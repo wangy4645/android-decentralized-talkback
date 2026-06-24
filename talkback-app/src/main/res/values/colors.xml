@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="tb_bg">#0B1117</color>
+    <color name="tb_surface">#141C24</color>
+    <color name="tb_surface_elevated">#1A2430</color>
+    <!-- Settings 列表行图标内填充（白线描边 + 灰底，避免透明透出纯黑背景） -->
+    <color name="tb_settings_icon_fill">#243040</color>
+    <!-- 主强调色：亮青绿（略偏青） -->
+    <color name="tb_primary">#3AF6D4</color>
+    <color name="tb_primary_dim">#333AF6D4</color>
+    <color name="tb_primary_glow">#923AF6D4</color>
+    <color name="tb_text_primary">#E8EEF4</color>
+    <color name="tb_white">#FFFFFF</color>
+    <color name="tb_text_secondary">#8FA3B8</color>
+    <color name="tb_text_muted">#5C7084</color>
+    <!-- 在线/信号：比主色再偏绿一点 -->
+    <color name="tb_success">#58FAB8</color>
+    <color name="tb_warning">#FFB020</color>
+    <!-- Meeting connecting accent: purer yellow than tb_warning (less orange). -->
+    <color name="tb_meeting_connecting">#FFD524</color>
+    <color name="tb_danger">#FF4D4F</color>
+    <color name="tb_monitor">#5B9FD4</color>
+    <color name="tb_emergency">#FF6B4A</color>
+    <color name="tb_record">#B8C5D6</color>
+    <color name="tb_speaking">#FF8C42</color>
+    <color name="tb_divider">#243040</color>
+    <!-- Meeting speaker: faint outer ring + VU meter inactive segments -->
+    <color name="tb_meeting_outer_ring">#33E8EEF4</color>
+    <color name="tb_meeting_outer_ring_muted">#225C7084</color>
+    <color name="tb_volume_meter_inactive">#1A2430</color>
+    <!-- PTT 按钮内圆：中心浅灰径向渐变，非纯黑 -->
+    <color name="tb_ptt_inner_center">#2C3844</color>
+    <color name="tb_ptt_inner_edge">#171F28</color>
+</resources>

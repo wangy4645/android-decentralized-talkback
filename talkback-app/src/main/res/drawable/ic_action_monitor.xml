@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="30dp"
+    android:height="30dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- 图形整体下移，底边 y=17 与其它快捷图标外圈底对齐 -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M7.5,11 A4.5,4.5 0 0,1 16.5,11"
+        android:strokeWidth="1.5"
+        android:strokeColor="@color/tb_monitor"
+        android:strokeLineCap="round" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M6.2,17 L6.2,12.6 L8.1,12.6 L8.1,17"
+        android:strokeWidth="1.5"
+        android:strokeColor="@color/tb_monitor"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M15.9,17 L15.9,12.6 L17.8,12.6 L17.8,17"
+        android:strokeWidth="1.5"
+        android:strokeColor="@color/tb_monitor"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+</vector>

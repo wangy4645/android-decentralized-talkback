@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical">
+
+    <LinearLayout
+        android:id="@+id/subpageRowContent"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="?attr/selectableItemBackground"
+        android:gravity="center_vertical"
+        android:minHeight="@dimen/settings_row_min_height"
+        android:orientation="horizontal"
+        android:paddingStart="14dp"
+        android:paddingEnd="10dp">
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical"
+            android:paddingVertical="8dp">
+
+            <TextView
+                android:id="@+id/txtSubpageTitle"
+                style="@style/SettingsRowTitle"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textColor="@color/tb_text_primary"
+                tools:text="Encryption Mode" />
+
+            <TextView
+                android:id="@+id/txtSubpageSubtitle"
+                style="@style/SettingsRowValue"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingTop="2dp"
+                android:textColor="@color/tb_text_muted"
+                android:visibility="gone"
+                tools:text="AES-256 (Planned)"
+                tools:visibility="visible" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/txtSubpageBadge"
+            style="@style/SettingsBadgePlanned"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginEnd="6dp"
+            android:visibility="gone"
+            tools:text="Planned"
+            tools:visibility="visible" />
+
+        <TextView
+            android:id="@+id/txtSubpageValue"
+            style="@style/SettingsRowValue"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginEnd="4dp"
+            android:textColor="@color/tb_text_muted"
+            android:visibility="gone"
+            tools:text="12 Devices"
+            tools:visibility="visible" />
+
+        <ImageView
+            android:id="@+id/imgSubpageChevron"
+            android:layout_width="14dp"
+            android:layout_height="14dp"
+            android:contentDescription="@null"
+            android:src="@drawable/ic_chevron_right"
+            android:visibility="gone" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/txtSubpageFooter"
+        style="@style/SettingsHintText"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:paddingHorizontal="14dp"
+        android:paddingBottom="10dp"
+        android:textColor="@color/tb_text_muted"
+        android:visibility="gone" />
+
+    <View
+        android:id="@+id/dividerSubpageRow"
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:layout_marginStart="14dp"
+        android:background="@color/tb_divider"
+        android:visibility="gone" />
+</LinearLayout>

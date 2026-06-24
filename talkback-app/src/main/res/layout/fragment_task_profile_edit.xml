@@ -1,0 +1,136 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/tb_bg"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="@dimen/settings_subpage_padding">
+
+        <include layout="@layout/include_settings_toolbar" />
+
+        <TextView
+            style="@style/SettingsFieldLabel"
+            android:layout_marginTop="4dp"
+            android:text="@string/task_profile_name_label" />
+
+        <EditText
+            android:id="@+id/inputProfileName"
+            style="@style/SettingsEditText"
+            android:importantForAutofill="no" />
+
+        <TextView
+            style="@style/SettingsFieldLabel"
+            android:text="@string/settings_shared_secret_label" />
+
+        <com.google.android.material.textfield.TextInputLayout
+            style="@style/SettingsEditTextPasswordLayout"
+            app:endIconContentDescription="@string/settings_toggle_secret_visibility">
+
+            <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/inputProfileSecret"
+                style="@style/SettingsTextInputEditText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:importantForAutofill="no"
+                android:inputType="textPassword" />
+        </com.google.android.material.textfield.TextInputLayout>
+
+        <TextView
+            style="@style/SettingsFieldLabel"
+            android:text="@string/task_profile_channel_id_label" />
+
+        <EditText
+            android:id="@+id/inputProfileChannelId"
+            style="@style/SettingsEditText"
+            android:importantForAutofill="no" />
+
+        <TextView
+            style="@style/SettingsFieldLabel"
+            android:text="@string/task_profile_channel_name_label" />
+
+        <EditText
+            android:id="@+id/inputProfileChannelName"
+            style="@style/SettingsEditText"
+            android:importantForAutofill="no" />
+
+        <TextView
+            style="@style/SettingsFieldLabel"
+            android:text="@string/task_profile_rf_key_label" />
+
+        <EditText
+            android:id="@+id/inputProfileRfKeyLabel"
+            style="@style/SettingsEditText"
+            android:importantForAutofill="no" />
+
+        <TextView
+            style="@style/SettingsHintText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:text="@string/task_profile_rf_key_hint" />
+
+        <TextView
+            style="@style/SettingsFieldLabel"
+            android:layout_marginTop="8dp"
+            android:text="@string/task_profile_priority_label" />
+
+        <RadioGroup
+            android:id="@+id/groupProfilePriority"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+
+            <RadioButton
+                android:id="@+id/radioPriorityNormal"
+                style="@style/SettingsPriorityOption"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:checked="true"
+                android:text="@string/task_profile_priority_normal" />
+
+            <RadioButton
+                android:id="@+id/radioPriorityDispatch"
+                style="@style/SettingsPriorityOption"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/task_profile_priority_dispatch" />
+
+            <RadioButton
+                android:id="@+id/radioPriorityEmergency"
+                style="@style/SettingsPriorityOption"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/task_profile_priority_emergency" />
+        </RadioGroup>
+
+        <TextView
+            style="@style/SettingsHintText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:text="@string/task_profile_priority_hint" />
+
+        <TextView
+            style="@style/SettingsSectionLabel"
+            android:layout_marginTop="12dp"
+            android:text="@string/task_profile_manual_peers_section" />
+
+        <include
+            android:id="@+id/manualPeerEditor"
+            layout="@layout/include_manual_peer_editor" />
+
+        <Button
+            android:id="@+id/btnSaveProfile"
+            style="@style/SettingsPrimaryButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="@string/settings_save" />
+    </LinearLayout>
+</ScrollView>

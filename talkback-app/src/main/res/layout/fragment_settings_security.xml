@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/tb_bg"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="@dimen/settings_subpage_padding">
+
+        <include layout="@layout/include_settings_toolbar" />
+
+        <TextView
+            style="@style/SettingsSectionLabel"
+            android:text="@string/settings_encryption_section" />
+
+        <LinearLayout
+            android:id="@+id/groupEncryption"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@drawable/bg_card"
+            android:orientation="vertical" />
+
+        <TextView
+            style="@style/SettingsSectionLabel"
+            android:layout_marginTop="14dp"
+            android:text="@string/settings_shared_secret_section" />
+
+        <LinearLayout
+            android:id="@+id/groupSecret"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@drawable/bg_card"
+            android:orientation="vertical" />
+
+        <TextView
+            style="@style/SettingsSectionLabel"
+            android:layout_marginTop="14dp"
+            android:text="@string/settings_allowed_list_section" />
+
+        <LinearLayout
+            android:id="@+id/groupAllowed"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@drawable/bg_card"
+            android:orientation="vertical" />
+
+        <TextView
+            style="@style/SettingsSectionLabel"
+            android:layout_marginTop="14dp"
+            android:text="@string/settings_advanced_section" />
+
+        <LinearLayout
+            android:id="@+id/groupAdvanced"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@drawable/bg_card"
+            android:orientation="vertical" />
+    </LinearLayout>
+</ScrollView>

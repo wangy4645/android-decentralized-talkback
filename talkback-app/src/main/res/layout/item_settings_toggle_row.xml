@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:minHeight="@dimen/settings_row_min_height"
+        android:orientation="horizontal"
+        android:paddingStart="14dp"
+        android:paddingEnd="10dp">
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:duplicateParentState="false"
+            android:orientation="vertical"
+            android:paddingVertical="8dp">
+
+            <TextView
+                android:id="@+id/txtToggleTitle"
+                style="@style/SettingsRowTitle"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:duplicateParentState="false"
+                android:textColor="@color/settings_row_title_text"
+                tools:text="Signaling Protection" />
+
+            <TextView
+                android:id="@+id/txtToggleSubtitle"
+                style="@style/SettingsStatusEnabled"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:duplicateParentState="false"
+                android:paddingTop="2dp"
+                android:textColor="@color/tb_success"
+                android:visibility="gone"
+                tools:text="Enabled"
+                tools:visibility="visible" />
+        </LinearLayout>
+
+        <androidx.appcompat.widget.SwitchCompat
+            android:id="@+id/switchRow"
+            style="@style/SettingsSwitch"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/txtToggleFooter"
+        style="@style/SettingsHintText"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:duplicateParentState="false"
+        android:paddingHorizontal="14dp"
+        android:paddingBottom="10dp"
+        android:textColor="@color/tb_text_muted"
+        android:visibility="gone"
+        tools:text="Footer note"
+        tools:visibility="visible" />
+
+    <View
+        android:id="@+id/dividerToggleRow"
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:layout_marginStart="14dp"
+        android:background="@color/tb_divider"
+        android:visibility="gone" />
+</LinearLayout>

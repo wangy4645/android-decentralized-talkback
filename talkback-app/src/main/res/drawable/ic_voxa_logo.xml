@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Regular hexagon; horizontal scale via group (slimmer, not stretched) -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="32dp"
+    android:height="32dp"
+    android:viewportWidth="40"
+    android:viewportHeight="40">
+    <group
+        android:pivotX="20"
+        android:pivotY="20"
+        android:scaleX="0.88">
+        <path
+            android:fillColor="#4DF6E8"
+            android:pathData="M20,13 L27,17.5 L20,22 L13,17.5 Z" />
+        <path
+            android:fillColor="@color/tb_primary"
+            android:pathData="M13,17.5 L20,22 L20,29 L13,24.5 Z" />
+        <path
+            android:fillColor="#1AB89E"
+            android:pathData="M20,22 L27,17.5 L27,24.5 L20,29 Z" />
+        <path
+            android:fillColor="@android:color/transparent"
+            android:pathData="M5.36,12.5 L20,3.8 L34.64,12.5 L34.64,25.6 M33.1,29.4 L20,36 L5.36,27.5 L5.36,12.5"
+            android:strokeWidth="4.5"
+            android:strokeColor="@color/tb_primary"
+            android:strokeLineCap="round"
+            android:strokeLineJoin="round" />
+    </group>
+</vector>

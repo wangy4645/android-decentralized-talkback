@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/tb_bg"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="@dimen/settings_subpage_padding">
+
+        <include layout="@layout/include_settings_toolbar" />
+
+        <EditText
+            android:id="@+id/inputModuleId"
+            style="@style/SettingsEditText"
+            android:hint="@string/settings_hint_module_id" />
+
+        <EditText
+            android:id="@+id/inputEndpointId"
+            style="@style/SettingsEditText"
+            android:hint="@string/settings_hint_endpoint_id" />
+
+        <EditText
+            android:id="@+id/inputChannelId"
+            style="@style/SettingsEditText"
+            android:hint="@string/settings_hint_channel_id" />
+
+        <EditText
+            android:id="@+id/inputChannelName"
+            style="@style/SettingsEditText"
+            android:hint="@string/settings_hint_channel_name" />
+
+        <com.google.android.material.switchmaterial.SwitchMaterial
+            android:id="@+id/switchConferenceMode"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="@string/settings_conference_mode"
+            android:visibility="gone" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            style="@style/SettingsHintText"
+            android:text="@string/settings_conference_mode_hint"
+            android:visibility="gone" />
+
+        <TextView
+            style="@style/SettingsHintText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingTop="6dp"
+            android:text="@string/settings_channel_single_hint" />
+
+        <Button
+            android:id="@+id/btnSaveIdentity"
+            style="@style/SettingsPrimaryButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="@string/settings_save" />
+    </LinearLayout>
+</ScrollView>

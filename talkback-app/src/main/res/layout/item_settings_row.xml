@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical">
+
+    <LinearLayout
+        android:id="@+id/settingsRowContent"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="?attr/selectableItemBackground"
+        android:gravity="center_vertical"
+        android:minHeight="@dimen/settings_row_min_height"
+        android:orientation="horizontal"
+        android:paddingEnd="10dp">
+
+        <ImageView
+            android:id="@+id/imgNavIcon"
+            android:layout_width="@dimen/settings_row_icon_size"
+            android:layout_height="@dimen/settings_row_icon_size"
+            android:layout_marginStart="12dp"
+            android:contentDescription="@null"
+            android:src="@drawable/ic_status_person" />
+
+        <TextView
+            android:id="@+id/txtNavTitle"
+            style="@style/SettingsRowTitle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="10dp" />
+
+        <TextView
+            android:id="@+id/txtNavValue"
+            style="@style/SettingsRowValue"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="6dp"
+            android:layout_weight="1"
+            android:ellipsize="end"
+            android:gravity="end"
+            android:maxLines="1" />
+
+        <ImageView
+            android:id="@+id/imgNavChevron"
+            android:layout_width="14dp"
+            android:layout_height="14dp"
+            android:layout_marginStart="2dp"
+            android:contentDescription="@null"
+            android:src="@drawable/ic_chevron_right" />
+    </LinearLayout>
+
+    <View
+        android:id="@+id/dividerNav"
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:layout_marginStart="42dp"
+        android:background="@color/tb_divider"
+        android:visibility="gone" />
+</LinearLayout>

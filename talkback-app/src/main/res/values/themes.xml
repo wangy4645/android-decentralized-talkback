@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.Talkback" parent="Theme.MaterialComponents.NoActionBar">
+        <item name="colorPrimary">@color/tb_primary</item>
+        <item name="colorPrimaryVariant">@color/tb_primary</item>
+        <item name="colorOnPrimary">@color/tb_bg</item>
+        <item name="colorSecondary">@color/tb_primary</item>
+        <item name="colorSurface">@color/tb_surface</item>
+        <item name="colorOnSurface">@color/tb_text_primary</item>
+        <item name="android:statusBarColor">@color/tb_bg</item>
+        <item name="android:navigationBarColor">@color/tb_bg</item>
+        <item name="android:windowBackground">@color/tb_bg</item>
+        <item name="android:textColor">@color/tb_text_primary</item>
+        <item name="android:textColorPrimary">@color/tb_text_primary</item>
+        <item name="android:textColorSecondary">@color/tb_text_secondary</item>
+        <item name="android:textColorTertiary">@color/tb_text_muted</item>
+        <item name="switchStyle">@style/SettingsSwitch</item>
+        <item name="materialButtonStyle">@style/TalkbackButton</item>
+    </style>
+
+    <style name="TalkbackButton" parent="Widget.MaterialComponents.Button">
+        <item name="android:textAllCaps">false</item>
+        <item name="cornerRadius">12dp</item>
+    </style>
+
+    <style name="TalkbackCard" parent="">
+        <item name="android:background">@drawable/bg_card</item>
+    </style>
+</resources>

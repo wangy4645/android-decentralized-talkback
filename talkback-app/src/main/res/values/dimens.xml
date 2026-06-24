@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 快捷按钮 Broadcast/Monitor 等标签字号；Online Endpoints 标题与之共用 -->
+    <dimen name="tb_action_icon_slot">30dp</dimen>
+    <dimen name="tb_action_icon_size">28dp</dimen>
+    <dimen name="tb_action_monitor_icon_size">30dp</dimen>
+    <dimen name="tb_tile_label_text_size">9sp</dimen>
+    <dimen name="tb_status_label_text_size">9sp</dimen>
+    <dimen name="tb_status_value_text_size">11sp</dimen>
+    <dimen name="tb_status_card_padding_v">6dp</dimen>
+    <dimen name="tb_status_card_padding_h">8dp</dimen>
+    <dimen name="tb_status_row_gap">2dp</dimen>
+    <dimen name="tb_status_divider_height">28dp</dimen>
+    <dimen name="tb_status_talking_icon_size">18dp</dimen>
+    <dimen name="tb_status_icon_size">14dp</dimen>
+    <dimen name="tb_endpoint_header_text_size">11sp</dimen>
+    <dimen name="tb_endpoint_name_text_size">11sp</dimen>
+    <dimen name="tb_endpoint_status_text_size">9sp</dimen>
+    <!-- PTT 尺寸按 360dp 屏宽设计；更窄屏幕由 TalkResponsiveScale 同比缩小 -->
+    <dimen name="ptt_button_size">176dp</dimen>
+    <!-- 与设计稿比例一致 -->
+    <dimen name="ptt_mic_icon_size">52dp</dimen>
+    <dimen name="ptt_content_offset_top">5dp</dimen>
+    <dimen name="ptt_label_text_size">20dp</dimen>
+    <dimen name="ptt_hint_text_size">11dp</dimen>
+    <dimen name="ptt_label_margin_top">5dp</dimen>
+    <dimen name="ptt_hint_margin_top">6dp</dimen>
+    <!-- PTT 按钮外渐变虚线环（由内到外渐弱，均大于 ptt_button_size 176dp） -->
+    <dimen name="ptt_radar_ring_1">188dp</dimen>
+    <dimen name="ptt_radar_ring_2">200dp</dimen>
+    <dimen name="ptt_radar_ring_3">212dp</dimen>
+    <dimen name="ptt_radar_ring_4">224dp</dimen>
+    <dimen name="ptt_radar_ring_5">236dp</dimen>
+    <dimen name="ptt_radar_ring_6">248dp</dimen>
+    <dimen name="ptt_area_height">268dp</dimen>
+    <dimen name="mode_pill_tab_width">76dp</dimen>
+    <dimen name="mode_pill_tab_height">32dp</dimen>
+    <dimen name="mode_pill_gap_above_ptt">10dp</dimen>
+    <!-- 单呼头像：内圆实线 + 外圈虚线，两圈间距约 7dp（参考设计稿） -->
+    <dimen name="call_avatar_inner_size">104dp</dimen>
+    <dimen name="call_avatar_ring_size">118dp</dimen>
+    <dimen name="call_avatar_icon_size">52dp</dimen>
+    <!-- Meeting speaker: double-ring avatar + vertical VU meter (reference design) -->
+    <dimen name="meeting_speaker_outer_size">168dp</dimen>
+    <dimen name="meeting_speaker_inner_size">132dp</dimen>
+    <dimen name="meeting_speaker_icon_size">56dp</dimen>
+    <dimen name="meeting_volume_meter_width">10dp</dimen>
+    <dimen name="meeting_volume_meter_height">112dp</dimen>
+    <dimen name="meeting_volume_meter_gap">20dp</dimen>
+    <dimen name="call_end_button_height">44dp</dimen>
+    <dimen name="call_end_button_radius">22dp</dimen>
+    <dimen name="call_end_button_padding_h">28dp</dimen>
+    <dimen name="call_end_icon_width">33dp</dimen>
+    <dimen name="call_end_icon_height">14dp</dimen>
+    <dimen name="call_ended_title_text_size">18sp</dimen>
+    <dimen name="call_ended_duration_text_size">12sp</dimen>
+    <dimen name="call_ended_summary_title_text_size">12sp</dimen>
+    <dimen name="call_ended_summary_body_text_size">11sp</dimen>
+    <dimen name="ptt_lock_bar_height">42dp</dimen>
+    <dimen name="ptt_lock_thumb_size">34dp</dimen>
+    <dimen name="ptt_lock_bar_padding">4dp</dimen>
+    <dimen name="ptt_lock_bar_width">204dp</dimen>
+    <dimen name="ptt_hint_max_width">128dp</dimen>
+    <!-- Settings 字号层级：页标题 > 分组标题 > 行标题 > 行右侧摘要 -->
+    <dimen name="settings_page_title_text_size">16sp</dimen>
+    <dimen name="settings_section_label_text_size">10sp</dimen>
+    <dimen name="settings_row_title_text_size">12sp</dimen>
+    <dimen name="settings_row_value_text_size">10sp</dimen>
+    <dimen name="settings_footer_text_size">9sp</dimen>
+    <dimen name="settings_input_text_size">12sp</dimen>
+    <dimen name="settings_desc_text_size">11sp</dimen>
+    <dimen name="settings_hint_text_size">10sp</dimen>
+    <dimen name="settings_switch_text_size">12sp</dimen>
+    <dimen name="settings_button_text_size">12sp</dimen>
+    <dimen name="call_incoming_button_text_size">15sp</dimen>
+    <dimen name="call_incoming_button_min_height">48dp</dimen>
+    <dimen name="settings_row_icon_size">20dp</dimen>
+    <dimen name="settings_row_min_height">46dp</dimen>
+    <dimen name="settings_subpage_padding">16dp</dimen>
+</resources>
+

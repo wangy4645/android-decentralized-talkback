@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical">
+
+    <TextView
+        android:id="@+id/txtManualPeersHint"
+        style="@style/SettingsHintText"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:paddingBottom="6dp"
+        android:text="@string/settings_peers_hint" />
+
+    <EditText
+        android:id="@+id/inputPeerModuleId"
+        style="@style/SettingsEditText"
+        android:hint="@string/settings_hint_peer_module_id"
+        android:importantForAutofill="no"
+        android:inputType="textCapCharacters" />
+
+    <EditText
+        android:id="@+id/inputPeerHost"
+        style="@style/SettingsEditText"
+        android:hint="@string/settings_hint_peer_host"
+        android:importantForAutofill="no"
+        android:inputType="textNoSuggestions" />
+
+    <EditText
+        android:id="@+id/inputPeerPort"
+        style="@style/SettingsEditText"
+        android:hint="@string/settings_hint_peer_port"
+        android:importantForAutofill="no"
+        android:inputType="number" />
+
+    <Button
+        android:id="@+id/btnAddPeer"
+        style="@style/SettingsOutlinedButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:text="@string/settings_peer_add" />
+
+    <TextView
+        android:id="@+id/txtPeersEmpty"
+        style="@style/SettingsHintText"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:paddingTop="8dp"
+        android:text="@string/settings_peers_empty" />
+
+    <LinearLayout
+        android:id="@+id/containerPeerList"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:paddingTop="4dp" />
+
+    <TextView
+        android:id="@+id/btnToggleAdvanced"
+        style="@style/SettingsRowTitle"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:background="?attr/selectableItemBackground"
+        android:paddingVertical="8dp"
+        android:text="@string/settings_show_advanced" />
+
+    <LinearLayout
+        android:id="@+id/groupAdvanced"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:visibility="gone">
+
+        <TextView
+            style="@style/SettingsSectionLabel"
+            android:text="@string/settings_advanced_section" />
+
+        <TextView
+            style="@style/SettingsHintText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingBottom="6dp"
+            android:text="@string/settings_peers_json_advanced_hint" />
+
+        <EditText
+            android:id="@+id/inputStaticPeersJson"
+            style="@style/SettingsEditText"
+            android:hint="@string/settings_hint_static_peers"
+            android:importantForAutofill="no"
+            android:inputType="textMultiLine"
+            android:minLines="3" />
+
+        <Button
+            android:id="@+id/btnImportPeersJson"
+            style="@style/SettingsOutlinedButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/settings_import_peers_json" />
+    </LinearLayout>
+</LinearLayout>

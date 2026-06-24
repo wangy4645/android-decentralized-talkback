@@ -1,0 +1,21 @@
+# Gradle
+.gradle/
+build/
+local.properties
+.android-sdk/
+
+# Android
+*.iml
+.idea/
+captures/
+.externalNativeBuild/
+.cxx/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test logs
+test-logs/
+logs-soak*/
+*.apk

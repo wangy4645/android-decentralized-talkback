@@ -1,0 +1,117 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/tb_bg"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:paddingHorizontal="16dp"
+        android:paddingTop="8dp"
+        android:paddingBottom="12dp">
+
+        <include
+            android:id="@+id/toolbarOptions"
+            layout="@layout/include_settings_toolbar" />
+
+        <TextView
+            style="@style/SettingsSectionLabel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="MEETING CONTROL" />
+
+        <TextView
+            android:id="@+id/rowMuteAll"
+            style="@style/SettingsRowTitle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@drawable/bg_card"
+            android:padding="14dp"
+            android:text="@string/meeting_mute_all" />
+
+        <com.google.android.material.switchmaterial.SwitchMaterial
+            android:id="@+id/switchLockMeeting"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:background="@drawable/bg_card"
+            android:padding="14dp"
+            android:text="@string/meeting_lock" />
+
+        <TextView
+            android:id="@+id/rowEndForAll"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:background="@drawable/bg_card"
+            android:padding="14dp"
+            android:text="@string/meeting_end_for_all"
+            android:textColor="@color/tb_danger"
+            android:textSize="14sp" />
+
+        <TextView
+            style="@style/SettingsSectionLabel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="@string/meeting_audio_settings" />
+
+        <com.google.android.material.switchmaterial.SwitchMaterial
+            android:id="@+id/switchAutoGain"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@drawable/bg_card"
+            android:padding="14dp"
+            android:text="@string/meeting_auto_gain" />
+
+        <com.google.android.material.switchmaterial.SwitchMaterial
+            android:id="@+id/switchNoiseSuppression"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:background="@drawable/bg_card"
+            android:padding="14dp"
+            android:text="@string/meeting_noise_suppression" />
+
+        <TextView
+            android:id="@+id/rowMeetingInfo"
+            style="@style/SettingsRowTitle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:background="@drawable/bg_card"
+            android:padding="14dp"
+            android:text="@string/meeting_info_title" />
+
+        <TextView
+            style="@style/SettingsSectionLabel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="@string/meeting_participants_section" />
+
+        <TextView
+            android:id="@+id/rowMeetingMembers"
+            style="@style/SettingsRowTitle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:background="@drawable/bg_card"
+            android:padding="14dp"
+            android:text="@string/meeting_members_title" />
+
+        <TextView
+            android:id="@+id/rowInviteMembers"
+            style="@style/SettingsRowTitle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:background="@drawable/bg_card"
+            android:padding="14dp"
+            android:text="@string/meeting_invite_members" />
+    </LinearLayout>
+</ScrollView>

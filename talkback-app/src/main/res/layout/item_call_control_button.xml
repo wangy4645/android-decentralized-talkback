@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:gravity="center_horizontal"
+    android:orientation="vertical"
+    android:paddingHorizontal="4dp">
+
+    <FrameLayout
+        android:id="@+id/btnControlCircle"
+        android:layout_width="56dp"
+        android:layout_height="56dp"
+        android:background="@drawable/bg_call_control_circle">
+
+        <ImageView
+            android:id="@+id/imgControlIcon"
+            android:layout_width="24dp"
+            android:layout_height="24dp"
+            android:layout_gravity="center"
+            android:contentDescription="@null"
+            android:tint="@color/tb_text_primary" />
+    </FrameLayout>
+
+    <TextView
+        android:id="@+id/txtControlLabel"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:textColor="@color/tb_text_muted"
+        android:textSize="11sp" />
+</LinearLayout>

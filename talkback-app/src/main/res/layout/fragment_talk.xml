@@ -1,0 +1,858 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/tb_bg"
+    android:orientation="vertical">
+
+    <FrameLayout
+        android:layout_width="match_parent"
+        android:layout_height="56dp"
+        android:paddingStart="4dp"
+        android:paddingEnd="4dp">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:layout_marginEnd="96dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <ImageButton
+                android:id="@+id/btnToolbarMenu"
+                style="@style/TalkbackToolbarIconButton"
+                android:contentDescription="@string/cd_toolbar_menu"
+                android:src="@drawable/ic_toolbar_menu" />
+
+            <ImageView
+                android:id="@+id/imgAppLogo"
+                android:layout_width="32dp"
+                android:layout_height="32dp"
+                android:contentDescription="@string/app_name"
+                android:src="@drawable/ic_launcher_humlink" />
+
+            <TextView
+                android:id="@+id/txtToolbarTitle"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="5dp"
+                android:layout_weight="1"
+                android:ellipsize="end"
+                android:fontFamily="sans-serif-medium"
+                android:includeFontPadding="false"
+                android:letterSpacing="-0.03"
+                android:maxLines="1"
+                android:text="@string/app_name"
+                android:textColor="@color/tb_text_primary"
+                android:textSize="17sp" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="match_parent"
+            android:layout_gravity="end|center_vertical"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <ImageButton
+                android:id="@+id/btnToolbarVolume"
+                style="@style/TalkbackToolbarIconButton"
+                android:contentDescription="@string/cd_toolbar_volume"
+                android:src="@drawable/ic_toolbar_volume" />
+
+            <ImageButton
+                android:id="@+id/btnToolbarMore"
+                style="@style/TalkbackToolbarIconButton"
+                android:contentDescription="@string/cd_toolbar_more"
+                android:src="@drawable/ic_toolbar_more_vert" />
+        </LinearLayout>
+    </FrameLayout>
+
+    <ScrollView
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:clipChildren="false"
+        android:clipToPadding="false"
+        android:fillViewport="true">
+
+        <LinearLayout
+            android:id="@+id/talkScrollContent"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:clipChildren="false"
+            android:clipToPadding="false"
+            android:orientation="vertical"
+            android:paddingHorizontal="16dp"
+            android:paddingBottom="16dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:background="@drawable/bg_card"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:paddingHorizontal="8dp"
+                android:paddingVertical="8dp">
+
+                <FrameLayout
+                    android:layout_width="32dp"
+                    android:layout_height="32dp"
+                    android:background="@drawable/bg_channel_icon_circle">
+
+                    <ImageView
+                        android:layout_width="16dp"
+                        android:layout_height="16dp"
+                        android:layout_gravity="center"
+                        android:contentDescription="@string/nav_channels"
+                        android:src="@drawable/ic_channel_waveform" />
+                </FrameLayout>
+
+                <LinearLayout
+                    android:id="@+id/channelHeaderArea"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="6dp"
+                    android:layout_weight="1"
+                    android:background="?attr/selectableItemBackgroundBorderless"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <TextView
+                        android:id="@+id/txtChannelTitle"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:fontFamily="sans-serif"
+                        android:includeFontPadding="false"
+                        android:text="Channel 01"
+                        android:textColor="@color/tb_text_primary"
+                        android:textSize="11sp" />
+
+                    <ImageView
+                        android:layout_width="8dp"
+                        android:layout_height="8dp"
+                        android:layout_marginStart="3dp"
+                        android:contentDescription="@null"
+                        android:src="@drawable/ic_dropdown_small" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:fontFamily="sans-serif"
+                        android:includeFontPadding="false"
+                        android:paddingHorizontal="4dp"
+                        android:text="·"
+                        android:textColor="@color/tb_text_muted"
+                        android:textSize="12sp" />
+
+                    <TextView
+                        android:id="@+id/txtChannelSubtitle"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:ellipsize="end"
+                        android:fontFamily="sans-serif"
+                        android:includeFontPadding="false"
+                        android:maxLines="1"
+                        android:text="Maintenance Team"
+                        android:textColor="@color/tb_text_secondary"
+                        android:textSize="10sp" />
+                </LinearLayout>
+
+                <View
+                    android:layout_width="1dp"
+                    android:layout_height="24dp"
+                    android:layout_marginHorizontal="6dp"
+                    android:background="@color/tb_divider" />
+
+                <LinearLayout
+                    android:id="@+id/channelOnlineArea"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <ImageView
+                        android:layout_width="12dp"
+                        android:layout_height="12dp"
+                        android:contentDescription="@string/online_endpoints"
+                        android:src="@drawable/ic_group_online" />
+
+                    <TextView
+                        android:id="@+id/txtOnlineCount"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="3dp"
+                        android:fontFamily="sans-serif"
+                        android:includeFontPadding="false"
+                        android:text="0 online"
+                        android:textColor="@color/tb_primary"
+                        android:textSize="8sp" />
+
+                    <ImageView
+                        android:layout_width="10dp"
+                        android:layout_height="10dp"
+                        android:layout_marginStart="2dp"
+                        android:contentDescription="@null"
+                        android:src="@drawable/ic_chevron_right" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <!-- Floor Owner | Talking | Network — three columns, label above value -->
+            <LinearLayout
+                android:id="@+id/layoutStatusCard"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:background="@drawable/bg_card"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:paddingHorizontal="@dimen/tb_status_card_padding_h"
+                android:paddingVertical="@dimen/tb_status_card_padding_v">
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:contentDescription="@string/floor_owner"
+                    android:orientation="vertical"
+                    android:paddingEnd="4dp">
+
+                    <TextView
+                        android:id="@+id/txtFloorOwnerLabel"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:ellipsize="end"
+                        android:fontFamily="sans-serif"
+                        android:includeFontPadding="false"
+                        android:maxLines="1"
+                        android:text="@string/floor_owner"
+                        android:textColor="@color/tb_text_muted"
+                        android:textSize="@dimen/tb_status_label_text_size" />
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="@dimen/tb_status_row_gap"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
+
+                        <TextView
+                            android:id="@+id/txtFloorOwner"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:ellipsize="end"
+                            android:fontFamily="sans-serif-medium"
+                            android:includeFontPadding="false"
+                            android:maxLines="1"
+                            android:text="--"
+                            android:textColor="@color/tb_primary"
+                            android:textSize="@dimen/tb_status_value_text_size" />
+
+                        <ImageView
+                            android:id="@+id/imgFloorIndicator"
+                        android:layout_width="16dp"
+                        android:layout_height="12dp"
+                            android:layout_marginStart="4dp"
+                            android:contentDescription="@null"
+                            android:src="@drawable/ic_signal_bars" />
+                    </LinearLayout>
+                </LinearLayout>
+
+                <View
+                    android:layout_width="1dp"
+                    android:layout_height="@dimen/tb_status_divider_height"
+                    android:layout_gravity="center_vertical"
+                    android:background="@color/tb_divider" />
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:contentDescription="@string/talking"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal"
+                    android:paddingHorizontal="4dp">
+
+                    <ImageView
+                        android:id="@+id/imgTalkingIndicator"
+                        android:layout_width="@dimen/tb_status_talking_icon_size"
+                        android:layout_height="@dimen/tb_status_talking_icon_size"
+                        android:contentDescription="@null"
+                        android:src="@drawable/ic_status_talking_ring" />
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="4dp"
+                        android:layout_weight="1"
+                        android:orientation="vertical">
+
+                    <TextView
+                        android:id="@+id/txtTalkingLabel"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:ellipsize="end"
+                        android:fontFamily="sans-serif"
+                        android:includeFontPadding="false"
+                        android:maxLines="1"
+                        android:text="@string/talking"
+                            android:textColor="@color/tb_text_muted"
+                            android:textSize="@dimen/tb_status_label_text_size" />
+
+                        <TextView
+                            android:id="@+id/txtTalking"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="@dimen/tb_status_row_gap"
+                            android:ellipsize="end"
+                            android:fontFamily="sans-serif-medium"
+                            android:includeFontPadding="false"
+                            android:maxLines="1"
+                            android:text="--"
+                            android:textColor="@color/tb_primary"
+                            android:textSize="@dimen/tb_status_value_text_size" />
+                    </LinearLayout>
+                </LinearLayout>
+
+                <View
+                    android:layout_width="1dp"
+                    android:layout_height="@dimen/tb_status_divider_height"
+                    android:layout_gravity="center_vertical"
+                    android:background="@color/tb_divider" />
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:contentDescription="@string/network"
+                    android:orientation="vertical"
+                    android:paddingStart="4dp">
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:ellipsize="end"
+                        android:fontFamily="sans-serif"
+                        android:includeFontPadding="false"
+                        android:maxLines="1"
+                        android:text="@string/network"
+                        android:textColor="@color/tb_text_muted"
+                        android:textSize="@dimen/tb_status_label_text_size" />
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="@dimen/tb_status_row_gap"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
+
+                        <TextView
+                            android:id="@+id/txtNetwork"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:ellipsize="end"
+                            android:fontFamily="sans-serif-medium"
+                            android:includeFontPadding="false"
+                            android:maxLines="1"
+                            android:text="N/A"
+                            android:textColor="@color/tb_primary"
+                            android:textSize="@dimen/tb_status_value_text_size" />
+
+                        <ImageView
+                            android:id="@+id/imgNetworkIndicator"
+                            android:layout_width="7dp"
+                            android:layout_height="7dp"
+                            android:layout_marginStart="4dp"
+                            android:contentDescription="@null"
+                            android:src="@drawable/ic_network_dot_off" />
+                    </LinearLayout>
+                </LinearLayout>
+            </LinearLayout>
+
+            <LinearLayout
+                android:id="@+id/layoutPttSection"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:clipChildren="false"
+                android:clipToPadding="false"
+                android:gravity="center_horizontal"
+                android:orientation="vertical">
+
+                <LinearLayout
+                    android:id="@+id/layoutModeToggle"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:background="@drawable/bg_mode_pill_track"
+                    android:gravity="center"
+                    android:orientation="horizontal"
+                    android:padding="2dp">
+
+                    <TextView
+                        android:id="@+id/btnModePtt"
+                        android:layout_width="@dimen/mode_pill_tab_width"
+                        android:layout_height="@dimen/mode_pill_tab_height"
+                        android:background="@drawable/bg_mode_pill_tab_selected"
+                        android:fontFamily="sans-serif-medium"
+                        android:gravity="center"
+                        android:includeFontPadding="false"
+                        android:text="@string/mode_ptt"
+                        android:textColor="@color/tb_bg"
+                        android:textSize="12sp" />
+
+                    <TextView
+                        android:id="@+id/btnModeMeeting"
+                        android:layout_width="@dimen/mode_pill_tab_width"
+                        android:layout_height="@dimen/mode_pill_tab_height"
+                        android:fontFamily="sans-serif-medium"
+                        android:gravity="center"
+                        android:includeFontPadding="false"
+                        android:text="@string/mode_meeting"
+                        android:textColor="@color/tb_text_muted"
+                        android:textSize="12sp" />
+                </LinearLayout>
+
+                <FrameLayout
+                    android:id="@+id/layoutPttArea"
+                    android:layout_width="match_parent"
+                    android:layout_height="@dimen/ptt_area_height"
+                    android:layout_marginTop="@dimen/mode_pill_gap_above_ptt"
+                    android:clipChildren="false"
+                    android:clipToPadding="false">
+
+                <FrameLayout
+                    android:id="@+id/layoutPttRadarRings"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:clipChildren="false"
+                    android:clipToPadding="false">
+
+                    <View
+                        android:layout_width="@dimen/ptt_radar_ring_6"
+                        android:layout_height="@dimen/ptt_radar_ring_6"
+                        android:layout_gravity="center"
+                        android:alpha="0.10"
+                        android:background="@drawable/bg_ptt_radar_ring" />
+
+                    <View
+                        android:layout_width="@dimen/ptt_radar_ring_5"
+                        android:layout_height="@dimen/ptt_radar_ring_5"
+                        android:layout_gravity="center"
+                        android:alpha="0.16"
+                        android:background="@drawable/bg_ptt_radar_ring" />
+
+                    <View
+                        android:layout_width="@dimen/ptt_radar_ring_4"
+                        android:layout_height="@dimen/ptt_radar_ring_4"
+                        android:layout_gravity="center"
+                        android:alpha="0.24"
+                        android:background="@drawable/bg_ptt_radar_ring" />
+
+                    <View
+                        android:layout_width="@dimen/ptt_radar_ring_3"
+                        android:layout_height="@dimen/ptt_radar_ring_3"
+                        android:layout_gravity="center"
+                        android:alpha="0.34"
+                        android:background="@drawable/bg_ptt_radar_ring" />
+
+                    <View
+                        android:layout_width="@dimen/ptt_radar_ring_2"
+                        android:layout_height="@dimen/ptt_radar_ring_2"
+                        android:layout_gravity="center"
+                        android:alpha="0.46"
+                        android:background="@drawable/bg_ptt_radar_ring" />
+
+                    <View
+                        android:layout_width="@dimen/ptt_radar_ring_1"
+                        android:layout_height="@dimen/ptt_radar_ring_1"
+                        android:layout_gravity="center"
+                        android:alpha="0.58"
+                        android:background="@drawable/bg_ptt_radar_ring" />
+                </FrameLayout>
+
+                <View
+                    android:id="@+id/pttTransmitRipple1"
+                    android:layout_width="@dimen/ptt_button_size"
+                    android:layout_height="@dimen/ptt_button_size"
+                    android:layout_gravity="center"
+                    android:background="@drawable/bg_ptt_transmit_ripple"
+                    android:visibility="gone" />
+
+                <View
+                    android:id="@+id/pttTransmitRipple2"
+                    android:layout_width="@dimen/ptt_button_size"
+                    android:layout_height="@dimen/ptt_button_size"
+                    android:layout_gravity="center"
+                    android:background="@drawable/bg_ptt_transmit_ripple"
+                    android:visibility="gone" />
+
+                <FrameLayout
+                    android:id="@+id/layoutPttCenter"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="center"
+                    android:clipChildren="false"
+                    android:clipToPadding="false">
+
+                <FrameLayout
+                    android:id="@+id/btnPtt"
+                    android:layout_width="@dimen/ptt_button_size"
+                    android:layout_height="@dimen/ptt_button_size"
+                    android:layout_gravity="center"
+                    android:background="@drawable/bg_ptt_button"
+                    android:clickable="true"
+                    android:focusable="true">
+
+                    <LinearLayout
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_gravity="center"
+                        android:gravity="center_horizontal"
+                        android:orientation="vertical"
+                        android:paddingTop="@dimen/ptt_content_offset_top">
+
+                        <ImageView
+                            android:id="@+id/imgPttMic"
+                            android:layout_width="@dimen/ptt_mic_icon_size"
+                            android:layout_height="@dimen/ptt_mic_icon_size"
+                            android:adjustViewBounds="true"
+                            android:contentDescription="@null"
+                            android:scaleType="fitCenter"
+                            android:src="@drawable/ic_mic_ptt" />
+
+                        <TextView
+                            android:id="@+id/txtPttLabel"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:fontFamily="sans-serif"
+                            android:includeFontPadding="false"
+                            android:letterSpacing="0.06"
+                            android:paddingTop="@dimen/ptt_label_margin_top"
+                            android:text="@string/ptt_label"
+                            android:textColor="@color/tb_primary"
+                            android:textSize="@dimen/ptt_label_text_size"
+                            android:textStyle="normal" />
+
+                        <TextView
+                            android:id="@+id/txtPttHint"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:fontFamily="sans-serif"
+                            android:gravity="center"
+                            android:includeFontPadding="false"
+                            android:lineSpacingExtra="1dp"
+                            android:maxWidth="@dimen/ptt_hint_max_width"
+                            android:maxLines="2"
+                            android:paddingTop="@dimen/ptt_hint_margin_top"
+                            android:text="@string/ptt_hold_hint_lines"
+                            android:textColor="@color/tb_text_primary"
+                            android:textSize="@dimen/ptt_hint_text_size"
+                            android:textStyle="normal" />
+                    </LinearLayout>
+                </FrameLayout>
+                </FrameLayout>
+                </FrameLayout>
+
+                <FrameLayout
+                    android:id="@+id/barPttLockSlide"
+                    android:layout_width="@dimen/ptt_lock_bar_width"
+                    android:layout_height="@dimen/ptt_lock_bar_height"
+                    android:layout_gravity="center_horizontal"
+                    android:layout_marginTop="8dp"
+                android:background="@drawable/bg_ptt_lock_bar"
+                android:clipChildren="false"
+                android:clipToPadding="false"
+                android:padding="@dimen/ptt_lock_bar_padding">
+
+                <View
+                    android:id="@+id/viewPttLockTrackFill"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_gravity="center_vertical|start"
+                    android:background="@drawable/bg_ptt_lock_track_fill"
+                    android:visibility="invisible" />
+
+                <TextView
+                    android:id="@+id/txtPttLockSlide"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="center"
+                    android:fontFamily="sans-serif"
+                    android:gravity="center"
+                    android:includeFontPadding="false"
+                    android:maxLines="1"
+                    android:paddingStart="40dp"
+                    android:paddingEnd="26dp"
+                    android:singleLine="true"
+                    android:text="@string/lock_ptt_slide"
+                    android:textColor="@color/tb_text_secondary"
+                    android:textSize="10sp"
+                    android:textStyle="normal" />
+
+                <ImageView
+                    android:id="@+id/imgPttLockChevrons"
+                    android:layout_width="20dp"
+                    android:layout_height="14dp"
+                    android:layout_gravity="center_vertical|end"
+                    android:layout_marginEnd="12dp"
+                    android:contentDescription="@null"
+                    android:src="@drawable/ic_chevrons_right" />
+
+                <FrameLayout
+                    android:id="@+id/viewPttLockThumb"
+                    android:layout_width="@dimen/ptt_lock_thumb_size"
+                    android:layout_height="@dimen/ptt_lock_thumb_size"
+                    android:layout_gravity="center_vertical|start"
+                    android:background="@drawable/bg_ptt_lock_thumb"
+                    android:elevation="2dp">
+
+                    <ImageView
+                        android:layout_width="16dp"
+                        android:layout_height="16dp"
+                        android:layout_gravity="center"
+                        android:contentDescription="@null"
+                        android:src="@drawable/ic_lock_ptt" />
+                </FrameLayout>
+                </FrameLayout>
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:baselineAligned="false"
+                android:orientation="horizontal">
+
+                <LinearLayout
+                    android:id="@+id/btnBroadcast"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginEnd="6dp"
+                    android:layout_weight="1"
+                    android:background="@drawable/bg_action_tile"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:foreground="?attr/selectableItemBackground"
+                    android:gravity="center"
+                    android:minHeight="64dp"
+                    android:orientation="vertical"
+                    android:paddingHorizontal="2dp"
+                    android:paddingVertical="8dp">
+
+                    <FrameLayout
+                        android:layout_width="@dimen/tb_action_icon_slot"
+                        android:layout_height="@dimen/tb_action_icon_slot"
+                        android:layout_gravity="center_horizontal">
+
+                        <ImageView
+                            android:layout_width="@dimen/tb_action_icon_size"
+                            android:layout_height="@dimen/tb_action_icon_size"
+                            android:layout_gravity="bottom|center_horizontal"
+                            android:contentDescription="@string/action_broadcast"
+                            android:scaleType="fitCenter"
+                            android:src="@drawable/ic_action_broadcast" />
+                    </FrameLayout>
+
+                    <TextView
+                        android:id="@+id/txtActionBroadcast"
+                        style="@style/TalkbackTileLabel"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="5dp"
+                        android:ellipsize="none"
+                        android:gravity="center"
+                        android:text="@string/action_broadcast"
+                        android:textColor="@color/tb_primary" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:id="@+id/btnMonitor"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginEnd="6dp"
+                    android:layout_weight="1"
+                    android:background="@drawable/bg_action_tile"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:foreground="?attr/selectableItemBackground"
+                    android:gravity="center"
+                    android:minHeight="64dp"
+                    android:orientation="vertical"
+                    android:paddingHorizontal="2dp"
+                    android:paddingVertical="8dp">
+
+                    <FrameLayout
+                        android:layout_width="@dimen/tb_action_icon_slot"
+                        android:layout_height="@dimen/tb_action_icon_slot"
+                        android:layout_gravity="center_horizontal">
+
+                        <ImageView
+                            android:layout_width="@dimen/tb_action_monitor_icon_size"
+                            android:layout_height="@dimen/tb_action_monitor_icon_size"
+                            android:layout_gravity="bottom|center_horizontal"
+                            android:contentDescription="@string/action_monitor"
+                            android:scaleType="fitCenter"
+                            android:src="@drawable/ic_action_monitor" />
+                    </FrameLayout>
+
+                    <TextView
+                        android:id="@+id/txtActionMonitor"
+                        style="@style/TalkbackTileLabel"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="5dp"
+                        android:ellipsize="none"
+                        android:gravity="center"
+                        android:text="@string/action_monitor"
+                        android:textColor="@color/tb_monitor" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:id="@+id/btnEmergency"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginEnd="6dp"
+                    android:layout_weight="1"
+                    android:background="@drawable/bg_action_tile"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:foreground="?attr/selectableItemBackground"
+                    android:gravity="center"
+                    android:minHeight="64dp"
+                    android:orientation="vertical"
+                    android:paddingHorizontal="2dp"
+                    android:paddingVertical="8dp">
+
+                    <FrameLayout
+                        android:layout_width="@dimen/tb_action_icon_slot"
+                        android:layout_height="@dimen/tb_action_icon_slot"
+                        android:layout_gravity="center_horizontal">
+
+                        <ImageView
+                            android:layout_width="@dimen/tb_action_icon_size"
+                            android:layout_height="@dimen/tb_action_icon_size"
+                            android:layout_gravity="bottom|center_horizontal"
+                            android:contentDescription="@string/action_emergency"
+                            android:scaleType="fitCenter"
+                            android:src="@drawable/ic_action_emergency" />
+                    </FrameLayout>
+
+                    <TextView
+                        android:id="@+id/txtActionEmergency"
+                        style="@style/TalkbackTileLabel"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="5dp"
+                        android:ellipsize="none"
+                        android:gravity="center"
+                        android:text="@string/action_emergency"
+                        android:textColor="@color/tb_emergency" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:id="@+id/btnRecord"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:background="@drawable/bg_action_tile"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:foreground="?attr/selectableItemBackground"
+                    android:gravity="center"
+                    android:minHeight="64dp"
+                    android:orientation="vertical"
+                    android:paddingHorizontal="2dp"
+                    android:paddingVertical="8dp">
+
+                    <FrameLayout
+                        android:layout_width="@dimen/tb_action_icon_slot"
+                        android:layout_height="@dimen/tb_action_icon_slot"
+                        android:layout_gravity="center_horizontal">
+
+                        <ImageView
+                            android:layout_width="@dimen/tb_action_icon_size"
+                            android:layout_height="@dimen/tb_action_icon_size"
+                            android:layout_gravity="bottom|center_horizontal"
+                            android:contentDescription="@string/action_record"
+                            android:scaleType="fitCenter"
+                            android:src="@drawable/ic_action_record" />
+                    </FrameLayout>
+
+                    <TextView
+                        android:id="@+id/txtActionRecord"
+                        style="@style/TalkbackTileLabel"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="5dp"
+                        android:ellipsize="none"
+                        android:gravity="center"
+                        android:text="@string/action_record"
+                        android:textColor="@color/tb_record" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:paddingTop="14dp"
+                android:paddingBottom="8dp">
+
+                <TextView
+                    android:id="@+id/txtEndpointHeader"
+                    style="@style/TalkbackEndpointHeader"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="@string/online_endpoints" />
+
+                <LinearLayout
+                    android:id="@+id/btnViewAllEndpoints"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <TextView
+                        style="@style/TalkbackTileLabel"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/view_all"
+                        android:textColor="@color/tb_primary" />
+
+                    <ImageView
+                        android:layout_width="10dp"
+                        android:layout_height="10dp"
+                        android:layout_marginStart="2dp"
+                        android:contentDescription="@null"
+                        android:src="@drawable/ic_chevron_right"
+                        app:tint="@color/tb_primary" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <LinearLayout
+                android:id="@+id/containerEndpoints"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical" />
+
+            <TextView
+                android:id="@+id/txtTalkHint"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center"
+                android:paddingTop="8dp"
+                android:text="@string/no_session"
+                android:textColor="@color/tb_text_muted"
+                android:textSize="12sp"
+                android:visibility="gone" />
+        </LinearLayout>
+    </ScrollView>
+</LinearLayout>

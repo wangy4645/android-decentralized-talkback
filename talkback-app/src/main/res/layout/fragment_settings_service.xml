@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/tb_bg"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="@dimen/settings_subpage_padding">
+
+        <include layout="@layout/include_settings_toolbar" />
+
+        <TextView
+            style="@style/SettingsSectionLabel"
+            android:layout_marginTop="4dp"
+            android:text="@string/settings_section_this_device" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <EditText
+                android:id="@+id/inputLocalIp"
+                style="@style/SettingsEditText"
+                android:layout_width="0dp"
+                android:layout_weight="1"
+                android:enabled="false"
+                android:focusable="false"
+                android:hint="@string/settings_hint_local_ip"
+                android:inputType="none"
+                android:textColor="@color/tb_text_secondary" />
+
+            <Button
+                android:id="@+id/btnCopyLocalIp"
+                style="@style/SettingsOutlinedButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:minHeight="40dp"
+                android:paddingHorizontal="12dp"
+                android:text="@string/settings_copy_ip" />
+        </LinearLayout>
+
+        <EditText
+            android:id="@+id/inputSignalingPort"
+            style="@style/SettingsEditText"
+            android:hint="@string/settings_hint_signaling_port"
+            android:inputType="number" />
+
+        <TextView
+            style="@style/SettingsSectionLabel"
+            android:layout_marginTop="12dp"
+            android:text="@string/settings_section_remote_peers" />
+
+        <include
+            android:id="@+id/manualPeerEditor"
+            layout="@layout/include_manual_peer_editor" />
+
+        <TextView
+            android:id="@+id/txtState"
+            style="@style/SettingsHintText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingTop="10dp" />
+
+        <Button
+            android:id="@+id/btnStartService"
+            style="@style/SettingsPrimaryButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="@string/start_service" />
+
+        <Button
+            android:id="@+id/btnStopService"
+            style="@style/SettingsOutlinedButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="@string/stop_service" />
+
+        <TextView
+            style="@style/SettingsHintText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingTop="10dp"
+            android:text="@string/settings_service_start_hint" />
+    </LinearLayout>
+</ScrollView>

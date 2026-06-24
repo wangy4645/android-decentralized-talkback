@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/tb_bg"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:paddingHorizontal="16dp"
+        android:paddingTop="16dp"
+        android:paddingBottom="24dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:fontFamily="sans-serif"
+            android:includeFontPadding="false"
+            android:paddingBottom="16dp"
+            android:text="@string/settings_title"
+            android:textColor="@color/tb_text_primary"
+            android:textSize="@dimen/settings_page_title_text_size" />
+
+        <TextView
+            style="@style/SettingsSectionLabel"
+            android:text="@string/settings_section_device" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@drawable/bg_card"
+            android:orientation="vertical">
+
+            <include
+                android:id="@+id/rowIdentity"
+                layout="@layout/item_settings_row" />
+        </LinearLayout>
+
+        <TextView
+            style="@style/SettingsSectionLabel"
+            android:layout_marginTop="16dp"
+            android:text="@string/settings_section_network" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@drawable/bg_card"
+            android:orientation="vertical">
+
+            <include
+                android:id="@+id/rowNetwork"
+                layout="@layout/item_settings_row" />
+
+            <include
+                android:id="@+id/rowService"
+                layout="@layout/item_settings_row" />
+        </LinearLayout>
+
+        <TextView
+            style="@style/SettingsSectionLabel"
+            android:layout_marginTop="16dp"
+            android:text="@string/settings_section_security" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@drawable/bg_card"
+            android:orientation="vertical">
+
+            <include
+                android:id="@+id/rowTaskProfiles"
+                layout="@layout/item_settings_row" />
+
+            <include
+                android:id="@+id/rowSecurity"
+                layout="@layout/item_settings_row" />
+        </LinearLayout>
+
+        <TextView
+            style="@style/SettingsSectionLabel"
+            android:layout_marginTop="16dp"
+            android:text="@string/settings_section_system" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@drawable/bg_card"
+            android:orientation="vertical">
+
+            <include
+                android:id="@+id/rowGeneral"
+                layout="@layout/item_settings_row" />
+
+            <include
+                android:id="@+id/rowAbout"
+                layout="@layout/item_settings_row" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/txtSettingsSummary"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingTop="16dp"
+            android:textColor="@color/tb_text_muted"
+            android:textSize="@dimen/settings_footer_text_size" />
+    </LinearLayout>
+</ScrollView>
