@@ -19,3 +19,10 @@ Thumbs.db
 test-logs/
 logs-soak*/
 *.apk
+
+# Root-level dev artifacts (keep assets under docs/ or res/)
+/*.png
+/*.jpg
+/*.jpeg
+/*.pdf
+/Screenshot_*
