@@ -1,5 +1,7 @@
 # Android Board Decentralized Talkback
 
+Decentralized push-to-talk for Android boards over RF mesh — no central server, group PTT with membership authority and floor arbitration.
+
 This repository contains a reference implementation for decentralized push-to-talk (PTT) on Android communication modules over **RF mesh** (flat IP subnet), not dependent on external Wi-Fi/Ethernet infrastructure.
 
 ## Scope
