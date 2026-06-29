@@ -4,6 +4,10 @@ import com.talkback.core.audio.AudioRouter
 import com.talkback.core.audio.DefaultAudioRouter
 import com.talkback.core.audio.ModuleAudioMixer
 import com.talkback.core.channel.ChannelManager
+import com.talkback.core.contacts.CallableModuleGate
+import com.talkback.core.contacts.ContactEndpointRow
+import com.talkback.core.contacts.ContactsProjection
+import com.talkback.core.discovery.CompositeModuleDiscoveryService
 import com.talkback.core.discovery.DiscoverySignalHandler
 import com.talkback.core.discovery.GossipDiscoveryControl
 import com.talkback.core.discovery.ModuleDiscoveryService
@@ -15,6 +19,7 @@ import com.talkback.core.model.EndpointAddress
 import com.talkback.core.model.EndpointId
 import com.talkback.core.model.EndpointPriority
 import com.talkback.core.model.FloorPayload
+import com.talkback.core.model.FloorSnapshotDigest
 import com.talkback.core.media.MediaTopologyPolicy
 import com.talkback.core.model.GroupSessionPayload
 import com.talkback.core.model.MembershipSnapshot
@@ -28,6 +33,7 @@ import com.talkback.core.ptt.FloorArbitrator
 import com.talkback.core.ptt.FloorGrantResult
 import com.talkback.core.ptt.FloorPriorityPolicy
 import com.talkback.core.ptt.GroupFloorController
+import com.talkback.core.ptt.SnapshotResult
 import com.talkback.core.ptt.PttEvent
 import com.talkback.core.ptt.PttState
 import com.talkback.core.session.AnchorAuthority
@@ -40,6 +46,8 @@ import com.talkback.core.session.ChannelLifecyclePolicy
 import com.talkback.core.session.ChannelMode
 import com.talkback.core.session.ChannelModeFsm
 import com.talkback.core.session.ChannelReadiness
+import com.talkback.core.session.ConferenceParticipantManager
+import com.talkback.core.session.ConferenceSnapshot
 import com.talkback.core.session.GroupMediaTopology
 import com.talkback.core.session.GroupMemberReachability
 import com.talkback.core.session.GroupMembershipSupport
@@ -56,6 +64,9 @@ import com.talkback.core.session.MediaState
 import com.talkback.core.session.MediaTopology
 import com.talkback.core.session.MemberView
 import com.talkback.core.session.MeshTopology
+import com.talkback.core.session.ParticipantState
+import com.talkback.core.session.ReachabilitySnapshot
+import com.talkback.core.session.ReachabilityView
 import com.talkback.core.qos.IceConnectivity
 import com.talkback.core.qos.NetworkQualityMonitor
 import com.talkback.core.registry.EndpointRegistry
@@ -69,6 +80,7 @@ import com.talkback.core.signaling.PeerTarget
 import com.talkback.core.signaling.SignalingChannel
 import com.talkback.core.sync.RemoteModuleState
 import com.talkback.core.sync.StateSyncManager
+import com.talkback.core.util.FloorTrace
 import com.talkback.core.util.PttTimingLog
 import com.talkback.core.util.TalkbackLog
 import com.talkback.core.webrtc.ConferenceAudioBus
@@ -192,6 +204,23 @@ class TalkbackCoordinator(
     private val programAudioBus = ProgramAudioBus(mediaRegistry::getGroup)
     private val conferenceAudioBus = ConferenceAudioBus(mediaRegistry::getGroup)
     private val groupMeshReconciler = GroupMeshReconciler()
+    private val conferenceParticipantManager = ConferenceParticipantManager()
+    private val reachabilityView: ReachabilityView = object : ReachabilityView {
+        override fun snapshot(sessionId: String): ReachabilitySnapshot {
+            val session = sessions[sessionId] ?: return ReachabilitySnapshot.EMPTY
+            val online = linkedSetOf<ModuleId>()
+            val suspect = linkedSetOf<ModuleId>()
+            val evicted = linkedSetOf<ModuleId>()
+            GroupMembershipSupport.canonicalMemberModuleIds(session).forEach { moduleId ->
+                when (GroupMembershipSupport.membershipState(session, moduleId.value)) {
+                    GroupMemberReachability.ONLINE -> online.add(moduleId)
+                    GroupMemberReachability.SUSPECT -> suspect.add(moduleId)
+                    GroupMemberReachability.EVICTED -> evicted.add(moduleId)
+                }
+            }
+            return ReachabilitySnapshot(online, suspect, evicted)
+        }
+    }
     private val remoteHealthByModule = ConcurrentHashMap<String, AnchorHealthSnapshot>()
     @Volatile
     private var invariantF1BreakCount = 0
@@ -201,6 +230,44 @@ class TalkbackCoordinator(
             SessionType.CONFERENCE -> mediaRegistry.conferenceEngine(moduleId)
             else -> mediaRegistry.groupEngine(moduleId)
         }
+
+    private fun isConferenceSession(session: TalkbackSession): Boolean =
+        session.type == SessionType.CONFERENCE
+
+    private fun meshRoster(session: TalkbackSession): List<EndpointAddress> =
+        if (isConferenceSession(session)) {
+            conferenceParticipantManager.roster(session.id)
+        } else {
+            session.groupMembers
+        }
+
+    private fun meshParticipant(session: TalkbackSession, moduleId: String): ParticipantState =
+        if (isConferenceSession(session)) {
+            conferenceParticipantManager.participant(session.id, moduleId)
+        } else {
+            session.participant(moduleId)
+        }
+
+    private fun markMeshLinkCompleted(session: TalkbackSession, moduleId: String) {
+        session.meshCompletedModules.add(moduleId)
+        if (isConferenceSession(session)) {
+            conferenceParticipantManager.onMediaConnected(session.id, moduleId)
+        }
+    }
+
+    private fun conferenceSnapshot(session: TalkbackSession): ConferenceSnapshot =
+        conferenceParticipantManager.snapshot(session.id, localModuleId)
+
+    private fun initConferenceParticipantState(
+        session: TalkbackSession,
+        members: List<EndpointAddress>
+    ) {
+        conferenceParticipantManager.initSession(session.id, session.local, members)
+    }
+
+    private fun disposeConferenceParticipantState(sessionId: String) {
+        conferenceParticipantManager.removeSession(sessionId)
+    }
 
     private fun getMeshEngine(moduleId: String): WebRtcAudioEngine? = mediaRegistry.getGroup(moduleId)
 
@@ -247,6 +314,8 @@ class TalkbackCoordinator(
     private val pendingGroupPttRecoveryByChannel = ConcurrentHashMap<String, Boolean>()
     private val sessions = ConcurrentHashMap<String, TalkbackSession>()
     private val discoveredByModule = ConcurrentHashMap<String, PeerTarget>()
+    /** Modules verified via gossip or signed HELLO — Callable Roster gate (ADR-0005). */
+    private val callableModuleGate = CallableModuleGate()
     /** UDP return path learned from inbound signals; must survive partial mDNS refresh. */
     private val signalPeersByModule = ConcurrentHashMap<String, PeerTarget>()
     /** Last verified signal or HELLO from each remote module (not refreshed on UI reads). */
@@ -438,7 +507,8 @@ class TalkbackCoordinator(
         if (session.type != SessionType.CONFERENCE || !session.accepted) return@runOnCoordinatorSync false
         if (isConferenceUiReady(session)) return@runOnCoordinatorSync false
         conferenceReconnectStartedAtBySession.containsKey(session.id) ||
-            session.participants.values.any { it.media == MediaState.RECONNECTING } ||
+            conferenceParticipantManager.participants(session.id)
+                .any { it.media == MediaState.RECONNECTING } ||
             pendingHostRejoinByChannel.containsKey(channelId)
     }
 
@@ -524,6 +594,7 @@ class TalkbackCoordinator(
                 val incomingKeys = modules.map { it.moduleId.value }.toSet()
                 modules.forEach {
                     discoveredByModule[it.moduleId.value] = PeerTarget(it.host, it.port)
+                    applyDiscoveryCallableGate(it.moduleId.value)
                 }
                 // Never clear() — Huawei mDNS often publishes a subset and would drop HELLO-learned peers.
                 discoveredByModule.keys.toList().forEach { key ->
@@ -583,6 +654,7 @@ class TalkbackCoordinator(
         runCatching { discoveryService.stop() }
         runCatching { coordinatorExecutor.shutdownNow() }
         sessions.clear()
+        callableModuleGate.clear()
         pendingGroupJoinsBySession.clear()
         runCatching { mediaRegistry.releaseAll() }
         log("Coordinator stopped")
@@ -657,7 +729,7 @@ class TalkbackCoordinator(
 
         val local = session.local
         val channelId = session.channelId ?: return 0
-        val existingKeys = session.groupMembers.map { it.key }.toSet()
+        val existingKeys = meshRoster(session).map { it.key }.toSet()
         val targets = invitees.filter { it.moduleId != local.moduleId }
         if (targets.isEmpty()) return 0
 
@@ -667,7 +739,7 @@ class TalkbackCoordinator(
             session.memberModules.add(remote.moduleId)
         }
         if (toAdd.isNotEmpty()) {
-            session.groupMembers = session.groupMembers + toAdd
+            conferenceParticipantManager.addToRoster(session.id, toAdd)
         }
 
         val reconnectTargets = targets.filter { target ->
@@ -675,7 +747,9 @@ class TalkbackCoordinator(
             val disconnected = !qosMonitor.isGroupConnected(moduleId)
             when {
                 target.key !in existingKeys -> false
-                rejoin && moduleId in session.leftMemberEndpoints -> true
+                rejoin && moduleId in (
+                    conferenceParticipantManager.leftMemberEndpoints(session.id)?.keys ?: emptySet()
+                    ) -> true
                 disconnected -> true
                 else -> false
             }
@@ -683,14 +757,14 @@ class TalkbackCoordinator(
         val inviteTargets = (toAdd + reconnectTargets).distinctBy { it.key }
         if (inviteTargets.isEmpty()) return 0
 
-        val allMembers = session.groupMembers
+        val allMembers = meshRoster(session)
         applyGroupTopology(session, allMembers.size)
         val payloadBase = groupPayloadBase(session).copy(rejoin = rejoin)
 
         var sent = 0
         inviteTargets.forEach { remote ->
             val moduleId = remote.moduleId.value
-            session.leftMemberEndpoints.remove(moduleId)
+            conferenceParticipantManager.leftMemberEndpoints(session.id)?.remove(moduleId)
             val forReconnect = rejoin
             if (!canSendConferenceInvite(session, moduleId, forReconnect = forReconnect)) {
                 return@forEach
@@ -702,13 +776,12 @@ class TalkbackCoordinator(
                 return@forEach
             }
             session.remotePeersByModule[moduleId] = peer
-            session.participant(moduleId).apply {
-                invite = InviteState.INVITING
-                invitedAtMs = System.currentTimeMillis()
-                if (forReconnect) {
-                    media = MediaState.RECONNECTING
-                }
-            }
+            conferenceParticipantManager.onInviteSent(
+                session.id,
+                moduleId,
+                System.currentTimeMillis(),
+                forReconnect
+            )
             val existingEngine = getMeshEngine(moduleId)
             val engine = if (forReconnect && existingEngine != null &&
                 IceConnectivity.isConnected(qosMonitor.snapshot(moduleId)?.iceState)
@@ -787,7 +860,7 @@ class TalkbackCoordinator(
                 return@forEach
             }
             session.remotePeersByModule[moduleId] = peer
-            session.participant(moduleId).apply {
+            meshParticipant(session,moduleId).apply {
                 invite = InviteState.INVITING
                 invitedAtMs = System.currentTimeMillis()
             }
@@ -843,7 +916,7 @@ class TalkbackCoordinator(
                 return@forEach
             }
             session.remotePeersByModule[moduleId] = peer
-            session.participant(moduleId).apply {
+            meshParticipant(session,moduleId).apply {
                 invite = InviteState.INVITING
                 invitedAtMs = System.currentTimeMillis()
                 media = MediaState.RECONNECTING
@@ -946,7 +1019,11 @@ class TalkbackCoordinator(
         session.localInitiated = true
         session.initiatorModuleId = local.moduleId
         session.floorAuthorityModuleId = local.moduleId
-        session.groupMembers = allMembers
+        if (sessionType == SessionType.CONFERENCE) {
+            initConferenceParticipantState(session, allMembers)
+        } else {
+            session.groupMembers = allMembers
+        }
         session.rosterEpochMs = System.currentTimeMillis()
         session.memberModules.add(local.moduleId)
         remoteEndpoints.forEach { remote ->
@@ -964,12 +1041,25 @@ class TalkbackCoordinator(
         if (sessionType == SessionType.GROUP || sessionType == SessionType.CONFERENCE) {
             applyGroupTopology(session, allMembers.size)
         }
-        session.syncParticipantsFromMembers(local.moduleId)
+        if (sessionType == SessionType.CONFERENCE) {
+            conferenceParticipantManager.syncParticipantsFromMembers(session.id, local.moduleId)
+        } else {
+            session.syncParticipantsFromMembers(local.moduleId)
+        }
         val inviteTargets = groupInviteTargets(session, sessionType, local, remoteEndpoints)
         inviteTargets.forEach { remote ->
-            session.participant(remote.moduleId.value).apply {
-                invite = InviteState.INVITING
-                invitedAtMs = System.currentTimeMillis()
+            if (sessionType == SessionType.CONFERENCE) {
+                conferenceParticipantManager.onInviteSent(
+                    session.id,
+                    remote.moduleId.value,
+                    System.currentTimeMillis(),
+                    forReconnect = false
+                )
+            } else {
+                meshParticipant(session, remote.moduleId.value).apply {
+                    invite = InviteState.INVITING
+                    invitedAtMs = System.currentTimeMillis()
+                }
             }
         }
 
@@ -1021,20 +1111,40 @@ class TalkbackCoordinator(
         val session = sessions[sessionId] ?: return
         if (!session.type.usesFloorControl()) return
         val currentOwner = session.floor.owner()
+        log(
+            "PTT_GATE ${sessionTag(session)} sid=$sessionId " +
+                "hash=${System.identityHashCode(session)} " +
+                "owner=${currentOwner?.key ?: "null"} " +
+                "version=${session.floor.version()} epoch=${session.floor.epoch()} " +
+                "ptt=${session.ptt.state}"
+        )
         if (currentOwner != null && currentOwner != session.local) {
+            log(
+                "PTT_GATE ${sessionTag(session)} silent-return-owner " +
+                    "owner=${currentOwner.key} version=${session.floor.version()} " +
+                    "epoch=${session.floor.epoch()}"
+            )
             return
         }
         val reqState = session.ptt.onEvent(PttEvent.Press)
-        if (reqState != PttState.REQUEST_FLOOR) return
+        if (reqState != PttState.REQUEST_FLOOR) {
+            log(
+                "PTT_GATE ${sessionTag(session)} silent-return-state " +
+                    "ptt=$reqState version=${session.floor.version()} epoch=${session.floor.epoch()}"
+            )
+            return
+        }
         val version = session.floor.nextRequestVersion()
+        val traceId = FloorTrace.nextId()
         val payload = FloorPayload.forRequest(
             session.local,
             version,
             session.floor.epoch(),
-            priority
+            priority,
+            traceId = traceId
         ).encode()
         session.lastFloorRequestMs = System.currentTimeMillis()
-        dispatchFloorRequest(session, payload)
+        dispatchFloorRequest(session, payload, traceId)
     }
 
     private fun onPttReleasedInternal(sessionId: String) {
@@ -1251,16 +1361,19 @@ class TalkbackCoordinator(
 
     /** Peers still ringing or evicted by ring-timeout — not voluntary leavers. */
     private fun conferencePendingInviteTargets(session: TalkbackSession): List<EndpointAddress> {
-        val pendingFromRoster = session.groupMembers.filter { remote ->
+        val pendingFromRoster = meshRoster(session).filter { remote ->
             remote.moduleId != session.local.moduleId &&
                 !qosMonitor.isGroupConnected(remote.moduleId.value) &&
-                session.participant(remote.moduleId.value).invite in
+                meshParticipant(session, remote.moduleId.value).invite in
                 setOf(InviteState.INVITING, InviteState.RINGING, InviteState.EXPIRED)
         }
-        val pendingEvicted = session.leftMemberEndpoints.values.filter { remote ->
-            !qosMonitor.isGroupConnected(remote.moduleId.value) &&
-                session.participant(remote.moduleId.value).invite == InviteState.EXPIRED
-        }
+        val pendingEvicted = conferenceParticipantManager.leftMemberEndpoints(session.id)
+            ?.values
+            ?.filter { remote ->
+                !qosMonitor.isGroupConnected(remote.moduleId.value) &&
+                    meshParticipant(session, remote.moduleId.value).invite == InviteState.EXPIRED
+            }
+            ?: emptyList()
         return (pendingFromRoster + pendingEvicted).distinctBy { it.moduleId.value }
     }
 
@@ -1274,22 +1387,25 @@ class TalkbackCoordinator(
         }
     }
 
-    private fun toSessionSnapshot(session: TalkbackSession) = TalkbackSessionSnapshot(
+    private fun toSessionSnapshot(session: TalkbackSession): TalkbackSessionSnapshot {
+        val conferenceSnap = if (isConferenceSession(session)) conferenceSnapshot(session) else null
+        return TalkbackSessionSnapshot(
         sessionId = session.id,
         type = session.type,
         channelId = session.channelId,
         floorOwnerKey = session.floor.owner()?.key,
         localPttState = session.ptt.state,
-        memberKeys = session.groupMembers.map { it.key }.ifEmpty {
+        memberKeys = conferenceSnap?.roster?.map { it.key } ?: session.groupMembers.map { it.key }.ifEmpty {
             listOfNotNull(session.local.key, session.remote?.key)
         },
-        memberViews = buildMemberViews(session),
+        memberViews = conferenceSnap?.memberViews ?: buildMemberViews(session),
         connectedRemoteCount = countConnectedRemotes(session),
         callPhase = session.unicastPhase,
         remoteKey = session.remote?.key,
         localInitiated = session.localInitiated,
         muted = session.muted
     )
+    }
 
     fun networkQualityLabel(): String = runOnCoordinatorSync {
         val states = qosMonitor.all()
@@ -1306,6 +1422,22 @@ class TalkbackCoordinator(
 
     fun qosSnapshotForModule(moduleId: String): com.talkback.core.qos.QosSnapshot? =
         runOnCoordinatorSync { qosMonitor.snapshot(moduleId) }
+
+    /**
+     * Presentation semantic API: can the current floor holder's audio reach us right now.
+     *
+     * This is the Anti-Corruption boundary for the UI: callers learn "speaker reachable"
+     * without depending on the transport implementation (ICE today, AudioBus/decoder/jitter
+     * tomorrow). The Presentation layer MUST consume this instead of reading iceState.
+     * Returns false when no GROUP floor owner exists; true when the local device holds it.
+     */
+    fun isCurrentSpeakerReachable(channelId: String): Boolean = runOnCoordinatorSync {
+        val session = bestSessionForChannel(channelId) ?: return@runOnCoordinatorSync false
+        if (session.type != SessionType.GROUP) return@runOnCoordinatorSync false
+        val owner = session.floor.owner() ?: return@runOnCoordinatorSync false
+        if (owner == session.local) return@runOnCoordinatorSync true
+        isFloorHolderAudioReachable(session, owner.moduleId.value)
+    }
 
     fun remotePlaybackEnabledForModule(moduleId: String): Boolean? = runOnCoordinatorSync {
         getMeshEngine(moduleId)?.isRemotePlaybackEnabled()
@@ -1377,7 +1509,7 @@ class TalkbackCoordinator(
         connectedPeerModuleIds.forEach { peerId ->
             val engine = acquireMeshEngine(session, peerId, forReconnect = false)
             wireIceCallback(session, peerId, engine)
-            session.meshCompletedModules.add(peerId)
+            markMeshLinkCompleted(session,peerId)
             qosMonitor.updateIceState(peerId, "CONNECTED")
         }
         sessions[sessionId] = session
@@ -1474,17 +1606,33 @@ class TalkbackCoordinator(
     }
 
     fun peerDisplayRoster(): List<PeerDisplayRow> = runOnCoordinatorSync {
-        val localKey = localModuleId.value
-        val rows = LinkedHashMap<String, PeerDisplayRow>()
-        mergeRemoteModuleViews().forEach { state ->
-            val moduleId = state.presence.moduleId.value
-            if (moduleId == localKey) return@forEach
-            val moduleOnline = isModuleReachable(moduleId, state)
-            val endpointId = resolvePrimaryEndpointId(moduleId, state)
-            val key = endpointKey(moduleId, endpointId)
-            rows[key] = PeerDisplayRow(key, moduleOnline)
+        buildContactsProjectionInternal().map { PeerDisplayRow(it.endpointKey, it.moduleOnline) }
+    }
+
+    internal fun buildContactsProjection(): List<ContactEndpointRow> =
+        runOnCoordinatorSync { buildContactsProjectionInternal() }
+
+    private fun buildContactsProjectionInternal(): List<ContactEndpointRow> {
+        val moduleStates = stateSync.allModules().associateBy { it.presence.moduleId.value }
+        return ContactsProjection.project(
+            localModuleId = localModuleId.value,
+            callableModuleIds = callableModuleGate.verifiedModules(),
+            moduleStates = moduleStates,
+            isModuleReachable = ::isModuleReachable
+        )
+    }
+
+    private fun applyDiscoveryCallableGate(moduleId: String) {
+        val source = (discoveryService as? CompositeModuleDiscoveryService)?.discoverySource(moduleId)
+        when (source) {
+            "gossip" -> callableModuleGate.markVerified(moduleId)
+            "static", "nsd" -> if (!callableModuleGate.isVerified(moduleId)) {
+                log("DISCOVERY_UNVERIFIED module=$moduleId source=$source")
+            }
+            null -> if (!callableModuleGate.isVerified(moduleId)) {
+                log("DISCOVERY_UNVERIFIED module=$moduleId source=unknown")
+            }
         }
-        rows.values.toList()
     }
 
     /** stateSync + live discovery + static config; partial mDNS on some OEMs only fills one of the two. */
@@ -1711,6 +1859,7 @@ class TalkbackCoordinator(
 
     private fun handleSignal(signal: SignalEnvelope, fromPeer: PeerTarget) {
         if (!verifyIncomingSignal(signal)) return
+        callableModuleGate.markVerified(signal.from.moduleId.value)
         rememberSignalPeer(signal.from.moduleId.value, fromPeer)
         touchSession(signal.sessionId)
         when (signal.type) {
@@ -1782,9 +1931,44 @@ class TalkbackCoordinator(
         assertCanonicalConsistencyFromHello(payload)
         maybeRequestGroupResyncFromHello(payload)
         ensureCanonicalMemberPresent(payload, fromPeer)
+        applyAuthorityFloorSnapshotFromHello(payload)
         if (wasStale) {
             onRemoteModuleRecovered(payload.moduleId)
         }
+    }
+
+    private fun applyAuthorityFloorSnapshotFromHello(payload: HelloPayload) {
+        val digest = payload.floorSnapshot ?: return
+        val channelId = payload.channelId ?: return
+        sessions.values
+            .filter { it.type == SessionType.GROUP && it.accepted && it.channelId == channelId }
+            .forEach { session ->
+                val result = GroupFloorController.applyAuthorityFloorSnapshot(
+                    session = session,
+                    authorityModuleId = payload.moduleId,
+                    digest = digest,
+                    onOwnerChanged = { updateSessionReceivePlayback(session) }
+                )
+                when (result) {
+                    SnapshotResult.DEFERRED -> log(
+                        "SNAPSHOT_DEFER ${sessionTag(session)} sid=${session.id} " +
+                            "from=${payload.moduleId} ownerKey=${digest.ownerKey} " +
+                            "epoch=${digest.epoch} version=${digest.version} " +
+                            "reason=membership_not_converged"
+                    )
+                    SnapshotResult.UNCHANGED,
+                    SnapshotResult.IGNORED_OLD_EPOCH -> Unit
+                    SnapshotResult.UPDATED,
+                    SnapshotResult.OWNER_CHANGED -> log(
+                        "FLOOR_SNAPSHOT_APPLIED ${sessionTag(session)} sid=${session.id} " +
+                            "from=${payload.moduleId} result=$result " +
+                            "epoch=${digest.epoch} version=${digest.version} " +
+                            "owner=${digest.ownerKey ?: "null"} " +
+                            "localEpoch=${session.floor.epoch()} " +
+                            "localOwner=${session.floor.owner()?.key ?: "null"}"
+                    )
+                }
+            }
     }
 
     private fun handleCallInvite(signal: SignalEnvelope, fromPeer: PeerTarget) {
@@ -2088,7 +2272,9 @@ class TalkbackCoordinator(
         }
         if (hostConference.initiatorModuleId != localModuleId) return
 
-        val wasMember = rejoinerId in hostConference.leftMemberEndpoints ||
+        val leftKeys = conferenceParticipantManager.leftMemberEndpoints(hostConference.id)?.keys
+            ?: hostConference.leftMemberEndpoints.keys
+        val wasMember = rejoinerId in leftKeys ||
             rejoinerId in conferenceMemberRemoteIds(hostConference) ||
             hostConference.memberModules.any { it.value == rejoinerId }
         if (!wasMember) {
@@ -2102,9 +2288,6 @@ class TalkbackCoordinator(
 
     private fun markConferenceParticipantLeft(session: TalkbackSession, moduleId: String) {
         if (moduleId == localModuleId.value) return
-        session.groupMembers.find { it.moduleId.value == moduleId }?.let { endpoint ->
-            session.leftMemberEndpoints[moduleId] = endpoint
-        }
         removeConferenceParticipant(session, moduleId)
     }
 
@@ -2268,11 +2451,19 @@ class TalkbackCoordinator(
             if (sessionType == SessionType.CONFERENCE) ChannelMode.CONFERENCE else ChannelMode.GROUP_PTT,
             session.initiatorModuleId?.value ?: caller.moduleId.value
         )
-        session.syncParticipantsFromMembers(localModuleId)
-        session.participant(caller.moduleId.value).apply {
-            invite = InviteState.ACCEPTED
-            media = MediaState.CONNECTING
-            lastMediaChangeMs = System.currentTimeMillis()
+        if (sessionType == SessionType.CONFERENCE) {
+            conferenceParticipantManager.syncParticipantsFromMembers(session.id, localModuleId)
+        } else {
+            session.syncParticipantsFromMembers(localModuleId)
+        }
+        if (sessionType == SessionType.CONFERENCE) {
+            conferenceParticipantManager.onInviteAccepted(session.id, caller.moduleId.value)
+        } else {
+            meshParticipant(session, caller.moduleId.value).apply {
+                invite = InviteState.ACCEPTED
+                media = MediaState.CONNECTING
+                lastMediaChangeMs = System.currentTimeMillis()
+            }
         }
 
         val engine = acquireMeshEngine(session, caller.moduleId.value, forReconnect = false)
@@ -2280,7 +2471,7 @@ class TalkbackCoordinator(
         val answer = engine.applyRemoteOffer(payload.sdp, politeForInviteAnswer())
         drainPendingIce(session.id, caller.moduleId.value, engine)
         session.accepted = true
-        session.meshCompletedModules.add(caller.moduleId.value)
+        markMeshLinkCompleted(session,caller.moduleId.value)
         sendSignal(
             fromPeer,
             buildSignedEnvelope(SignalType.GROUP_ACCEPT, callee, caller, signal.sessionId, answer)
@@ -2331,7 +2522,7 @@ class TalkbackCoordinator(
         val answer = engine.applyRemoteOffer(payload.sdp, politeForInviteAnswer())
         drainPendingIce(session.id, caller.moduleId.value, engine)
         session.accepted = true
-        session.meshCompletedModules.add(caller.moduleId.value)
+        markMeshLinkCompleted(session,caller.moduleId.value)
         sendSignal(
             fromPeer,
             buildSignedEnvelope(SignalType.GROUP_ACCEPT, callee, caller, signal.sessionId, answer)
@@ -2565,7 +2756,7 @@ class TalkbackCoordinator(
         wireIceCallback(session, caller.moduleId.value, engine)
         val answer = engine.applyRemoteOffer(payload.sdp, politeForMeshPair(caller.moduleId.value))
         drainPendingIce(session.id, caller.moduleId.value, engine)
-        session.meshCompletedModules.add(caller.moduleId.value)
+        markMeshLinkCompleted(session,caller.moduleId.value)
         sendSignal(
             fromPeer,
             buildSignedEnvelope(SignalType.GROUP_ACCEPT, callee, caller, signal.sessionId, answer)
@@ -2577,7 +2768,7 @@ class TalkbackCoordinator(
     }
 
     private fun markConferenceParticipantActive(session: TalkbackSession, moduleId: String) {
-        session.participant(moduleId).apply {
+        meshParticipant(session,moduleId).apply {
             invite = InviteState.ACCEPTED
             if (media != MediaState.CONNECTED) {
                 media = MediaState.CONNECTING
@@ -2599,8 +2790,8 @@ class TalkbackCoordinator(
         if (IceConnectivity.isConnected(existingIce)) {
             session.remotePeersByModule.putIfAbsent(moduleId, fromPeer)
             session.memberModules.add(signal.from.moduleId)
-            session.meshCompletedModules.add(moduleId)
-            session.participant(moduleId).apply {
+            markMeshLinkCompleted(session,moduleId)
+            meshParticipant(session,moduleId).apply {
                 invite = InviteState.ACCEPTED
                 media = MediaState.CONNECTED
                 lastMediaChangeMs = System.currentTimeMillis()
@@ -2625,8 +2816,8 @@ class TalkbackCoordinator(
         wireIceCallback(session, moduleId, engine)
         engine.applyRemoteAnswer(signal.payload, politeForMeshPair(moduleId))
         drainPendingIce(session.id, moduleId, engine)
-        session.meshCompletedModules.add(moduleId)
-        session.participant(moduleId).apply {
+        markMeshLinkCompleted(session,moduleId)
+        meshParticipant(session,moduleId).apply {
             invite = InviteState.ACCEPTED
             media = MediaState.CONNECTING
             lastMediaChangeMs = System.currentTimeMillis()
@@ -2647,9 +2838,9 @@ class TalkbackCoordinator(
         peer: PeerTarget
     ) {
         val moduleId = remote.moduleId.value
-        session.leftMemberEndpoints.remove(moduleId)
-        if (session.groupMembers.none { it.moduleId.value == moduleId }) {
-            session.groupMembers = session.groupMembers + remote
+        conferenceParticipantManager.leftMemberEndpoints(session.id)?.remove(moduleId)
+        if (meshRoster(session).none { it.moduleId.value == moduleId }) {
+            conferenceParticipantManager.onLateJoin(session.id, moduleId, remote)
             session.channelId?.let { channelManager.join(it, remote.moduleId) }
             log("[${session.traceId}] Conference roster restored $moduleId after accept")
         }
@@ -2672,17 +2863,78 @@ class TalkbackCoordinator(
     }
 
     private fun handleFloorRequest(signal: SignalEnvelope) {
-        val session = sessions[signal.sessionId] ?: return
-        if (!session.type.usesFloorControl()) return
-        if (!GroupFloorController.shouldProcessFloorRequest(session, localModuleId.value)) {
+        val floorPayload = FloorPayload.decode(signal.payload)
+        val traceId = floorPayload.traceId
+        val session = sessions[signal.sessionId]
+        if (session == null) {
+            FloorTrace.requestDropped(
+                traceId,
+                signal.sessionId,
+                "NO_SESSION",
+                mapOf("from" to signal.from.key)
+            )
+            log(
+                "FLOOR_DROP reason=NO_SESSION sid=${signal.sessionId} " +
+                    "from=${signal.from.key}"
+            )
             return
         }
-        processFloorArbitration(session, signal)
+        if (!session.type.usesFloorControl()) {
+            FloorTrace.requestDropped(
+                traceId,
+                session.id,
+                "NO_FLOOR_CONTROL",
+                mapOf("from" to signal.from.key, "type" to session.type.name)
+            )
+            log(
+                "FLOOR_DROP reason=NO_FLOOR_CONTROL sid=${session.id} " +
+                    "from=${signal.from.key} type=${session.type}"
+            )
+            return
+        }
+        val authorityModule = session.floorAuthorityModuleId?.value
+        val localIsAuthority = GroupFloorController.isFloorAuthority(session, localModuleId.value)
+        FloorTrace.requestObserved(
+            traceId,
+            session.id,
+            signal.from.key,
+            authorityModule,
+            localIsAuthority
+        )
+        log(
+            "REQUEST_OBSERVED ${sessionTag(session)} sid=${session.id} " +
+                "hash=${System.identityHashCode(session)} from=${signal.from.key} " +
+                "authorityModule=${authorityModule ?: "null"} " +
+                "localIsAuthority=$localIsAuthority"
+        )
+        if (!GroupFloorController.shouldProcessFloorRequest(session, localModuleId.value)) {
+            FloorTrace.requestDropped(
+                traceId,
+                session.id,
+                "NOT_AUTHORITY",
+                mapOf(
+                    "from" to signal.from.key,
+                    "local" to localModuleId.value,
+                    "authority" to (authorityModule ?: "null")
+                )
+            )
+            log(
+                "FLOOR_DROP reason=NOT_AUTHORITY ${sessionTag(session)} sid=${session.id} " +
+                    "from=${signal.from.key} local=${localModuleId.value} " +
+                    "authorityModule=${authorityModule ?: "null"}"
+            )
+            return
+        }
+        processFloorArbitration(session, signal, floorPayload)
     }
 
-    private fun processFloorArbitration(session: TalkbackSession, signal: SignalEnvelope) {
+    private fun processFloorArbitration(
+        session: TalkbackSession,
+        signal: SignalEnvelope,
+        floorPayload: FloorPayload
+    ) {
         if (!session.type.usesFloorControl()) return
-        val floorPayload = FloorPayload.decode(signal.payload)
+        val traceId = floorPayload.traceId
         val requester = signal.from
         val previousOwner = session.floor.owner()
         val effectivePriority = resolveRegisteredPriority(requester, floorPayload.priority)
@@ -2692,6 +2944,9 @@ class TalkbackCoordinator(
                     "claimed=${floorPayload.priority} registered=$effectivePriority"
             )
         }
+        val localEpochBefore = session.floor.epoch()
+        val localVersionBefore = session.floor.version()
+        val memberPresent = session.groupMembers.any { it.key == requester.key }
         val result = session.floor.tryGrant(
             requester = requester,
             requestVersion = floorPayload.floorVersion,
@@ -2700,13 +2955,33 @@ class TalkbackCoordinator(
             requestTsMs = signal.timestampMs,
             arbitrator = floorArbitrator
         )
+        FloorTrace.arbitration(
+            traceId,
+            session.id,
+            requester.key,
+            floorPayload.floorEpoch,
+            localEpochBefore,
+            floorPayload.floorVersion,
+            localVersionBefore,
+            previousOwner?.key,
+            memberPresent,
+            result.name
+        )
+        log(
+            "TRY_GRANT ${sessionTag(session)} requester=${requester.key} " +
+                "requestEpoch=${floorPayload.floorEpoch} localEpoch=$localEpochBefore " +
+                "requestVersion=${floorPayload.floorVersion} localVersion=$localVersionBefore " +
+                "currentOwner=${previousOwner?.key ?: "null"} memberPresent=$memberPresent " +
+                "result=$result"
+        )
         when (result) {
             FloorGrantResult.GRANTED, FloorGrantResult.PREEMPTED -> {
                 val grantPayload = FloorPayload.forRequest(
                     requester,
                     session.floor.version(),
                     session.floor.epoch(),
-                    effectivePriority
+                    effectivePriority,
+                    traceId = traceId
                 )
                 applyFloorGrant(
                     session,
@@ -2714,9 +2989,10 @@ class TalkbackCoordinator(
                     grantPayload.floorVersion,
                     grantPayload.floorEpoch,
                     effectivePriority,
-                    floorAlreadyGranted = true
+                    floorAlreadyGranted = true,
+                    traceId = traceId
                 )
-                broadcastFloorGranted(session, grantPayload.encode())
+                broadcastFloorGranted(session, grantPayload.encode(), traceId)
                 if (result == FloorGrantResult.PREEMPTED &&
                     previousOwner != null &&
                     previousOwner != requester
@@ -2757,17 +3033,60 @@ class TalkbackCoordinator(
     }
 
     private fun handleFloorGranted(signal: SignalEnvelope) {
-        val session = sessions[signal.sessionId] ?: return
         val floorPayload = FloorPayload.decode(signal.payload)
+        val traceId = floorPayload.traceId
+        val session = sessions[signal.sessionId]
+        if (session == null) {
+            FloorTrace.grantDropped(
+                traceId,
+                signal.sessionId,
+                "NO_SESSION",
+                mapOf("from" to signal.from.key)
+            )
+            log("GRANT_OBSERVED sid=${signal.sessionId} resolved=NO_SESSION from=${signal.from.key}")
+            return
+        }
         if (session.type == SessionType.GROUP) {
-            val owner = GroupFloorController.resolveFloorOwner(session, floorPayload.requesterKey) ?: return
+            FloorTrace.grantReceived(
+                traceId,
+                session.id,
+                signal.from.key,
+                floorPayload.requesterKey,
+                floorPayload.floorEpoch,
+                session.floor.epoch()
+            )
+            val owner = GroupFloorController.resolveFloorOwner(session, floorPayload.requesterKey)
+            log(
+                "GRANT_OBSERVED ${sessionTag(session)} sid=${session.id} " +
+                    "from=${signal.from.key} requesterKey=${floorPayload.requesterKey} " +
+                    "resolved=${if (owner != null) "OK" else "ROSTER_MISS"} " +
+                    "grantEpoch=${floorPayload.floorEpoch} localEpoch=${session.floor.epoch()} " +
+                    "ownerIsLocal=${owner == session.local}"
+            )
+            if (owner == null) {
+                FloorTrace.grantDropped(
+                    traceId,
+                    session.id,
+                    "ROSTER_MISS",
+                    mapOf("requesterKey" to floorPayload.requesterKey)
+                )
+                return
+            }
             applyFloorGrant(
                 session,
                 owner,
                 floorPayload.floorVersion,
                 floorPayload.floorEpoch,
                 floorPayload.priority,
-                floorAlreadyGranted = false
+                floorAlreadyGranted = false,
+                traceId = traceId
+            )
+        } else {
+            FloorTrace.grantDropped(
+                traceId,
+                session.id,
+                "NO_FLOOR_CONTROL",
+                mapOf("type" to session.type.name)
             )
         }
     }
@@ -2782,10 +3101,26 @@ class TalkbackCoordinator(
         floorVersion: Long,
         floorEpoch: Long,
         priority: EndpointPriority,
-        floorAlreadyGranted: Boolean
+        floorAlreadyGranted: Boolean,
+        traceId: Long = 0L
     ) {
         if (session.type != SessionType.GROUP) return
+        var grantAccepted = floorAlreadyGranted
         if (!floorAlreadyGranted) {
+            val localEpochBefore = session.floor.epoch()
+            val staleEpoch = floorEpoch < localEpochBefore
+            if (staleEpoch) {
+                FloorTrace.grantDropped(
+                    traceId,
+                    session.id,
+                    "STALE_EPOCH",
+                    mapOf(
+                        "grantEpoch" to floorEpoch.toString(),
+                        "localEpoch" to localEpochBefore.toString(),
+                        "owner" to owner.key
+                    )
+                )
+            }
             GroupFloorController.applyRemoteGrant(
                 session,
                 owner,
@@ -2793,6 +3128,9 @@ class TalkbackCoordinator(
                 floorEpoch,
                 priority
             )
+            if (!staleEpoch) {
+                grantAccepted = true
+            }
         }
         PttTimingLog.grantApplied(session.id)
         if (owner == session.local) {
@@ -2807,9 +3145,26 @@ class TalkbackCoordinator(
         }
         syncProgramRelay(session)
         updateSessionReceivePlayback(session)
+        if (grantAccepted) {
+            FloorTrace.grantApplied(
+                traceId,
+                session.id,
+                owner.key,
+                session.floor.epoch(),
+                session.floor.version()
+            )
+        }
     }
 
-    private fun broadcastFloorGranted(session: TalkbackSession, grantPayload: String) {
+    private fun broadcastFloorGranted(session: TalkbackSession, grantPayload: String, traceId: Long = 0L) {
+        val targets = targetsForSession(session).joinToString(",") { (peer, remote) ->
+            "${remote.key}@${peer.host}:${peer.port}"
+        }
+        FloorTrace.grantBroadcast(traceId, session.id, "[$targets]")
+        log(
+            "GRANT_BROADCAST ${sessionTag(session)} sid=${session.id} " +
+                "targets=[$targets]"
+        )
         broadcastFloorSignal(session, SignalType.FLOOR_GRANTED, grantPayload)
     }
 
@@ -2836,7 +3191,20 @@ class TalkbackCoordinator(
     private fun handleFloorRelease(signal: SignalEnvelope) {
         val session = sessions[signal.sessionId] ?: return
         if (!session.type.usesFloorControl()) return
-        session.floor.release(signal.from)
+        val oldOwner = session.floor.owner()
+        val versionBefore = session.floor.version()
+        val epochBefore = session.floor.epoch()
+        val fromMatchesOwner = oldOwner != null && oldOwner == signal.from
+        val released = session.floor.release(signal.from)
+        val newOwner = session.floor.owner()
+        log(
+            "FLOOR_RELEASE_DIAG ${sessionTag(session)} sid=${session.id} " +
+                "hash=${System.identityHashCode(session)} " +
+                "oldOwner=${oldOwner?.key ?: "null"} from=${signal.from.key} " +
+                "fromMatchesOwner=$fromMatchesOwner released=$released " +
+                "newOwner=${newOwner?.key ?: "null"} " +
+                "version=$versionBefore->${session.floor.version()} epoch=$epochBefore"
+        )
         if (session.local == signal.from) {
             session.ptt.onEvent(PttEvent.Release)
         }
@@ -2953,7 +3321,7 @@ class TalkbackCoordinator(
                 reDialByRemoteModule.remove(moduleId)
             }
         }
-        session.groupMembers = members
+        conferenceParticipantManager.replaceRoster(session.id, members)
         members.forEach { session.memberModules.add(it.moduleId) }
         session.memberModules.add(localModuleId)
         session.touch()
@@ -2962,15 +3330,12 @@ class TalkbackCoordinator(
     private fun removeConferenceParticipant(session: TalkbackSession, moduleId: String) {
         if (moduleId == localModuleId.value) return
         releaseFloorIfHolderUnavailable(session, moduleId)
-        session.groupMembers.find { it.moduleId.value == moduleId }?.let { endpoint ->
-            session.leftMemberEndpoints[moduleId] = endpoint
-        }
+        conferenceParticipantManager.applyPrune(session.id, moduleId)
         session.memberModules.remove(ModuleId(moduleId))
-        session.groupMembers = session.groupMembers.filter { it.moduleId.value != moduleId }
         releaseMeshPeer(session, moduleId)
         session.channelId?.let { channelManager.leave(it, ModuleId(moduleId)) }
         if (session.remote?.moduleId?.value == moduleId) {
-            val nextRemote = session.groupMembers.firstOrNull { it.moduleId != localModuleId }
+            val nextRemote = meshRoster(session).firstOrNull { it.moduleId != localModuleId }
             session.remote = nextRemote
             session.remotePeer = nextRemote?.moduleId?.value?.let { session.remotePeersByModule[it] }
         }
@@ -2989,11 +3354,6 @@ class TalkbackCoordinator(
         signalPayload: String
     ): Boolean {
         if (moduleId == localModuleId.value) return false
-        if (session.type == SessionType.CONFERENCE) {
-            session.groupMembers.find { it.moduleId.value == moduleId }?.let { endpoint ->
-                session.leftMemberEndpoints[moduleId] = endpoint
-            }
-        }
         val connected = qosMonitor.isGroupConnected(moduleId)
         if (connected && (signalPayload == "BUSY" || signalPayload == "EXPIRED")) {
             log(
@@ -3002,12 +3362,26 @@ class TalkbackCoordinator(
             )
             return false
         }
+        if (session.type == SessionType.CONFERENCE) {
+            if (!conferenceParticipantManager.evictInvitee(session.id, moduleId, inviteState)) {
+                return false
+            }
+            session.memberModules.remove(ModuleId(moduleId))
+            releaseMeshPeer(session, moduleId)
+            session.channelId?.let { channelManager.leave(it, ModuleId(moduleId)) }
+            if (session.remote?.moduleId?.value == moduleId) {
+                val nextRemote = meshRoster(session).firstOrNull { it.moduleId != localModuleId }
+                session.remote = nextRemote
+                session.remotePeer = nextRemote?.moduleId?.value?.let { session.remotePeersByModule[it] }
+            }
+            return true
+        }
         if (session.type == SessionType.GROUP) {
             val wasPending = session.pendingInviteeEndpoints.remove(moduleId) != null
             val wasCanonical = session.groupMembers.any { it.moduleId.value == moduleId }
             if (wasPending && !wasCanonical) {
                 session.memberModules.remove(ModuleId(moduleId))
-                session.participant(moduleId).invite = inviteState
+                meshParticipant(session,moduleId).invite = inviteState
                 releaseMeshPeer(session, moduleId)
                 session.channelId?.let { channelManager.leave(it, ModuleId(moduleId)) }
                 return true
@@ -3015,7 +3389,7 @@ class TalkbackCoordinator(
         }
         session.groupMembers = session.groupMembers.filter { it.moduleId.value != moduleId }
         session.memberModules.remove(ModuleId(moduleId))
-        session.participant(moduleId).invite = inviteState
+        meshParticipant(session,moduleId).invite = inviteState
         releaseMeshPeer(session, moduleId)
         session.channelId?.let { channelManager.leave(it, ModuleId(moduleId)) }
         if (session.remote?.moduleId?.value == moduleId) {
@@ -3060,7 +3434,7 @@ class TalkbackCoordinator(
     ): Boolean {
         if (qosMonitor.isGroupConnected(moduleId)) return false
         if (forReconnect) return true
-        val participant = session.participant(moduleId)
+        val participant = meshParticipant(session,moduleId)
         if (participant.invite == InviteState.INVITING || participant.invite == InviteState.RINGING) {
             if (System.currentTimeMillis() - participant.invitedAtMs < CONFERENCE_INVITE_MIN_INTERVAL_MS) {
                 return false
@@ -3070,11 +3444,15 @@ class TalkbackCoordinator(
     }
 
     private fun conferenceMemberRemoteIds(session: TalkbackSession): Set<String> =
-        session.groupMembers
-            .asSequence()
-            .map { it.moduleId.value }
-            .filter { it != localModuleId.value }
-            .toSet()
+        if (isConferenceSession(session)) {
+            conferenceParticipantManager.remoteModuleIds(session.id, localModuleId)
+        } else {
+            session.groupMembers
+                .asSequence()
+                .map { it.moduleId.value }
+                .filter { it != localModuleId.value }
+                .toSet()
+        }
 
     private fun resumeConferenceAudioAfterPeerLeft(session: TalkbackSession) {
         if (session.type != SessionType.CONFERENCE || !session.accepted || session.muted) return
@@ -3093,7 +3471,7 @@ class TalkbackCoordinator(
 
     private fun repairConferenceMeshAfterLeave(session: TalkbackSession) {
         if (session.type != SessionType.CONFERENCE || !session.accepted) return
-        val remaining = session.groupMembers.map { it.moduleId }.toSet()
+        val remaining = meshRoster(session).map { it.moduleId }.toSet()
         if (remaining.size <= 1) {
             resumeConferenceAudioAfterPeerLeft(session)
             return
@@ -3120,6 +3498,7 @@ class TalkbackCoordinator(
                 clearRejoinHintsForSession(channelId, session.id)
                 cancelHostRejoinRetry(channelId)
             }
+            disposeConferenceParticipantState(session.id)
         }
         pendingIceBySession.remove(sessionId)
         pendingGroupJoinsBySession.remove(sessionId)
@@ -3277,13 +3656,29 @@ class TalkbackCoordinator(
         }
     }
 
-    private fun dispatchFloorRequest(session: TalkbackSession, payload: String) {
+    private fun dispatchFloorRequest(session: TalkbackSession, payload: String, traceId: Long) {
         if (!session.type.usesFloorControl()) return
+        val floorPayload = FloorPayload.decode(payload)
+        val effectiveTraceId = traceId.takeIf { it > 0L } ?: floorPayload.traceId
+        val authority = session.floorAuthorityModuleId?.value ?: session.initiatorModuleId?.value
         if (GroupFloorController.isFloorAuthority(session, localModuleId.value)) {
-            processFloorArbitration(session, syntheticFloorRequest(session, payload))
+            FloorTrace.requestSend(
+                effectiveTraceId,
+                session.id,
+                session.local.key,
+                floorPayload.floorEpoch,
+                floorPayload.floorVersion,
+                authority,
+                "SEND_OK_LOCAL"
+            )
+            processFloorArbitration(session, syntheticFloorRequest(session, payload), floorPayload)
+            log(
+                "FLOOR_REQUEST_SEND ${sessionTag(session)} sid=${session.id} " +
+                    "hash=${System.identityHashCode(session)} result=SEND_OK_LOCAL"
+            )
             return
         }
-        sendFloorRequestToAuthority(session, payload)
+        sendFloorRequestToAuthority(session, payload, effectiveTraceId)
     }
 
     private fun syntheticFloorRequest(session: TalkbackSession, payload: String): SignalEnvelope =
@@ -3298,20 +3693,67 @@ class TalkbackCoordinator(
             signature = ""
         )
 
-    private fun sendFloorRequestToAuthority(session: TalkbackSession, payload: String) {
+    private fun sendFloorRequestToAuthority(session: TalkbackSession, payload: String, traceId: Long) {
         if (!session.type.usesFloorControl()) return
+        val floorPayload = FloorPayload.decode(payload)
         val authorityId = session.floorAuthorityModuleId ?: session.initiatorModuleId ?: run {
+            FloorTrace.requestSend(
+                traceId,
+                session.id,
+                session.local.key,
+                floorPayload.floorEpoch,
+                floorPayload.floorVersion,
+                null,
+                "AUTHORITY_MISSING"
+            )
+            log(
+                "FLOOR_REQUEST_SEND ${sessionTag(session)} sid=${session.id} " +
+                    "hash=${System.identityHashCode(session)} result=AUTHORITY_MISSING"
+            )
             log("[${session.traceId}] Floor request failed: no floor authority")
             return
         }
         val peer = session.remotePeersByModule[authorityId.value] ?: run {
+            FloorTrace.requestSend(
+                traceId,
+                session.id,
+                session.local.key,
+                floorPayload.floorEpoch,
+                floorPayload.floorVersion,
+                authorityId.value,
+                "PEER_UNREACHABLE"
+            )
+            log(
+                "FLOOR_REQUEST_SEND ${sessionTag(session)} sid=${session.id} " +
+                    "hash=${System.identityHashCode(session)} result=PEER_UNREACHABLE " +
+                    "authority=${authorityId.value}"
+            )
             log("[${session.traceId}] Floor request failed: authority ${authorityId.value} unreachable")
             return
         }
         val remote = endpointForModule(session, authorityId)
+        val discoveredPeer = discoveredByModule[authorityId.value]
+        val peerIsStale = discoveredPeer != null && discoveredPeer != peer
         sendSignal(
             peer,
             buildSignedEnvelope(SignalType.FLOOR_REQUEST, session.local, remote, session.id, payload)
+        )
+        FloorTrace.requestSend(
+            traceId,
+            session.id,
+            session.local.key,
+            floorPayload.floorEpoch,
+            floorPayload.floorVersion,
+            authorityId.value,
+            "SEND_OK"
+        )
+        log(
+            "FLOOR_REQUEST_SEND ${sessionTag(session)} sid=${session.id} " +
+                "hash=${System.identityHashCode(session)} result=SEND_OK " +
+                "authority=${authorityId.value} to=${remote.key} " +
+                "peerTarget=${peer.host}:${peer.port} " +
+                "discovered=${discoveredPeer?.let { "${it.host}:${it.port}" } ?: "null"} " +
+                "peerStale=$peerIsStale"
         )
     }
 
@@ -3417,8 +3859,12 @@ class TalkbackCoordinator(
             ?: initiatorId
         session.initiatorModuleId = initiatorId
         session.floorAuthorityModuleId = authorityId
-        session.groupMembers = members
-        GroupMembershipSupport.syncMembershipFromGroupMembers(session)
+        if (session.type == SessionType.CONFERENCE) {
+            initConferenceParticipantState(session, members)
+        } else {
+            session.groupMembers = members
+            GroupMembershipSupport.syncMembershipFromGroupMembers(session)
+        }
         if (payload.rosterEpochMs > 0L) {
             session.rosterEpochMs = payload.rosterEpochMs
         }
@@ -3997,8 +4443,10 @@ class TalkbackCoordinator(
     /** Active roster plus evicted peers still eligible for conference re-invite. */
     private fun fullConferenceRoster(session: TalkbackSession): List<EndpointAddress> {
         val byModule = LinkedHashMap<String, EndpointAddress>()
-        session.groupMembers.forEach { byModule[it.moduleId.value] = it }
-        session.leftMemberEndpoints.forEach { (id, endpoint) -> byModule.putIfAbsent(id, endpoint) }
+        meshRoster(session).forEach { byModule[it.moduleId.value] = it }
+        conferenceParticipantManager.leftMemberEndpoints(session.id)
+            ?.forEach { (id, endpoint) -> byModule.putIfAbsent(id, endpoint) }
+            ?: session.leftMemberEndpoints.forEach { (id, endpoint) -> byModule.putIfAbsent(id, endpoint) }
         return byModule.values.toList()
     }
 
@@ -4079,7 +4527,7 @@ class TalkbackCoordinator(
         val ice = qosMonitor.snapshot(peerId)?.iceState
         val meshPeer = session.meshCompletedModules.contains(peerId)
         if (meshPeer && IceConnectivity.isConnected(ice)) return
-        val invitePending = session.participant(peerId).invite == InviteState.INVITING &&
+        val invitePending = meshParticipant(session,peerId).invite == InviteState.INVITING &&
             !meshPeer
         if (invitePending) {
             log("${sessionTag(session)} Mesh join deferred: $peerId invite still pending")
@@ -4187,10 +4635,34 @@ class TalkbackCoordinator(
         } ?: anchorSession
         val digest = groupSession?.let { TopologyDigest.fromSession(it) }
         if (groupSession != null && digest != null) {
+            val floorDigest = groupSession.takeIf {
+                GroupFloorController.canPublishFloorSnapshot(it, localModuleId.value)
+            }?.floor?.let { floor ->
+                FloorSnapshotDigest(
+                    epoch = floor.epoch(),
+                    version = floor.version(),
+                    ownerKey = floor.owner()?.key,
+                    ownerPriority = floor.ownerPriority()
+                )
+            }
             log(
                 "GROUP_DIGEST sessionId=${groupSession.id} channelId=${groupSession.channelId} " +
                     "anchorEpoch=${digest.anchorEpoch} rosterEpoch=${digest.rosterEpoch} " +
-                    "memberHash=${digest.memberHash}"
+                    "memberHash=${digest.memberHash}" +
+                    (floorDigest?.let {
+                        " floorEpoch=${it.epoch} floorVersion=${it.version} " +
+                            "floorOwner=${it.ownerKey ?: "null"}"
+                    } ?: "")
+            )
+        }
+        val floorSnapshot = groupSession?.takeIf {
+            GroupFloorController.canPublishFloorSnapshot(it, localModuleId.value)
+        }?.let { session ->
+            FloorSnapshotDigest(
+                epoch = session.floor.epoch(),
+                version = session.floor.version(),
+                ownerKey = session.floor.owner()?.key,
+                ownerPriority = session.floor.ownerPriority()
             )
         }
         val payload = HelloPayload(
@@ -4205,7 +4677,8 @@ class TalkbackCoordinator(
             channelId = groupSession?.channelId,
             rosterEpoch = digest?.rosterEpoch ?: 0L,
             meshGeneration = digest?.meshGeneration ?: 0L,
-            memberHash = digest?.memberHash ?: 0
+            memberHash = digest?.memberHash ?: 0,
+            floorSnapshot = floorSnapshot
         ).encode()
         val from = endpointRegistry.allOnline().firstOrNull()?.address
             ?: EndpointAddress(localModuleId, com.talkback.core.model.EndpointId("E01"))
@@ -4289,7 +4762,7 @@ class TalkbackCoordinator(
                 IceConnectivity.isConnected(state) -> markUnicastConnected(session)
                 IceConnectivity.isLost(state) -> {
                     if (session.participants.containsKey(remoteModuleId)) {
-                        session.participant(remoteModuleId).media = when (state) {
+                        meshParticipant(session,remoteModuleId).media = when (state) {
                             "FAILED" -> MediaState.FAILED
                             else -> MediaState.RECONNECTING
                         }
@@ -4321,12 +4794,21 @@ class TalkbackCoordinator(
                         }
                     }
                 sessions.values.forEach { session ->
-                    if (session.participants.containsKey(remoteModuleId)) {
-                        session.participant(remoteModuleId).apply {
-                            media = MediaState.CONNECTED
-                            lastMediaChangeMs = System.currentTimeMillis()
-                            if (invite == InviteState.INVITING || invite == InviteState.RINGING) {
-                                invite = InviteState.ACCEPTED
+                    val tracked = if (isConferenceSession(session)) {
+                        conferenceParticipantManager.containsParticipant(session.id, remoteModuleId)
+                    } else {
+                        session.participants.containsKey(remoteModuleId)
+                    }
+                    if (tracked) {
+                        if (isConferenceSession(session)) {
+                            conferenceParticipantManager.onMediaConnected(session.id, remoteModuleId)
+                        } else {
+                            meshParticipant(session, remoteModuleId).apply {
+                                media = MediaState.CONNECTED
+                                lastMediaChangeMs = System.currentTimeMillis()
+                                if (invite == InviteState.INVITING || invite == InviteState.RINGING) {
+                                    invite = InviteState.ACCEPTED
+                                }
                             }
                         }
                     }
@@ -4425,10 +4907,20 @@ class TalkbackCoordinator(
                         }
                     }
                 sessions.values.forEach { session ->
-                    if (session.participants.containsKey(remoteModuleId)) {
-                        session.participant(remoteModuleId).media = when (state) {
+                    val tracked = if (isConferenceSession(session)) {
+                        conferenceParticipantManager.containsParticipant(session.id, remoteModuleId)
+                    } else {
+                        session.participants.containsKey(remoteModuleId)
+                    }
+                    if (tracked) {
+                        val media = when (state) {
                             "FAILED" -> MediaState.FAILED
                             else -> MediaState.RECONNECTING
+                        }
+                        if (isConferenceSession(session)) {
+                            conferenceParticipantManager.updateMediaState(session.id, remoteModuleId, media)
+                        } else {
+                            meshParticipant(session, remoteModuleId).media = media
                         }
                     }
                 }
@@ -5227,7 +5719,7 @@ class TalkbackCoordinator(
         remote: EndpointAddress
     ) {
         val accepted = moduleId in session.meshCompletedModules ||
-            session.participant(moduleId).invite == InviteState.ACCEPTED
+            meshParticipant(session,moduleId).invite == InviteState.ACCEPTED
         if (accepted || getMeshEngine(moduleId) != null) {
             if (attemptConferencePeerIceRestart(session, moduleId, remote)) {
                 log("[${session.traceId}] Forcing conference ICE-restart for $moduleId stuck in $ice")
@@ -5354,7 +5846,18 @@ class TalkbackCoordinator(
     private fun isLiveConferenceSession(session: TalkbackSession): Boolean {
         if (!session.accepted) return false
         if (countConnectedRemotes(session) > 0) return true
-        if (session.participants.values.any { ps ->
+        if (isConferenceSession(session) &&
+            conferenceParticipantManager.participants(session.id).any { ps ->
+                ps.invite == InviteState.INVITING ||
+                    ps.invite == InviteState.RINGING ||
+                    (ps.invite == InviteState.ACCEPTED &&
+                        (ps.media == MediaState.CONNECTING || ps.media == MediaState.RECONNECTING))
+            }
+        ) {
+            return true
+        }
+        if (!isConferenceSession(session) &&
+            session.participants.values.any { ps ->
                 ps.invite == InviteState.INVITING ||
                     ps.invite == InviteState.RINGING ||
                     (ps.invite == InviteState.ACCEPTED &&
@@ -5721,7 +6224,8 @@ class TalkbackCoordinator(
         moduleId: String,
         now: Long
     ): Boolean {
-        val participant = session.participant(moduleId)
+        if (ModuleId(moduleId) in reachabilityView.snapshot(session.id).evicted) return false
+        val participant = meshParticipant(session, moduleId)
         if (participant.invite != InviteState.ACCEPTED) return false
         if (!conferenceParticipantWasEverConnected(session, moduleId)) return false
         if (qosMonitor.isGroupConnected(moduleId)) return false
@@ -5739,7 +6243,11 @@ class TalkbackCoordinator(
     }
 
     private fun conferenceParticipantWasEverConnected(session: TalkbackSession, moduleId: String): Boolean =
-        session.meshCompletedModules.contains(moduleId)
+        if (isConferenceSession(session)) {
+            conferenceParticipantManager.wasEverConnected(session.id, moduleId)
+        } else {
+            session.meshCompletedModules.contains(moduleId)
+        }
 
     private fun touchSession(sessionId: String) {
         sessions[sessionId]?.touch()
@@ -5878,13 +6386,15 @@ class TalkbackCoordinator(
             if (session.ptt.state != PttState.REQUEST_FLOOR) return@forEach
             if (now - session.lastFloorRequestMs < config.floorRetryMs) return@forEach
             session.lastFloorRequestMs = now
+            val traceId = FloorTrace.nextId()
             val payload = FloorPayload.forRequest(
                 session.local,
                 session.floor.version(),
                 session.floor.epoch(),
-                EndpointPriority.NORMAL
+                EndpointPriority.NORMAL,
+                traceId = traceId
             ).encode()
-            dispatchFloorRequest(session, payload)
+            dispatchFloorRequest(session, payload, traceId)
         }
     }
 
@@ -5995,6 +6505,10 @@ class TalkbackCoordinator(
     }
 
     private fun buildMemberViews(session: TalkbackSession): List<MemberView> {
+        if (isConferenceSession(session)) {
+            syncSessionParticipantMedia(session)
+            return conferenceSnapshot(session).memberViews
+        }
         syncSessionParticipantMedia(session)
         return session.groupMembers.mapNotNull { member ->
             val id = member.moduleId.value
@@ -6015,7 +6529,7 @@ class TalkbackCoordinator(
             else -> remoteModuleIds(session)
         }
         remoteIds.forEach { moduleId ->
-            val ps = session.participant(moduleId)
+            val ps = meshParticipant(session,moduleId)
             val ice = qosMonitor.snapshot(moduleId)?.iceState
             ps.media = mediaStateFromIce(ice, ps.media)
             if (IceConnectivity.isConnected(ice)) {
@@ -6069,10 +6583,10 @@ class TalkbackCoordinator(
                     it.initiatorModuleId == localModuleId
             }
             .forEach { session ->
-                session.participants.values.forEach { ps ->
+                conferenceParticipantManager.participants(session.id).forEach { ps ->
                     if (ps.invite != InviteState.INVITING && ps.invite != InviteState.RINGING) return@forEach
                     if (now - ps.invitedAtMs <= config.conferenceInviteRingTimeoutMs) return@forEach
-                    val remoteEndpoint = session.groupMembers.firstOrNull {
+                    val remoteEndpoint = meshRoster(session).firstOrNull {
                         it.moduleId.value == ps.moduleId.value
                     }
                     if (remoteEndpoint != null && !qosMonitor.isGroupConnected(ps.moduleId.value)) {
@@ -6106,7 +6620,7 @@ class TalkbackCoordinator(
                             session.local,
                             remoteEndpoint,
                             session.channelId,
-                            session.groupMembers,
+                            meshRoster(session),
                             SessionType.CONFERENCE,
                             now
                         )
@@ -6183,10 +6697,24 @@ class TalkbackCoordinator(
     private fun shouldEnableGroupReceivePlayback(session: TalkbackSession): Boolean {
         if (!session.accepted || session.suspendedForUnicast) return false
         val channelId = session.channelId ?: return false
-        if (ChannelLifecyclePolicy.blocksGroupReceivePlayback(channelGateState(channelId))) return false
-        val owner = session.floor.owner() ?: return false
+        if (ChannelLifecyclePolicy.blocksGroupReceivePlayback(channelGateState(channelId))) {
+            log("PLAYBACK_DIAG ${sessionTag(session)} enable=false reason=CHANNEL_GATED")
+            return false
+        }
+        val owner = session.floor.owner()
+        if (owner == null) {
+            log("PLAYBACK_DIAG ${sessionTag(session)} enable=false reason=NO_FLOOR_OWNER")
+            return false
+        }
         if (owner == session.local) return false
-        return isFloorHolderAudioReachable(session, owner.moduleId.value)
+        val reachable = isFloorHolderAudioReachable(session, owner.moduleId.value)
+        if (!reachable) {
+            log(
+                "PLAYBACK_DIAG ${sessionTag(session)} enable=false reason=HOLDER_AUDIO_UNREACHABLE " +
+                    "owner=${owner.key}"
+            )
+        }
+        return reachable
     }
 
     private fun isFloorHolderAudioReachable(session: TalkbackSession, holderModuleId: String): Boolean {

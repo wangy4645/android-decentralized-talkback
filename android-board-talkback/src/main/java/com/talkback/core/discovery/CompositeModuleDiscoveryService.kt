@@ -97,4 +97,7 @@ class CompositeModuleDiscoveryService(
             .sortedBy { it.moduleId.value }
         listeners.forEach { it(list) }
     }
+
+    /** Discovery source for a module: static, gossip, or nsd. */
+    fun discoverySource(moduleId: String): String? = sourceByModule[moduleId]
 }
