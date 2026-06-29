@@ -63,8 +63,6 @@ class TalkbackSession(
     var localFloorPreempted: Boolean = false
     /** Set when acquire-release timeout fires; consumed once by UI for capture-failure toast. */
     var localAcquireTimedOut: Boolean = false
-    /** GROUP held in memory while a UNICAST call uses the active-session slot. */
-    var suspendedForUnicast: Boolean = false
     var disposition: SessionDisposition = SessionDisposition.ACTIVE
 
     fun touch() {

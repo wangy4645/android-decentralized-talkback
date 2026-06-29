@@ -59,6 +59,11 @@ import com.talkback.core.model.TopologyDigest
 import com.talkback.core.session.GroupMeshReconciler
 import com.talkback.core.session.GroupMeshPlanner
 import com.talkback.core.session.GroupRoomId
+import com.talkback.core.runtime.ForegroundActivityAdmission
+import com.talkback.core.runtime.ModuleActivityStack
+import com.talkback.core.runtime.SessionDispositionTransitions
+import com.talkback.core.runtime.isForegroundActive
+import com.talkback.core.runtime.isForegroundSuspended
 import com.talkback.core.session.SessionDisposition
 import com.talkback.core.session.DefaultLocalDeviceHealthProvider
 import com.talkback.core.session.InviteState
@@ -346,6 +351,14 @@ class TalkbackCoordinator(
             timeoutMs = { config.acquireReleaseTimeoutMs },
             scheduler = scheduler,
             onTimeout = { sessionId -> runOnCoordinator { onAcquireReleaseTimeout(sessionId) } }
+        )
+    }
+    private val activityStack = ModuleActivityStack()
+    private val foregroundAdmission by lazy {
+        ForegroundActivityAdmission(
+            stack = activityStack,
+            maxActiveSessions = { config.maxActiveSessions },
+            foregroundActiveCount = { activeSessionCount() }
         )
     }
     private val hostRejoinAttemptByChannel = ConcurrentHashMap<String, Int>()
@@ -663,6 +676,7 @@ class TalkbackCoordinator(
         if (stopped) return
         stopped = true
         acquireReleaseWatchdog.cancelAll()
+        activityStack.clear()
         scheduler.shutdownNow()
         runCatching { signalingChannel.stop() }
         runCatching { discoveryService.stop() }
@@ -1213,7 +1227,7 @@ class TalkbackCoordinator(
         releaseSessionMedia(session)
         log("${sessionTag(session)} Call rejected locally reason=$reason")
         if (wasUnicast) {
-            resumeGroupSessionsAfterUnicast()
+            resumeGroupSessionsAfterUnicast(sessionId)
         }
     }
 
@@ -1265,7 +1279,8 @@ class TalkbackCoordinator(
         PresenceProjector.moduleSnapshot(
             moduleMixer = moduleMixer,
             localUplinkGrant = isLocalUplinkGranted(),
-            iceByPeer = qosMonitor.all().associate { it.remoteModuleId to it.iceState }
+            iceByPeer = qosMonitor.all().associate { it.remoteModuleId to it.iceState },
+            stackTopSessionId = activityStack.topSessionId()
         )
     }
 
@@ -1290,7 +1305,7 @@ class TalkbackCoordinator(
         val session = sessions.values.firstOrNull {
             it.channelId == channelId && it.type == SessionType.GROUP
         } ?: return@runOnCoordinatorSync true
-        if (session.suspendedForUnicast) return@runOnCoordinatorSync false
+        if (session.isForegroundSuspended()) return@runOnCoordinatorSync false
         if (pendingGroupJoinsBySession[session.id]?.isNotEmpty() == true) return@runOnCoordinatorSync false
         if (isSessionMediaNegotiating(session)) return@runOnCoordinatorSync false
         val remoteIds = remoteModuleIds(session)
@@ -1840,7 +1855,13 @@ class TalkbackCoordinator(
             log("Outgoing call blocked: active sessions=$blocking")
             return UnicastOutgoingPrep.Blocked("BUSY_ACTIVE_SESSION")
         }
-        return UnicastOutgoingPrep.Ready
+        return when (val outcome = foregroundAdmission.admitUnicastOutgoing()) {
+            is ForegroundActivityAdmission.Outcome.Ready -> UnicastOutgoingPrep.Ready
+            is ForegroundActivityAdmission.Outcome.Blocked -> {
+                log("Outgoing call blocked: ${outcome.reason}")
+                UnicastOutgoingPrep.Blocked(outcome.reason)
+            }
+        }
     }
 
     private fun resolvePeerForModule(moduleId: String): PeerTarget? {
@@ -1892,6 +1913,17 @@ class TalkbackCoordinator(
         )
         reDialByRemoteModule[remote.moduleId.value] = ReDialRecord(local, remote, channelId)
         log("[${session.traceId}] Outgoing call ${local.key} -> ${remote.key}")
+        if (type == SessionType.UNICAST) {
+            foregroundAdmission.onUnicastStarted(
+                sessionId = sessionId,
+                acting = local,
+                requestedBy = local,
+                suspendedSessions = sessions.values.filter {
+                    it.id != sessionId &&
+                        (it.type == SessionType.GROUP || it.type == SessionType.CONFERENCE)
+                }
+            )
+        }
         return sessionId
     }
 
@@ -2038,6 +2070,15 @@ class TalkbackCoordinator(
         session.memberModules.add(caller.moduleId)
         session.remotePeersByModule[caller.moduleId.value] = fromPeer
         sessions[signal.sessionId] = session
+        foregroundAdmission.onUnicastStarted(
+            sessionId = signal.sessionId,
+            acting = callee,
+            requestedBy = callee,
+            suspendedSessions = sessions.values.filter {
+                it.id != signal.sessionId &&
+                    (it.type == SessionType.GROUP || it.type == SessionType.CONFERENCE)
+            }
+        )
         log("[${session.traceId}] Incoming call ${caller.key} -> ${callee.key}")
         if (config.autoAcceptIncoming) {
             acceptInviteWithSdp(signal.sessionId, fromPeer, callee, caller, signal.payload)
@@ -2168,7 +2209,7 @@ class TalkbackCoordinator(
         session.ptt.onEvent(PttEvent.Rejected)
         log("${sessionTag(session)} Call rejected reason=${signal.payload}")
         if (session.type == SessionType.UNICAST) {
-            resumeGroupSessionsAfterUnicast()
+            resumeGroupSessionsAfterUnicast(signal.sessionId)
         }
     }
 
@@ -2549,7 +2590,7 @@ class TalkbackCoordinator(
         fromPeer: PeerTarget,
         payload: GroupSessionPayload
     ): Boolean {
-        if (session.suspendedForUnicast) return false
+        if (session.isForegroundSuspended()) return false
         val caller = signal.from
         val callee = signal.to ?: return false
         if (payload.sdp.isBlank()) return false
@@ -2597,8 +2638,7 @@ class TalkbackCoordinator(
                     }
                 }
             }
-        return activeSessionCount() == 0 ||
-            (!isBusy() && activeSessionCount() < config.maxActiveSessions)
+        return activeSessionCount() == 0 || foregroundAdmission.canAdmitMeshInvite()
     }
 
     /** Clear stale/zombie sessions so a fresh GROUP_INVITE can be accepted. */
@@ -2705,7 +2745,7 @@ class TalkbackCoordinator(
             hangupInternal(onChannel.id)
             return activeSessionCount() < config.maxActiveSessions
         }
-        return !isBusy() && activeSessionCount() < config.maxActiveSessions
+        return foregroundAdmission.canAdmitMeshInvite()
     }
 
     /** Earlier invite wins; equal timestamp breaks on lower moduleId (design 4.4). */
@@ -3292,7 +3332,7 @@ class TalkbackCoordinator(
         releaseSessionMedia(session)
         log("${sessionTag(session)} Remote hangup")
         if (wasUnicast) {
-            resumeGroupSessionsAfterUnicast()
+            resumeGroupSessionsAfterUnicast(signal.sessionId)
         }
     }
 
@@ -3584,7 +3624,7 @@ class TalkbackCoordinator(
         session.ptt.onEvent(PttEvent.RemoteHangup)
         log("${sessionTag(session)} Hangup")
         if (wasUnicast) {
-            resumeGroupSessionsAfterUnicast()
+            resumeGroupSessionsAfterUnicast(session.id)
         }
     }
 
@@ -4024,7 +4064,7 @@ class TalkbackCoordinator(
 
     private fun scheduleReconcile(reason: String) {
         sessions.values
-            .filter { it.type == SessionType.GROUP && it.accepted && !it.suspendedForUnicast }
+            .filter { it.type == SessionType.GROUP && it.accepted && !it.isForegroundSuspended() }
             .forEach { reconcileGroupMembership(it, reason) }
     }
 
@@ -4039,7 +4079,7 @@ class TalkbackCoordinator(
     }
 
     private fun reconcileGroupMembership(session: TalkbackSession, reason: String) {
-        if (session.type != SessionType.GROUP || !session.accepted || session.suspendedForUnicast) return
+        if (session.type != SessionType.GROUP || !session.accepted || session.isForegroundSuspended()) return
         val now = System.currentTimeMillis()
         val suspectHelloMs = config.groupMemberSuspectHelloMs
         val suspectIceMs = config.groupMemberSuspectIceMs
@@ -5167,6 +5207,14 @@ class TalkbackCoordinator(
         if (session.ptt.state != PttState.TALK) return
         if (isSessionTransmitReady(session)) {
             session.pendingTransmit = false
+            val stackActing = activityStack.topActingEndpointId()
+            if (stackActing != null && stackActing != session.local.key) {
+                log(
+                    "CAPTURE_STACK_MISMATCH ${sessionTag(session)} " +
+                        "stackActing=$stackActing local=${session.local.key}"
+                )
+                return
+            }
             moduleMixer.setActiveCapture(session.local)
             audioRouter.selectInput(session.local)
             startSessionCapture(session)
@@ -5714,7 +5762,7 @@ class TalkbackCoordinator(
     private fun tryReinviteGroupPeerPairwise(moduleId: String): Boolean {
         if (moduleId == localModuleId.value) return false
         val mesh = sessions.values.firstOrNull {
-            it.type == SessionType.GROUP && it.accepted && !it.suspendedForUnicast
+            it.type == SessionType.GROUP && it.accepted && !it.isForegroundSuspended()
         } ?: return false
         val anchor = resolveAnchorModuleId(mesh)
         if (localModuleId != anchor && mesh.mediaTopology == GroupMediaTopology.ANCHOR) return false
@@ -5749,7 +5797,7 @@ class TalkbackCoordinator(
         val session = sessions.values.firstOrNull {
             it.type == SessionType.GROUP &&
                 it.accepted &&
-                !it.suspendedForUnicast &&
+                !it.isForegroundSuspended() &&
                 moduleId in remoteModuleIds(it)
         } ?: return
         val channelId = session.channelId ?: return
@@ -5902,7 +5950,7 @@ class TalkbackCoordinator(
             return
         }
 
-        if (!session.accepted || session.suspendedForUnicast) return
+        if (!session.accepted || session.isForegroundSuspended()) return
 
         val primary = resolveBootstrapPrimary(allModules)
         val missingPeers = dialable
@@ -6101,7 +6149,7 @@ class TalkbackCoordinator(
         if (session.mediaTopology != GroupMediaTopology.ANCHOR) return
         val backup = session.backupAnchorModuleId ?: return
         if (localModuleId == session.anchorModuleId || localModuleId == backup) return
-        if (!session.accepted || session.suspendedForUnicast) return
+        if (!session.accepted || session.isForegroundSuspended()) return
         val backupId = backup.value
         if (backupId in session.backupStandbyPeers && qosMonitor.isGroupConnected(backupId)) return
         offerBackupStandbyJoin(session, backup)
@@ -6138,28 +6186,38 @@ class TalkbackCoordinator(
     }
 
     private fun suspendSessionForUnicast(session: TalkbackSession) {
-        if (session.suspendedForUnicast) return
-        session.suspendedForUnicast = true
+        if (session.isForegroundSuspended()) return
+        if (!SessionDispositionTransitions.suspend(session)) return
         stopSessionCapture(session)
         setPlaybackEnabled(session, enabled = false, reason = "suspend_unicast")
-        log("${sessionTag(session)} Suspending ${session.type.name} session for unicast")
+        log("${sessionTag(session)} Suspending ${session.type.name} session for unicast disposition=${session.disposition}")
     }
 
-    private fun resumeGroupSessionsAfterUnicast() {
+    private fun resumeGroupSessionsAfterUnicast(endedUnicastSessionId: String? = null) {
+        val endedId = endedUnicastSessionId ?: activityStack.topSessionId()
+        if (endedUnicastSessionId != null) {
+            foregroundAdmission.onUnicastEnded(endedUnicastSessionId)
+        } else {
+            activityStack.pop()
+        }
         var resumedGroup = false
         sessions.values
             .filter {
                 (it.type == SessionType.GROUP || it.type == SessionType.CONFERENCE) &&
-                    it.suspendedForUnicast
+                    it.disposition == SessionDisposition.SUSPENDED
             }
             .forEach { session ->
-                session.suspendedForUnicast = false
+                if (!activityStack.consumeResume(session.id, endedId)) {
+                    log("${sessionTag(session)} Skip resume: preemption token mismatch ended=$endedId")
+                    return@forEach
+                }
+                if (!SessionDispositionTransitions.beginResume(session)) return@forEach
                 val playbackAfterResume = when {
                     session.type == SessionType.GROUP -> shouldEnableGroupReceivePlayback(session)
                     session.type == SessionType.CONFERENCE -> session.accepted && !session.muted
                     else -> false
                 }
-                log("${sessionTag(session)} Resuming ${session.type.name} session after unicast")
+                log("${sessionTag(session)} Resuming ${session.type.name} session after unicast disposition=${session.disposition}")
                 log(
                     "${sessionTag(session)} resumeGroupSessionsAfterUnicast() " +
                         "playback=$playbackAfterResume"
@@ -6176,6 +6234,7 @@ class TalkbackCoordinator(
                     tryEnsureConferenceDuplex(session)
                     syncConferenceRelay(session)
                 }
+                SessionDispositionTransitions.markActive(session)
             }
         if (resumedGroup) {
             scheduler.schedule({
@@ -6271,7 +6330,7 @@ class TalkbackCoordinator(
                 }
                 else -> Unit
             }
-            if (!session.accepted || session.suspendedForUnicast) return@forEach
+            if (!session.accepted || session.isForegroundSuspended()) return@forEach
             when (session.type) {
                 SessionType.CONFERENCE -> {
                     recoverStuckCheckingConferencePeers(session)
@@ -6362,10 +6421,9 @@ class TalkbackCoordinator(
         sessions[sessionId]?.touch()
     }
 
-    private fun isBusy(): Boolean =
-        sessions.values.any { it.accepted && !it.suspendedForUnicast }
+    private fun isBusy(): Boolean = foregroundAdmission.isForegroundBusy()
 
-    private fun countsTowardActiveLimit(session: TalkbackSession): Boolean = !session.suspendedForUnicast
+    private fun countsTowardActiveLimit(session: TalkbackSession): Boolean = session.isForegroundActive()
 
     private fun activeSessionCount(): Int = sessions.values.count { countsTowardActiveLimit(it) }
 
@@ -6387,7 +6445,7 @@ class TalkbackCoordinator(
                 it.type == SessionType.GROUP &&
                     it.channelId == channelId &&
                     it.accepted &&
-                    !it.suspendedForUnicast
+                    !it.isForegroundSuspended()
             }
 
     private fun tryYieldToCanonicalGroupFromBusy(
@@ -6762,7 +6820,7 @@ class TalkbackCoordinator(
 
     private fun updateSessionReceivePlayback(session: TalkbackSession, reason: String = "refreshPlaybackState") {
         val enabled = when {
-            session.suspendedForUnicast -> false
+            session.isForegroundSuspended() -> false
             session.type == SessionType.UNICAST -> session.accepted
             session.type == SessionType.GROUP -> shouldEnableGroupReceivePlayback(session)
             session.type == SessionType.CONFERENCE -> session.accepted && !session.muted
@@ -6804,7 +6862,7 @@ class TalkbackCoordinator(
      * media path exists (direct mesh or anchor relay). Prevents idle warmup偷听.
      */
     private fun shouldEnableGroupReceivePlayback(session: TalkbackSession): Boolean {
-        if (!session.accepted || session.suspendedForUnicast) return false
+        if (!session.accepted || session.isForegroundSuspended()) return false
         val channelId = session.channelId ?: return false
         if (ChannelLifecyclePolicy.blocksGroupReceivePlayback(channelGateState(channelId))) {
             log("PLAYBACK_DIAG ${sessionTag(session)} enable=false reason=CHANNEL_GATED")
