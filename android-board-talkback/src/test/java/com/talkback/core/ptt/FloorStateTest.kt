@@ -82,4 +82,67 @@ class FloorStateTest {
         floor.applyGrant(m02e01, 2, 0, EndpointPriority.NORMAL)
         assertNull(floor.owner())
     }
+
+    @Test
+    fun applySnapshot_convergesEpochFromAuthority() {
+        val floor = FloorState()
+        val result = floor.applySnapshot(m01e01, 5, 5, EndpointPriority.NORMAL)
+        assertEquals(SnapshotResult.OWNER_CHANGED, result)
+        assertEquals(5, floor.epoch())
+        assertEquals(5, floor.version())
+        assertEquals(m01e01, floor.owner())
+    }
+
+    @Test
+    fun applySnapshot_assignsVersionDirectly_notMax() {
+        val floor = FloorState()
+        floor.nextRequestVersion()
+        repeat(99) { floor.nextRequestVersion() }
+        assertEquals(100, floor.version())
+        val result = floor.applySnapshot(m02e01, 6, 5, EndpointPriority.NORMAL)
+        assertEquals(SnapshotResult.OWNER_CHANGED, result)
+        assertEquals(6, floor.version())
+        assertEquals(5, floor.epoch())
+    }
+
+    @Test
+    fun applySnapshot_sameEpochOlderVersion_unchanged() {
+        val floor = FloorState()
+        floor.applySnapshot(m01e01, 5, 2, EndpointPriority.NORMAL)
+        val result = floor.applySnapshot(m02e01, 3, 2, EndpointPriority.NORMAL)
+        assertEquals(SnapshotResult.UNCHANGED, result)
+        assertEquals(m01e01, floor.owner())
+        assertEquals(5, floor.version())
+    }
+
+    @Test
+    fun applySnapshot_nullOwnerClearsStaleOwner() {
+        val floor = FloorState()
+        floor.applySnapshot(m01e01, 3, 2, EndpointPriority.NORMAL)
+        val result = floor.applySnapshot(null, 8, 7, EndpointPriority.NORMAL)
+        assertEquals(SnapshotResult.OWNER_CHANGED, result)
+        assertNull(floor.owner())
+        assertEquals(7, floor.epoch())
+        assertEquals(8, floor.version())
+    }
+
+    @Test
+    fun applySnapshot_ignoredOldEpoch() {
+        val floor = FloorState()
+        floor.applySnapshot(m01e01, 5, 5, EndpointPriority.NORMAL)
+        val result = floor.applySnapshot(m02e01, 10, 3, EndpointPriority.NORMAL)
+        assertEquals(SnapshotResult.IGNORED_OLD_EPOCH, result)
+        assertEquals(m01e01, floor.owner())
+        assertEquals(5, floor.epoch())
+    }
+
+    @Test
+    fun applySnapshot_sameEpochNewerVersion_updatesWithoutOwnerChange() {
+        val floor = FloorState()
+        floor.applySnapshot(m01e01, 3, 2, EndpointPriority.NORMAL)
+        val result = floor.applySnapshot(m01e01, 5, 2, EndpointPriority.NORMAL)
+        assertEquals(SnapshotResult.UPDATED, result)
+        assertEquals(m01e01, floor.owner())
+        assertEquals(5, floor.version())
+    }
 }

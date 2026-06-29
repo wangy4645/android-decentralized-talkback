@@ -9,15 +9,20 @@ data class FloorPayload(
     val floorVersion: Long,
     val floorEpoch: Long,
     val priority: EndpointPriority = EndpointPriority.NORMAL,
-    val requesterKey: String = ""
+    val requesterKey: String = "",
+    /** Observability-only correlation id; does not affect floor semantics. */
+    val traceId: Long = 0L
 ) {
     fun encode(): String {
-        return JSONObject()
+        val json = JSONObject()
             .put("floorVersion", floorVersion)
             .put("floorEpoch", floorEpoch)
             .put("priority", priority.name)
             .put("requesterKey", requesterKey)
-            .toString()
+        if (traceId > 0L) {
+            json.put("traceId", traceId)
+        }
+        return json.toString()
     }
 
     companion object {
@@ -31,7 +36,8 @@ data class FloorPayload(
                     priority = runCatching {
                         EndpointPriority.valueOf(json.optString("priority", "NORMAL"))
                     }.getOrDefault(EndpointPriority.NORMAL),
-                    requesterKey = json.optString("requesterKey", "")
+                    requesterKey = json.optString("requesterKey", ""),
+                    traceId = json.optLong("traceId", 0L)
                 )
             }.getOrDefault(FloorPayload(0, 0))
         }
@@ -40,12 +46,14 @@ data class FloorPayload(
             requester: EndpointAddress,
             floorVersion: Long,
             floorEpoch: Long,
-            priority: EndpointPriority
+            priority: EndpointPriority,
+            traceId: Long = 0L
         ): FloorPayload = FloorPayload(
             floorVersion = floorVersion,
             floorEpoch = floorEpoch,
             priority = priority,
-            requesterKey = requester.key
+            requesterKey = requester.key,
+            traceId = traceId
         )
     }
 }

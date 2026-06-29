@@ -29,6 +29,49 @@ data class RemoteEndpointInfo(
     }
 }
 
+/**
+ * Authority-published floor snapshot carried in HELLO (replicas omit this field).
+ * [ownerKey] null means authority reports no current floor holder.
+ */
+data class FloorSnapshotDigest(
+    val epoch: Long,
+    val version: Long,
+    val ownerKey: String?,
+    val ownerPriority: EndpointPriority = EndpointPriority.NORMAL
+) {
+    fun encodeJson(): JSONObject {
+        val json = JSONObject()
+            .put("epoch", epoch)
+            .put("version", version)
+        if (ownerKey != null) {
+            json.put("ownerKey", ownerKey)
+            json.put("ownerPriority", ownerPriority.name)
+        } else {
+            json.put("ownerKey", JSONObject.NULL)
+        }
+        return json
+    }
+
+    companion object {
+        fun decodeJson(json: JSONObject): FloorSnapshotDigest {
+            val ownerKey = if (json.has("ownerKey") && !json.isNull("ownerKey")) {
+                json.getString("ownerKey").takeIf { it.isNotBlank() }
+            } else {
+                null
+            }
+            val priority = runCatching {
+                EndpointPriority.valueOf(json.optString("ownerPriority", "NORMAL").trim().uppercase())
+            }.getOrDefault(EndpointPriority.NORMAL)
+            return FloorSnapshotDigest(
+                epoch = json.getLong("epoch"),
+                version = json.getLong("version"),
+                ownerKey = ownerKey,
+                ownerPriority = priority
+            )
+        }
+    }
+}
+
 data class HelloPayload(
     val moduleId: String,
     val endpoints: List<RemoteEndpointInfo>,
@@ -41,7 +84,8 @@ data class HelloPayload(
     val channelId: String? = null,
     val rosterEpoch: Long = 0L,
     val meshGeneration: Long = 0L,
-    val memberHash: Int = 0
+    val memberHash: Int = 0,
+    val floorSnapshot: FloorSnapshotDigest? = null
 ) {
     fun encode(): String {
         val arr = JSONArray()
@@ -75,6 +119,9 @@ data class HelloPayload(
         if (memberHash != 0) {
             json.put("memberHash", memberHash)
         }
+        if (floorSnapshot != null) {
+            json.put("floorSnapshot", floorSnapshot.encodeJson())
+        }
         return json.toString()
     }
 
@@ -97,7 +144,10 @@ data class HelloPayload(
                 channelId = json.optString("channelId").takeIf { it.isNotBlank() },
                 rosterEpoch = json.optLong("rosterEpoch", 0L),
                 meshGeneration = json.optLong("meshGeneration", 0L),
-                memberHash = json.optInt("memberHash", 0)
+                memberHash = json.optInt("memberHash", 0),
+                floorSnapshot = json.optJSONObject("floorSnapshot")?.let {
+                    FloorSnapshotDigest.decodeJson(it)
+                }
             )
         }.getOrNull()
     }

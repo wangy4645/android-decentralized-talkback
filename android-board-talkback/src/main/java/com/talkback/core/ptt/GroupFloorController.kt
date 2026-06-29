@@ -2,6 +2,7 @@ package com.talkback.core.ptt
 
 import com.talkback.core.model.EndpointAddress
 import com.talkback.core.model.EndpointPriority
+import com.talkback.core.model.FloorSnapshotDigest
 import com.talkback.core.session.SessionType
 import com.talkback.core.session.TalkbackSession
 
@@ -14,6 +15,9 @@ object GroupFloorController {
         val authority = session.floorAuthorityModuleId ?: session.initiatorModuleId ?: return false
         return authority.value == localModuleId
     }
+
+    fun canPublishFloorSnapshot(session: TalkbackSession, localModuleId: String): Boolean =
+        isFloorAuthority(session, localModuleId)
 
     fun shouldProcessFloorRequest(session: TalkbackSession, localModuleId: String): Boolean {
         if (session.type != SessionType.GROUP) return false
@@ -35,5 +39,36 @@ object GroupFloorController {
         priority: EndpointPriority
     ) {
         session.floor.applyGrant(owner, floorVersion, floorEpoch, priority)
+    }
+
+    /**
+     * Apply authority floor snapshot from HELLO when [authorityModuleId] matches session authority.
+     * Returns [SnapshotResult.DEFERRED] when ownerKey is set but not yet in canonical roster.
+     */
+    fun applyAuthorityFloorSnapshot(
+        session: TalkbackSession,
+        authorityModuleId: String,
+        digest: FloorSnapshotDigest,
+        onOwnerChanged: () -> Unit = {}
+    ): SnapshotResult {
+        if (session.type != SessionType.GROUP) return SnapshotResult.UNCHANGED
+        val sessionAuthority = session.floorAuthorityModuleId?.value
+            ?: session.initiatorModuleId?.value
+            ?: return SnapshotResult.UNCHANGED
+        if (authorityModuleId != sessionAuthority) return SnapshotResult.UNCHANGED
+        val owner = digest.ownerKey?.let { resolveFloorOwner(session, it) }
+        if (digest.ownerKey != null && owner == null) {
+            return SnapshotResult.DEFERRED
+        }
+        val result = session.floor.applySnapshot(
+            owner,
+            digest.version,
+            digest.epoch,
+            digest.ownerPriority
+        )
+        if (result == SnapshotResult.OWNER_CHANGED) {
+            onOwnerChanged()
+        }
+        return result
     }
 }

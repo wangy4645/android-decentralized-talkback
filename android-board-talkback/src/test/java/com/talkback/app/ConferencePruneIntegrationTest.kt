@@ -109,4 +109,48 @@ class ConferencePruneIntegrationTest {
         assertEquals(SessionType.CONFERENCE, snapshot.type)
         assertTrue(snapshot.memberKeys.any { it.startsWith("M03") })
     }
+
+    @Test
+    fun conferenceRosterSplit_lateJoinRestoresThreeMembers() {
+        val channelId = "CONF-ROSTER-SPLIT"
+        nodeM02.runtime.setAutoAcceptConferenceInvites(true)
+        nodeM03.runtime.setAutoAcceptConferenceInvites(true)
+        val sessionId = nodeM01.runtime.conferenceCall(
+            nodeM01.localEndpoint,
+            listOf(
+                EndpointAddress(m02, EndpointId("E01")),
+                EndpointAddress(m03, EndpointId("E01"))
+            ),
+            channelId
+        )
+        assertNotNull(sessionId)
+        assertTrue(nodeM02.waitForLog { it.contains("invite accepted") })
+        assertTrue(nodeM03.waitForLog { it.contains("invite accepted") })
+        nodeM01.runtime.simulateRemoteIceState("M02", "CONNECTED")
+        nodeM01.runtime.simulateRemoteIceState("M03", "CONNECTED")
+        nodeM02.runtime.simulateRemoteIceState("M01", "CONNECTED")
+        nodeM02.runtime.simulateRemoteIceState("M03", "CONNECTED")
+        Thread.sleep(300L)
+
+        val baseline = nodeM01.runtime.sessionSnapshots().first { it.sessionId == sessionId }
+        assertEquals(2, baseline.memberViews.size)
+        assertTrue(baseline.memberKeys.any { it.startsWith("M02") })
+        assertTrue(baseline.memberKeys.any { it.startsWith("M03") })
+
+        nodeM02.runtime.simulateRemoteIceState("M03", "CLOSED")
+        nodeM02.runtime.testRunConferenceHealthCleanup(channelId)
+        val split = nodeM02.runtime.sessionSnapshots().first { it.sessionId == sessionId }
+        assertEquals("roster must stay 2/3 during split", 2, split.memberViews.size)
+        assertTrue(split.memberKeys.any { it.startsWith("M03") })
+        assertFalse(nodeM02.hasLog { it.contains("Pruning unhealthy conference peer M03") })
+
+        nodeM03.runtime.simulateRemoteIceState("M02", "CONNECTED")
+        nodeM02.runtime.simulateRemoteIceState("M03", "CONNECTED")
+        Thread.sleep(500L)
+
+        val restored = nodeM02.runtime.sessionSnapshots().first { it.sessionId == sessionId }
+        assertEquals(SessionType.CONFERENCE, restored.type)
+        assertEquals(2, restored.memberViews.size)
+        assertTrue(restored.memberKeys.any { it.startsWith("M03") })
+    }
 }

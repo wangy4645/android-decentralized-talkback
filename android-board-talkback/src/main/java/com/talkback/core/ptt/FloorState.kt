@@ -16,6 +16,14 @@ enum class FloorGrantResult {
     PREEMPTED
 }
 
+enum class SnapshotResult {
+    IGNORED_OLD_EPOCH,
+    UNCHANGED,
+    UPDATED,
+    OWNER_CHANGED,
+    DEFERRED
+}
+
 /**
  * Explicit floor ownership with versioned CAS (no wall-clock arbitration).
  */
@@ -94,6 +102,27 @@ class FloorState(
         this.ownerPriority = priority
         this.version = maxOf(this.version, version)
         if (epoch > this.epoch) this.epoch = epoch
+    }
+
+    /**
+     * Apply authority-published floor snapshot (replication path, not grant event).
+     * [version] is assigned directly (not max) so replicas cannot retain ghost versions.
+     */
+    @Synchronized
+    fun applySnapshot(
+        owner: EndpointAddress?,
+        version: Long,
+        epoch: Long,
+        priority: EndpointPriority = EndpointPriority.NORMAL
+    ): SnapshotResult {
+        if (epoch < this.epoch) return SnapshotResult.IGNORED_OLD_EPOCH
+        if (epoch == this.epoch && version <= this.version) return SnapshotResult.UNCHANGED
+        val ownerChanged = this.owner != owner
+        this.owner = owner
+        this.ownerPriority = if (owner != null) priority else EndpointPriority.NORMAL
+        this.version = version
+        this.epoch = epoch
+        return if (ownerChanged) SnapshotResult.OWNER_CHANGED else SnapshotResult.UPDATED
     }
 
     @Synchronized
