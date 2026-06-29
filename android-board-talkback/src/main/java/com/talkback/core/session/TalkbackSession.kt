@@ -63,6 +63,10 @@ class TalkbackSession(
     var localFloorPreempted: Boolean = false
     /** Set when acquire-release timeout fires; consumed once by UI for capture-failure toast. */
     var localAcquireTimedOut: Boolean = false
+    /** Frozen Channel.members at session create (ADR-0002 R8). */
+    var channelMemberSnapshot: Set<String> = emptySet()
+    /** Unicast: optional origin channel label only; does not gate runtime or mutate Channel. */
+    var sessionOriginChannelId: String? = null
     var disposition: SessionDisposition = SessionDisposition.ACTIVE
 
     fun touch() {

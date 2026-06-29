@@ -4,6 +4,7 @@ import com.talkback.core.audio.AudioRouter
 import com.talkback.core.audio.DefaultAudioRouter
 import com.talkback.core.audio.ModuleAudioMixer
 import com.talkback.core.channel.ChannelManager
+import com.talkback.core.channel.ChannelMembershipSnapshot
 import com.talkback.core.contacts.CallableModuleGate
 import com.talkback.core.presence.ModulePresenceSnapshot
 import com.talkback.core.presence.PresenceProjector
@@ -763,7 +764,6 @@ class TalkbackCoordinator(
 
         val toAdd = targets.filter { it.key !in existingKeys }
         toAdd.forEach { remote ->
-            channelManager.join(channelId, remote.moduleId)
             session.memberModules.add(remote.moduleId)
         }
         if (toAdd.isNotEmpty()) {
@@ -866,7 +866,6 @@ class TalkbackCoordinator(
         }
 
         newInvitees.forEach { remote ->
-            channelManager.join(channelId, remote.moduleId)
             session.memberModules.add(remote.moduleId)
             session.pendingInviteeEndpoints[remote.moduleId.value] = remote
         }
@@ -1028,22 +1027,26 @@ class TalkbackCoordinator(
                 }?.id
             }
         }
-        val remoteModuleIds = remoteEndpoints.map { it.moduleId }.distinct()
-        require(remoteModuleIds.size + 1 <= maxModules) {
-            "${sessionType.name} exceeds maxModules=$maxModules (including local module)"
-        }
         if (activeSessionCount() >= config.maxActiveSessions) {
             error("Active session limit reached: ${config.maxActiveSessions}")
         }
-        channelManager.join(channelId, local.moduleId)
-        remoteModuleIds.forEach { channelManager.join(channelId, it) }
-
-        val allMembers = listOf(local) + remoteEndpoints
+        val channelSnap = ChannelMembershipSnapshot.capture(channelManager, channelId)
+        val allMembers = ChannelMembershipSnapshot.resolveInitialInvites(
+            configured = channelSnap,
+            local = local,
+            explicitRemotes = remoteEndpoints,
+            resolveModule = { mid -> endpointForDialableModule(mid) }
+        )
+        val remoteModuleIds = allMembers.map { it.moduleId }.filter { it != local.moduleId }.distinct()
+        require(remoteModuleIds.size + 1 <= maxModules) {
+            "${sessionType.name} exceeds maxModules=$maxModules (including local module)"
+        }
         val sessionId = when (sessionType) {
             SessionType.GROUP -> GroupRoomId.forChannel(channelId)
             else -> UUID.randomUUID().toString()
         }
         val session = TalkbackSession(sessionId, sessionType, local, channelId)
+        freezeChannelMemberSnapshot(session)
         session.localInitiated = true
         session.initiatorModuleId = local.moduleId
         session.floorAuthorityModuleId = local.moduleId
@@ -1054,14 +1057,15 @@ class TalkbackCoordinator(
         }
         session.rosterEpochMs = System.currentTimeMillis()
         session.memberModules.add(local.moduleId)
-        remoteEndpoints.forEach { remote ->
+        val inviteRemotes = allMembers.filter { it.moduleId != local.moduleId }
+        inviteRemotes.forEach { remote ->
             val peer = discoveredByModule[remote.moduleId.value]
                 ?: error("Remote module not discovered: ${remote.moduleId.value}")
             session.memberModules.add(remote.moduleId)
             session.remotePeersByModule[remote.moduleId.value] = peer
         }
-        if (remoteEndpoints.isNotEmpty()) {
-            session.remote = remoteEndpoints.first()
+        if (inviteRemotes.isNotEmpty()) {
+            session.remote = inviteRemotes.first()
             session.remotePeer = session.remotePeersByModule[session.remote!!.moduleId.value]
         }
         session.accepted = true
@@ -1074,7 +1078,7 @@ class TalkbackCoordinator(
         } else {
             session.syncParticipantsFromMembers(local.moduleId)
         }
-        val inviteTargets = groupInviteTargets(session, sessionType, local, remoteEndpoints)
+        val inviteTargets = groupInviteTargets(session, sessionType, local, inviteRemotes)
         inviteTargets.forEach { remote ->
             if (sessionType == SessionType.CONFERENCE) {
                 conferenceParticipantManager.onInviteSent(
@@ -1450,6 +1454,7 @@ class TalkbackCoordinator(
         memberKeys = conferenceSnap?.roster?.map { it.key } ?: session.groupMembers.map { it.key }.ifEmpty {
             listOfNotNull(session.local.key, session.remote?.key)
         },
+        channelMemberModuleIds = session.channelMemberSnapshot.sorted(),
         memberViews = conferenceSnap?.memberViews ?: buildMemberViews(session),
         connectedRemoteCount = countConnectedRemotes(session),
         callPhase = session.unicastPhase,
@@ -1499,6 +1504,11 @@ class TalkbackCoordinator(
         getMeshEngine(moduleId)?.setRemotePlaybackEnabled(enabled)
     }
 
+    internal fun testEvictGroupMember(sessionId: String, moduleId: String) = runOnCoordinatorSync {
+        val session = sessions[sessionId] ?: return@runOnCoordinatorSync
+        removeGroupMember(session, moduleId)
+    }
+
     internal fun testInvariantF1BreakCount(): Int = runOnCoordinatorSync { invariantF1BreakCount }
 
     internal fun testIsSessionCapturing(sessionId: String): Boolean = runOnCoordinatorSync {
@@ -1541,16 +1551,16 @@ class TalkbackCoordinator(
         connectedPeerModuleIds: List<String> = emptyList()
     ) = runOnCoordinatorSync {
         val local = localEndpointAddress() ?: return@runOnCoordinatorSync
-        channelManager.join(channelId, local.moduleId)
         val peers = connectedPeerModuleIds.map { EndpointAddress(ModuleId(it), EndpointId("E01")) }
+        channelManager.replaceMembers(channelId, listOf(local.moduleId) + peers.map { it.moduleId })
         val session = TalkbackSession(sessionId, SessionType.GROUP, local, channelId)
+        freezeChannelMemberSnapshot(session)
         session.localInitiated = true
         session.initiatorModuleId = ModuleId(initiatorModuleId)
         session.floorAuthorityModuleId = ModuleId(initiatorModuleId)
         session.groupMembers = listOf(local) + peers
         session.memberModules.add(local.moduleId)
         peers.forEach { remote ->
-            channelManager.join(channelId, remote.moduleId)
             session.memberModules.add(remote.moduleId)
             discoveredByModule[remote.moduleId.value]?.let { peer ->
                 session.remotePeersByModule[remote.moduleId.value] = peer
@@ -1825,6 +1835,21 @@ class TalkbackCoordinator(
 
     fun channels() = channelManager.all()
 
+    fun channelMemberModuleIds(channelId: String): Set<String> = runOnCoordinatorSync {
+        ChannelMembershipSnapshot.moduleIds(channelManager.members(channelId))
+    }
+
+    fun configureChannelMembership(channelId: String, moduleIds: List<String>) = runOnCoordinatorSync {
+        channelManager.replaceMembers(channelId, moduleIds.map { ModuleId(it) }.toSet())
+    }
+
+    private fun freezeChannelMemberSnapshot(session: TalkbackSession) {
+        val channelId = session.channelId ?: return
+        session.channelMemberSnapshot = ChannelMembershipSnapshot.moduleIds(
+            ChannelMembershipSnapshot.capture(channelManager, channelId)
+        )
+    }
+
     /** Make room for an outgoing private call (e.g. release active group PTT session). */
     private fun prepareForUnicastOutgoing(): UnicastOutgoingPrep {
         cleanupUnhealthySessions()
@@ -1889,9 +1914,9 @@ class TalkbackCoordinator(
         }
         val peer = resolvePeerForModule(remote.moduleId.value)
             ?: error("Remote module not discovered: ${remote.moduleId.value}")
-        channelId?.let { channelManager.join(it, local.moduleId); channelManager.join(it, remote.moduleId) }
         val sessionId = UUID.randomUUID().toString()
         val session = TalkbackSession(sessionId, type, local, channelId)
+        channelId?.let { session.sessionOriginChannelId = it }
         session.remote = remote
         session.remotePeer = peer
         session.memberModules.add(remote.moduleId)
@@ -2533,10 +2558,9 @@ class TalkbackCoordinator(
             yieldLocalGroupSessionsForIncomingInvite(channelId, signal.sessionId)
         }
 
-        channelManager.join(channelId, localModuleId)
-        members.map { it.moduleId }.distinct().forEach { channelManager.join(channelId, it) }
         val session = TalkbackSession(signal.sessionId, sessionType, callee, channelId)
         populateGroupSessionMetadata(session, payload, members, caller, fromPeer)
+        freezeChannelMemberSnapshot(session)
         sessions[signal.sessionId] = session
         enterChannelMode(
             channelId,
@@ -2932,7 +2956,6 @@ class TalkbackCoordinator(
         conferenceParticipantManager.leftMemberEndpoints(session.id)?.remove(moduleId)
         if (meshRoster(session).none { it.moduleId.value == moduleId }) {
             conferenceParticipantManager.onLateJoin(session.id, moduleId, remote)
-            session.channelId?.let { channelManager.join(it, remote.moduleId) }
             log("[${session.traceId}] Conference roster restored $moduleId after accept")
         }
         session.memberModules.add(remote.moduleId)
@@ -3392,7 +3415,6 @@ class TalkbackCoordinator(
                 )
             )
         }
-        session.channelId?.let { channelManager.leave(it, localModuleId) }
         session.channelId?.let { ch ->
             releaseChannelModeIfIdle(ch)
         }
@@ -3425,7 +3447,6 @@ class TalkbackCoordinator(
         conferenceParticipantManager.applyPrune(session.id, moduleId)
         session.memberModules.remove(ModuleId(moduleId))
         releaseMeshPeer(session, moduleId)
-        session.channelId?.let { channelManager.leave(it, ModuleId(moduleId)) }
         if (session.remote?.moduleId?.value == moduleId) {
             val nextRemote = meshRoster(session).firstOrNull { it.moduleId != localModuleId }
             session.remote = nextRemote
@@ -3460,7 +3481,6 @@ class TalkbackCoordinator(
             }
             session.memberModules.remove(ModuleId(moduleId))
             releaseMeshPeer(session, moduleId)
-            session.channelId?.let { channelManager.leave(it, ModuleId(moduleId)) }
             if (session.remote?.moduleId?.value == moduleId) {
                 val nextRemote = meshRoster(session).firstOrNull { it.moduleId != localModuleId }
                 session.remote = nextRemote
@@ -3475,7 +3495,6 @@ class TalkbackCoordinator(
                 session.memberModules.remove(ModuleId(moduleId))
                 meshParticipant(session,moduleId).invite = inviteState
                 releaseMeshPeer(session, moduleId)
-                session.channelId?.let { channelManager.leave(it, ModuleId(moduleId)) }
                 return true
             }
         }
@@ -3483,7 +3502,6 @@ class TalkbackCoordinator(
         session.memberModules.remove(ModuleId(moduleId))
         meshParticipant(session,moduleId).invite = inviteState
         releaseMeshPeer(session, moduleId)
-        session.channelId?.let { channelManager.leave(it, ModuleId(moduleId)) }
         if (session.remote?.moduleId?.value == moduleId) {
             val nextRemote = session.groupMembers.firstOrNull { it.moduleId != localModuleId }
             session.remote = nextRemote
@@ -4156,7 +4174,6 @@ class TalkbackCoordinator(
         session.suspectSinceMsByModule.remove(moduleId)
         releaseMeshPeer(session, moduleId)
         session.participants.remove(moduleId)
-        session.channelId?.let { channelManager.leave(it, ModuleId(moduleId)) }
         if (session.remote?.moduleId?.value == moduleId) {
             val nextRemote = session.groupMembers.firstOrNull { it.moduleId != localModuleId }
             session.remote = nextRemote
@@ -4528,7 +4545,6 @@ class TalkbackCoordinator(
         session.pendingInviteeEndpoints.remove(moduleId)
         if (session.groupMembers.any { it.moduleId.value == moduleId }) return
         session.groupMembers = session.groupMembers + remote
-        session.channelId?.let { channelManager.join(it, remote.moduleId) }
         GroupMembershipSupport.syncMembershipFromGroupMembers(session)
         bumpRosterEpoch(session, "member_joined")
         log("${sessionTag(session)} Canonical roster +$moduleId epoch=${session.rosterEpoch}")

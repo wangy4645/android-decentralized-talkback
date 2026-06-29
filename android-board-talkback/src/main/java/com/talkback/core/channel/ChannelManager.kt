@@ -10,8 +10,15 @@ class ChannelManager {
         return channels.getOrPut(channelId) { Channel(channelId, displayName) }
     }
 
+    /** Explicit channel configuration only (ADR-0002 R7); not driven by Session evict/rejoin. */
     fun join(channelId: String, moduleId: ModuleId) {
         getOrCreate(channelId).memberModuleIds.add(moduleId)
+    }
+
+    fun replaceMembers(channelId: String, moduleIds: Collection<ModuleId>) {
+        val channel = getOrCreate(channelId)
+        channel.memberModuleIds.clear()
+        channel.memberModuleIds.addAll(moduleIds)
     }
 
     fun leave(channelId: String, moduleId: ModuleId) {

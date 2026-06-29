@@ -189,6 +189,19 @@ class TalkbackRuntime(
                 )
             }
 
+    fun channels(): List<com.talkback.core.channel.Channel> =
+        runCatching { coordinator.channels() }.getOrElse { emptyList() }
+
+    internal fun testEvictGroupMember(sessionId: String, moduleId: String) =
+        coordinator.testEvictGroupMember(sessionId, moduleId)
+
+    fun configureChannelMembership(channelId: String, moduleIds: List<String>) {
+        coordinator.configureChannelMembership(channelId, moduleIds)
+    }
+
+    fun channelMemberModuleIds(channelId: String): Set<String> =
+        runCatching { coordinator.channelMemberModuleIds(channelId) }.getOrElse { emptySet() }
+
     fun networkQualityLabel(): String = runCatching { coordinator.networkQualityLabel() }.getOrElse { "N/A" }
     fun onlineModuleCount(): Int = runCatching { coordinator.onlineModuleCount() }.getOrElse { 0 }
     fun qosSummary(): String = runCatching { coordinator.qosSummary() }.getOrElse { "" }

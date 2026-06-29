@@ -12,6 +12,8 @@ data class TalkbackSessionSnapshot(
     val protocolFloorOwnerKey: String?,
     val localPttState: PttState,
     val memberKeys: List<String>,
+    /** Channel config members frozen at session create (ADR-0002); distinct from active session roster. */
+    val channelMemberModuleIds: List<String> = emptyList(),
     /** Per-member invite/media state; UI should treat media==CONNECTED as in-meeting. */
     val memberViews: List<MemberView> = emptyList(),
     /** Mesh peers with ICE CONNECTED (0 = solo in meeting, live but waiting for others). */

@@ -105,6 +105,10 @@ data class TalkUiState(
     val conferenceRejoinInProgress: Boolean = false,
     val conferenceReconnecting: Boolean = false,
     val conferenceReconnectFailed: Boolean = false,
+    /** Channel config members (static intent, ADR-0002). */
+    val channelMemberModuleIds: List<String> = emptyList(),
+    /** Active session roster keys (runtime membership). */
+    val sessionMemberKeys: List<String> = emptyList(),
     val endpoints: List<EndpointUiItem>,
     val call: CallUiState = CallUiState(),
     val meeting: MeetingUiState = MeetingUiState()

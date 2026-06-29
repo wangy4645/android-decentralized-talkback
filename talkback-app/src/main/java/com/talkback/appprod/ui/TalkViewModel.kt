@@ -887,6 +887,8 @@ class TalkViewModel(
             conferenceRejoinInProgress = conferenceRejoinInProgress,
             conferenceReconnecting = conferenceReconnecting,
             conferenceReconnectFailed = conferenceReconnectFailed,
+            channelMemberModuleIds = session?.channelMemberModuleIds.orEmpty(),
+            sessionMemberKeys = session?.memberKeys.orEmpty(),
             endpoints = endpoints,
             call = callState,
             meeting = MeetingUiState(
