@@ -652,10 +652,10 @@ class TalkViewModel(
         session: com.talkback.app.TalkbackSessionSnapshot,
         localKey: String
     ): String? {
-        val ownerKey = session.floorOwnerKey ?: return null
+        val ownerKey = session.protocolFloorOwnerKey ?: return null
         if (ownerKey == localKey) return null
         if (session.localPttState == PttState.TALK) return null
-        return formatEndpointLabel(ownerKey)
+        return moduleLabel(ownerKey)
     }
 
     private sealed class FloorDecision {
@@ -677,7 +677,7 @@ class TalkViewModel(
             when (session.localPttState) {
                 PttState.TALK -> return FloorDecision.Granted
                 PttState.IDLE -> {
-                    val ownerKey = session.floorOwnerKey
+                    val ownerKey = session.protocolFloorOwnerKey
                     return if (ownerKey != null && ownerKey != localKey) {
                         FloorDecision.Denied(ownerKey)
                     } else {
@@ -733,32 +733,43 @@ class TalkViewModel(
             ModuleId(config.moduleId),
             EndpointId(config.endpointId)
         ).key
-        val floorOwnerKey = session?.floorOwnerKey
-        val activeFloorOwnerKey = connectedFloorOwnerKey(floorOwnerKey)
-        val floorOwner = when {
-            conferenceActive -> appContext.getString(R.string.conference_floor_all)
-            activeFloorOwnerKey != null -> formatEndpointLabel(activeFloorOwnerKey)
-            else -> "--"
-        }
+        val floorOwnerKey = session?.protocolFloorOwnerKey
         val localPttActive = session?.localPttState == PttState.TALK ||
             session?.localPttState == PttState.REQUEST_FLOOR
+        // Control plane: who holds the floor, derived ONLY from floor protocol (never ICE).
+        val floorPresentation = buildFloorPresentation(config, session, localRawKey, conferenceActive)
+        val floorOwner = when {
+            conferenceActive -> appContext.getString(R.string.conference_floor_all)
+            floorPresentation is FloorPresentation.Acquiring -> {
+                if (floorPresentation.degraded) {
+                    appContext.getString(R.string.floor_acquiring_degraded)
+                } else {
+                    appContext.getString(R.string.floor_acquiring)
+                }
+            }
+            floorPresentation is FloorPresentation.Speaking -> moduleLabel(floorPresentation.moduleId)
+            else -> "--"
+        }
         val talking = when {
             conferenceActive && conferenceMuted -> appContext.getString(R.string.conference_status_muted)
             conferenceActive && manager.isChannelMediaReady(config) -> appContext.getString(R.string.conference_status_live)
             conferenceActive -> appContext.getString(R.string.conference_status_connecting)
-            localPttActive -> formatEndpointLabel(localRawKey)
-            activeFloorOwnerKey != null -> formatEndpointLabel(activeFloorOwnerKey)
+            floorPresentation is FloorPresentation.Acquiring -> moduleLabel(localRawKey)
+            localPttActive -> moduleLabel(localRawKey)
+            floorPresentation is FloorPresentation.Speaking -> moduleLabel(floorPresentation.moduleId)
             else -> "--"
         }
 
-        val speakingKey = when {
+        // UI identity is the module: endpoint keys never participate in matching.
+        val speakingModuleId = when {
             conferenceActive && !conferenceMuted && manager.isChannelMediaReady(config) ->
-                resolveConferenceSpeakingKey(config, localRawKey, session)
-            localPttActive -> localRawKey
-            else -> activeFloorOwnerKey
+                resolveConferenceSpeakingKey(config, localRawKey, session)?.let { moduleIdFromKey(it) }
+            localPttActive -> moduleIdFromKey(localRawKey)
+            floorPresentation is FloorPresentation.Speaking -> floorPresentation.moduleId
+            else -> null
         }
         val localLanOnline = serviceRunning && LocalNetworkHelper.hasLanLink(appContext)
-        val endpoints = buildEndpointList(config, localRawKey, speakingKey, localLanOnline)
+        val endpoints = buildEndpointList(config, localRawKey, speakingModuleId, localLanOnline)
 
         val unicast = manager.activeUnicastSession()
         val callState = if (unicast != null) {
@@ -850,6 +861,7 @@ class TalkViewModel(
             },
             floorOwner = floorOwner,
             floorOwnerKey = floorOwnerKey,
+            floorPresentation = floorPresentation,
             localEndpointKey = localRawKey,
             talking = talking,
             networkLabel = runtime.networkQualityLabel(),
@@ -892,7 +904,7 @@ class TalkViewModel(
     private fun buildEndpointList(
         config: AppConfig,
         localRawKey: String,
-        speakingKey: String?,
+        speakingModuleId: String?,
         localLanOnline: Boolean
     ): List<EndpointUiItem> {
         val runtime = manager.getRuntime() ?: return emptyList()
@@ -912,7 +924,7 @@ class TalkViewModel(
                 displayLabel = localYouLabel(localRawKey),
                 status = when {
                     !localLanOnline -> EndpointStatus.OFFLINE
-                    speakingKey == localRawKey -> EndpointStatus.SPEAKING
+                    speakingModuleId == moduleIdFromKey(localRawKey) -> EndpointStatus.SPEAKING
                     else -> EndpointStatus.ONLINE
                 },
                 signalBars = if (localLanOnline) 3 else 0,
@@ -934,7 +946,7 @@ class TalkViewModel(
             val displayKey = roster.firstOrNull { moduleIdFromKey(it.endpointKey) == moduleId }?.endpointKey
                 ?: runtime.primaryEndpointIdForModule(moduleId)?.let { "$moduleId-$it" }
                 ?: key
-            addItem(endpointItem(displayKey, online, speakingKey, localRawKey))
+            addItem(endpointItem(displayKey, online, speakingModuleId, localRawKey))
         }
 
         if (conferenceActive) {
@@ -951,7 +963,7 @@ class TalkViewModel(
                         conferenceEndpointItem(
                             displayKey,
                             view,
-                            speakingKey,
+                            speakingModuleId,
                             rosterOnlineByModule[moduleId] == true,
                             localRawKey
                         )
@@ -965,7 +977,7 @@ class TalkViewModel(
                 val moduleId = moduleIdFromKey(row.endpointKey)
                 if (moduleId in seenModules) return@forEach
                 seenModules.add(moduleId)
-                addItem(endpointItem(row.endpointKey, row.online, speakingKey, localRawKey))
+                addItem(endpointItem(row.endpointKey, row.online, speakingModuleId, localRawKey))
             }
             session?.memberKeys?.forEach(::addMemberKey)
         }
@@ -973,12 +985,47 @@ class TalkViewModel(
         return items
     }
 
-    private fun connectedFloorOwnerKey(floorOwnerKey: String?): String? {
-        if (floorOwnerKey == null) return null
-        val runtime = manager.getRuntime() ?: return null
-        val ice = runtime.qosSnapshotForModule(moduleIdFromKey(floorOwnerKey))?.iceState
-        return if (ice == "CONNECTED" || ice == "COMPLETED") floorOwnerKey else null
+    /**
+     * Build the floor presentation from the control plane only.
+     *
+     * Per Presentation Rule #5, ownership comes exclusively from
+     * [TalkbackSessionSnapshot.protocolFloorOwnerKey];
+     * reachability is an independent media-plane attribute fetched via the Runtime semantic API
+     * ([TalkbackRuntime.isCurrentSpeakerReachable]) and never used to suppress a present owner.
+     * Conference active-speaker is a different (multi-speaker) model and is not represented here.
+     */
+    private fun buildFloorPresentation(
+        config: AppConfig,
+        session: com.talkback.app.TalkbackSessionSnapshot?,
+        localRawKey: String,
+        conferenceActive: Boolean
+    ): FloorPresentation {
+        if (conferenceActive) return FloorPresentation.Idle
+        val localModuleId = moduleIdFromKey(localRawKey)
+        if (session?.localPttState == PttState.REQUEST_FLOOR &&
+            session.protocolFloorOwnerKey != localRawKey
+        ) {
+            return FloorPresentation.Requesting
+        }
+        val ownerKey = session?.protocolFloorOwnerKey ?: return FloorPresentation.Idle
+        val ownerModuleId = moduleIdFromKey(ownerKey)
+        if (ownerModuleId == localModuleId) {
+            val uplinkGrant = manager.modulePresenceSnapshot()?.localUplinkGrant ?: false
+            if (!uplinkGrant) {
+                val degraded = !manager.isChannelMediaReady(config)
+                return FloorPresentation.Acquiring(degraded = degraded)
+            }
+        }
+        val reachable = if (ownerModuleId == localModuleId) {
+            true
+        } else {
+            manager.getRuntime()?.isCurrentSpeakerReachable(config.defaultChannelId) ?: false
+        }
+        return FloorPresentation.Speaking(ownerModuleId, reachable)
     }
+
+    /** UI label for a floor/endpoint key: always the module, never the endpoint. */
+    private fun moduleLabel(key: String): String = moduleIdFromKey(key)
 
     private fun resolveConferenceSpeakingKey(
         config: AppConfig,
@@ -999,7 +1046,7 @@ class TalkViewModel(
     }
 
     private fun localYouLabel(key: String): String =
-        "${formatEndpointLabel(key)} ${appContext.getString(R.string.you_suffix)}"
+        "${moduleLabel(key)} ${appContext.getString(R.string.you_suffix)}"
 
     private fun isLocalEndpointKey(key: String, localRawKey: String): Boolean =
         moduleIdFromKey(key).equals(moduleIdFromKey(localRawKey), ignoreCase = true)
@@ -1033,12 +1080,12 @@ class TalkViewModel(
     private fun conferenceEndpointItem(
         key: String,
         view: MemberView,
-        speakingKey: String?,
+        speakingModuleId: String?,
         rosterOnline: Boolean,
         localRawKey: String
     ): EndpointUiItem {
         val status = when {
-            view.media == MediaState.CONNECTED && speakingKey == key -> EndpointStatus.SPEAKING
+            view.media == MediaState.CONNECTED && speakingModuleId == moduleIdFromKey(key) -> EndpointStatus.SPEAKING
             view.media == MediaState.CONNECTED -> EndpointStatus.ONLINE
             view.media == MediaState.CONNECTING || view.media == MediaState.RECONNECTING ->
                 EndpointStatus.CONNECTING
@@ -1056,7 +1103,7 @@ class TalkViewModel(
         }
         return EndpointUiItem(
             key = key,
-            displayLabel = formatEndpointLabel(key),
+            displayLabel = moduleLabel(key),
             status = status,
             signalBars = bars,
             isLocal = isLocalEndpointKey(key, localRawKey)
@@ -1066,18 +1113,17 @@ class TalkViewModel(
     private fun endpointItem(
         key: String,
         online: Boolean,
-        speakingKey: String?,
+        speakingModuleId: String?,
         localRawKey: String
     ): EndpointUiItem {
-        val label = formatEndpointLabel(key)
         val status = when {
             !online -> EndpointStatus.OFFLINE
-            speakingKey == key -> EndpointStatus.SPEAKING
+            speakingModuleId == moduleIdFromKey(key) -> EndpointStatus.SPEAKING
             else -> EndpointStatus.ONLINE
         }
         return EndpointUiItem(
             key = key,
-            displayLabel = label,
+            displayLabel = moduleLabel(key),
             status = status,
             signalBars = if (online) 3 else 0,
             isLocal = isLocalEndpointKey(key, localRawKey)

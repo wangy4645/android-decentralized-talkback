@@ -19,6 +19,8 @@
     <string name="lock_ptt_slide">Slide to Lock PTT</string>
     <string name="lock_ptt_unlock_slide">Slide to Unlock PTT</string>
     <string name="floor_owner">Floor Owner</string>
+    <string name="floor_acquiring">Acquiring floor…</string>
+    <string name="floor_acquiring_degraded">Acquiring floor (media degraded)…</string>
     <string name="floor_owner_short">Floor</string>
     <string name="talking">Talking</string>
     <string name="talking_short">Talk</string>

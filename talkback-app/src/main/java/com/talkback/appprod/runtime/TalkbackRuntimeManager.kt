@@ -52,6 +52,11 @@ class TalkbackRuntimeManager(private val appContext: Context) {
 
     fun getRuntime(): TalkbackRuntime? = runtime
 
+    fun modulePresenceSnapshot() = runtime?.modulePresenceSnapshot()
+
+    fun acquireReleaseTimeoutMs(): Long =
+        runtime?.acquireReleaseTimeoutMs() ?: 500L
+
     fun applyMeetingAutoJoinPolicy(meetingAutoJoin: Boolean) {
         runtime?.setAutoAcceptConferenceInvites(meetingAutoJoin)
     }
@@ -103,7 +108,8 @@ class TalkbackRuntimeManager(private val appContext: Context) {
                     sharedSecret = config.sharedSecret,
                     allowedModuleIds = config.effectiveAllowedModuleIds(),
                     maxConferenceModules = MediaTopologyPolicy.DEFAULT_MAX_CONFERENCE_MODULES,
-                    autoAcceptConferenceInvites = config.meetingAutoJoin
+                    autoAcceptConferenceInvites = config.meetingAutoJoin,
+                    acquireReleaseTimeoutMs = 500L
                 ),
                 mode = AudioEngineMode.REAL_WEBRTC,
                 staticPeers = config.staticPeers(),

@@ -82,6 +82,8 @@ data class TalkUiState(
     val onlineCount: Int,
     val floorOwner: String,
     val floorOwnerKey: String? = null,
+    /** Decoupled control/media presentation of the floor. UI should prefer this. */
+    val floorPresentation: FloorPresentation = FloorPresentation.Idle,
     val localEndpointKey: String = "",
     val talking: String,
     val networkLabel: String,

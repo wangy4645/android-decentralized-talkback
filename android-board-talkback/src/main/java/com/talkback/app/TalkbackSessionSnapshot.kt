@@ -9,7 +9,7 @@ data class TalkbackSessionSnapshot(
     val sessionId: String,
     val type: SessionType,
     val channelId: String?,
-    val floorOwnerKey: String?,
+    val protocolFloorOwnerKey: String?,
     val localPttState: PttState,
     val memberKeys: List<String>,
     /** Per-member invite/media state; UI should treat media==CONNECTED as in-meeting. */

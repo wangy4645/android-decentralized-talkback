@@ -11,6 +11,7 @@ interface WebRtcAudioEngine {
     fun addIceCandidate(candidate: String)
     fun startCapture()
     fun stopCapture()
+    fun isCapturing(): Boolean = false
     fun setMuted(muted: Boolean)
     /** Optional trace tag set by coordinator (session id). */
     var playbackDiagnosticTag: String?

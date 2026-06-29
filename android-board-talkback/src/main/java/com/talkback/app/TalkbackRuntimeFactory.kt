@@ -104,7 +104,8 @@ object TalkbackRuntimeFactory {
             discoveryPeerTtlMs = config.discoveryPeerTtlMs,
             discoveryAnnounceIntervalMs = config.discoveryAnnounceIntervalMs,
             conferenceHostIceReconnectGraceMs = config.conferenceHostIceReconnectGraceMs,
-            conferenceInviteRingTimeoutMs = config.conferenceInviteRingTimeoutMs
+            conferenceInviteRingTimeoutMs = config.conferenceInviteRingTimeoutMs,
+            acquireReleaseTimeoutMs = config.acquireReleaseTimeoutMs
         )
         lateinit var coordinator: TalkbackCoordinator
         val mediaRegistry = SessionMediaRegistry(

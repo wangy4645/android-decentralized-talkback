@@ -217,6 +217,8 @@ class RealWebRtcAudioEngine(
         TalkbackLog.i("WebRTC local capture OFF")
     }
 
+    override fun isCapturing(): Boolean = capturing.get()
+
     private fun applyCaptureEnabled(enabled: Boolean) {
         when (programRelayMode) {
             ProgramRelayMode.MICROPHONE -> {

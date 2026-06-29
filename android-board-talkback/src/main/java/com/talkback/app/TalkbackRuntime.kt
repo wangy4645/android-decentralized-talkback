@@ -9,6 +9,8 @@ import com.talkback.core.model.EndpointAddress
 import com.talkback.core.model.EndpointId
 import com.talkback.core.model.EndpointPriority
 import com.talkback.core.model.ModuleId
+import com.talkback.core.presence.ModulePresenceSnapshot
+import com.talkback.core.presence.SessionPresenceSnapshot
 import com.talkback.core.ptt.PttState
 import com.talkback.core.registry.EndpointRegistry
 import com.talkback.core.webrtc.MediaBearerScope
@@ -37,7 +39,9 @@ data class TalkbackRuntimeConfig(
     val discoveryPeerTtlMs: Long = 45_000L,
     val discoveryAnnounceIntervalMs: Long = 10_000L,
     val conferenceHostIceReconnectGraceMs: Long = 5_000L,
-    val conferenceInviteRingTimeoutMs: Long = 20_000L
+    val conferenceInviteRingTimeoutMs: Long = 20_000L,
+    /** ADR-0004 interim; Phase 3 enforces auto FLOOR_RELEASE. Phase 1–2: observe/config only. */
+    val acquireReleaseTimeoutMs: Long = 500L
 )
 
 /**
@@ -50,6 +54,8 @@ class TalkbackRuntime(
     private val staticDiscovery: StaticPeerDiscoveryService,
     private val gossipDiscovery: MeshSweepGossipDiscovery? = null
 ) {
+    fun acquireReleaseTimeoutMs(): Long = config.acquireReleaseTimeoutMs
+
     fun start() {
         coordinator.start(config.signalingPort)
     }
@@ -167,12 +173,31 @@ class TalkbackRuntime(
     fun sessionSnapshotForChannel(channelId: String): TalkbackSessionSnapshot? =
         runCatching { coordinator.sessionSnapshotForChannel(channelId) }.getOrNull()
 
+    fun sessionPresenceSnapshot(sessionId: String): SessionPresenceSnapshot? =
+        runCatching { coordinator.sessionPresenceSnapshot(sessionId) }.getOrNull()
+
+    fun sessionPresenceSnapshots(): List<SessionPresenceSnapshot> =
+        runCatching { coordinator.sessionPresenceSnapshots() }.getOrElse { emptyList() }
+
+    fun modulePresenceSnapshot(): ModulePresenceSnapshot =
+        runCatching { coordinator.modulePresenceSnapshot() }
+            .getOrElse {
+                ModulePresenceSnapshot(
+                    localUplinkGrant = false,
+                    activeCaptureEndpointKey = null,
+                    iceByPeer = emptyMap()
+                )
+            }
+
     fun networkQualityLabel(): String = runCatching { coordinator.networkQualityLabel() }.getOrElse { "N/A" }
     fun onlineModuleCount(): Int = runCatching { coordinator.onlineModuleCount() }.getOrElse { 0 }
     fun qosSummary(): String = runCatching { coordinator.qosSummary() }.getOrElse { "" }
 
     fun qosSnapshotForModule(moduleId: String): com.talkback.core.qos.QosSnapshot? =
         runCatching { coordinator.qosSnapshotForModule(moduleId) }.getOrNull()
+
+    fun isCurrentSpeakerReachable(channelId: String): Boolean =
+        runCatching { coordinator.isCurrentSpeakerReachable(channelId) }.getOrElse { false }
 
     fun remotePlaybackEnabledForModule(moduleId: String): Boolean? =
         runCatching { coordinator.remotePlaybackEnabledForModule(moduleId) }.getOrNull()

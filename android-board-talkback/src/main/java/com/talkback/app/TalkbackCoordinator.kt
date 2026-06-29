@@ -5,6 +5,9 @@ import com.talkback.core.audio.DefaultAudioRouter
 import com.talkback.core.audio.ModuleAudioMixer
 import com.talkback.core.channel.ChannelManager
 import com.talkback.core.contacts.CallableModuleGate
+import com.talkback.core.presence.ModulePresenceSnapshot
+import com.talkback.core.presence.PresenceProjector
+import com.talkback.core.presence.SessionPresenceSnapshot
 import com.talkback.core.contacts.ContactEndpointRow
 import com.talkback.core.contacts.ContactsProjection
 import com.talkback.core.discovery.CompositeModuleDiscoveryService
@@ -144,6 +147,8 @@ data class TalkbackCoordinatorConfig(
     val anchorLowBatteryPercent: Int = 10,
     /** GROUP: no recent HELLO before marking a roster member SUSPECT (default 3× hello interval). */
     val groupMemberSuspectHelloMs: Long = 9_000L,
+    /** ADR-0004 interim acquire timeout (ms). Phase 3 wires FSM; Phase 1–2 config-only. */
+    val acquireReleaseTimeoutMs: Long = 500L,
     /** GROUP: ICE not connected before marking SUSPECT. */
     val groupMemberSuspectIceMs: Long = 10_000L,
     /** GROUP: SUSPECT duration before EVICTED (default 27s). */
@@ -585,6 +590,7 @@ class TalkbackCoordinator(
     fun start(localSignalingPort: Int) {
         stopped = false
         coordinatorBootstrapStartedAtMs = System.currentTimeMillis()
+        log("Floor acquire timeout config: acquireReleaseTimeoutMs=${config.acquireReleaseTimeoutMs} (observe-only until Phase 3)")
         lastDialablePeerCount = 0
         signalingChannel.start(localSignalingPort)
         signalingChannel.onMessage { signal, peer -> runOnCoordinator { handleSignal(signal, peer) } }
@@ -1232,6 +1238,27 @@ class TalkbackCoordinator(
         toSessionSnapshot(session)
     }
 
+    fun sessionPresenceSnapshot(sessionId: String): SessionPresenceSnapshot? = runOnCoordinatorSync {
+        val session = sessions[sessionId] ?: return@runOnCoordinatorSync null
+        val conferenceSnap = if (isConferenceSession(session)) conferenceSnapshot(session) else null
+        PresenceProjector.sessionSnapshot(session, conferenceSnap)
+    }
+
+    fun sessionPresenceSnapshots(): List<SessionPresenceSnapshot> = runOnCoordinatorSync {
+        sessions.values.map { session ->
+            val conferenceSnap = if (isConferenceSession(session)) conferenceSnapshot(session) else null
+            PresenceProjector.sessionSnapshot(session, conferenceSnap)
+        }
+    }
+
+    fun modulePresenceSnapshot(): ModulePresenceSnapshot = runOnCoordinatorSync {
+        PresenceProjector.moduleSnapshot(
+            moduleMixer = moduleMixer,
+            localUplinkGrant = isLocalUplinkGranted(),
+            iceByPeer = qosMonitor.all().associate { it.remoteModuleId to it.iceState }
+        )
+    }
+
     fun isChannelMediaReady(channelId: String): Boolean = runOnCoordinatorSync {
         val session = meshSessionForChannel(channelId) ?: return@runOnCoordinatorSync false
         if (session.type == SessionType.CONFERENCE) {
@@ -1393,7 +1420,7 @@ class TalkbackCoordinator(
         sessionId = session.id,
         type = session.type,
         channelId = session.channelId,
-        floorOwnerKey = session.floor.owner()?.key,
+        protocolFloorOwnerKey = session.floor.owner()?.key,
         localPttState = session.ptt.state,
         memberKeys = conferenceSnap?.roster?.map { it.key } ?: session.groupMembers.map { it.key }.ifEmpty {
             listOfNotNull(session.local.key, session.remote?.key)
@@ -1451,10 +1478,11 @@ class TalkbackCoordinator(
 
     internal fun testIsSessionCapturing(sessionId: String): Boolean = runOnCoordinatorSync {
         val session = sessions[sessionId] ?: return@runOnCoordinatorSync false
-        sessionMediaEngines(session).any { engine ->
-            (engine as? com.talkback.core.webrtc.StubWebRtcAudioEngine)?.isCapturing() == true
-        }
+        sessionMediaEngines(session).any { it.isCapturing() }
     }
+
+    private fun isLocalUplinkGranted(): Boolean =
+        sessions.values.any { session -> sessionMediaEngines(session).any { it.isCapturing() } }
 
     /** Test-only: refresh playback gate from ICE reachability without tearing down media links. */
     internal fun testRefreshIceReachability(remoteModuleId: String, state: String) = runOnCoordinatorSync {

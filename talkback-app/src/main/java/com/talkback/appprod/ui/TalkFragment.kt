@@ -205,9 +205,22 @@ class TalkFragment : Fragment() {
             view.findViewById<TextView>(R.id.txtTalking).text = state.talking
             imgFloorIndicator.isVisible = true
             talkingIcon.isVisible = true
-            val floorActive = state.floorOwner != "--"
+            val floorActive = state.floorPresentation.isSpeaking ||
+                state.floorPresentation is FloorPresentation.Acquiring
             val talkingActive = state.talking != "--"
-            imgFloorIndicator.alpha = if (floorActive) 1f else 0.35f
+            val speakerReachable = when (val presentation = state.floorPresentation) {
+                is FloorPresentation.Speaking -> presentation.reachable
+                is FloorPresentation.Acquiring -> !presentation.degraded
+                else -> true
+            }
+            imgFloorIndicator.alpha = when {
+                state.floorPresentation is FloorPresentation.Acquiring -> {
+                    if ((state.floorPresentation as FloorPresentation.Acquiring).degraded) 0.45f else 0.7f
+                }
+                !floorActive -> 0.35f
+                !speakerReachable -> 0.5f
+                else -> 1f
+            }
             talkingIcon.alpha = if (talkingActive) 1f else 0.4f
         }
 

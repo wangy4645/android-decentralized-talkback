@@ -65,5 +65,5 @@ class StubWebRtcAudioEngine : WebRtcAudioEngine {
 
     override fun outboundAudioLevel(): Float = 0f
 
-    fun isCapturing(): Boolean = capturing.get()
+    override fun isCapturing(): Boolean = capturing.get()
 }
