@@ -193,6 +193,9 @@ class TalkViewModel(
             if (manager.consumeFloorPreempted(sessionId)) {
                 _toastMessageRes.emit(R.string.ptt_floor_preempted)
             }
+            if (manager.consumeAcquireTimedOut(sessionId)) {
+                _toastMessageRes.emit(R.string.floor_acquire_timeout)
+            }
         }
         val state = buildState(config)
         val endReason = if (wasConferenceActive && !state.conferenceActive) {

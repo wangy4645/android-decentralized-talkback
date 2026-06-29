@@ -40,7 +40,7 @@ data class TalkbackRuntimeConfig(
     val discoveryAnnounceIntervalMs: Long = 10_000L,
     val conferenceHostIceReconnectGraceMs: Long = 5_000L,
     val conferenceInviteRingTimeoutMs: Long = 20_000L,
-    /** ADR-0004 interim; Phase 3 enforces auto FLOOR_RELEASE. Phase 1–2: observe/config only. */
+    /** ADR-0004 interim; Phase 3 enforces auto FLOOR_RELEASE on acquire timeout. */
     val acquireReleaseTimeoutMs: Long = 500L
 )
 
@@ -262,6 +262,9 @@ class TalkbackRuntime(
 
     fun consumeFloorPreempted(sessionId: String): Boolean =
         coordinator.consumeFloorPreempted(sessionId)
+
+    fun consumeAcquireTimedOut(sessionId: String): Boolean =
+        coordinator.consumeAcquireTimedOut(sessionId)
 
     fun onlineEndpoints() = endpointRegistry.allOnline()
 

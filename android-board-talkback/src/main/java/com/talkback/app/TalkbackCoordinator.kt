@@ -147,7 +147,7 @@ data class TalkbackCoordinatorConfig(
     val anchorLowBatteryPercent: Int = 10,
     /** GROUP: no recent HELLO before marking a roster member SUSPECT (default 3× hello interval). */
     val groupMemberSuspectHelloMs: Long = 9_000L,
-    /** ADR-0004 interim acquire timeout (ms). Phase 3 wires FSM; Phase 1–2 config-only. */
+    /** ADR-0004 interim acquire timeout (ms). Phase 3 enforces auto FLOOR_RELEASE. */
     val acquireReleaseTimeoutMs: Long = 500L,
     /** GROUP: ICE not connected before marking SUSPECT. */
     val groupMemberSuspectIceMs: Long = 10_000L,
@@ -341,6 +341,13 @@ class TalkbackCoordinator(
     private val pendingConferenceHostIceHangupBySession = ConcurrentHashMap<String, ScheduledFuture<*>>()
     private val pendingParticipantPruneBySession = ConcurrentHashMap<String, ConcurrentHashMap<String, ScheduledFuture<*>>>()
     private val pendingHostRejoinByChannel = ConcurrentHashMap<String, ScheduledFuture<*>>()
+    private val acquireReleaseWatchdog by lazy {
+        FloorAcquireReleaseWatchdog(
+            timeoutMs = { config.acquireReleaseTimeoutMs },
+            scheduler = scheduler,
+            onTimeout = { sessionId -> runOnCoordinator { onAcquireReleaseTimeout(sessionId) } }
+        )
+    }
     private val hostRejoinAttemptByChannel = ConcurrentHashMap<String, Int>()
     private val conferenceReconnectStartedAtBySession = ConcurrentHashMap<String, Long>()
     private val lastGroupMeshReconnectMsByPeer = ConcurrentHashMap<String, Long>()
@@ -590,7 +597,7 @@ class TalkbackCoordinator(
     fun start(localSignalingPort: Int) {
         stopped = false
         coordinatorBootstrapStartedAtMs = System.currentTimeMillis()
-        log("Floor acquire timeout config: acquireReleaseTimeoutMs=${config.acquireReleaseTimeoutMs} (observe-only until Phase 3)")
+        log("Floor acquire timeout config: acquireReleaseTimeoutMs=${config.acquireReleaseTimeoutMs} (enforced)")
         lastDialablePeerCount = 0
         signalingChannel.start(localSignalingPort)
         signalingChannel.onMessage { signal, peer -> runOnCoordinator { handleSignal(signal, peer) } }
@@ -655,6 +662,7 @@ class TalkbackCoordinator(
     fun stop() {
         if (stopped) return
         stopped = true
+        acquireReleaseWatchdog.cancelAll()
         scheduler.shutdownNow()
         runCatching { signalingChannel.stop() }
         runCatching { discoveryService.stop() }
@@ -1116,6 +1124,7 @@ class TalkbackCoordinator(
         PttTimingLog.pttDown(sessionId)
         val session = sessions[sessionId] ?: return
         if (!session.type.usesFloorControl()) return
+        session.localAcquireTimedOut = false
         val currentOwner = session.floor.owner()
         log(
             "PTT_GATE ${sessionTag(session)} sid=$sessionId " +
@@ -1157,6 +1166,7 @@ class TalkbackCoordinator(
         PttTimingLog.pttUp(sessionId)
         val session = sessions[sessionId] ?: return
         if (!session.type.usesFloorControl()) return
+        acquireReleaseWatchdog.onFloorLost(sessionId)
         val state = session.ptt.onEvent(PttEvent.Release)
         session.pendingTransmit = false
         stopSessionCapture(session)
@@ -1987,14 +1997,27 @@ class TalkbackCoordinator(
                     SnapshotResult.UNCHANGED,
                     SnapshotResult.IGNORED_OLD_EPOCH -> Unit
                     SnapshotResult.UPDATED,
-                    SnapshotResult.OWNER_CHANGED -> log(
-                        "FLOOR_SNAPSHOT_APPLIED ${sessionTag(session)} sid=${session.id} " +
-                            "from=${payload.moduleId} result=$result " +
-                            "epoch=${digest.epoch} version=${digest.version} " +
-                            "owner=${digest.ownerKey ?: "null"} " +
-                            "localEpoch=${session.floor.epoch()} " +
-                            "localOwner=${session.floor.owner()?.key ?: "null"}"
-                    )
+                    SnapshotResult.OWNER_CHANGED -> {
+                        log(
+                            "FLOOR_SNAPSHOT_APPLIED ${sessionTag(session)} sid=${session.id} " +
+                                "from=${payload.moduleId} result=$result " +
+                                "epoch=${digest.epoch} version=${digest.version} " +
+                                "owner=${digest.ownerKey ?: "null"} " +
+                                "localEpoch=${session.floor.epoch()} " +
+                                "localOwner=${session.floor.owner()?.key ?: "null"}"
+                        )
+                        if (session.floor.owner() == session.local) {
+                            PttTimingLog.grantApplied(session.id)
+                            onLocalProtocolFloorAcquired(session)
+                        } else if (session.floor.owner() != null && session.floor.owner() != session.local) {
+                            acquireReleaseWatchdog.onFloorLost(session.id)
+                            if (session.ptt.state == PttState.TALK || session.pendingTransmit) {
+                                session.ptt.onEvent(PttEvent.Release)
+                                session.pendingTransmit = false
+                                stopSessionCapture(session)
+                            }
+                        }
+                    }
                 }
             }
     }
@@ -3162,11 +3185,9 @@ class TalkbackCoordinator(
         }
         PttTimingLog.grantApplied(session.id)
         if (owner == session.local) {
-            if (session.ptt.state == PttState.REQUEST_FLOOR) {
-                session.ptt.onEvent(PttEvent.Granted)
-            }
-            beginTransmitIfReady(session)
+            onLocalProtocolFloorAcquired(session)
         } else {
+            acquireReleaseWatchdog.onFloorLost(session.id)
             session.ptt.onEvent(PttEvent.Release)
             session.pendingTransmit = false
             stopSessionCapture(session)
@@ -3202,6 +3223,7 @@ class TalkbackCoordinator(
         if (signal.to == session.local) {
             session.ptt.onEvent(PttEvent.Rejected)
             session.pendingTransmit = false
+            acquireReleaseWatchdog.onFloorLost(session.id)
             stopSessionCapture(session)
         }
     }
@@ -3212,6 +3234,7 @@ class TalkbackCoordinator(
         if (signal.to != session.local) return
         session.ptt.onEvent(PttEvent.Rejected)
         session.pendingTransmit = false
+        acquireReleaseWatchdog.onFloorLost(session.id)
         stopSessionCapture(session)
         session.localFloorPreempted = true
     }
@@ -3236,6 +3259,7 @@ class TalkbackCoordinator(
         if (session.local == signal.from) {
             session.ptt.onEvent(PttEvent.Release)
         }
+        acquireReleaseWatchdog.onFloorLost(session.id)
         if (session.floor.owner() != session.local) {
             stopSessionCapture(session)
         }
@@ -3518,6 +3542,7 @@ class TalkbackCoordinator(
     private fun hangupInternal(sessionId: String) {
         cancelConferenceHostIceHangup(sessionId)
         cancelAllParticipantPrunes(sessionId)
+        acquireReleaseWatchdog.onFloorLost(sessionId)
         conferenceReconnectStartedAtBySession.remove(sessionId)
         val session = sessions.remove(sessionId) ?: return
         val wasUnicast = session.type == SessionType.UNICAST
@@ -3667,6 +3692,7 @@ class TalkbackCoordinator(
             }
         }
         PttTimingLog.captureOn(session.id)
+        acquireReleaseWatchdog.onCaptureStarted(session.id)
         sessionMediaEngines(session).forEach { it.startCapture() }
     }
 
@@ -4642,6 +4668,58 @@ class TalkbackCoordinator(
         true
     }
 
+    fun consumeAcquireTimedOut(sessionId: String): Boolean = runOnCoordinatorSync {
+        val session = sessions[sessionId] ?: return@runOnCoordinatorSync false
+        if (!session.localAcquireTimedOut) return@runOnCoordinatorSync false
+        session.localAcquireTimedOut = false
+        true
+    }
+
+    private fun onLocalProtocolFloorAcquired(session: TalkbackSession) {
+        if (session.floor.owner() != session.local) return
+        if (session.ptt.state == PttState.REQUEST_FLOOR) {
+            session.ptt.onEvent(PttEvent.Granted)
+        }
+        beginTransmitIfReady(session)
+        scheduleAcquireReleaseIfNeeded(session)
+    }
+
+    private fun scheduleAcquireReleaseIfNeeded(session: TalkbackSession) {
+        if (!session.type.usesFloorControl()) return
+        if (session.floor.owner() != session.local) return
+        val capturing = sessionMediaEngines(session).any { it.isCapturing() }
+        acquireReleaseWatchdog.onLocalGrantApplied(session.id, alreadyCapturing = capturing)
+    }
+
+    private fun onAcquireReleaseTimeout(sessionId: String) {
+        val session = sessions[sessionId] ?: return
+        if (!session.type.usesFloorControl()) return
+        if (session.floor.owner() != session.local) return
+        if (sessionMediaEngines(session).any { it.isCapturing() }) {
+            log("ACQUIRE_RELEASE_TIMEOUT_SKIP sid=$sessionId reason=capture_already_on")
+            return
+        }
+        val awaitingUplink = session.ptt.state == PttState.TALK ||
+            session.ptt.state == PttState.REQUEST_FLOOR ||
+            session.pendingTransmit
+        if (!awaitingUplink) return
+
+        log(
+            "ACQUIRE_RELEASE_TIMEOUT ${sessionTag(session)} sid=$sessionId " +
+                "timeoutMs=${config.acquireReleaseTimeoutMs}"
+        )
+        session.localAcquireTimedOut = true
+        session.pendingTransmit = false
+        stopSessionCapture(session)
+        moduleMixer.setActiveCapture(null)
+        session.ptt.onEvent(PttEvent.Release)
+        if (session.floor.release(session.local)) {
+            broadcastFloorRelease(session)
+        }
+        syncProgramRelay(session)
+        updateSessionReceivePlayback(session, "acquire_timeout")
+    }
+
     private fun broadcastHello() {
         val endpoints = endpointRegistry.allOnline().map {
             RemoteEndpointInfo(
@@ -5096,6 +5174,9 @@ class TalkbackCoordinator(
         } else {
             session.pendingTransmit = true
             stopSessionCapture(session)
+            if (session.floor.owner() == session.local) {
+                scheduleAcquireReleaseIfNeeded(session)
+            }
         }
     }
 

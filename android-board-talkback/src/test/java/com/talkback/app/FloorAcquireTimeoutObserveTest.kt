@@ -19,7 +19,7 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 
 /**
- * ADR-0004 Phase 1–2: observe + config only — timeout must not trigger FLOOR_RELEASE yet.
+ * ADR-0004 Phase 1–2: observe + config.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [28])
@@ -55,29 +55,30 @@ class FloorAcquireTimeoutObserveTest {
     fun startup_logsAcquireReleaseTimeoutConfig() {
         assertTrue(
             nodeM03.hasLog {
-                it.contains("acquireReleaseTimeoutMs=500") && it.contains("observe-only")
+                it.contains("acquireReleaseTimeoutMs=500") && it.contains("enforced")
             }
         )
         assertEquals(500L, nodeM03.runtime.acquireReleaseTimeoutMs())
     }
 
     @Test
-    fun grantWithoutCapture_pastInterimTimeout_doesNotAutoRelease() {
-        val channelId = "ACQ-TIMEOUT-OBS"
+    fun grantWithoutCapture_pastInterimTimeout_autoReleases() {
+        val channelId = "ACQ-TIMEOUT-ENF"
         setupGroup(channelId)
         val sessionId = nodeM03.runtime.activeSessionIds().single()
         nodeM03.pressPtt(sessionId)
         assertTrue(waitForProtocolOwner(nodeM03, sessionId, nodeM03.localEndpoint.key))
         assertFalse(nodeM03.runtime.modulePresenceSnapshot().localUplinkGrant)
 
-        Thread.sleep(650L)
-
-        val presence = requireNotNull(nodeM03.runtime.sessionPresenceSnapshot(sessionId))
-        assertEquals(nodeM03.localEndpoint.key, presence.protocolFloorOwnerKey)
-        assertFalse(nodeM03.runtime.testIsSessionCapturing(sessionId))
-        val snap = nodeM03.runtime.sessionSnapshots().first { it.sessionId == sessionId }
-        assertTrue(snap.localPttState == PttState.TALK || snap.localPttState == PttState.REQUEST_FLOOR)
-        assertFalse(nodeM03.hasLog { it.contains("FLOOR_RELEASE_DIAG") })
+        assertTrue(
+            nodeM03.waitForLog(timeoutMs = 3_000L) {
+                it.contains("ACQUIRE_RELEASE_TIMEOUT") && it.contains(sessionId)
+            }
+        )
+        assertTrue(waitForProtocolOwnerCleared(nodeM03, sessionId))
+        assertTrue(
+            nodeM01.waitForLog(timeoutMs = 2_000L) { it.contains("FLOOR_RELEASE_DIAG") }
+        )
     }
 
     @Test
@@ -120,6 +121,17 @@ class FloorAcquireTimeoutObserveTest {
         nodeM01.runtime.simulateRemoteIceState("M02", "CONNECTED")
         nodeM01.runtime.simulateRemoteIceState("M03", "CONNECTED")
         Thread.sleep(200L)
+    }
+
+    private fun waitForProtocolOwnerCleared(node: TestTalkbackNode, sessionId: String): Boolean {
+        val localKey = node.localEndpoint.key
+        val deadline = System.currentTimeMillis() + 2_000L
+        while (System.currentTimeMillis() < deadline) {
+            val owner = node.runtime.sessionPresenceSnapshot(sessionId)?.protocolFloorOwnerKey
+            if (owner == null || owner != localKey) return true
+            Thread.sleep(50)
+        }
+        return false
     }
 
     private fun waitForProtocolOwner(

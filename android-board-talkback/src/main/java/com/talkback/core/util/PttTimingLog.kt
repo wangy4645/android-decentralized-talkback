@@ -10,6 +10,7 @@ import java.util.concurrent.CopyOnWriteArrayList
  * Metrics: PTT_METRIC grantDelay, captureDelay, sinceGrant, holdTime
  *
  * Phase 1 (ADR-0004): sinceGrant = captureON - GRANT_APPLIED (R12). Samples feed P95 calibration
+ * (timeout_violation_rate, false_yield_rate per ADR-0004).
  * via [emitP95Report] or `scripts/soak-summarize.ps1` log parsing.
  */
 object PttTimingLog {

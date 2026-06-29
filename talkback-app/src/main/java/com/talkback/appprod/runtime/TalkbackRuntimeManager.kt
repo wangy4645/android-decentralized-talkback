@@ -155,6 +155,9 @@ class TalkbackRuntimeManager(private val appContext: Context) {
     fun consumeFloorPreempted(sessionId: String): Boolean =
         runtime?.consumeFloorPreempted(sessionId) == true
 
+    fun consumeAcquireTimedOut(sessionId: String): Boolean =
+        runtime?.consumeAcquireTimedOut(sessionId) == true
+
     fun refreshLocalEndpoint(config: AppConfig) {
         bindLocalEndpoint(config)
     }

@@ -23,7 +23,8 @@ internal class TestTalkbackNode(
     heartbeatIntervalMs: Long = 2_000L,
     autoReDialOnModuleRecovery: Boolean = true,
     conferenceHostIceReconnectGraceMs: Long = 5_000L,
-    conferenceInviteRingTimeoutMs: Long = 20_000L
+    conferenceInviteRingTimeoutMs: Long = 20_000L,
+    acquireReleaseTimeoutMs: Long = 500L
 ) {
     val logs = mutableListOf<String>()
     val channel = InMemorySignalingChannel(hub, TEST_HOST, port)
@@ -41,7 +42,8 @@ internal class TestTalkbackNode(
             sharedSecret = sharedSecret,
             maxGroupModules = 8,
             conferenceHostIceReconnectGraceMs = conferenceHostIceReconnectGraceMs,
-            conferenceInviteRingTimeoutMs = conferenceInviteRingTimeoutMs
+            conferenceInviteRingTimeoutMs = conferenceInviteRingTimeoutMs,
+            acquireReleaseTimeoutMs = acquireReleaseTimeoutMs
         ),
         mode = AudioEngineMode.STUB,
         discoveryService = discovery,
