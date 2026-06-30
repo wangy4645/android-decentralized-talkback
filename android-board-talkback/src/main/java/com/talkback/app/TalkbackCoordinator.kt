@@ -62,6 +62,7 @@ import com.talkback.core.session.ChannelReadiness
 import com.talkback.core.session.ConferenceParticipantManager
 import com.talkback.core.session.ConferenceSnapshot
 import com.talkback.core.session.GroupMediaTopology
+import com.talkback.core.session.GroupIdentityStability
 import com.talkback.core.session.GroupMemberReachability
 import com.talkback.core.session.GroupMembershipSupport
 import com.talkback.core.model.GroupResyncRequestPayload
@@ -1187,6 +1188,17 @@ class TalkbackCoordinator(
                     "epoch=${session.floor.epoch()}"
             )
             return
+        }
+        if (session.type == SessionType.GROUP) {
+            val identity = evaluateGroupIdentityStability(session)
+            if (!identity.stable) {
+                log(
+                    "PTT_GATE ${sessionTag(session)} sid=$sessionId identity_unstable " +
+                        "reason=${identity.reason} detail=${identity.detail ?: "-"}"
+                )
+                emitGroupTopologySnapshot(TopologySnapshotReason.PTT_BLOCKED, session)
+                return
+            }
         }
         val reqState = session.ptt.onEvent(PttEvent.Press)
         if (reqState != PttState.REQUEST_FLOOR) {
@@ -7347,6 +7359,25 @@ class TalkbackCoordinator(
         val localDigest = TopologyDigest.fromSession(session)
         return localDigest.rosterEpoch == authorityDigest.rosterEpoch &&
             localDigest.memberHash == authorityDigest.memberHash
+    }
+
+    private fun evaluateGroupIdentityStability(session: TalkbackSession): GroupIdentityStability.Result {
+        val channelId = session.channelId
+        val authorityDigestSeen = channelId != null && lastSeenAuthorityDigestByChannel.containsKey(channelId)
+        return GroupIdentityStability.evaluate(
+            session = session,
+            localModuleId = localModuleId.value,
+            authorityDigestSeen = authorityDigestSeen,
+            membershipDigestAlignedWithAuthority = membershipDigestAlignedWithAuthority(session),
+            verifiedHelloEndpointId = ::verifiedHelloEndpointIdForModule
+        )
+    }
+
+    private fun verifiedHelloEndpointIdForModule(moduleId: String): String? {
+        lastKnownPrimaryEndpointByModule[moduleId]?.let { return it }
+        val endpoints = stateSync.get(moduleId)?.endpoints ?: return null
+        return endpoints.filter { it.online }.minByOrNull { it.endpointId }?.endpointId
+            ?: endpoints.minByOrNull { it.endpointId }?.endpointId
     }
 
     private fun isChannelGatedForGroup(session: TalkbackSession): Boolean {
