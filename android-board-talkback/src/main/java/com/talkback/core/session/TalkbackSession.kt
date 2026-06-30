@@ -2,6 +2,7 @@ package com.talkback.core.session
 
 import com.talkback.core.model.EndpointAddress
 import com.talkback.core.model.ModuleId
+import com.talkback.core.ptt.FloorOwner
 import com.talkback.core.ptt.FloorState
 import com.talkback.core.ptt.PttStateMachine
 import com.talkback.core.signaling.PeerTarget
@@ -18,7 +19,8 @@ class TalkbackSession(
     val traceId: String = UUID.randomUUID().toString().take(8)
 ) {
     val ptt = PttStateMachine()
-    val floor = FloorState()
+    val floorOwner = FloorOwner()
+    val floor: FloorState get() = floorOwner.floor
 
     var remote: EndpointAddress? = null
     var remotePeer: PeerTarget? = null

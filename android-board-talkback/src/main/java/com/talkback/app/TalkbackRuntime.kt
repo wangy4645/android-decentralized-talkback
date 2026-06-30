@@ -298,6 +298,26 @@ class TalkbackRuntime(
     internal fun testIsSessionCapturing(sessionId: String): Boolean =
         coordinator.testIsSessionCapturing(sessionId)
 
+    internal fun testFloorRequestVersion(sessionId: String): Long? =
+        coordinator.testFloorRequestVersion(sessionId)
+
+    internal fun testInjectFloorGranted(
+        sessionId: String,
+        authority: EndpointAddress,
+        grantee: EndpointAddress,
+        floorVersion: Long,
+        floorEpoch: Long = 0L
+    ) {
+        coordinator.testInjectFloorGranted(sessionId, authority, grantee, floorVersion, floorEpoch)
+    }
+
+    internal fun testArmFloorRequest(sessionId: String): Long =
+        coordinator.testArmFloorRequest(sessionId)
+
+    internal fun testCancelFloorRequest(sessionId: String) {
+        coordinator.testCancelFloorRequest(sessionId)
+    }
+
     internal fun testRefreshIceReachability(remoteModuleId: String, state: String) {
         coordinator.testRefreshIceReachability(remoteModuleId, state)
     }

@@ -17,6 +17,7 @@ enum class SignalType {
     /** Participant requests silent rejoin into an existing host conference (no new invite UX). */
     CONFERENCE_REJOIN,
     FLOOR_REQUEST,
+    FLOOR_REQUEST_CANCEL,
     FLOOR_GRANTED,
     FLOOR_DENY,
     FLOOR_PREEMPTED,

@@ -1,5 +1,6 @@
 package com.talkback.core.util
 
+import com.talkback.core.ptt.FloorCommitDiscardReason
 import java.util.concurrent.atomic.AtomicLong
 
 /**
@@ -150,4 +151,15 @@ object FloorTrace {
             "GRANT_DROPPED",
             mapOf("sid" to sid, "reason" to reason) + extra
         )
+
+    fun completionDiscarded(
+        traceId: Long,
+        sid: String,
+        reason: FloorCommitDiscardReason,
+        extra: Map<String, String> = emptyMap()
+    ) = emit(
+        traceId,
+        "COMPLETION_DISCARDED",
+        mapOf("sid" to sid, "reason" to reason.name) + extra
+    )
 }

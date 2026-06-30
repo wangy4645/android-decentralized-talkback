@@ -99,15 +99,15 @@ _Avoid_: Session 状态机（Disposition 仍为 Session 权威，Snapshot 仅投
 _Avoid_: 话权, 麦权, 持麦方（口语可接受，术语用 Floor）
 
 **Protocol Floor Owner**:
-Session 信令收敛后的 Floor 归属，投影为 Session Presence 的 `protocolFloorOwner`。跨端一致性的权威来源；UI「谁在说话」读此字段。
-_Avoid_: floorOwner, floorOwnerKey
+Floor ownership 的协议层 Representation，投影为 Session Presence 的 `protocolFloorOwner`。权威 Fact 为 Floor ownership（Owner：Floor FSM）；跨端一致性以信令收敛后的该字段为准。
+_Avoid_: floorOwner, floorOwnerKey（未区分 Fact/Representation 时）
 
 **Local Uplink Grant**:
 本 Module 是否已实际开启上行采集，投影为 Module Presence 的 `localUplinkGrant`。由采集闸门与 Mixer 驱动；须单调跟随 Protocol Floor Owner，但允许有界滞后（夺权中）；执行态不得超前协议态。
 _Avoid_: localFloorGrant, 持麦（口语）
 
 **Floor Convergence**:
-协议态与执行态不一致时的收敛规则。获权：`protocolFloorOwner == local` 且 uplink 未就绪 → UI「夺权中…」；超时从 `GRANT_APPLIED` 起算，有界等待后须主动让权（沉默霸麦）。失权：权已归他人 → 零窗口停采集。计时语义、标定、interim 500ms 与三阶段落地见 `docs/adr/0004-floor-acquire-timeout.md`。
+协议态与执行态不一致时的收敛规则。获权：`protocolFloorOwner == local` 且 uplink 未就绪 → UI「夺权中…」；超时从 `GRANT_APPLIED` 起算，有界等待后须主动让权（沉默霸麦）。失权：权已归他人 → 零窗口停采集。计时语义、标定、interim 500ms 与三阶段落地见 `docs/adr/0004-floor-acquire-timeout.md`。仅适用于已通过 ADR-0007 R31 校验的 grant；Late Grant 须 discard，不得靠 timeout release 补救。
 _Avoid_: 同步延迟（未指明方向时）
 
 **Endpoint Priority**:
@@ -135,8 +135,28 @@ _Avoid_: 会话模式, 通话状态
 ### Runtime Model
 
 **Runtime Model**:
-Talkback 本端运行时模型。资源属 Module（Activity 栈、媒体、ICE、采集）；身份属 Endpoint（Floor、PTT、信令主体）；业务对象属 Session（生命周期、Disposition、Membership）。详见 `docs/adr/0001-talkback-runtime-model.md`。
+Talkback 本端运行时模型。资源属 Module（Activity 栈、媒体、ICE、采集）；身份属 Endpoint（Floor、PTT、信令主体）；业务对象属 Session（生命周期、Disposition、Membership）。对象定义见 `docs/adr/0001-talkback-runtime-model.md`；Facts 如何安全演化见 `docs/adr/0007-intent-reality-consistency.md`。
 _Avoid_: Endpoint Runtime, Module Runtime, Coordinator
+
+**Late Completion**:
+过去发起的异步操作（信令、ICE、定时器等）在延迟后完成时，其所依赖的 Intent 可能已失效。未经验证即修改 Facts 是 Floor/Mesh/Conference 等竞态的共同根因。
+_Avoid_: 孤儿 Floor, 迟到 Grant（仅作口语）
+
+**Asynchronous Completion**:
+在 Intent 之后、经 Physical Execution 或信令路径抵达的「完成」事件。须在各 Fact Owner 的 commit 边界经 R31 校验；Physical completion 不等于 Fact completion（R33）。
+_Avoid_: 回调, 事件（未指明 completion 语义时）
+
+**OperationToken**:
+Runtime 对一次异步操作的语义封装：`(domain, identity, version, validity)`。不引入新协议编号；`version` 映射各域已有权威版本（如 `floorVersion`、`rosterEpoch`）；`validity` 为本地生命周期（VALID / INVALIDATED / COMPLETED），供 R31 校验。
+_Avoid_: operationId, requestId（与协议字段混用时）
+
+**Runtime Fact**:
+Runtime 内可被多方依赖的权威事实（如 Floor ownership、Session membership、mesh topology、Session disposition）。仅由对应 Owner 修改；字段与 digest 条目为其 Representation，不是独立 Fact。
+_Avoid_: protocolFloorOwner（单独作为 Fact 名）, digest 字段
+
+**Projection Emitter**:
+只读 Runtime Facts、生成 Digest、Presence、UI Snapshot 等投影的组件。不得 mutate Facts（R32）。Digest 是投影，不是权威状态。
+_Avoid_: digest owner, 同步层（未指明单向时）
 
 **Session Disposition**:
 某个 Session 当前的处置态，描述其生命周期阶段（如 Active、Suspended、Resuming、Terminating、Terminated）。媒体、UI 与同步快照均读取此态；从 Suspended 恢复须经 Resuming，因媒体与 Floor 重连是异步的。

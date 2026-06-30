@@ -34,7 +34,10 @@ import com.talkback.core.model.RemoteEndpointInfo
 import com.talkback.core.model.SignalEnvelope
 import com.talkback.core.model.SignalType
 import com.talkback.core.ptt.FloorArbitrator
+import com.talkback.core.ptt.FloorCommitResult
+import com.talkback.core.ptt.FloorGrantCompletion
 import com.talkback.core.ptt.FloorGrantResult
+import com.talkback.core.ptt.FloorOperationIdentity
 import com.talkback.core.ptt.FloorPriorityPolicy
 import com.talkback.core.ptt.GroupFloorController
 import com.talkback.core.ptt.SnapshotResult
@@ -1168,6 +1171,7 @@ class TalkbackCoordinator(
             return
         }
         val version = session.floor.nextRequestVersion()
+        session.floorOwner.createRequestToken(session.id, session.local, version)
         val traceId = FloorTrace.nextId()
         val payload = FloorPayload.forRequest(
             session.local,
@@ -1185,7 +1189,16 @@ class TalkbackCoordinator(
         val session = sessions[sessionId] ?: return
         if (!session.type.usesFloorControl()) return
         acquireReleaseWatchdog.onFloorLost(sessionId)
+        val stateBefore = session.ptt.state
         val state = session.ptt.onEvent(PttEvent.Release)
+        if (stateBefore == PttState.REQUEST_FLOOR) {
+            val identity = FloorOperationIdentity(session.id, session.local.key)
+            val requestVersion = session.floorOwner.tokens.lookup(identity)?.version
+            session.floorOwner.invalidateRequestToken(identity)
+            if (requestVersion != null) {
+                dispatchFloorRequestCancel(session, requestVersion)
+            }
+        }
         session.pendingTransmit = false
         stopSessionCapture(session)
         moduleMixer.setActiveCapture(null)
@@ -1514,6 +1527,60 @@ class TalkbackCoordinator(
     internal fun testIsSessionCapturing(sessionId: String): Boolean = runOnCoordinatorSync {
         val session = sessions[sessionId] ?: return@runOnCoordinatorSync false
         sessionMediaEngines(session).any { it.isCapturing() }
+    }
+
+    internal fun testFloorRequestVersion(sessionId: String): Long? = runOnCoordinatorSync {
+        val session = sessions[sessionId] ?: return@runOnCoordinatorSync null
+        session.floorOwner.tokens.lookup(
+            FloorOperationIdentity(sessionId, session.local.key)
+        )?.version
+    }
+
+    internal fun testInjectFloorGranted(
+        sessionId: String,
+        authority: EndpointAddress,
+        grantee: EndpointAddress,
+        floorVersion: Long,
+        floorEpoch: Long = 0L
+    ) = runOnCoordinatorSync {
+        val payload = FloorPayload.forRequest(
+            grantee,
+            floorVersion,
+            floorEpoch,
+            EndpointPriority.NORMAL
+        ).encode()
+        handleFloorGranted(
+            SignalEnvelope(
+                type = SignalType.FLOOR_GRANTED,
+                from = authority,
+                to = grantee,
+                sessionId = sessionId,
+                timestampMs = System.currentTimeMillis(),
+                payload = payload,
+                nonce = "",
+                signature = ""
+            )
+        )
+    }
+
+    internal fun testArmFloorRequest(sessionId: String): Long = runOnCoordinatorSync {
+        val session = sessions[sessionId] ?: return@runOnCoordinatorSync -1L
+        if (!session.type.usesFloorControl()) return@runOnCoordinatorSync -1L
+        val reqState = session.ptt.onEvent(PttEvent.Press)
+        if (reqState != PttState.REQUEST_FLOOR) return@runOnCoordinatorSync -1L
+        val version = session.floor.nextRequestVersion()
+        session.floorOwner.createRequestToken(session.id, session.local, version)
+        version
+    }
+
+    internal fun testCancelFloorRequest(sessionId: String) = runOnCoordinatorSync {
+        val session = sessions[sessionId] ?: return@runOnCoordinatorSync
+        if (!session.type.usesFloorControl()) return@runOnCoordinatorSync
+        if (session.ptt.state != PttState.REQUEST_FLOOR) return@runOnCoordinatorSync
+        session.floorOwner.invalidateRequestToken(
+            FloorOperationIdentity(session.id, session.local.key)
+        )
+        session.ptt.onEvent(PttEvent.Release)
     }
 
     private fun isLocalUplinkGranted(): Boolean =
@@ -1977,6 +2044,7 @@ class TalkbackCoordinator(
             SignalType.WEBRTC_ICE -> handleIce(signal)
             SignalType.HEARTBEAT -> Unit
             SignalType.FLOOR_REQUEST -> handleFloorRequest(signal)
+            SignalType.FLOOR_REQUEST_CANCEL -> handleFloorRequestCancel(signal)
             SignalType.FLOOR_GRANTED -> handleFloorGranted(signal)
             SignalType.FLOOR_DENY -> handleFloorDeny(signal)
             SignalType.FLOOR_PREEMPTED -> handleFloorPreempted(signal)
@@ -3039,7 +3107,86 @@ class TalkbackCoordinator(
             )
             return
         }
+        val requester = signal.from
+        val identity = FloorOperationIdentity(session.id, requester.key)
+        if (session.floorOwner.isRequestWithdrawn(identity, floorPayload.floorVersion)) {
+            FloorTrace.requestDropped(
+                traceId,
+                session.id,
+                "INTENT_WITHDRAWN",
+                mapOf("from" to requester.key, "version" to floorPayload.floorVersion.toString())
+            )
+            log(
+                "FLOOR_DROP reason=INTENT_WITHDRAWN ${sessionTag(session)} sid=${session.id} " +
+                    "from=${requester.key} version=${floorPayload.floorVersion}"
+            )
+            return
+        }
+        if (requester != session.local) {
+            session.floorOwner.createRequestToken(session.id, requester, floorPayload.floorVersion)
+        }
         processFloorArbitration(session, signal, floorPayload)
+    }
+
+    private fun handleFloorRequestCancel(signal: SignalEnvelope) {
+        val floorPayload = FloorPayload.decode(signal.payload)
+        val session = sessions[signal.sessionId] ?: return
+        if (!session.type.usesFloorControl()) return
+        if (!GroupFloorController.shouldProcessFloorRequest(session, localModuleId.value)) return
+        val requester = signal.from
+        val identity = FloorOperationIdentity(session.id, requester.key)
+        session.floorOwner.recordRequestWithdrawal(identity, floorPayload.floorVersion)
+        log(
+            "FLOOR_REQUEST_CANCEL ${sessionTag(session)} sid=${session.id} " +
+                "from=${requester.key} version=${floorPayload.floorVersion}"
+        )
+        if (session.floor.owner() == requester) {
+            if (session.floor.release(requester)) {
+                broadcastFloorRelease(session)
+            }
+        }
+    }
+
+    private fun isFloorRequestIntentCurrent(
+        session: TalkbackSession,
+        requester: EndpointAddress,
+        requestVersion: Long,
+        traceId: Long
+    ): Boolean {
+        val identity = FloorOperationIdentity(session.id, requester.key)
+        if (session.floorOwner.isRequestWithdrawn(identity, requestVersion)) {
+            FloorTrace.requestDropped(
+                traceId,
+                session.id,
+                "INTENT_WITHDRAWN",
+                mapOf("requester" to requester.key, "version" to requestVersion.toString())
+            )
+            return false
+        }
+        val token = session.floorOwner.tokens.validTokenFor(identity)
+        if (token == null) {
+            FloorTrace.requestDropped(
+                traceId,
+                session.id,
+                "NO_VALID_INTENT",
+                mapOf("requester" to requester.key, "version" to requestVersion.toString())
+            )
+            return false
+        }
+        if (requestVersion < token.version) {
+            FloorTrace.requestDropped(
+                traceId,
+                session.id,
+                "STALE_REQUEST",
+                mapOf(
+                    "requester" to requester.key,
+                    "requestVersion" to requestVersion.toString(),
+                    "tokenVersion" to token.version.toString()
+                )
+            )
+            return false
+        }
+        return true
     }
 
     private fun processFloorArbitration(
@@ -3061,6 +3208,13 @@ class TalkbackCoordinator(
         val localEpochBefore = session.floor.epoch()
         val localVersionBefore = session.floor.version()
         val memberPresent = session.groupMembers.any { it.key == requester.key }
+        if (!isFloorRequestIntentCurrent(session, requester, floorPayload.floorVersion, traceId)) {
+            log(
+                "TRY_GRANT_ABORT ${sessionTag(session)} requester=${requester.key} " +
+                    "reason=INTENT_NOT_CURRENT version=${floorPayload.floorVersion}"
+            )
+            return
+        }
         val result = session.floor.tryGrant(
             requester = requester,
             requestVersion = floorPayload.floorVersion,
@@ -3090,6 +3244,16 @@ class TalkbackCoordinator(
         )
         when (result) {
             FloorGrantResult.GRANTED, FloorGrantResult.PREEMPTED -> {
+                if (!isFloorRequestIntentCurrent(session, requester, floorPayload.floorVersion, traceId)) {
+                    if (session.floor.owner() == requester) {
+                        session.floor.release(requester)
+                    }
+                    log(
+                        "GRANT_ABORT ${sessionTag(session)} requester=${requester.key} " +
+                            "reason=INTENT_WITHDRAWN_AFTER_ARBITRATION"
+                    )
+                    return
+                }
                 val grantPayload = FloorPayload.forRequest(
                     requester,
                     session.floor.version(),
@@ -3219,6 +3383,18 @@ class TalkbackCoordinator(
         traceId: Long = 0L
     ) {
         if (session.type != SessionType.GROUP) return
+        val completion = FloorGrantCompletion(
+            owner = owner,
+            floorVersion = floorVersion,
+            floorEpoch = floorEpoch,
+            priority = priority,
+            alreadyGranted = floorAlreadyGranted
+        )
+        val requesterIntent = if (owner == session.local) {
+            FloorOperationIdentity(session.id, owner.key)
+        } else {
+            null
+        }
         var grantAccepted = floorAlreadyGranted
         if (!floorAlreadyGranted) {
             val localEpochBefore = session.floor.epoch()
@@ -3235,15 +3411,39 @@ class TalkbackCoordinator(
                     )
                 )
             }
-            GroupFloorController.applyRemoteGrant(
-                session,
-                owner,
-                floorVersion,
-                floorEpoch,
-                priority
-            )
+            val outcome = session.floorOwner.commitGrant(completion, requesterIntent)
+            if (outcome.result == FloorCommitResult.DISCARDED) {
+                val reason = requireNotNull(outcome.discardReason)
+                FloorTrace.completionDiscarded(
+                    traceId,
+                    session.id,
+                    reason,
+                    mapOf("owner" to owner.key, "version" to floorVersion.toString())
+                )
+                log(
+                    "COMPLETION_DISCARDED ${sessionTag(session)} sid=${session.id} " +
+                        "reason=$reason owner=${owner.key} version=$floorVersion"
+                )
+                return
+            }
             if (!staleEpoch) {
                 grantAccepted = true
+            }
+        } else {
+            val outcome = session.floorOwner.commitGrant(completion, requesterIntent)
+            if (outcome.result == FloorCommitResult.DISCARDED) {
+                val reason = requireNotNull(outcome.discardReason)
+                FloorTrace.completionDiscarded(
+                    traceId,
+                    session.id,
+                    reason,
+                    mapOf("owner" to owner.key, "version" to floorVersion.toString())
+                )
+                log(
+                    "COMPLETION_DISCARDED ${sessionTag(session)} sid=${session.id} " +
+                        "reason=$reason owner=${owner.key} version=$floorVersion"
+                )
+                return
             }
         }
         PttTimingLog.grantApplied(session.id)
@@ -3332,28 +3532,28 @@ class TalkbackCoordinator(
 
     private fun handleHangup(signal: SignalEnvelope) {
         clearPendingConferenceInvite(sessionId = signal.sessionId)
-        val session = sessions.remove(signal.sessionId) ?: return
-        val wasUnicast = session.type == SessionType.UNICAST
+        val removed = sessions.remove(signal.sessionId) ?: return
+        val wasUnicast = removed.type == SessionType.UNICAST
         pendingGroupJoinsBySession.remove(signal.sessionId)
         pendingIceBySession.remove(signal.sessionId)
-        session.remote?.moduleId?.value?.let { reDialByRemoteModule.remove(it) }
-        session.remotePeersByModule.keys.forEach { reDialByRemoteModule.remove(it) }
-        if (session.type == SessionType.CONFERENCE) {
-            session.channelId?.let { clearRejoinHintsForSession(it, session.id) }
+        removed.remote?.moduleId?.value?.let { reDialByRemoteModule.remove(it) }
+        removed.remotePeersByModule.keys.forEach { reDialByRemoteModule.remove(it) }
+        if (removed.type == SessionType.CONFERENCE) {
+            removed.channelId?.let { clearRejoinHintsForSession(it, removed.id) }
         }
-        session.channelId?.let { ch ->
+        removed.channelId?.let { ch ->
             groupMeshReconciler.clearChannel(ch)
             if (sessions.values.none { it.channelId == ch && it.type == SessionType.CONFERENCE }) {
-                if (session.type == SessionType.CONFERENCE) {
+                if (removed.type == SessionType.CONFERENCE) {
                     releaseConferenceChannelForGroupPtt(ch, "remote_hangup")
                 } else {
                     releaseChannelModeIfIdle(ch)
                 }
             }
         }
-        session.ptt.onEvent(PttEvent.RemoteHangup)
-        releaseSessionMedia(session)
-        log("${sessionTag(session)} Remote hangup")
+        removed.ptt.onEvent(PttEvent.RemoteHangup)
+        releaseSessionMedia(removed)
+        log("${sessionTag(removed)} Remote hangup")
         if (wasUnicast) {
             resumeGroupSessionsAfterUnicast(signal.sessionId)
         }
@@ -3757,6 +3957,54 @@ class TalkbackCoordinator(
     private fun stopSessionCapture(session: TalkbackSession) {
         PttTimingLog.captureOff(session.id)
         sessionMediaEngines(session).forEach { it.stopCapture() }
+    }
+
+    private fun dispatchFloorRequestCancel(session: TalkbackSession, requestVersion: Long) {
+        if (!session.type.usesFloorControl()) return
+        val payload = FloorPayload.forRequest(
+            session.local,
+            requestVersion,
+            session.floor.epoch(),
+            EndpointPriority.NORMAL
+        ).encode()
+        if (GroupFloorController.isFloorAuthority(session, localModuleId.value)) {
+            handleFloorRequestCancel(syntheticFloorRequestCancel(session, payload))
+            return
+        }
+        sendFloorRequestCancelToAuthority(session, payload)
+    }
+
+    private fun syntheticFloorRequestCancel(session: TalkbackSession, payload: String): SignalEnvelope =
+        SignalEnvelope(
+            type = SignalType.FLOOR_REQUEST_CANCEL,
+            from = session.local,
+            to = session.local,
+            sessionId = session.id,
+            timestampMs = System.currentTimeMillis(),
+            payload = payload,
+            nonce = "",
+            signature = ""
+        )
+
+    private fun sendFloorRequestCancelToAuthority(session: TalkbackSession, payload: String) {
+        if (!session.type.usesFloorControl()) return
+        val authorityId = session.floorAuthorityModuleId ?: session.initiatorModuleId ?: return
+        val peer = session.remotePeersByModule[authorityId.value] ?: return
+        val remote = endpointForModule(session, authorityId)
+        sendSignal(
+            peer,
+            buildSignedEnvelope(
+                SignalType.FLOOR_REQUEST_CANCEL,
+                session.local,
+                remote,
+                session.id,
+                payload
+            )
+        )
+        log(
+            "FLOOR_REQUEST_CANCEL_SEND ${sessionTag(session)} sid=${session.id} " +
+                "authority=${authorityId.value} version=${FloorPayload.decode(payload).floorVersion}"
+        )
     }
 
     private fun broadcastFloorRequest(session: TalkbackSession, payload: String) {
