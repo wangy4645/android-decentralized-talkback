@@ -179,8 +179,16 @@ Active Group session 内，每个 `moduleId` 在 `session.groupMembers` 与 floo
 _Avoid_: endpoint alias 合并, 双 key 共存
 
 **Identity Drift**:
-同一 module 在 Group session 不同层（roster / floor / mesh）使用不同 `EndpointKey` 的状态。典型指纹：`GRANT_DROPPED ROSTER_MISS`。ICE 连通不能证明 identity 一致。
+同一 module 在 Group session 不同层（roster / floor / mesh）使用不同 `EndpointKey` 的状态。典型指纹：`GRANT_DROPPED ROSTER_MISS`（远端 drift，R35）；`ownerIsLocal=false` + canonical grant + 无 `captureON`（本地 runtime drift，R38）。ICE 连通不能证明 identity 一致。
 _Avoid_: mesh 未连接, floor bug（未区分层时）
+
+**Runtime Local Identity**:
+Group PTT 运行时本机身份的**只读派生视图**，由 canonical `groupMembers[localModuleId]` 经 `IdentityResolver` 导出；**不是** `TalkbackSession.local` 的存储副本。原则：*derived view, not stored state*（R38）。
+_Avoid_: session.local 作 SSOT, 在 canonical 变更时 mutate session.local
+
+**IdentityResolver**:
+Group session 内读取 local runtime identity 的唯一入口（`local` / `isLocal` / `localKey`）。Canonical 由 Membership Authority 写入；Resolver 只读。Compat：`moduleId` fallback + `LOCAL_IDENTITY_DRIFT_COMPAT`（过渡，须可删除）。
+_Avoid_: 散落 moduleId 比较, 多处 ownerIsLocal 逻辑
 
 **Session Disposition**:
 某个 Session 当前的处置态，描述其生命周期阶段（如 Active、Suspended、Resuming、Terminating、Terminated）。媒体、UI 与同步快照均读取此态；从 Suspended 恢复须经 Resuming，因媒体与 Floor 重连是异步的。
