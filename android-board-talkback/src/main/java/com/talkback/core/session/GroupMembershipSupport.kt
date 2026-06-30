@@ -1,6 +1,7 @@
 package com.talkback.core.session
 
 import com.talkback.core.model.EndpointAddress
+import com.talkback.core.model.EndpointId
 import com.talkback.core.model.ModuleId
 import com.talkback.core.qos.IceConnectivity
 
@@ -11,6 +12,11 @@ import com.talkback.core.qos.IceConnectivity
 object GroupMembershipSupport {
 
     const val INITIAL_ROSTER_EPOCH = 1L
+
+    data class GroupMemberIdentityRebound(
+        val oldEndpoint: EndpointAddress,
+        val newEndpoint: EndpointAddress
+    )
 
     fun membershipState(session: TalkbackSession, moduleId: String): GroupMemberReachability =
         session.membershipStateByModule[moduleId] ?: GroupMemberReachability.ONLINE
@@ -117,6 +123,28 @@ object GroupMembershipSupport {
         session.memberModules.clear()
         members.map { it.moduleId }.forEach { session.memberModules.add(it) }
         syncMembershipFromGroupMembers(session)
+    }
+
+    /**
+     * R35: replace stale endpoint binding for [moduleId] when verified HELLO reports a new endpointId.
+     * Single key per module — no merge of old and new keys.
+     */
+    fun replaceGroupMemberEndpoint(
+        session: TalkbackSession,
+        moduleId: String,
+        endpointId: EndpointId
+    ): GroupMemberIdentityRebound? {
+        val existing = session.groupMembers.find { it.moduleId.value == moduleId } ?: return null
+        if (existing.endpointId == endpointId) return null
+        val newEndpoint = EndpointAddress(existing.moduleId, endpointId)
+        session.groupMembers = session.groupMembers.map { member ->
+            if (member.moduleId.value == moduleId) newEndpoint else member
+        }
+        session.pendingInviteeEndpoints[moduleId]?.let {
+            session.pendingInviteeEndpoints[moduleId] = newEndpoint
+        }
+        syncMembershipFromGroupMembers(session)
+        return GroupMemberIdentityRebound(existing, newEndpoint)
     }
 
     enum class MembershipSnapshotApplyResult {

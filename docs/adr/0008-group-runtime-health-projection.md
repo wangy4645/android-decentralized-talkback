@@ -247,6 +247,7 @@ TopologySnapshotLogger
 | 优先级 | 项 |
 |--------|-----|
 | P0 | 实现 Projector + Logger + 触发点竖切 |
+| P0 | Identity 根因修复见 ADR-0009（`ROSTER_MISS` / endpoint drift） |
 | P1 | 现场复测：M03 新装 → Syncing → Meeting → 对比快照 |
 | P2 | UI 改读 Projector（消除 known gap） |
 | P3 | ConferenceRuntimeHealth（独立 ADR） |

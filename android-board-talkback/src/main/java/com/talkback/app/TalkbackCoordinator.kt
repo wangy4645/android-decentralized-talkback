@@ -2116,6 +2116,9 @@ class TalkbackCoordinator(
         resolveSplitBrainFromHello(payload, now)
         sessions.values
             .filter { it.type == SessionType.GROUP && it.accepted && it.channelId == payload.channelId }
+            .forEach { applyCanonicalEndpointBindingFromHello(it, payload) }
+        sessions.values
+            .filter { it.type == SessionType.GROUP && it.accepted && it.channelId == payload.channelId }
             .forEach {
                 reconcileGroupMembership(it, "hello_${payload.moduleId}")
                 onGroupConvergenceBoundary(it)
@@ -4365,6 +4368,46 @@ class TalkbackCoordinator(
         touchConvergenceAnchor(session)
         emitGroupTopologySnapshot(TopologySnapshotReason.MEMBERSHIP_CHANGED, session)
         onGroupConvergenceBoundary(session)
+    }
+
+    /**
+     * R35: on verified HELLO, replace stale groupMembers endpoint when moduleId matches but endpointId differs.
+     */
+    private fun applyCanonicalEndpointBindingFromHello(session: TalkbackSession, payload: HelloPayload) {
+        val moduleId = payload.moduleId
+        val endpointId = payload.endpoints.filter { it.online }.minByOrNull { it.endpointId }?.endpointId
+            ?: lastKnownPrimaryEndpointByModule[moduleId]
+            ?: return
+        val rebound = GroupMembershipSupport.replaceGroupMemberEndpoint(
+            session,
+            moduleId,
+            EndpointId(endpointId)
+        ) ?: return
+        log(
+            "IDENTITY_REBOUND ${sessionTag(session)} sid=${session.id} " +
+                "moduleId=$moduleId oldKey=${rebound.oldEndpoint.key} newKey=${rebound.newEndpoint.key}"
+        )
+        if (session.remote?.moduleId?.value == moduleId &&
+            session.remote?.endpointId == rebound.oldEndpoint.endpointId
+        ) {
+            session.remote = rebound.newEndpoint
+        }
+        emitGroupTopologySnapshot(TopologySnapshotReason.IDENTITY_REBOUND, session)
+        if (isMembershipAuthority(session)) {
+            bumpRosterEpoch(session, "identity_rebound")
+            broadcastMembershipSnapshot(session)
+        }
+        session.touch()
+    }
+
+    private fun broadcastMembershipSnapshot(session: TalkbackSession) {
+        GroupMembershipSupport.canonicalRosterEndpoints(session)
+            .filter { it.moduleId != session.local.moduleId }
+            .forEach { remote ->
+                if (sendMembershipSnapshotInvite(session, remote)) {
+                    log("${sessionTag(session)} MEMBERSHIP_SNAPSHOT -> ${remote.moduleId.value}")
+                }
+            }
     }
 
     private fun scheduleReconcile(reason: String) {

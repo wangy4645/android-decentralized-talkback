@@ -174,6 +174,14 @@ _Avoid_: Planner phase, TRANSMIT_PENDING（作为独立 UI 态）
 本机 Membership 是否已收敛到**最近已知 authority view**（非全局共识）：`sessionAccepted`、与 authority digest 对齐、无 `suspectPeers`。未 reconciled 时为 `MEMBERSHIP_PENDING`。公理见 ADR-0008 R34。
 _Avoid_: 全员 roster 一致, 全局共识
 
+**Canonical Endpoint Binding**:
+Active Group session 内，每个 `moduleId` 在 `session.groupMembers` 与 floor payload 中仅对应一个 canonical `endpointId`（R35）。验签 HELLO 发现 endpoint 变化时 **replace** 旧 binding 并 bump `rosterEpoch`，禁止 `M03-E01` 与 `M03-E03` 并存。详见 `docs/adr/0009-group-session-identity-consistency.md`。
+_Avoid_: endpoint alias 合并, 双 key 共存
+
+**Identity Drift**:
+同一 module 在 Group session 不同层（roster / floor / mesh）使用不同 `EndpointKey` 的状态。典型指纹：`GRANT_DROPPED ROSTER_MISS`。ICE 连通不能证明 identity 一致。
+_Avoid_: mesh 未连接, floor bug（未区分层时）
+
 **Session Disposition**:
 某个 Session 当前的处置态，描述其生命周期阶段（如 Active、Suspended、Resuming、Terminating、Terminated）。媒体、UI 与同步快照均读取此态；从 Suspended 恢复须经 Resuming，因媒体与 Floor 重连是异步的。
 _Avoid_: session 状态（未区分 lifecycle 时）, 布尔挂起标志

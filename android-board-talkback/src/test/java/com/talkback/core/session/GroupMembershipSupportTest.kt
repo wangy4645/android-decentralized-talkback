@@ -5,6 +5,7 @@ import com.talkback.core.model.EndpointId
 import com.talkback.core.model.ModuleId
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -164,6 +165,36 @@ class GroupMembershipSupportTest {
         s.pendingInviteeEndpoints["M02"] = EndpointAddress(ModuleId("M02"), EndpointId("E01"))
         val hashAfter = GroupMembershipSupport.memberHashForSession(s)
         assertEquals(hashBefore, hashAfter)
+    }
+
+    @Test
+    fun replaceGroupMemberEndpoint_replacesStaleEndpointForExistingModule() {
+        val s = session("M01", "M02", "M03")
+        val rebound = GroupMembershipSupport.replaceGroupMemberEndpoint(
+            s,
+            "M03",
+            EndpointId("E03")
+        )
+        assertEquals("M03-E01", rebound!!.oldEndpoint.key)
+        assertEquals("M03-E03", rebound.newEndpoint.key)
+        assertEquals(1, s.groupMembers.count { it.moduleId.value == "M03" })
+        assertEquals("M03-E03", s.groupMembers.single { it.moduleId.value == "M03" }.key)
+        assertEquals("M01-E01", s.groupMembers.single { it.moduleId.value == "M01" }.key)
+    }
+
+    @Test
+    fun replaceGroupMemberEndpoint_noOpWhenModuleAbsentOrEndpointUnchanged() {
+        val s = session("M01", "M03")
+        assertNull(GroupMembershipSupport.replaceGroupMemberEndpoint(s, "M02", EndpointId("E03")))
+        assertNull(GroupMembershipSupport.replaceGroupMemberEndpoint(s, "M03", EndpointId("E01")))
+    }
+
+    @Test
+    fun replaceGroupMemberEndpoint_refreshesPendingInviteeEndpoint() {
+        val s = session("M01", "M03")
+        s.pendingInviteeEndpoints["M03"] = EndpointAddress(ModuleId("M03"), EndpointId("E01"))
+        GroupMembershipSupport.replaceGroupMemberEndpoint(s, "M03", EndpointId("E03"))
+        assertEquals("M03-E03", s.pendingInviteeEndpoints["M03"]!!.key)
     }
 
     @Test
