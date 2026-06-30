@@ -28,7 +28,28 @@ object GroupFloorController {
         session: TalkbackSession,
         requesterKey: String
     ): EndpointAddress? {
-        return session.groupMembers.find { it.key == requesterKey }
+        if (requesterKey.isBlank()) return null
+        session.groupMembers.find { it.key == requesterKey }?.let { return it }
+        val moduleId = moduleIdFromEndpointKey(requesterKey) ?: return null
+        return session.groupMembers.find { it.moduleId.value.equals(moduleId, ignoreCase = true) }
+    }
+
+    /** Canonical key for floor payloads when roster binding differs from stale owner/requester key. */
+    fun canonicalFloorOwnerKey(session: TalkbackSession): String? {
+        val owner = session.floor.owner() ?: return null
+        return resolveFloorOwner(session, owner.key)?.key ?: owner.key
+    }
+
+    fun canonicalRequester(session: TalkbackSession, requester: EndpointAddress): EndpointAddress =
+        resolveFloorOwner(session, requester.key) ?: requester
+
+    private fun moduleIdFromEndpointKey(key: String): String? {
+        val dash = key.indexOf('-')
+        return if (dash <= 0) {
+            key.takeIf { it.isNotBlank() }?.uppercase()
+        } else {
+            key.substring(0, dash).uppercase()
+        }
     }
 
     fun applyRemoteGrant(

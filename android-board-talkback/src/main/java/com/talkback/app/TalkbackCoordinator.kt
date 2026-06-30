@@ -3236,6 +3236,7 @@ class TalkbackCoordinator(
         if (!session.type.usesFloorControl()) return
         val traceId = floorPayload.traceId
         val requester = signal.from
+        val canonicalRequester = GroupFloorController.canonicalRequester(session, requester)
         val previousOwner = session.floor.owner()
         val effectivePriority = resolveRegisteredPriority(requester, floorPayload.priority)
         if (effectivePriority != floorPayload.priority) {
@@ -3246,7 +3247,7 @@ class TalkbackCoordinator(
         }
         val localEpochBefore = session.floor.epoch()
         val localVersionBefore = session.floor.version()
-        val memberPresent = session.groupMembers.any { it.key == requester.key }
+        val memberPresent = GroupFloorController.resolveFloorOwner(session, requester.key) != null
         if (!isFloorRequestIntentCurrent(session, requester, floorPayload.floorVersion, traceId)) {
             log(
                 "TRY_GRANT_ABORT ${sessionTag(session)} requester=${requester.key} " +
@@ -3255,7 +3256,7 @@ class TalkbackCoordinator(
             return
         }
         val result = session.floor.tryGrant(
-            requester = requester,
+            requester = canonicalRequester,
             requestVersion = floorPayload.floorVersion,
             requestEpoch = floorPayload.floorEpoch,
             priority = effectivePriority,
@@ -3284,8 +3285,8 @@ class TalkbackCoordinator(
         when (result) {
             FloorGrantResult.GRANTED, FloorGrantResult.PREEMPTED -> {
                 if (!isFloorRequestIntentCurrent(session, requester, floorPayload.floorVersion, traceId)) {
-                    if (session.floor.owner() == requester) {
-                        session.floor.release(requester)
+                    if (session.floor.owner() == canonicalRequester) {
+                        session.floor.release(canonicalRequester)
                     }
                     log(
                         "GRANT_ABORT ${sessionTag(session)} requester=${requester.key} " +
@@ -3294,7 +3295,7 @@ class TalkbackCoordinator(
                     return
                 }
                 val grantPayload = FloorPayload.forRequest(
-                    requester,
+                    canonicalRequester,
                     session.floor.version(),
                     session.floor.epoch(),
                     effectivePriority,
@@ -3302,7 +3303,7 @@ class TalkbackCoordinator(
                 )
                 applyFloorGrant(
                     session,
-                    requester,
+                    canonicalRequester,
                     grantPayload.floorVersion,
                     grantPayload.floorEpoch,
                     effectivePriority,
@@ -3312,7 +3313,7 @@ class TalkbackCoordinator(
                 broadcastFloorGranted(session, grantPayload.encode(), traceId)
                 if (result == FloorGrantResult.PREEMPTED &&
                     previousOwner != null &&
-                    previousOwner != requester
+                    previousOwner != canonicalRequester
                 ) {
                     replyFloorToSession(
                         session,
@@ -5138,7 +5139,7 @@ class TalkbackCoordinator(
                 FloorSnapshotDigest(
                     epoch = floor.epoch(),
                     version = floor.version(),
-                    ownerKey = floor.owner()?.key,
+                    ownerKey = GroupFloorController.canonicalFloorOwnerKey(groupSession),
                     ownerPriority = floor.ownerPriority()
                 )
             }
@@ -5158,7 +5159,7 @@ class TalkbackCoordinator(
             FloorSnapshotDigest(
                 epoch = session.floor.epoch(),
                 version = session.floor.version(),
-                ownerKey = session.floor.owner()?.key,
+                ownerKey = GroupFloorController.canonicalFloorOwnerKey(session),
                 ownerPriority = session.floor.ownerPriority()
             )
         }

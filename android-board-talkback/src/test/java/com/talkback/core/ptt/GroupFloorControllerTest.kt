@@ -52,6 +52,51 @@ class GroupFloorControllerTest {
     }
 
     @Test
+    fun resolveFloorOwner_exactKeyMatch() {
+        val m03e03 = EndpointAddress(ModuleId("M03"), EndpointId("E03"))
+        val session = TalkbackSession("s1", SessionType.GROUP, m01e01, "CH-01")
+        session.groupMembers = listOf(m01e01, m02e01, m03e03)
+        assertEquals(m03e03, GroupFloorController.resolveFloorOwner(session, "M03-E03"))
+    }
+
+    @Test
+    fun resolveFloorOwner_moduleIdFallbackWhenEndpointDrifts() {
+        val m03e03 = EndpointAddress(ModuleId("M03"), EndpointId("E03"))
+        val session = TalkbackSession("s1", SessionType.GROUP, m01e01, "CH-01")
+        session.groupMembers = listOf(m01e01, m02e01, m03e03)
+        assertEquals(m03e03, GroupFloorController.resolveFloorOwner(session, "M03-E01"))
+    }
+
+    @Test
+    fun resolveFloorOwner_trueMissWhenModuleAbsent() {
+        val session = TalkbackSession("s1", SessionType.GROUP, m01e01, "CH-01")
+        session.groupMembers = listOf(m01e01, m02e01)
+        assertNull(GroupFloorController.resolveFloorOwner(session, "M03-E01"))
+    }
+
+    @Test
+    fun applyAuthorityFloorSnapshot_ownerKeyResolvesByModuleId() {
+        val m03e03 = EndpointAddress(ModuleId("M03"), EndpointId("E03"))
+        val session = TalkbackSession("s1", SessionType.GROUP, m02e01, "CH-01")
+        session.initiatorModuleId = m01
+        session.floorAuthorityModuleId = m01
+        session.groupMembers = listOf(m01e01, m02e01, m03e03)
+        val digest = FloorSnapshotDigest(epoch = 5, version = 6, ownerKey = "M03-E01")
+        val result = GroupFloorController.applyAuthorityFloorSnapshot(session, "M01", digest)
+        assertEquals(SnapshotResult.OWNER_CHANGED, result)
+        assertEquals(m03e03, session.floor.owner())
+    }
+
+    @Test
+    fun canonicalRequester_prefersRosterEndpoint() {
+        val m03e03 = EndpointAddress(ModuleId("M03"), EndpointId("E03"))
+        val stale = EndpointAddress(ModuleId("M03"), EndpointId("E01"))
+        val session = TalkbackSession("s1", SessionType.GROUP, m01e01, "CH-01")
+        session.groupMembers = listOf(m01e01, m03e03)
+        assertEquals(m03e03, GroupFloorController.canonicalRequester(session, stale))
+    }
+
+    @Test
     fun applyRemoteGrantSyncsOwner() {
         val session = TalkbackSession("s1", SessionType.GROUP, m02e01, "CH-01")
         session.groupMembers = listOf(m01e01, m02e01)
