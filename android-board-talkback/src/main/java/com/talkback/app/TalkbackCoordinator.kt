@@ -63,6 +63,7 @@ import com.talkback.core.session.ConferenceParticipantManager
 import com.talkback.core.session.ConferenceSnapshot
 import com.talkback.core.session.GroupMediaTopology
 import com.talkback.core.session.GroupIdentityStability
+import com.talkback.core.session.IdentityResolver
 import com.talkback.core.session.GroupMemberReachability
 import com.talkback.core.session.GroupMembershipSupport
 import com.talkback.core.model.GroupResyncRequestPayload
@@ -251,6 +252,23 @@ class TalkbackCoordinator(
     private val remoteHealthByModule = ConcurrentHashMap<String, AnchorHealthSnapshot>()
     @Volatile
     private var invariantF1BreakCount = 0
+
+    private fun groupLocalIdentity(session: TalkbackSession): EndpointAddress =
+        IdentityResolver.local(session, localModuleId.value)
+
+    private fun isLocalIdentity(session: TalkbackSession, endpoint: EndpointAddress): Boolean =
+        IdentityResolver.isLocal(session, endpoint, localModuleId.value)
+
+    private fun isLocalFloorHolder(session: TalkbackSession): Boolean {
+        val owner = session.floor.owner() ?: return false
+        return isLocalIdentity(session, owner)
+    }
+
+    private fun releaseLocalFloorIfHeld(session: TalkbackSession): Boolean {
+        val owner = session.floor.owner() ?: return false
+        if (!isLocalIdentity(session, owner)) return false
+        return session.floor.release(owner)
+    }
 
     private fun meshEngineFor(session: TalkbackSession, moduleId: String): WebRtcAudioEngine =
         when (session.type) {
@@ -1181,7 +1199,7 @@ class TalkbackCoordinator(
                 "version=${session.floor.version()} epoch=${session.floor.epoch()} " +
                 "ptt=${session.ptt.state}"
         )
-        if (currentOwner != null && currentOwner != session.local) {
+        if (currentOwner != null && !isLocalIdentity(session, currentOwner)) {
             log(
                 "PTT_GATE ${sessionTag(session)} silent-return-owner " +
                     "owner=${currentOwner.key} version=${session.floor.version()} " +
@@ -1209,10 +1227,11 @@ class TalkbackCoordinator(
             return
         }
         val version = session.floor.nextRequestVersion()
-        session.floorOwner.createRequestToken(session.id, session.local, version)
+        val localIdentity = groupLocalIdentity(session)
+        session.floorOwner.createRequestToken(session.id, localIdentity, version)
         val traceId = FloorTrace.nextId()
         val payload = FloorPayload.forRequest(
-            session.local,
+            localIdentity,
             version,
             session.floor.epoch(),
             priority,
@@ -1230,7 +1249,7 @@ class TalkbackCoordinator(
         val stateBefore = session.ptt.state
         val state = session.ptt.onEvent(PttEvent.Release)
         if (stateBefore == PttState.REQUEST_FLOOR) {
-            val identity = FloorOperationIdentity(session.id, session.local.key)
+            val identity = FloorOperationIdentity(session.id, groupLocalIdentity(session).key)
             val requestVersion = session.floorOwner.tokens.lookup(identity)?.version
             session.floorOwner.invalidateRequestToken(identity)
             if (requestVersion != null) {
@@ -1240,7 +1259,7 @@ class TalkbackCoordinator(
         session.pendingTransmit = false
         stopSessionCapture(session)
         moduleMixer.setActiveCapture(null)
-        if (state == PttState.RELEASE_FLOOR && session.floor.release(session.local)) {
+        if (state == PttState.RELEASE_FLOOR && releaseLocalFloorIfHeld(session)) {
             broadcastFloorRelease(session)
         }
         updateSessionReceivePlayback(session, "ptt_released")
@@ -1543,7 +1562,7 @@ class TalkbackCoordinator(
         val session = bestSessionForChannel(channelId) ?: return@runOnCoordinatorSync false
         if (session.type != SessionType.GROUP) return@runOnCoordinatorSync false
         val owner = session.floor.owner() ?: return@runOnCoordinatorSync false
-        if (owner == session.local) return@runOnCoordinatorSync true
+        if (isLocalIdentity(session, owner)) return@runOnCoordinatorSync true
         isFloorHolderAudioReachable(session, owner.moduleId.value)
     }
 
@@ -1570,7 +1589,7 @@ class TalkbackCoordinator(
     internal fun testFloorRequestVersion(sessionId: String): Long? = runOnCoordinatorSync {
         val session = sessions[sessionId] ?: return@runOnCoordinatorSync null
         session.floorOwner.tokens.lookup(
-            FloorOperationIdentity(sessionId, session.local.key)
+            FloorOperationIdentity(sessionId, groupLocalIdentity(session).key)
         )?.version
     }
 
@@ -1607,7 +1626,7 @@ class TalkbackCoordinator(
         val reqState = session.ptt.onEvent(PttEvent.Press)
         if (reqState != PttState.REQUEST_FLOOR) return@runOnCoordinatorSync -1L
         val version = session.floor.nextRequestVersion()
-        session.floorOwner.createRequestToken(session.id, session.local, version)
+        session.floorOwner.createRequestToken(session.id, groupLocalIdentity(session), version)
         version
     }
 
@@ -1616,7 +1635,7 @@ class TalkbackCoordinator(
         if (!session.type.usesFloorControl()) return@runOnCoordinatorSync
         if (session.ptt.state != PttState.REQUEST_FLOOR) return@runOnCoordinatorSync
         session.floorOwner.invalidateRequestToken(
-            FloorOperationIdentity(session.id, session.local.key)
+            FloorOperationIdentity(session.id, groupLocalIdentity(session).key)
         )
         session.ptt.onEvent(PttEvent.Release)
     }
@@ -2176,10 +2195,10 @@ class TalkbackCoordinator(
                                 "localEpoch=${session.floor.epoch()} " +
                                 "localOwner=${session.floor.owner()?.key ?: "null"}"
                         )
-                        if (session.floor.owner() == session.local) {
+                        if (isLocalFloorHolder(session)) {
                             PttTimingLog.grantApplied(session.id)
                             onLocalProtocolFloorAcquired(session)
-                        } else if (session.floor.owner() != null && session.floor.owner() != session.local) {
+                        } else if (session.floor.owner() != null && !isLocalFloorHolder(session)) {
                             acquireReleaseWatchdog.onFloorLost(session.id)
                             if (session.ptt.state == PttState.TALK || session.pendingTransmit) {
                                 session.ptt.onEvent(PttEvent.Release)
@@ -3173,7 +3192,7 @@ class TalkbackCoordinator(
             )
             return
         }
-        if (requester != session.local) {
+        if (!isLocalIdentity(session, requester)) {
             session.floorOwner.createRequestToken(session.id, requester, floorPayload.floorVersion)
         }
         processFloorArbitration(session, signal, floorPayload)
@@ -3336,7 +3355,7 @@ class TalkbackCoordinator(
                 }
             }
             FloorGrantResult.DENIED, FloorGrantResult.STALE_VERSION -> {
-                if (requester == session.local) {
+                if (isLocalIdentity(session, requester)) {
                     session.ptt.onEvent(PttEvent.Rejected)
                 }
                 val denyPayload = FloorPayload(
@@ -3391,7 +3410,7 @@ class TalkbackCoordinator(
                     "from=${signal.from.key} requesterKey=${floorPayload.requesterKey} " +
                     "resolved=${if (owner != null) "OK" else "ROSTER_MISS"} " +
                     "grantEpoch=${floorPayload.floorEpoch} localEpoch=${session.floor.epoch()} " +
-                    "ownerIsLocal=${owner == session.local}"
+                    "ownerIsLocal=${owner != null && isLocalIdentity(session, owner)}"
             )
             if (owner == null) {
                 FloorTrace.grantDropped(
@@ -3442,7 +3461,7 @@ class TalkbackCoordinator(
             priority = priority,
             alreadyGranted = floorAlreadyGranted
         )
-        val requesterIntent = if (owner == session.local) {
+        val requesterIntent = if (isLocalIdentity(session, owner)) {
             FloorOperationIdentity(session.id, owner.key)
         } else {
             null
@@ -3499,7 +3518,7 @@ class TalkbackCoordinator(
             }
         }
         PttTimingLog.grantApplied(session.id)
-        if (owner == session.local) {
+        if (isLocalIdentity(session, owner)) {
             onLocalProtocolFloorAcquired(session)
         } else {
             acquireReleaseWatchdog.onFloorLost(session.id)
@@ -3535,7 +3554,7 @@ class TalkbackCoordinator(
     private fun handleFloorDeny(signal: SignalEnvelope) {
         val session = sessions[signal.sessionId] ?: return
         if (!session.type.usesFloorControl()) return
-        if (signal.to == session.local) {
+        if (signal.to != null && isLocalIdentity(session, signal.to)) {
             session.ptt.onEvent(PttEvent.Rejected)
             session.pendingTransmit = false
             acquireReleaseWatchdog.onFloorLost(session.id)
@@ -3546,7 +3565,8 @@ class TalkbackCoordinator(
     private fun handleFloorPreempted(signal: SignalEnvelope) {
         val session = sessions[signal.sessionId] ?: return
         if (!session.type.usesFloorControl()) return
-        if (signal.to != session.local) return
+        val to = signal.to ?: return
+        if (!isLocalIdentity(session, to)) return
         session.ptt.onEvent(PttEvent.Rejected)
         session.pendingTransmit = false
         acquireReleaseWatchdog.onFloorLost(session.id)
@@ -3571,11 +3591,11 @@ class TalkbackCoordinator(
                 "newOwner=${newOwner?.key ?: "null"} " +
                 "version=$versionBefore->${session.floor.version()} epoch=$epochBefore"
         )
-        if (session.local == signal.from) {
+        if (isLocalIdentity(session, signal.from)) {
             session.ptt.onEvent(PttEvent.Release)
         }
         acquireReleaseWatchdog.onFloorLost(session.id)
-        if (session.floor.owner() != session.local) {
+        if (!isLocalFloorHolder(session)) {
             stopSessionCapture(session)
         }
         syncProgramRelay(session)
@@ -3992,11 +4012,12 @@ class TalkbackCoordinator(
     private fun startSessionCapture(session: TalkbackSession) {
         if (session.type == SessionType.GROUP) {
             val floorOwner = session.floor.owner()
-            if (floorOwner != session.local) {
+            val localIdentity = groupLocalIdentity(session)
+            if (floorOwner != null && !isLocalIdentity(session, floorOwner)) {
                 invariantF1BreakCount++
                 TalkbackLog.e(
                     "INVARIANT_F1_BREAK session=${session.id} " +
-                        "local=${session.local.key} floorOwner=${floorOwner?.key ?: "null"}"
+                        "local=${localIdentity.key} floorOwner=${floorOwner.key}"
                 )
                 return
             }
@@ -4013,8 +4034,9 @@ class TalkbackCoordinator(
 
     private fun dispatchFloorRequestCancel(session: TalkbackSession, requestVersion: Long) {
         if (!session.type.usesFloorControl()) return
+        val localIdentity = groupLocalIdentity(session)
         val payload = FloorPayload.forRequest(
-            session.local,
+            localIdentity,
             requestVersion,
             session.floor.epoch(),
             EndpointPriority.NORMAL
@@ -4029,8 +4051,8 @@ class TalkbackCoordinator(
     private fun syntheticFloorRequestCancel(session: TalkbackSession, payload: String): SignalEnvelope =
         SignalEnvelope(
             type = SignalType.FLOOR_REQUEST_CANCEL,
-            from = session.local,
-            to = session.local,
+            from = groupLocalIdentity(session),
+            to = groupLocalIdentity(session),
             sessionId = session.id,
             timestampMs = System.currentTimeMillis(),
             payload = payload,
@@ -4047,7 +4069,7 @@ class TalkbackCoordinator(
             peer,
             buildSignedEnvelope(
                 SignalType.FLOOR_REQUEST_CANCEL,
-                session.local,
+                groupLocalIdentity(session),
                 remote,
                 session.id,
                 payload
@@ -4063,7 +4085,7 @@ class TalkbackCoordinator(
         targetsForSession(session).forEach { (peer, remote) ->
             sendSignal(
                 peer,
-                buildSignedEnvelope(SignalType.FLOOR_REQUEST, session.local, remote, session.id, payload)
+                buildSignedEnvelope(SignalType.FLOOR_REQUEST, groupLocalIdentity(session), remote, session.id, payload)
             )
         }
     }
@@ -4077,7 +4099,7 @@ class TalkbackCoordinator(
             FloorTrace.requestSend(
                 effectiveTraceId,
                 session.id,
-                session.local.key,
+                groupLocalIdentity(session).key,
                 floorPayload.floorEpoch,
                 floorPayload.floorVersion,
                 authority,
@@ -4096,8 +4118,8 @@ class TalkbackCoordinator(
     private fun syntheticFloorRequest(session: TalkbackSession, payload: String): SignalEnvelope =
         SignalEnvelope(
             type = SignalType.FLOOR_REQUEST,
-            from = session.local,
-            to = session.local,
+            from = groupLocalIdentity(session),
+            to = groupLocalIdentity(session),
             sessionId = session.id,
             timestampMs = System.currentTimeMillis(),
             payload = payload,
@@ -4112,7 +4134,7 @@ class TalkbackCoordinator(
             FloorTrace.requestSend(
                 traceId,
                 session.id,
-                session.local.key,
+                groupLocalIdentity(session).key,
                 floorPayload.floorEpoch,
                 floorPayload.floorVersion,
                 null,
@@ -4129,7 +4151,7 @@ class TalkbackCoordinator(
             FloorTrace.requestSend(
                 traceId,
                 session.id,
-                session.local.key,
+                groupLocalIdentity(session).key,
                 floorPayload.floorEpoch,
                 floorPayload.floorVersion,
                 authorityId.value,
@@ -4148,12 +4170,12 @@ class TalkbackCoordinator(
         val peerIsStale = discoveredPeer != null && discoveredPeer != peer
         sendSignal(
             peer,
-            buildSignedEnvelope(SignalType.FLOOR_REQUEST, session.local, remote, session.id, payload)
+            buildSignedEnvelope(SignalType.FLOOR_REQUEST, groupLocalIdentity(session), remote, session.id, payload)
         )
         FloorTrace.requestSend(
             traceId,
             session.id,
-            session.local.key,
+            groupLocalIdentity(session).key,
             floorPayload.floorEpoch,
             floorPayload.floorVersion,
             authorityId.value,
@@ -4177,7 +4199,7 @@ class TalkbackCoordinator(
         targetsForSession(session).forEach { (peer, remote) ->
             sendSignal(
                 peer,
-                buildSignedEnvelope(type, session.local, remote, session.id, payload)
+                buildSignedEnvelope(type, groupLocalIdentity(session), remote, session.id, payload)
             )
         }
     }
@@ -4187,7 +4209,7 @@ class TalkbackCoordinator(
         targetsForSession(session).forEach { (peer, remote) ->
             sendSignal(
                 peer,
-                buildSignedEnvelope(SignalType.FLOOR_RELEASE, session.local, remote, session.id, payload)
+                buildSignedEnvelope(SignalType.FLOOR_RELEASE, groupLocalIdentity(session), remote, session.id, payload)
             )
         }
     }
@@ -4201,7 +4223,7 @@ class TalkbackCoordinator(
         val peer = session.remotePeersByModule[remote.moduleId.value] ?: session.remotePeer ?: return
         sendSignal(
             peer,
-            buildSignedEnvelope(type, session.local, remote, session.id, payload)
+            buildSignedEnvelope(type, groupLocalIdentity(session), remote, session.id, payload)
         )
     }
 
@@ -4967,7 +4989,7 @@ class TalkbackCoordinator(
         val owner = session.floor.owner() ?: return
         if (owner.moduleId.value != moduleId) return
         session.floor.release(owner)
-        if (owner == session.local) {
+        if (isLocalIdentity(session, owner)) {
             session.ptt.onEvent(PttEvent.Release)
             session.pendingTransmit = false
             stopSessionCapture(session)
@@ -5080,7 +5102,7 @@ class TalkbackCoordinator(
     }
 
     private fun onLocalProtocolFloorAcquired(session: TalkbackSession) {
-        if (session.floor.owner() != session.local) return
+        if (!isLocalFloorHolder(session)) return
         if (session.ptt.state == PttState.REQUEST_FLOOR) {
             session.ptt.onEvent(PttEvent.Granted)
         }
@@ -5090,7 +5112,7 @@ class TalkbackCoordinator(
 
     private fun scheduleAcquireReleaseIfNeeded(session: TalkbackSession) {
         if (!session.type.usesFloorControl()) return
-        if (session.floor.owner() != session.local) return
+        if (!isLocalFloorHolder(session)) return
         val capturing = sessionMediaEngines(session).any { it.isCapturing() }
         acquireReleaseWatchdog.onLocalGrantApplied(session.id, alreadyCapturing = capturing)
     }
@@ -5098,7 +5120,7 @@ class TalkbackCoordinator(
     private fun onAcquireReleaseTimeout(sessionId: String) {
         val session = sessions[sessionId] ?: return
         if (!session.type.usesFloorControl()) return
-        if (session.floor.owner() != session.local) return
+        if (!isLocalFloorHolder(session)) return
         if (sessionMediaEngines(session).any { it.isCapturing() }) {
             log("ACQUIRE_RELEASE_TIMEOUT_SKIP sid=$sessionId reason=capture_already_on")
             return
@@ -5117,7 +5139,7 @@ class TalkbackCoordinator(
         stopSessionCapture(session)
         moduleMixer.setActiveCapture(null)
         session.ptt.onEvent(PttEvent.Release)
-        if (session.floor.release(session.local)) {
+        if (releaseLocalFloorIfHeld(session)) {
             broadcastFloorRelease(session)
         }
         syncProgramRelay(session)
@@ -5573,22 +5595,23 @@ class TalkbackCoordinator(
         if (session.ptt.state != PttState.TALK) return
         if (isSessionTransmitReady(session)) {
             session.pendingTransmit = false
+            val localIdentity = groupLocalIdentity(session)
             val stackActing = activityStack.topActingEndpointId()
-            if (stackActing != null && stackActing != session.local.key) {
+            if (stackActing != null && stackActing != localIdentity.key) {
                 log(
                     "CAPTURE_STACK_MISMATCH ${sessionTag(session)} " +
-                        "stackActing=$stackActing local=${session.local.key}"
+                        "stackActing=$stackActing local=${localIdentity.key}"
                 )
                 return
             }
-            moduleMixer.setActiveCapture(session.local)
-            audioRouter.selectInput(session.local)
+            moduleMixer.setActiveCapture(localIdentity)
+            audioRouter.selectInput(localIdentity)
             startSessionCapture(session)
             syncProgramRelay(session)
         } else {
             session.pendingTransmit = true
             stopSessionCapture(session)
-            if (session.floor.owner() == session.local) {
+            if (isLocalFloorHolder(session)) {
                 scheduleAcquireReleaseIfNeeded(session)
             }
             if (session.type == SessionType.GROUP) {
@@ -5601,7 +5624,7 @@ class TalkbackCoordinator(
     private fun tryFlushPendingTransmit(session: TalkbackSession) {
         if (!session.pendingTransmit) return
         if (session.ptt.state != PttState.TALK) return
-        if (session.floor.owner() != session.local) return
+        if (!isLocalFloorHolder(session)) return
         beginTransmitIfReady(session)
     }
 
@@ -6928,7 +6951,7 @@ class TalkbackCoordinator(
             session.lastFloorRequestMs = now
             val traceId = FloorTrace.nextId()
             val payload = FloorPayload.forRequest(
-                session.local,
+                groupLocalIdentity(session),
                 session.floor.version(),
                 session.floor.epoch(),
                 EndpointPriority.NORMAL,
@@ -7246,7 +7269,7 @@ class TalkbackCoordinator(
             log("PLAYBACK_DIAG ${sessionTag(session)} enable=false reason=NO_FLOOR_OWNER")
             return false
         }
-        if (owner == session.local) return false
+        if (isLocalIdentity(session, owner)) return false
         val reachable = isFloorHolderAudioReachable(session, owner.moduleId.value)
         if (!reachable) {
             log(
