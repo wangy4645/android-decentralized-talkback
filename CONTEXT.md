@@ -135,7 +135,7 @@ _Avoid_: 会话模式, 通话状态
 ### Runtime Model
 
 **Runtime Model**:
-Talkback 本端运行时模型。资源属 Module（Activity 栈、媒体、ICE、采集）；身份属 Endpoint（Floor、PTT、信令主体）；业务对象属 Session（生命周期、Disposition、Membership）。对象定义见 `docs/adr/0001-talkback-runtime-model.md`；Facts 如何安全演化见 `docs/adr/0007-intent-reality-consistency.md`。
+Talkback 本端运行时模型。资源属 Module（Activity 栈、媒体、ICE、采集）；身份属 Endpoint（Floor、PTT、信令主体）；业务对象属 Session（生命周期、Disposition、Membership）。对象定义见 `docs/adr/0001-talkback-runtime-model.md`；Facts 如何安全演化见 `docs/adr/0007-intent-reality-consistency.md`；Group PTT 收敛可观测投影见 `docs/adr/0008-group-runtime-health-projection.md`。
 _Avoid_: Endpoint Runtime, Module Runtime, Coordinator
 
 **Late Completion**:
@@ -157,6 +157,22 @@ _Avoid_: protocolFloorOwner（单独作为 Fact 名）, digest 字段
 **Projection Emitter**:
 只读 Runtime Facts、生成 Digest、Presence、UI Snapshot 等投影的组件。不得 mutate Facts（R32）。Digest 是投影，不是权威状态。
 _Avoid_: digest owner, 同步层（未指明单向时）
+
+**Group Runtime Health**:
+Group PTT Session 上 Membership → Planner → Mesh → Transmit 收敛链的只读投影（Observability Layer）。解释本机为何处于 Syncing、为何 Meeting 后恢复等；**不是**权威 Fact，**不是**状态机。v1 仅覆盖 Group PTT；详见 `docs/adr/0008-group-runtime-health-projection.md`。
+_Avoid_: Group 状态机, mesh 状态机, readiness owner
+
+**Topology Snapshot**:
+某一时刻 `Group Runtime Health` 的序列化观测产物（`schemaVersion` 版本化）。用于 log diff、现场诊断与回放；**不得**回灌控制决策。日志形态建议 `TOPOLOGY_SNAPSHOT`。
+_Avoid_: GROUP-PLAN 日志, debug 状态
+
+**Group Topology Readiness**:
+Group Runtime Health 内部的四态收敛标签（`DISCOVERING`、`MEMBERSHIP_PENDING`、`BUILDING`、`OPERATIONAL`）。**Transmit Policy 为唯一 readiness 裁决**；Mesh 层仅解释原因。v1 映射到现有 `ChannelReadiness` 供对照，UI 暂不直接依赖。
+_Avoid_: Planner phase, TRANSMIT_PENDING（作为独立 UI 态）
+
+**Membership Reconciled**:
+本机 Membership 是否已收敛到**最近已知 authority view**（非全局共识）：`sessionAccepted`、与 authority digest 对齐、无 `suspectPeers`。未 reconciled 时为 `MEMBERSHIP_PENDING`。公理见 ADR-0008 R34。
+_Avoid_: 全员 roster 一致, 全局共识
 
 **Session Disposition**:
 某个 Session 当前的处置态，描述其生命周期阶段（如 Active、Suspended、Resuming、Terminating、Terminated）。媒体、UI 与同步快照均读取此态；从 Suspended 恢复须经 Resuming，因媒体与 Floor 重连是异步的。

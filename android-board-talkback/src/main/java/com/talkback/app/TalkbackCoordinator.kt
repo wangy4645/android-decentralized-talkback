@@ -5,10 +5,16 @@ import com.talkback.core.audio.DefaultAudioRouter
 import com.talkback.core.audio.ModuleAudioMixer
 import com.talkback.core.channel.ChannelManager
 import com.talkback.core.channel.ChannelMembershipSnapshot
-import com.talkback.core.contacts.CallableModuleGate
+import com.talkback.core.grouphealth.GroupConvergenceTracker
+import com.talkback.core.grouphealth.GroupRuntimeHealthInput
+import com.talkback.core.grouphealth.GroupRuntimeHealthProjector
+import com.talkback.core.grouphealth.GroupTopologyReadiness
+import com.talkback.core.grouphealth.TopologySnapshotLogger
+import com.talkback.core.grouphealth.TopologySnapshotReason
 import com.talkback.core.presence.ModulePresenceSnapshot
 import com.talkback.core.presence.PresenceProjector
 import com.talkback.core.presence.SessionPresenceSnapshot
+import com.talkback.core.contacts.CallableModuleGate
 import com.talkback.core.contacts.ContactEndpointRow
 import com.talkback.core.contacts.ContactsProjection
 import com.talkback.core.discovery.CompositeModuleDiscoveryService
@@ -161,7 +167,13 @@ data class TalkbackCoordinatorConfig(
     /** GROUP: ICE not connected before marking SUSPECT. */
     val groupMemberSuspectIceMs: Long = 10_000L,
     /** GROUP: SUSPECT duration before EVICTED (default 27s). */
-    val groupMemberEvictSuspectMs: Long = 27_000L
+    val groupMemberEvictSuspectMs: Long = 27_000L,
+    /** BUILDING stall before PERIODIC_BUILDING snapshot (ADR-0008). */
+    val buildingStallThresholdMs: Long = 10_000L,
+    /** Minimum gap between PERIODIC_BUILDING snapshots per session. */
+    val periodicBuildingWindowMs: Long = 30_000L,
+    /** Throttle ICE_STATE_CHANGED topology snapshots per peer. */
+    val iceTopologySnapshotThrottleMs: Long = 2_000L
 )
 
 private data class ReDialRecord(
@@ -368,6 +380,12 @@ class TalkbackCoordinator(
     private val hostRejoinAttemptByChannel = ConcurrentHashMap<String, Int>()
     private val conferenceReconnectStartedAtBySession = ConcurrentHashMap<String, Long>()
     private val lastGroupMeshReconnectMsByPeer = ConcurrentHashMap<String, Long>()
+    private val lastSeenAuthorityDigestByChannel = ConcurrentHashMap<String, TopologyDigest>()
+    private val lastGroupTopologyReadinessBySession = ConcurrentHashMap<String, GroupTopologyReadiness>()
+    private val lastConvergenceAnchorMsBySession = ConcurrentHashMap<String, Long>()
+    private val lastPeriodicBuildingMsBySession = ConcurrentHashMap<String, Long>()
+    private val lastIceTopologySnapshotMsByPeer = ConcurrentHashMap<String, Long>()
+    private val groupAppStartSnapshotEmitted = ConcurrentHashMap.newKeySet<String>()
     private val suppressMeshRepairUntilMsByChannel = ConcurrentHashMap<String, Long>()
     private val lastPlaybackEnabledBySession = ConcurrentHashMap<String, Boolean>()
     private val lastEnsureCanonicalInviteMsByModule = ConcurrentHashMap<String, Long>()
@@ -432,6 +450,7 @@ class TalkbackCoordinator(
         channelModeFsm(channelId).reset()
         log("Conference channel released for GROUP PTT ch=$channelId reason=$reason")
         onChannelLifecycleEvent(channelId, ChannelLifecycleEvent.ConferenceEnded)
+        emitGroupTopologyForChannel(TopologySnapshotReason.CONFERENCE_END, channelId)
     }
 
     private fun onChannelLifecycleEvent(channelId: String, event: ChannelLifecycleEvent) {
@@ -648,7 +667,7 @@ class TalkbackCoordinator(
             }
         }
         scheduler.scheduleAtFixedRate(
-            { runOnCoordinator { cleanupExpiredSessions() } },
+            { runOnCoordinator { cleanupExpiredSessions(); maybeEmitPeriodicBuildingSnapshots() } },
             config.cleanupIntervalMs,
             config.cleanupIntervalMs,
             TimeUnit.MILLISECONDS
@@ -916,6 +935,9 @@ class TalkbackCoordinator(
         if (sent > 0 && session.mediaTopology == GroupMediaTopology.MESH) {
             completeGroupMesh(session)
         }
+        if (sent > 0) {
+            emitGroupTopologySnapshot(TopologySnapshotReason.MESH_OFFERED, session)
+        }
         return sent
     }
 
@@ -1073,6 +1095,10 @@ class TalkbackCoordinator(
         }
         session.accepted = true
         sessions[sessionId] = session
+        if (sessionType == SessionType.GROUP) {
+            ensureConvergenceAnchor(session)
+            maybeEmitAppStartSnapshot(session)
+        }
         if (sessionType == SessionType.GROUP || sessionType == SessionType.CONFERENCE) {
             applyGroupTopology(session, allMembers.size)
         }
@@ -2090,8 +2116,12 @@ class TalkbackCoordinator(
         resolveSplitBrainFromHello(payload, now)
         sessions.values
             .filter { it.type == SessionType.GROUP && it.accepted && it.channelId == payload.channelId }
-            .forEach { reconcileGroupMembership(it, "hello_${payload.moduleId}") }
+            .forEach {
+                reconcileGroupMembership(it, "hello_${payload.moduleId}")
+                onGroupConvergenceBoundary(it)
+            }
         assertCanonicalConsistencyFromHello(payload)
+        recordAuthorityDigestFromHello(payload)
         maybeRequestGroupResyncFromHello(payload)
         ensureCanonicalMemberPresent(payload, fromPeer)
         applyAuthorityFloorSnapshotFromHello(payload)
@@ -2655,6 +2685,10 @@ class TalkbackCoordinator(
         val answer = engine.applyRemoteOffer(payload.sdp, politeForInviteAnswer())
         drainPendingIce(session.id, caller.moduleId.value, engine)
         session.accepted = true
+        if (sessionType == SessionType.GROUP) {
+            ensureConvergenceAnchor(session)
+            maybeEmitAppStartSnapshot(session)
+        }
         markMeshLinkCompleted(session,caller.moduleId.value)
         sendSignal(
             fromPeer,
@@ -2713,6 +2747,8 @@ class TalkbackCoordinator(
         )
         log("${sessionTag(session)} Group invite reconnect accepted from ${caller.moduleId.value}")
         updateSessionReceivePlayback(session)
+        emitGroupTopologySnapshot(TopologySnapshotReason.RECONNECT, session)
+        onGroupConvergenceBoundary(session)
         return true
     }
 
@@ -4326,6 +4362,9 @@ class TalkbackCoordinator(
     private fun bumpRosterEpoch(session: TalkbackSession, reason: String) {
         val epoch = GroupMembershipSupport.bumpRosterEpoch(session)
         log("${sessionTag(session)} rosterEpoch=$epoch reason=$reason")
+        touchConvergenceAnchor(session)
+        emitGroupTopologySnapshot(TopologySnapshotReason.MEMBERSHIP_CHANGED, session)
+        onGroupConvergenceBoundary(session)
     }
 
     private fun scheduleReconcile(reason: String) {
@@ -4392,6 +4431,7 @@ class TalkbackCoordinator(
             session.channelId?.let { reconcileGroupMeshInternal(it) }
             updateSessionReceivePlayback(session, "member_evict")
         }
+        onGroupConvergenceBoundary(session)
     }
 
     private fun applyGroupRoster(session: TalkbackSession, members: List<EndpointAddress>, rosterEpoch: Long) {
@@ -4710,9 +4750,12 @@ class TalkbackCoordinator(
                         "from=${caller.moduleId.value}" +
                         if (forceAlign) " forceAlign localWas=$localEpochBefore" else ""
                 )
+                touchConvergenceAnchor(session)
                 completeGroupMesh(session)
                 updateSessionReceivePlayback(session)
                 tryFlushPendingTransmit(session)
+                emitGroupTopologySnapshot(TopologySnapshotReason.MEMBERSHIP_CHANGED, session)
+                onGroupConvergenceBoundary(session)
             }
             GroupMembershipSupport.MembershipSnapshotApplyResult.IGNORED_STALE -> {
                 log(
@@ -4923,6 +4966,7 @@ class TalkbackCoordinator(
             groupMeshReconciler.markJoinOffered(channelId, peerId)
         }
         log("${sessionTag(session)} Group mesh join offered -> $peerId ice=$ice restart=$meshPeer")
+        emitGroupTopologySnapshot(TopologySnapshotReason.MESH_OFFERED, session)
     }
 
     private fun drainPendingGroupJoins(sessionId: String) {
@@ -5192,6 +5236,7 @@ class TalkbackCoordinator(
         runOnCoordinator {
             qosMonitor.updateIceState(remoteModuleId, state)
             log("ICE $remoteModuleId state=$state ${qosMonitor.formatSummary()}")
+            maybeEmitIceTopologySnapshot(remoteModuleId)
             if (IceConnectivity.isConnected(state)) {
                 sessions.values
                     .filter { it.type == SessionType.GROUP && it.channelId != null }
@@ -5271,6 +5316,7 @@ class TalkbackCoordinator(
                             reconcileGroupMembership(session, "ice_connected_$remoteModuleId")
                         }
                         tryFlushPendingTransmit(session)
+                        onGroupConvergenceBoundary(session)
                     }
                 sessions.values
                     .filter { it.type == SessionType.CONFERENCE && it.accepted }
@@ -5488,6 +5534,10 @@ class TalkbackCoordinator(
             stopSessionCapture(session)
             if (session.floor.owner() == session.local) {
                 scheduleAcquireReleaseIfNeeded(session)
+            }
+            if (session.type == SessionType.GROUP) {
+                emitGroupTopologySnapshot(TopologySnapshotReason.PTT_BLOCKED, session)
+                onGroupConvergenceBoundary(session)
             }
         }
     }
@@ -6235,6 +6285,9 @@ class TalkbackCoordinator(
         }
         completeGroupMesh(session)
         maintainBackupStandby(session)
+        touchConvergenceAnchor(session)
+        emitGroupTopologySnapshot(TopologySnapshotReason.PLANNER_SCHEDULED, session)
+        onGroupConvergenceBoundary(session)
     }
 
     private fun anchorHealthMap(): Map<String, AnchorHealthSnapshot> {
@@ -7222,6 +7275,150 @@ class TalkbackCoordinator(
         val threshold = now - config.replayWindowMs
         seenNoncesByModule.values.forEach { nonces ->
             nonces.filterValues { it < threshold }.keys.forEach { nonces.remove(it) }
+        }
+    }
+
+    private fun recordAuthorityDigestFromHello(payload: HelloPayload) {
+        val channelId = payload.channelId ?: return
+        if (payload.rosterEpoch <= 0L) return
+        val session = sessions.values.firstOrNull {
+            it.type == SessionType.GROUP && it.accepted && it.channelId == channelId
+        } ?: return
+        val authorityId = session.anchorModuleId?.value
+            ?: resolveBootstrapPrimary(dialableRemoteModuleIds().plus(localModuleId))?.value
+            ?: return
+        if (payload.moduleId != authorityId) return
+        lastSeenAuthorityDigestByChannel[channelId] = TopologyDigest(
+            rosterEpoch = payload.rosterEpoch,
+            anchorEpoch = payload.anchorEpoch,
+            meshGeneration = payload.meshGeneration,
+            memberHash = payload.memberHash
+        )
+    }
+
+    private fun membershipDigestAlignedWithAuthority(session: TalkbackSession): Boolean {
+        if (isMembershipAuthority(session)) return true
+        val channelId = session.channelId ?: return false
+        val authorityDigest = lastSeenAuthorityDigestByChannel[channelId] ?: return false
+        val localDigest = TopologyDigest.fromSession(session)
+        return localDigest.rosterEpoch == authorityDigest.rosterEpoch &&
+            localDigest.memberHash == authorityDigest.memberHash
+    }
+
+    private fun isChannelGatedForGroup(session: TalkbackSession): Boolean {
+        val channelId = session.channelId ?: return false
+        if (channelModeFsm(channelId).mode == ChannelMode.CONFERENCE) return true
+        return sessions.values.any {
+            it.channelId == channelId &&
+                it.type == SessionType.CONFERENCE &&
+                it.accepted &&
+                it.id != session.id
+        }
+    }
+
+    private fun peerMediaConnectedForSession(session: TalkbackSession): Set<String> =
+        GroupMembershipSupport.canonicalMemberModuleIds(session)
+            .map { it.value }
+            .filter { it != localModuleId.value && isPeerMediaConnected(it) }
+            .toSet()
+
+    private fun buildGroupRuntimeHealthInput(session: TalkbackSession): GroupRuntimeHealthInput {
+        val convergenceAge = GroupConvergenceTracker.convergenceAgeMs(
+            lastConvergenceAnchorMsBySession[session.id]
+        )
+        return GroupRuntimeHealthInput(
+            localModuleId = localModuleId,
+            session = session,
+            dialablePeerCount = countDialableRemoteModules(),
+            membershipDigestAlignedWithAuthority = membershipDigestAlignedWithAuthority(session),
+            peerMediaConnected = peerMediaConnectedForSession(session),
+            iceStateForModule = ::iceStateForModule,
+            channelGated = isChannelGatedForGroup(session),
+            convergenceAgeMs = convergenceAge
+        )
+    }
+
+    private fun ensureConvergenceAnchor(session: TalkbackSession) {
+        lastConvergenceAnchorMsBySession.putIfAbsent(session.id, System.currentTimeMillis())
+    }
+
+    private fun touchConvergenceAnchor(session: TalkbackSession) {
+        lastConvergenceAnchorMsBySession[session.id] = System.currentTimeMillis()
+    }
+
+    private fun acceptedGroupSessionsOnChannel(channelId: String): List<TalkbackSession> =
+        sessions.values.filter {
+            it.type == SessionType.GROUP && it.accepted && it.channelId == channelId
+        }
+
+    private fun isGroupSessionPeer(session: TalkbackSession, remoteModuleId: String): Boolean =
+        remoteModuleId == session.local.moduleId.value ||
+            remoteModuleId in session.memberModules.map { it.value } ||
+            remoteModuleId in session.groupMembers.map { it.moduleId.value }
+
+    private fun emitGroupTopologyForChannel(reason: TopologySnapshotReason, channelId: String) {
+        acceptedGroupSessionsOnChannel(channelId).forEach { emitGroupTopologySnapshot(reason, it) }
+    }
+
+    private fun emitGroupTopologySnapshot(reason: TopologySnapshotReason, session: TalkbackSession) {
+        if (session.type != SessionType.GROUP) return
+        val health = GroupRuntimeHealthProjector.project(buildGroupRuntimeHealthInput(session))
+        log(TopologySnapshotLogger.format(reason, health))
+    }
+
+    private fun maybeEmitAppStartSnapshot(session: TalkbackSession) {
+        if (session.type != SessionType.GROUP) return
+        if (!groupAppStartSnapshotEmitted.add(session.id)) return
+        emitGroupTopologySnapshot(TopologySnapshotReason.APP_START, session)
+        onGroupConvergenceBoundary(session)
+    }
+
+    private fun maybeEmitIceTopologySnapshot(remoteModuleId: String) {
+        val now = System.currentTimeMillis()
+        val last = lastIceTopologySnapshotMsByPeer[remoteModuleId] ?: 0L
+        if (now - last < config.iceTopologySnapshotThrottleMs) return
+        lastIceTopologySnapshotMsByPeer[remoteModuleId] = now
+        sessions.values
+            .filter { it.type == SessionType.GROUP && it.accepted && isGroupSessionPeer(it, remoteModuleId) }
+            .forEach { session ->
+                emitGroupTopologySnapshot(TopologySnapshotReason.ICE_STATE_CHANGED, session)
+                onGroupConvergenceBoundary(session)
+            }
+    }
+
+    private fun maybeEmitPeriodicBuildingSnapshots() {
+        val now = System.currentTimeMillis()
+        sessions.values
+            .filter { it.type == SessionType.GROUP && it.accepted }
+            .forEach { session ->
+                val health = GroupRuntimeHealthProjector.project(buildGroupRuntimeHealthInput(session))
+                val lastPeriodic = lastPeriodicBuildingMsBySession[session.id] ?: 0L
+                if (!GroupConvergenceTracker.shouldEmitPeriodicBuilding(
+                        readiness = health.groupTopologyReadiness,
+                        convergenceAgeMs = health.convergenceAgeMs,
+                        lastPeriodicMs = lastPeriodic,
+                        nowMs = now,
+                        stallThresholdMs = config.buildingStallThresholdMs,
+                        periodicWindowMs = config.periodicBuildingWindowMs
+                    )
+                ) {
+                    return@forEach
+                }
+                lastPeriodicBuildingMsBySession[session.id] = now
+                log(TopologySnapshotLogger.format(TopologySnapshotReason.PERIODIC_BUILDING, health))
+            }
+    }
+
+    private fun onGroupConvergenceBoundary(session: TalkbackSession) {
+        if (session.type != SessionType.GROUP || !session.accepted) return
+        val health = GroupRuntimeHealthProjector.project(buildGroupRuntimeHealthInput(session))
+        val sessionId = health.sessionId ?: return
+        val previous = lastGroupTopologyReadinessBySession.put(
+            sessionId,
+            health.groupTopologyReadiness
+        )
+        if (previous != health.groupTopologyReadiness) {
+            log(TopologySnapshotLogger.format(TopologySnapshotReason.READINESS_CHANGED, health))
         }
     }
 

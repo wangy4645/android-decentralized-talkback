@@ -150,6 +150,9 @@ ADR-0004 Floor Acquire Timeout
         │
         ▼
 ADR-0007 Intent–Reality Consistency
+        │
+        ▼
+ADR-0008 Group Runtime Health Projection (read model, v1)
 ```
 
 - **ADR-0001**：Runtime 对象（Activity、Disposition、Authority）
