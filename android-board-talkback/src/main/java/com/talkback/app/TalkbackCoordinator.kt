@@ -1586,6 +1586,11 @@ class TalkbackCoordinator(
         sessionMediaEngines(session).any { it.isCapturing() }
     }
 
+    internal fun testResolverLocalKey(sessionId: String): String? = runOnCoordinatorSync {
+        val session = sessions[sessionId] ?: return@runOnCoordinatorSync null
+        IdentityResolver.localKey(session, localModuleId.value)
+    }
+
     internal fun testFloorRequestVersion(sessionId: String): Long? = runOnCoordinatorSync {
         val session = sessions[sessionId] ?: return@runOnCoordinatorSync null
         session.floorOwner.tokens.lookup(

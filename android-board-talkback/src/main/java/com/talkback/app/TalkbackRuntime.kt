@@ -298,6 +298,9 @@ class TalkbackRuntime(
     internal fun testIsSessionCapturing(sessionId: String): Boolean =
         coordinator.testIsSessionCapturing(sessionId)
 
+    internal fun testResolverLocalKey(sessionId: String): String? =
+        coordinator.testResolverLocalKey(sessionId)
+
     internal fun testFloorRequestVersion(sessionId: String): Long? =
         coordinator.testFloorRequestVersion(sessionId)
 

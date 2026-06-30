@@ -5,6 +5,7 @@ import com.talkback.core.model.EndpointId
 import com.talkback.core.model.ModuleId
 import com.talkback.core.signaling.InMemorySignalingHub
 import org.junit.After
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -16,8 +17,8 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 
 /**
- * ADR-0009 issue #20: cold M03 join with placeholder invite endpoint → first Group PTT
- * must not observe ROSTER_MISS; grant uses canonical M03-E03.
+ * ADR-0009 issues #20 / #23: cold M03 join with placeholder invite endpoint → first Group PTT
+ * must not observe ROSTER_MISS; grant uses canonical M03-E03; capture/release and R38 identity lock.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [28])
@@ -85,6 +86,57 @@ class GroupIdentityColdM03IntegrationTest {
         )
         assertTrue(
             nodeM01.hasLog { it.contains("GRANT_BROADCAST") && it.contains(CANONICAL_M03_KEY) }
+        )
+    }
+
+    @Test
+    fun coldM03Join_firstPtt_captureRelease_identityConsistent() {
+        setupThreeNodeGroupWithPlaceholderInvite()
+        connectAllIce()
+        waitForIdentityReconcile()
+
+        val m02SessionId = nodeM02.runtime.activeSessionIds().single()
+        val m03SessionId = nodeM03.runtime.activeSessionIds().single()
+
+        assertLocalIdentityConsistent(nodeM03, m03SessionId, CANONICAL_M03_KEY, "pre-ptt")
+
+        nodeM03.pressPtt(m03SessionId)
+
+        assertTrue(
+            "M03 floor request logs=${nodeM03.floorRequestLines()}",
+            nodeM03.waitForLog(timeoutMs = 5_000L) {
+                it.contains("FLOOR_REQUEST_SEND") && !it.contains("identity_unstable")
+            }
+        )
+        assertTrue(
+            "M02 floor owner=${nodeM02.runtime.sessionSnapshots().firstOrNull { it.sessionId == m02SessionId }?.protocolFloorOwnerKey}",
+            waitForFloorOwner(nodeM02, m02SessionId, CANONICAL_M03_KEY)
+        )
+        assertFalse(nodeM02.hasGrantRosterMiss())
+        assertTrue(
+            "M03 capture logs=${nodeM03.captureLines()}",
+            waitForCapturing(nodeM03, m03SessionId)
+        )
+        assertLocalIdentityConsistent(nodeM03, m03SessionId, CANONICAL_M03_KEY, "post-grant-capture")
+
+        nodeM03.releasePtt(m03SessionId)
+
+        assertTrue(
+            "M02 release logs=${nodeM02.releaseLines()}",
+            nodeM02.waitForLog(timeoutMs = 5_000L) {
+                it.contains("FLOOR_RELEASE_DIAG") && it.contains("released=true")
+            }
+        )
+        assertTrue(
+            "M02 floor owner after release",
+            waitForProtocolOwnerCleared(nodeM02, m02SessionId)
+        )
+        assertFalse(nodeM03.runtime.testIsSessionCapturing(m03SessionId))
+        assertLocalIdentityConsistent(nodeM03, m03SessionId, CANONICAL_M03_KEY, "post-release")
+
+        assertFalse(
+            "M03 compat drift logs=${nodeM03.compatDriftLines()}",
+            nodeM03.hasCompatDriftAfterRebind()
         )
     }
 
@@ -176,6 +228,44 @@ class GroupIdentityColdM03IntegrationTest {
         return false
     }
 
+    private fun waitForCapturing(node: TestTalkbackNode, sessionId: String): Boolean {
+        val deadline = System.currentTimeMillis() + 8_000L
+        while (System.currentTimeMillis() < deadline) {
+            if (node.runtime.testIsSessionCapturing(sessionId)) return true
+            Thread.sleep(50)
+        }
+        return false
+    }
+
+    private fun waitForProtocolOwnerCleared(node: TestTalkbackNode, sessionId: String): Boolean {
+        val deadline = System.currentTimeMillis() + 8_000L
+        while (System.currentTimeMillis() < deadline) {
+            val owner = node.runtime.sessionPresenceSnapshot(sessionId)?.protocolFloorOwnerKey
+            if (owner == null) return true
+            Thread.sleep(50)
+        }
+        return false
+    }
+
+    private fun assertLocalIdentityConsistent(
+        node: TestTalkbackNode,
+        sessionId: String,
+        expectedCanonicalKey: String,
+        phase: String
+    ) {
+        val snap = node.runtime.sessionSnapshots().firstOrNull { it.sessionId == sessionId }
+        assertNotNull("missing snapshot at $phase", snap)
+        assertTrue(
+            "canonical member missing at $phase members=${snap!!.memberKeys}",
+            snap.memberKeys.contains(expectedCanonicalKey)
+        )
+        assertEquals(
+            "identity drift at $phase",
+            expectedCanonicalKey,
+            node.runtime.testResolverLocalKey(sessionId)
+        )
+    }
+
     private fun TestTalkbackNode.floorRequestLines(): List<String> =
         synchronized(logs) {
             logs.filter {
@@ -193,6 +283,25 @@ class GroupIdentityColdM03IntegrationTest {
                     (it.contains("GRANT_DROPPED") && it.contains("ROSTER_MISS"))
             }
         }
+
+    private fun TestTalkbackNode.captureLines(): List<String> =
+        synchronized(logs) { logs.filter { it.contains("captureON") || it.contains("captureOFF") } }
+
+    private fun TestTalkbackNode.releaseLines(): List<String> =
+        synchronized(logs) { logs.filter { it.contains("FLOOR_RELEASE") || it.contains("PTT_UP") } }
+
+    private fun TestTalkbackNode.compatDriftLines(): List<String> =
+        synchronized(logs) { logs.filter { it.contains("LOCAL_IDENTITY_DRIFT_COMPAT") } }
+
+    private fun TestTalkbackNode.hasCompatDriftAfterRebind(): Boolean {
+        val reboundIndex = synchronized(logs) {
+            logs.indexOfLast { it.contains("IDENTITY_REBOUND") && it.contains(CANONICAL_M03_KEY) }
+        }
+        if (reboundIndex < 0) return false
+        return synchronized(logs) {
+            logs.drop(reboundIndex).any { it.contains("LOCAL_IDENTITY_DRIFT_COMPAT") }
+        }
+    }
 
     companion object {
         private const val CHANNEL_ID = "COLD-M03-PTT"
