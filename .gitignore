@@ -20,6 +20,10 @@ test-logs/
 logs-soak*/
 *.apk
 
+# Local dev caches
+.gradle-home/
+.scratch/
+
 # Root-level dev artifacts (keep assets under docs/ or res/)
 /*.png
 /*.jpg
