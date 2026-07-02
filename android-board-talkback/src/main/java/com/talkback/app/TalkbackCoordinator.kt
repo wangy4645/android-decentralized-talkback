@@ -59,6 +59,7 @@ import com.talkback.core.session.ChannelLifecyclePolicy
 import com.talkback.core.session.ChannelMode
 import com.talkback.core.session.ChannelModeFsm
 import com.talkback.core.session.ChannelReadiness
+import com.talkback.core.session.ConferenceHostEndpointResolver
 import com.talkback.core.session.ConferenceParticipantManager
 import com.talkback.core.session.ConferenceSnapshot
 import com.talkback.core.session.GroupMediaTopology
@@ -285,6 +286,14 @@ class TalkbackCoordinator(
         } else {
             session.groupMembers
         }
+
+    private fun resolveConferenceHostEndpoint(session: TalkbackSession, hostModuleId: String): EndpointAddress =
+        ConferenceHostEndpointResolver.resolve(
+            roster = meshRoster(session),
+            remote = session.remote,
+            hostModuleId = hostModuleId,
+            fallbackEndpointId = session.local.endpointId,
+        )
 
     private fun meshParticipant(session: TalkbackSession, moduleId: String): ParticipantState =
         if (isConferenceSession(session)) {
@@ -5873,8 +5882,7 @@ class TalkbackCoordinator(
             scheduleHostRejoinRetry(channelId, session, immediate = true)
             return
         }
-        val hostEndpoint = session.groupMembers.find { it.moduleId.value == hostId }
-            ?: EndpointAddress(ModuleId(hostId), session.local.endpointId)
+        val hostEndpoint = resolveConferenceHostEndpoint(session, hostId)
         val restarted = attemptConferencePeerIceRestart(session, hostId, hostEndpoint)
         if (!restarted) {
             scheduleHostRejoinRetry(channelId, session, immediate = false)
@@ -5896,8 +5904,7 @@ class TalkbackCoordinator(
                         tryEnsureConferenceDuplex(current)
                         return@runOnCoordinator
                     }
-                    val hostEndpoint = current.groupMembers.find { it.moduleId.value == hostModuleId }
-                        ?: return@runOnCoordinator
+                    val hostEndpoint = resolveConferenceHostEndpoint(current, hostModuleId)
                     if (attemptConferencePeerIceRestart(current, hostModuleId, hostEndpoint)) {
                         log("${sessionTag(current)} Conference host link kick -> $hostModuleId delay=${delayMs}ms")
                     }
@@ -5912,8 +5919,16 @@ class TalkbackCoordinator(
         remote: EndpointAddress
     ): Boolean {
         if (!config.iceReconnectEnabled) return false
-        val peer = session.remotePeersByModule[remoteModuleId] ?: return false
-        val engine = getMeshEngine(remoteModuleId) ?: return false
+        val peer = session.remotePeersByModule[remoteModuleId]
+        if (peer == null) {
+            log("[${session.traceId}] Conference ICE-restart skipped: no signal peer for $remoteModuleId")
+            return false
+        }
+        val engine = getMeshEngine(remoteModuleId)
+        if (engine == null) {
+            log("[${session.traceId}] Conference ICE-restart skipped: no mesh engine for $remoteModuleId")
+            return false
+        }
         wireIceCallback(session, remoteModuleId, engine)
         val offer = engine.createOffer(iceRestart = true)
         drainPendingIce(session.id, remoteModuleId, engine)
@@ -5956,14 +5971,21 @@ class TalkbackCoordinator(
                 hostRejoinAttemptByChannel[channelId] = attempt + 1
                 val hint = lastRejoinableConferenceByChannel[channelId]
                 val hostSessionId = hint?.hostSessionId?.takeIf { it.isNotBlank() } ?: current.id
-                val authority = session.groupMembers.find { it.moduleId.value == hostId }
-                    ?: hint?.let {
-                        EndpointAddress(
-                            ModuleId(it.hostModuleId),
-                            EndpointId(it.hostKey.substringAfter('-', "E01"))
-                        )
+                val authority = resolveConferenceHostEndpoint(current, hostId).let { resolved ->
+                    if (
+                        meshRoster(current).none { it.moduleId.value == hostId } &&
+                        current.remote?.moduleId?.value != hostId
+                    ) {
+                        hint?.let {
+                            EndpointAddress(
+                                ModuleId(it.hostModuleId),
+                                EndpointId(it.hostKey.substringAfter('-', "E01"))
+                            )
+                        } ?: resolved
+                    } else {
+                        resolved
                     }
-                    ?: EndpointAddress(ModuleId(hostId), session.local.endpointId)
+                }
                 val sent = sendConferenceRejoinInternal(channelId, authority, hostSessionId)
                 log("[${current.traceId}] Participant host rejoin retry sent=$sent attempt=${attempt + 1}")
                 if (!sent && attempt + 1 < HOST_REJOIN_BACKOFF_MS.size) {
@@ -6288,7 +6310,7 @@ class TalkbackCoordinator(
     }
 
     private fun recoverStuckConferenceHostLink(session: TalkbackSession, hostId: String, ice: String) {
-        val hostEndpoint = session.groupMembers.find { it.moduleId.value == hostId } ?: return
+        val hostEndpoint = resolveConferenceHostEndpoint(session, hostId)
         if (attemptConferencePeerIceRestart(session, hostId, hostEndpoint)) {
             log("${sessionTag(session)} Forcing conference host ICE-restart for $hostId stuck in $ice")
             return
