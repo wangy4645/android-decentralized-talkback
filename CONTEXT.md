@@ -15,8 +15,8 @@ _Avoid_: 设备, 节点, 板卡
 _Avoid_: 终端, 用户, 单兵
 
 **EndpointKey**:
-Endpoint 的全局键，格式 `{moduleId}-{endpointId}`（如 `M01-E03`）。
-_Avoid_: 地址, peerId
+Endpoint 的全局键，格式 `{moduleId}-{endpointId}`（如 `M01-E03`）。Contact 域对外能力（Unicast、Endpoint Text、Monitor 等）的业务寻址唯一键；moduleId 仅用于 mesh 路由，由 EndpointKey 派生，不构成并列业务地址。
+_Avoid_: 地址, peerId, remoteKey（实现名）
 
 ### 组网与信任边界
 
@@ -67,6 +67,46 @@ _Avoid_: channelId（单独使用时）, 归属, 所有权
 **Unicast**:
 独立的端对端 Session：全双工媒体，无成员（Membership）与 Floor 语义。可携带 Session Origin，但不参与 ChannelMode。
 _Avoid_: 单呼, 点对点通话, 直呼
+
+**Endpoint Text**:
+Endpoint 间经验签信令投递的短文本单元；不属于 Session，不参与 Disposition、Membership 或媒体拓扑，不占用 Foreground Activity 的 Unicast/Group/Conference 槽位。V1 寻址为单个 EndpointKey（Endpoint Target）。不绑定 TalkbackSession；以 Message Id 标识单条投递，与 sessionId 正交。
+_Avoid_: SMS, 短信, Message（未指明类型时）
+
+**Message Id**:
+单条 Endpoint Text 的全局标识，用于去重与 replay 防护；不表示通话结构，不可替代 sessionId。
+_Avoid_: sessionId（用于 Text 时）, messageId（实现字段名）
+
+**Endpoint Text Delivery**:
+Endpoint Text 的 V1 投递约束：目标须 online 且所属 module callable 方可发送；经 UDP 信令 best-effort 投递，无 ACK、无离线队列、无 store-and-forward。收到即展示、不持久化、无 inbox、无 replay；可选 `deliverHint` 观测，但不引入 retry 语义。
+_Avoid_: 可靠投递, 已读回执（V1）, inbox, 历史记录（V1）
+
+**Transient Control Event**:
+Endpoint Text 的时间性语义：仅存在于发生时刻的控制事件；不形成系统记忆，不进入 notification center 或历史页。V1 刻意 amnesic，防止滑向 IM 存储模型。
+_Avoid_: 会话线程, 消息存储, 未读计数（V1）
+
+**Endpoint Text Payload**:
+Endpoint Text 的 V1 内容约束：纯 UTF-8 文本，上限 256 字符；短指令风格，不含结构化附件或二进制 payload。图片不属于 Endpoint Text V1 范畴。
+_Avoid_: 长文, 富文本, 文件/坐标 payload（V1）
+
+**Endpoint Text Rate Limit**:
+Endpoint Text 的 V1 发送防护：按 `(sender, endpointKey, signalType)` 维度限流（如约 1 条/秒），超限静默丢弃，不排队、不 retry；仅作用于 ENDPOINT_TEXT，不影响 Floor、PTT、Session 信令。
+_Avoid_: 全局信令限流, 排队 backlog, priority 队列（V1）
+
+**Endpoint Attachment**:
+Endpoint 间二进制 payload（图片、文件等）的 data-plane 能力；与 Endpoint Text（control-plane）正交。V2 范畴：分片传输、可选 ACK/retry、独立传输信道；不得塞入 UDP 信令 envelope 或 Endpoint Text payload。
+_Avoid_: base64 图片信令, Text 通道传文件, IM 存储模型（V1）
+
+**Control-Plane Text**:
+Endpoint Text 在 Runtime 中的定位：control-plane 带外信令，不占 Floor、不占 Session slot、不参与 Foreground Activity / Media Admission；发送与接收均 bypass Session FSM 与 Floor FSM。本端 reachable 于 control-plane 即可发；不依赖 RTP/WebRTC 或既有 Session 连通性。接收与渲染独立于 Session、Floor、Busy 状态；delivery 不等于 interrupt。可选 Session Hint 仅用于日志关联，不参与逻辑。
+_Avoid_: 会话内消息, 媒体信道短信, Floor 全局锁, TEXT_REJECT
+
+**Endpoint Text Priority**:
+Endpoint Text 的展示优先级分级，决定 UI 呈现强度但不打断媒体与交互流。INLINE 为轻提示；IMPORTANT 为置顶 banner；CRITICAL 为强提示（如 badge），均不抢 Floor、不中断 PTT、不打断 WebRTC Session。V1 协议可携带 priority 字段，但 UI 固定 INLINE，priority 不参与任何行为决策。
+_Avoid_: 拒收（busy 时）, 排队延迟展示, 与 Floor 抢占, priority 驱动 V1 UI
+
+**Message Target**:
+消息类能力的寻址意图。V1 仅 Endpoint Target（单个 EndpointKey）；Module Target、Group Target 等为扩展类型，不替代默认一对一 Endpoint Text。
+_Avoid_: moduleId 作为默认收件人, 广播（未指明目标类型时）
 
 **Group PTT**:
 半双工组呼 Session：Membership + Floor + Media。Floor 登记与裁决粒度为 Endpoint；同一 Module 上无论哪个 Endpoint 持麦，物理上行仍只有一条 module 级 RTP。
@@ -189,6 +229,34 @@ _Avoid_: session.local 作 SSOT, 在 canonical 变更时 mutate session.local
 **IdentityResolver**:
 Group session 内读取 local runtime identity 的唯一入口（`local` / `isLocal` / `localKey`）。Canonical 由 Membership Authority 写入；Resolver 只读。Compat：`moduleId` fallback + `LOCAL_IDENTITY_DRIFT_COMPAT`（过渡，须可删除）。
 _Avoid_: 散落 moduleId 比较, 多处 ownerIsLocal 逻辑
+
+**Canonical Membership Completeness**:
+Accepted Group session 的 canonical roster 必须：每个参与 module 恰好一个 endpoint；**local module 必须在 roster 内**（R39）。违反时 Floor/Resolver 异常是症状，不是独立根因。详见 ADR-0009。
+_Avoid_: 把 snapshot 规则当作 R39, 未查 Producer 就 patch Consumer
+
+**Committed Projection Publication**:
+Membership snapshot 只能发布已 commit 的 canonical facts（R40）。Commit 边界内多次 mutation 合并为一次 coalesced publish；R39 未满足时 defer。详见 ADR-0009。
+_Avoid_: 事件驱动逐条 broadcast, 静默 skip snapshot
+
+**Conference Membership Projection**:
+Conference roster 权威来源：`conferenceParticipantManager` / `memberViews`（R41）。表达谁属于会议；用于 Host 管理、调试、日志。**非** Conference 主 UI 数据源。
+_Avoid_: 把 roster 直接画进主界面头像条
+
+**Conference Membership Transition**:
+Conference membership 的唯一写 seam：`ConferenceMembershipReducer`（ADR-0012 R-M1）。信令 handler 只 dispatch event（`PeerLeft`、`PeerReactivated`、`SnapshotCorrected` 等）；roster、left tombstone、participant 基线与 mesh 失效在同一 transition 内完成。Reconcile 是 Host roster 快照校准，不是 invite。
+_Avoid_: Coordinator 各 handler 直接 applyPrune/onLateJoin, 把 mesh repair 当 membership 恢复
+
+**Conference Visible Participants**:
+Conference 用户可见在会者的 canonical UI 投影（R44）：`ConferenceParticipantProjector` → `visibleParticipants` / `visibleParticipantCount`。驱动头像、人数、Speaking、等待提示。规则由 Projector 解释 invite/media/LEFT，UI 只读 `ConferenceParticipantDisplayState`。
+_Avoid_: ViewModel 内 `memberViews.filter`, 直接读 `invite`/`media`
+
+**Conference Media Projection**:
+本机 ICE 媒体链路可达性（`meshConnectedPeerCount` / `connectedMeshPeerIds`）。用于 transmit readiness、信号质量与诊断；**不得**驱动 Conference UI（R42）。
+_Avoid_: 把 data-plane 当 control-plane
+
+**UI Projection Principle**:
+UI 不得直接解释 Runtime Facts；一切用户可见语义必须有专用 Projection（R43）。Conference、Contacts、Presence、GroupRuntimeHealth 均遵守。
+_Avoid_: 在 ViewModel 散落业务 filter
 
 **Session Disposition**:
 某个 Session 当前的处置态，描述其生命周期阶段（如 Active、Suspended、Resuming、Terminating、Terminated）。媒体、UI 与同步快照均读取此态；从 Suspended 恢复须经 Resuming，因媒体与 Floor 重连是异步的。

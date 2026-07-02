@@ -29,7 +29,7 @@ ADR-0007 Intent–Reality Consistency (R31–R33)
         │
         ├── ADR-0008 Group Runtime Health Projection (diagnostic read model)
         │
-        └── ADR-0009 Group Session Identity Consistency (R35–R38)
+        └── ADR-0009 Group Session Identity Consistency (R35–R39)
 ```
 
 ADR-0008 的 `membershipReconciled` 与 `transmitMissingPeers` 在 identity 分裂时可能给出误导性「已连接」诊断；R35 是 membership 收敛的**前置条件**；R38 是本地 runtime 读取 canonical 的**前置条件**（floor / media 不得直接以 legacy `session.local` 为 SSOT）。
@@ -62,6 +62,21 @@ R35 生效后 `ROSTER_MISS` 消失、`GRANT_OBSERVED resolved=OK`，但冷启动
 | Remote UI | `floorOwner=M03-E03` 卡住 ~1–2 分钟直至 mesh / snapshot 恢复 |
 
 结论：Identity Drift 从 **Remote**（远端认不出你，R35 已修）收敛为 **Local Runtime**（自己认不出自己，R38 待修）。
+
+### Phase 3（R38 落地后，M02 发起方复测）
+
+M03 冷启动路径改善后，M02 作为 Group 发起方出现 PTT / 收听失败。log 显示：
+
+| 时间 | 事件 |
+|------|------|
+| 16:18:45 | M02 `meshCallInternal`：`members=M02,M03`（含 local） |
+| 16:19:04 | `CANONICAL_MISMATCH`：local=`[M02,M03]`，authority=`[M01,M03]` |
+| 16:19:04 | `snapshotApplied from=M01 members=2` → `members=M01,M03`（**local 从 roster 消失**） |
+| 16:20:01 | M02 PTT：`requester=M02-E02`，`GRANT_DROPPED ROSTER_MISS` |
+
+**已证实**：Consumer 侧 `applyMembershipSnapshot` → `applyGroupMembersList` 整表覆盖后 local ∉ roster。
+
+**未证实（待调查）**：Producer 侧 — M01 的 canonical snapshot builder 为何发出不含 M02 的 roster。在回答该问题之前，**不得**将「snapshot apply 不得删除 local」等策略写入 normative 修复方案。
 
 ## Normative Rules
 
@@ -101,6 +116,83 @@ R35 生效后 `ROSTER_MISS` 消失、`GRANT_OBSERVED resolved=OK`，但冷启动
 - **Legacy bootstrap**：`TalkbackSession.local`（`val`）仅为会话创建时的 bootstrap identity；标注为 legacy，未来退役；在 R38 落地前不得作为 canonical 写入目标。
 - **Compatibility guard**（过渡）：`IdentityResolver.isLocal` 在 canonical key 不匹配时 **MAY** fallback 到 `moduleId` 相等并打 `LOCAL_IDENTITY_DRIFT_COMPAT`；此路径 **MUST NOT** 成为 authoritative identity 定义；日志长期归零后删除 fallback。
 - **Recovery**（非 correctness）：`localRequestedFloor && PTT_UP && owner still local after timeout` 时 **MAY** emit release；不得替代 Resolver 正确性。
+
+### R39 — Canonical Membership Completeness
+
+> For every **accepted** Group session, the canonical roster (`session.groupMembers`, non-EVICTED) MUST contain exactly one `EndpointAddress` per participating `moduleId`, and **MUST** include the local module.
+
+形式化：
+
+```
+∀ moduleId ∈ acceptedParticipants(session):
+    ∃! endpoint : (moduleId, endpoint) ∈ canonicalRoster
+
+localModuleId ∈ { m.moduleId | m ∈ canonicalRoster }
+```
+
+- **Runtime invariant, not a snapshot rule**：R39 约束 roster **最终必须成立的事实**；HELLO、membership snapshot、mesh 建组、evict 等仅为写入路径，不是 R39 本身。合法的 LEAVE/evict 后 local 可以不在 roster，但此时 session **MUST NOT** 再视为该 module 的 accepted active participant。
+- **Producer vs Consumer**：违反 R39 可能源于 Authority 发出错误 snapshot（Producer），或 Consumer 错误应用（Consumer），或 Initiator 建组绕过 Authority 模型。诊断 **MUST** 区分二者，不得默认 Consumer apply 即为 bug。
+- **与 R38 关系**：R39 是 R38 的前置条件；`local ∉ canonicalRoster` 时 IdentityResolver / Floor / Playback 的异常行为是 **非法 roster 的症状**，不是独立根因。
+- **禁止过早修复策略**：在 Producer 根因未查清前，**MUST NOT** normatively 规定「snapshot apply 不得删除 local」等补丁；该命题仅可作为待验证假设。
+
+#### R39 断言点（implementation，非 normative 修复）
+
+| 侧 | 时机 | 目的 |
+|----|------|------|
+| **Producer** | Authority `serializeMembershipSnapshot` / broadcast 前 | 若此处违反 R39 → Authority canonical builder 错误 |
+| **Consumer** | `applyMembershipSnapshot` / `applyGroupMembersList` 后 | 若此处违反 R39 → 收到非法 snapshot 或 apply 逻辑错误 |
+
+指纹：`ROSTER_INVARIANT_BROKEN`（含 `sessionId`、`side=PRODUCER|CONSUMER`、`modules=…`、`localModuleId=…`）。
+
+#### Roster Origin（诊断，非 SSOT）
+
+每次 `groupMembers` 变更 **SHOULD** 记录 `rosterOrigin` 供现场归因（永久诊断字段，非控制面）：
+
+| Origin | 含义 |
+|--------|------|
+| `LOCAL_BUILD` | Initiator `meshCallInternal` 初始 roster |
+| `INVITE_METADATA` | Invitee `populateGroupSessionMetadata` |
+| `AUTHORITY_SNAPSHOT` | `applyMembershipSnapshot` 整表对齐 |
+| `HELLO_REBIND` | `replaceGroupMemberEndpoint` |
+| `PROMOTE_INVITEE` | `promoteInviteeToCanonicalRoster` |
+| `EVICTION` | `removeGroupMember` |
+
+日志形态建议：`ROSTER_MUTATION origin=… modules=… sessionId=…`。
+
+### R40 — Committed Projection Publication
+
+> **Projection publication is commit-based rather than event-based.** Runtime events may mutate canonical membership multiple times within one authority mutation boundary; only the final committed state is eligible for publication.
+
+> Membership snapshots MUST represent only the latest **committed** canonical membership state.
+
+- **Facts → Projection**（ADR-0008）：Snapshot 是 canonical `groupMembers` 的投影，不是事件流中的第 N 条消息。
+- **Deferred publication**：canonical 尚未 commit（R39 未满足）时 **MUST** defer；多个 pending 请求 **MAY** coalesce 为一次对最新 committed state 的 publish。
+- **Commit boundary**：Authority mutation 边界内 **MUST** `markPublicationPending()`；离开边界前 **MUST** 调用一次 `flushPublicationIfReady()`。边界内允许多次 mutation，**MUST NOT** 每步 mutation 单独 publish。
+- **PublicationController**：唯一 publish 门控；**MUST NOT** 在 gate 内 repair / promote / reconcile（R32）。
+- **Pending state**：Runtime **SHALL** retain publication pending state（实现可用 generation 或等价机制，normative 不写死 bool）。
+
+#### Publication Decision
+
+| decision | 含义 |
+|----------|------|
+| `READY` | 可 publish |
+| `DEFER` | 暂不可 publish；保留 pending |
+| `IGNORE` | 非 authority 或非 GROUP；不 pending |
+
+`DEFER` reason：`CANONICAL_INCOMPLETE`、`PARTICIPANT_PROMOTING`、`NOT_ACCEPTED`。
+
+指纹：`MEMBER-PRODUCER`（含 `decision`、`reason`、`pendingGeneration`、`publishedGeneration`、`members`、`memberHash`、`rosterEpoch`）。
+
+#### Commit Path（authority mutation boundaries）
+
+| Mutation | markPending | flushBoundary |
+|----------|-------------|---------------|
+| `promoteInviteeToCanonicalRoster` | boundary | end |
+| `replaceGroupMemberEndpoint` / HELLO rebound | boundary | end |
+| `removeGroupMember` / evict | boundary | end |
+| `becomeAuthority` / conference→group reconnect | boundary | end（待接线处须审计） |
+
+**禁止**：直接 `broadcastMembershipSnapshot`；统一经 `MembershipPublicationController`。
 
 ### Canonical Identity Owner
 
@@ -165,6 +257,10 @@ onVerifiedHello(moduleId, endpointId):
 | `LOCAL_IDENTITY_DRIFT_COMPAT` | Resolver compat：`session.local` ≠ canonical local；含 `sessionId`、`expected`、`actual` |
 | `ownerIsLocal=false` + grant `owner==canonicalLocal` | Local runtime drift：未走 Resolver 或 legacy 直读 |
 | `HOLDER_AUDIO_UNREACHABLE` + 本地无 `captureON` | 持权但本机未开麦（常与 local drift 共生） |
+| `ROSTER_INVARIANT_BROKEN` | R39 违反：`local ∉ roster` 或 module 重复；含 PRODUCER/CONSUMER 侧 |
+| `ROSTER_MUTATION` | `groupMembers` 变更归因：`origin=… modules=…` |
+| `CANONICAL_MISMATCH` + `snapshotApplied` | local 与 authority roster 分歧；Consumer 已执行覆盖 |
+| `MEMBER-PRODUCER` | R40 publish 决策：`decision=READY|DEFER|IGNORE`、`reason=…`、`pendingGeneration` / `publishedGeneration` |
 
 TopologySnapshot（ADR-0008）v2 **MAY** 增加 `identityDriftPeers: [moduleId]`；v1 实现可先用结构化 log `IDENTITY_REBOUND`。
 
@@ -197,5 +293,9 @@ TopologySnapshot（ADR-0008）v2 **MAY** 增加 `identityDriftPeers: [moduleId]`
 | 5 | ADR R38 + IdentityResolver + unit tests | Local runtime SSOT |
 | 6 | Group PTT 四路径经 Resolver（request / grant / release / capture） | P0 wire-up |
 | 7 | cold M03 回归：captureON、release、全程 canonical==resolver.local | Lock-down |
+| 8 | ADR R39 + Producer/Consumer 双侧 R39 断言 | Invariant guard |
+| 9 | Roster Origin 诊断（`ROSTER_MUTATION`） | Observability |
+| 10 | R40 Committed Projection Publication + coalescing flush | Producer commit fix |
+| 11 | M02 initiator + Mutation Storm 集成回归 | Lock-down |
 
-每个切片独立 PR / issue，按序合并。Slices 1–4 对应 issues #17–#20；5–7 对应 issues #21–#23。
+每个切片独立 PR / issue，按序合并。Slices 1–4 对应 issues #17–#20；5–7 对应 issues #21–#23；8–9 为 R39 诊断；10 为 R40 Producer publication。
