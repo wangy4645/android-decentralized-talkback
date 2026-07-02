@@ -61,6 +61,8 @@ class TalkbackSession(
     /** Wait for ICE CONNECTED before opening the mic. */
     var pendingTransmit: Boolean = false
     var lastFloorRequestMs: Long = 0L
+    /** ADR-0013: bumped on GROUP roster mutation; floor routing must not reuse pre-mutation peer bindings. */
+    var floorAuthorityEpoch: Long = 0L
     @Volatile
     var localFloorPreempted: Boolean = false
     /** Set when acquire-release timeout fires; consumed once by UI for capture-failure toast. */
@@ -70,6 +72,10 @@ class TalkbackSession(
     /** Unicast: optional origin channel label only; does not gate runtime or mutate Channel. */
     var sessionOriginChannelId: String? = null
     var disposition: SessionDisposition = SessionDisposition.ACTIVE
+    /** R40: latest committed canonical state not yet published to followers. */
+    var membershipPublicationPendingGeneration: Long = 0L
+    /** R40: generation last successfully broadcast as membership snapshot. */
+    var membershipPublishedGeneration: Long = 0L
 
     fun touch() {
         lastActiveMs = System.currentTimeMillis()

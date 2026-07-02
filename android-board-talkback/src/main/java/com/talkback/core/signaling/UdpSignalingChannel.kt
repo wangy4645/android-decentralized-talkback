@@ -1,5 +1,6 @@
 package com.talkback.core.signaling
 
+import com.talkback.core.ptt.FloorRequestCallsiteTracer
 import com.talkback.core.model.EndpointAddress
 import com.talkback.core.model.EndpointId
 import com.talkback.core.model.ModuleId
@@ -48,11 +49,17 @@ class UdpSignalingChannel : SignalingChannel {
     }
 
     override fun send(target: PeerTarget, envelope: SignalEnvelope) {
-        runCatching {
+        val result = runCatching {
             val data = encode(envelope).toByteArray()
             val packet = DatagramPacket(data, data.size, InetAddress.getByName(target.host), target.port)
             socket?.send(packet)
-        }.onFailure {
+        }
+        FloorRequestCallsiteTracer.recordUdpWrite(
+            sendTarget = target,
+            envelope = envelope,
+            sendResult = if (result.isSuccess) "UDP_OK" else "UDP_FAIL:${result.exceptionOrNull()?.message}"
+        )
+        result.onFailure {
             if (running.get()) {
                 recreateSocket()
             }
