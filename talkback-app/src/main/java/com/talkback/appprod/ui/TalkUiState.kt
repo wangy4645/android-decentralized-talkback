@@ -46,7 +46,9 @@ data class RejoinableMeetingUi(
 data class MeetingUiState(
     val sessionId: String? = null,
     val memberKeys: List<String> = emptyList(),
-    val connectedRemoteCount: Int = 0,
+    /** Canonical Conference UI participant count (ADR-0010 R44). */
+    val visibleParticipantCount: Int = 0,
+    val awaitingAdditionalParticipants: Boolean = false,
     val startedAtMs: Long? = null,
     val networkLabel: String = "N/A",
     val rttMs: Long? = null,

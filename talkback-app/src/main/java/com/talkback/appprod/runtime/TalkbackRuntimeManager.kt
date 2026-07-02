@@ -16,6 +16,7 @@ import com.talkback.core.model.EndpointAddress
 import com.talkback.core.model.EndpointId
 import com.talkback.core.model.EndpointPriority
 import com.talkback.core.model.ModuleId
+import com.talkback.core.ptt.PttEmitTracer
 import com.talkback.core.ptt.PttState
 import com.talkback.core.qos.QosSnapshot
 import com.talkback.core.session.ChannelMeshHostElection
@@ -189,7 +190,7 @@ class TalkbackRuntimeManager(private val appContext: Context) {
             val isConference = existing.type == SessionType.CONFERENCE
             if (wantConference == isConference) {
                 if (isConference) {
-                    if (existing.connectedRemoteCount == 0) {
+                    if (existing.visibleParticipantCount <= 1) {
                         val invitees = conferenceRejoinInvitees(config)
                         if (!invitees.isNullOrEmpty()) {
                             val sent = rt.sendConferenceInvites(existing.sessionId, invitees)
@@ -489,8 +490,16 @@ class TalkbackRuntimeManager(private val appContext: Context) {
     }
 
     fun pressPtt(sessionId: String): PttState {
-        val priority = configStore.load().localPriority
-        return runtime?.pressPtt(sessionId, priority) ?: PttState.IDLE
+        val config = configStore.load()
+        val local = config.moduleId.trim().uppercase()
+        PttEmitTracer.recordUiTrigger(sessionId, local, source = "RUNTIME_PRESS_PTT")
+        val priority = config.localPriority
+        val rt = runtime
+        if (rt == null) {
+            PttEmitTracer.recordBlocked(sessionId, local, "RUNTIME", "RUNTIME_NULL")
+            return PttState.IDLE
+        }
+        return rt.pressPtt(sessionId, priority)
     }
 
     fun releasePtt(sessionId: String) {

@@ -61,6 +61,7 @@ import com.talkback.core.session.ChannelModeFsm
 import com.talkback.core.session.ChannelReadiness
 import com.talkback.core.session.ConferenceHostEndpointResolver
 import com.talkback.core.session.ConferenceParticipantManager
+import com.talkback.core.session.ConferenceParticipantProjector
 import com.talkback.core.session.ConferenceSnapshot
 import com.talkback.core.session.GroupMediaTopology
 import com.talkback.core.session.GroupIdentityStability
@@ -1524,6 +1525,21 @@ class TalkbackCoordinator(
 
     private fun toSessionSnapshot(session: TalkbackSession): TalkbackSessionSnapshot {
         val conferenceSnap = if (isConferenceSession(session)) conferenceSnapshot(session) else null
+        val memberViews = conferenceSnap?.memberViews ?: buildMemberViews(session)
+        val projection = conferenceSnap?.let {
+            val leftModuleIds = conferenceParticipantManager.leftMemberEndpoints(session.id)?.keys
+                ?: session.leftMemberEndpoints.keys
+            ConferenceParticipantProjector.project(
+                ConferenceParticipantProjector.Input(
+                    localModuleId = localModuleId,
+                    localKey = session.local.key,
+                    sessionAccepted = session.accepted,
+                    roster = meshRoster(session),
+                    memberViews = memberViews,
+                    leftModuleIds = leftModuleIds.toSet()
+                )
+            )
+        }
         return TalkbackSessionSnapshot(
         sessionId = session.id,
         type = session.type,
@@ -1534,7 +1550,11 @@ class TalkbackCoordinator(
             listOfNotNull(session.local.key, session.remote?.key)
         },
         channelMemberModuleIds = session.channelMemberSnapshot.sorted(),
-        memberViews = conferenceSnap?.memberViews ?: buildMemberViews(session),
+        memberViews = memberViews,
+        visibleParticipants = projection?.visibleParticipants ?: emptyList(),
+        visibleParticipantCount = projection?.visibleParticipantCount ?: 0,
+        awaitingAdditionalParticipants = projection?.awaitingAdditionalParticipants ?: false,
+        meshConnectedPeerCount = countConnectedRemotes(session),
         connectedRemoteCount = countConnectedRemotes(session),
         callPhase = session.unicastPhase,
         remoteKey = session.remote?.key,

@@ -210,7 +210,7 @@ class MeetingFragment : Fragment() {
         view.findViewById<View>(R.id.btnMeetingLeaveTop).isVisible = live
         view.findViewById<TextView>(R.id.txtMeetingParticipantCount).isVisible = live
         if (live) {
-            val inMeetingCount = 1 + state.meeting.connectedRemoteCount
+            val inMeetingCount = state.meeting.visibleParticipantCount
             view.findViewById<TextView>(R.id.txtMeetingParticipantCount).text =
                 getString(R.string.meeting_participants, inMeetingCount)
         }
@@ -360,7 +360,7 @@ class MeetingFragment : Fragment() {
     private fun isWaitingAlone(state: TalkUiState): Boolean =
         state.conferenceActive &&
             viewModel.isConferenceHost() &&
-            state.meeting.connectedRemoteCount == 0
+            state.meeting.visibleParticipantCount <= 1
 
     private fun startVolumeMeterPolling(meter: MeetingVolumeMeterView) {
         meter.isVisible = true

@@ -17,10 +17,10 @@ import com.talkback.appprod.service.TalkbackForegroundService
 import com.talkback.core.model.EndpointAddress
 import com.talkback.core.model.EndpointId
 import com.talkback.core.model.ModuleId
+import com.talkback.core.ptt.PttEmitTracer
 import com.talkback.core.ptt.PttState
-import com.talkback.core.session.InviteState
-import com.talkback.core.session.MediaState
-import com.talkback.core.session.MemberView
+import com.talkback.core.session.ConferenceParticipantDisplayState
+import com.talkback.core.session.ConferenceParticipantViewState
 import com.talkback.core.session.SessionType
 import com.talkback.core.util.TalkbackLog
 import kotlinx.coroutines.Dispatchers
@@ -221,11 +221,21 @@ class TalkViewModel(
     suspend fun onPttDown(): PttDownResult = pttMutex.withLock {
         syncServiceState()
         val config = configStore.load()
+        val local = config.moduleId.trim().uppercase()
+        val initialSessionId = manager.activeChannelSession(config)?.sessionId ?: "ch:${config.defaultChannelId}"
+        PttEmitTracer.recordUiTrigger(initialSessionId, local, source = "UI_ON_PTT_DOWN")
         if (!serviceRunning || manager.getRuntime() == null) {
+            PttEmitTracer.recordBlocked(initialSessionId, local, "UI", "SERVICE_STOPPED")
             return PttDownResult.ServiceStopped
         }
         val beforeSession = manager.activeChannelSession(config)
         if (beforeSession?.type == SessionType.CONFERENCE || talkTabMode == ChannelMode.CONFERENCE) {
+            PttEmitTracer.recordBlocked(
+                beforeSession?.sessionId ?: initialSessionId,
+                local,
+                "UI",
+                "MEETING_ACTIVE"
+            )
             return PttDownResult.MeetingActive
         }
         manager.clearConferencePttCooldown(config.defaultChannelId)
@@ -233,16 +243,28 @@ class TalkViewModel(
         manager.refreshStaleGroupSession(config.defaultChannelId)
         runCatching { manager.ensureChannelSession(config) }
         val localKey = localEndpointKey(config)
-        val before = manager.activeChannelSession(config) ?: return PttDownResult.NoTeammates
-        floorBusySpeaker(before, localKey)?.let { return PttDownResult.FloorBusy(it) }
+        val before = manager.activeChannelSession(config) ?: run {
+            PttEmitTracer.recordBlocked(initialSessionId, local, "UI", "NO_TEAMMATES")
+            return PttDownResult.NoTeammates
+        }
+        floorBusySpeaker(before, localKey)?.let { busy ->
+            PttEmitTracer.recordBlocked(before.sessionId, local, "UI", "FLOOR_BUSY", "speaker=$busy")
+            return PttDownResult.FloorBusy(busy)
+        }
 
         val sessionId = before.sessionId
         val ready = manager.isChannelMediaReady(config)
         manager.pressPtt(sessionId)
-        val after = manager.activeChannelSession(config) ?: return PttDownResult.NoTeammates
+        val after = manager.activeChannelSession(config) ?: run {
+            PttEmitTracer.recordBlocked(sessionId, local, "UI", "SESSION_LOST_AFTER_PRESS")
+            return PttDownResult.NoTeammates
+        }
         when (after.localPttState) {
             PttState.IDLE -> {
-                floorBusySpeaker(after, localKey)?.let { return PttDownResult.FloorBusy(it) }
+                floorBusySpeaker(after, localKey)?.let { busy ->
+                    PttEmitTracer.recordBlocked(sessionId, local, "UI", "FLOOR_BUSY_AFTER_PRESS", "speaker=$busy")
+                    return PttDownResult.FloorBusy(busy)
+                }
             }
             PttState.REQUEST_FLOOR -> {
                 armedPttSessionId = sessionId
@@ -361,12 +383,12 @@ class TalkViewModel(
             if (manager.isChannelMediaReady(config)) {
                 refreshInternal()
                 TalkbackLog.i(
-                    "joinMeeting: reuse conference ready=true remotes=${existing.connectedRemoteCount}"
+                    "joinMeeting: reuse conference ready=true visible=${existing.visibleParticipantCount}"
                 )
                 return PttDownResult.Ok
             }
             TalkbackLog.i(
-                "joinMeeting: conference connecting remotes=${existing.connectedRemoteCount}, waiting for mesh"
+                "joinMeeting: conference connecting visible=${existing.visibleParticipantCount}, waiting for mesh"
             )
             if (manager.pendingConferenceInvite(meetingConfig.defaultChannelId) != null) {
                 if (!acceptPendingOrRejoinConference(meetingConfig)) {
@@ -383,8 +405,8 @@ class TalkViewModel(
             }
             refreshInternal()
             val ready = manager.isChannelMediaReady(configStore.load())
-            val remotes = manager.activeChannelSession(configStore.load())?.connectedRemoteCount ?: 0
-            TalkbackLog.i("joinMeeting: resume conference ready=$ready connectedRemotes=$remotes")
+            val visible = manager.activeChannelSession(configStore.load())?.visibleParticipantCount ?: 0
+            TalkbackLog.i("joinMeeting: resume conference ready=$ready visible=$visible")
             return if (ready || manager.isConferenceHost(configStore.load())) {
                 PttDownResult.Ok
             } else {
@@ -413,8 +435,8 @@ class TalkViewModel(
             return PttDownResult.NoPeers
         }
         val ready = manager.isChannelMediaReady(configStore.load())
-        val joinedRemotes = joined.connectedRemoteCount
-        TalkbackLog.i("joinMeeting: new conference ready=$ready connectedRemotes=$joinedRemotes")
+        val joinedRemotes = joined.visibleParticipantCount
+        TalkbackLog.i("joinMeeting: new conference ready=$ready visible=$joinedRemotes")
         return if (ready || manager.isConferenceHost(configStore.load())) {
             PttDownResult.Ok
         } else {
@@ -841,12 +863,10 @@ class TalkViewModel(
             manager.isConferenceReconnectFailed(config)
 
         if (conferenceActive && channelReady) {
-            val invited = (session?.memberKeys?.size ?: 0).coerceAtLeast(1) - 1
-            val connected = session?.connectedRemoteCount ?: 0
-            val waitingAlone = connected == 0
+            val visible = session?.visibleParticipantCount ?: 0
+            val awaiting = session?.awaitingAdditionalParticipants == true
             TalkbackLog.i(
-                "Meeting pill: connectedRemotes=$connected invitedRemotes=$invited " +
-                    "roster=${session?.memberKeys?.size ?: 0} waitingAlone=$waitingAlone"
+                "Meeting pill: visible=$visible roster=${session?.memberKeys?.size ?: 0} awaiting=$awaiting"
             )
         }
 
@@ -858,7 +878,7 @@ class TalkViewModel(
             channelTitle = config.channelTitle(),
             channelSubtitle = if (taskName.isNotBlank()) taskName else config.channelDisplayName,
             onlineCount = if (conferenceActive) {
-                (session?.connectedRemoteCount ?: 0) + 1
+                session?.visibleParticipantCount ?: 1
             } else {
                 endpoints.count { it.status != EndpointStatus.OFFLINE }
             },
@@ -894,7 +914,8 @@ class TalkViewModel(
             meeting = MeetingUiState(
                 sessionId = session?.sessionId?.takeIf { conferenceActive },
                 memberKeys = session?.memberKeys.orEmpty(),
-                connectedRemoteCount = session?.connectedRemoteCount ?: 0,
+                visibleParticipantCount = session?.visibleParticipantCount ?: 0,
+                awaitingAdditionalParticipants = session?.awaitingAdditionalParticipants == true,
                 startedAtMs = meetingStartedAtMs,
                 networkLabel = meetingQos?.networkLabel ?: runtime.networkQualityLabel(),
                 rttMs = meetingQos?.rttMs,
@@ -915,27 +936,13 @@ class TalkViewModel(
         val runtime = manager.getRuntime() ?: return emptyList()
         val items = mutableListOf<EndpointUiItem>()
         val seenKeys = mutableSetOf<String>()
-        val seenModules = mutableSetOf(config.moduleId.trim().uppercase())
+        val seenModules = mutableSetOf<String>()
 
         fun addItem(item: EndpointUiItem) {
             if (seenKeys.add(item.key)) {
                 items += item
             }
         }
-
-        addItem(
-            EndpointUiItem(
-                key = localRawKey,
-                displayLabel = localYouLabel(localRawKey),
-                status = when {
-                    !localLanOnline -> EndpointStatus.OFFLINE
-                    speakingModuleId == moduleIdFromKey(localRawKey) -> EndpointStatus.SPEAKING
-                    else -> EndpointStatus.ONLINE
-                },
-                signalBars = if (localLanOnline) 3 else 0,
-                isLocal = true
-            )
-        )
 
         val session = manager.activeChannelSession(config)
         val conferenceActive = session?.type == SessionType.CONFERENCE
@@ -955,19 +962,19 @@ class TalkViewModel(
         }
 
         if (conferenceActive) {
-            val memberViews = session?.memberViews.orEmpty()
-            if (memberViews.isNotEmpty()) {
-                memberViews.forEach { view ->
-                    val moduleId = view.moduleId
+            val visible = session?.visibleParticipants.orEmpty()
+            if (visible.isNotEmpty()) {
+                visible.forEach { participant ->
+                    val moduleId = participant.moduleId
                     if (moduleId in seenModules) return@forEach
                     seenModules.add(moduleId)
                     val displayKey = roster.firstOrNull { moduleIdFromKey(it.endpointKey) == moduleId }?.endpointKey
                         ?: runtime.primaryEndpointIdForModule(moduleId)?.let { "$moduleId-$it" }
-                        ?: view.key
+                        ?: participant.key
                     addItem(
-                        conferenceEndpointItem(
+                        conferenceVisibleEndpointItem(
                             displayKey,
-                            view,
+                            participant,
                             speakingModuleId,
                             rosterOnlineByModule[moduleId] == true,
                             localRawKey
@@ -975,9 +982,32 @@ class TalkViewModel(
                     )
                 }
             } else {
-                session?.memberKeys.orEmpty().forEach(::addMemberKey)
+                addItem(
+                    EndpointUiItem(
+                        key = localRawKey,
+                        displayLabel = localYouLabel(localRawKey),
+                        status = if (localLanOnline) EndpointStatus.ONLINE else EndpointStatus.OFFLINE,
+                        signalBars = if (localLanOnline) 3 else 0,
+                        isLocal = true
+                    )
+                )
             }
         } else {
+            val localModuleId = moduleIdFromKey(localRawKey)
+            addItem(
+                EndpointUiItem(
+                    key = localRawKey,
+                    displayLabel = localYouLabel(localRawKey),
+                    status = when {
+                        !localLanOnline -> EndpointStatus.OFFLINE
+                        speakingModuleId == localModuleId -> EndpointStatus.SPEAKING
+                        else -> EndpointStatus.ONLINE
+                    },
+                    signalBars = if (localLanOnline) 3 else 0,
+                    isLocal = true
+                )
+            )
+            seenModules.add(localModuleId)
             roster.forEach { row ->
                 val moduleId = moduleIdFromKey(row.endpointKey)
                 if (moduleId in seenModules) return@forEach
@@ -1041,6 +1071,7 @@ class TalkViewModel(
         val keys = LinkedHashSet<String>()
         keys.add(localRawKey)
         session?.memberKeys.orEmpty().forEach { keys.add(it) }
+        session?.visibleParticipants.orEmpty().forEach { keys.add(it.key) }
         return keys
             .mapNotNull { key ->
                 val level = manager.meetingSpeakerAudioLevel(config, key)
@@ -1082,36 +1113,35 @@ class TalkViewModel(
         return "$module / $endpoint"
     }
 
-    private fun conferenceEndpointItem(
+    private fun conferenceVisibleEndpointItem(
         key: String,
-        view: MemberView,
+        viewState: ConferenceParticipantViewState,
         speakingModuleId: String?,
         rosterOnline: Boolean,
-        localRawKey: String
+        @Suppress("UNUSED_PARAMETER") localRawKey: String
     ): EndpointUiItem {
-        val status = when {
-            view.media == MediaState.CONNECTED && speakingModuleId == moduleIdFromKey(key) -> EndpointStatus.SPEAKING
-            view.media == MediaState.CONNECTED -> EndpointStatus.ONLINE
-            view.media == MediaState.CONNECTING || view.media == MediaState.RECONNECTING ->
+        val speaking = speakingModuleId == moduleIdFromKey(key)
+        val status = when (viewState.displayState) {
+            ConferenceParticipantDisplayState.VISIBLE_LOCAL,
+            ConferenceParticipantDisplayState.VISIBLE_CONNECTED ->
+                if (speaking) EndpointStatus.SPEAKING else EndpointStatus.ONLINE
+            ConferenceParticipantDisplayState.VISIBLE_CONNECTING,
+            ConferenceParticipantDisplayState.VISIBLE_RECONNECTING ->
                 EndpointStatus.CONNECTING
-            view.invite == InviteState.EXPIRED || view.invite == InviteState.DECLINED ->
-                EndpointStatus.EXPIRED
-            view.invite == InviteState.INVITING || view.invite == InviteState.RINGING ->
-                EndpointStatus.INVITING
-            !rosterOnline -> EndpointStatus.OFFLINE
-            else -> EndpointStatus.INVITING
+            ConferenceParticipantDisplayState.VISIBLE_FAILED ->
+                if (!rosterOnline) EndpointStatus.OFFLINE else EndpointStatus.CONNECTING
         }
         val bars = when (status) {
-            EndpointStatus.OFFLINE, EndpointStatus.EXPIRED -> 0
-            EndpointStatus.INVITING, EndpointStatus.CONNECTING -> 1
+            EndpointStatus.OFFLINE -> 0
+            EndpointStatus.CONNECTING -> 1
             else -> 3
         }
         return EndpointUiItem(
             key = key,
-            displayLabel = moduleLabel(key),
+            displayLabel = if (viewState.isLocal) localYouLabel(key) else moduleLabel(key),
             status = status,
             signalBars = bars,
-            isLocal = isLocalEndpointKey(key, localRawKey)
+            isLocal = viewState.isLocal
         )
     }
 
