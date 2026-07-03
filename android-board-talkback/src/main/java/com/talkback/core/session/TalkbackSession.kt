@@ -61,6 +61,8 @@ class TalkbackSession(
     /** Wait for ICE CONNECTED before opening the mic. */
     var pendingTransmit: Boolean = false
     var lastFloorRequestMs: Long = 0L
+    /** Observability: floor epoch stamped on the most recent local FLOOR_REQUEST. */
+    var lastFloorRequestEpoch: Long = -1L
     /** ADR-0013: bumped on GROUP roster mutation; floor routing must not reuse pre-mutation peer bindings. */
     var floorAuthorityEpoch: Long = 0L
     @Volatile
