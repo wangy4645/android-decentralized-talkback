@@ -2771,10 +2771,31 @@ class TalkbackCoordinator(
             }
         }
         completeGroupMesh(session)
+        if (sessionType == SessionType.CONFERENCE && payload.rejoin) {
+            reconnectConferenceMeshToOtherPeers(session)
+        }
         drainPendingGroupJoins(session.id)
         scheduleGroupMeshRetries(session.id)
         updateSessionReceivePlayback(session)
         return true
+    }
+
+    /**
+     * When rejoining an existing conference, dial every other roster peer directly. Those peers
+     * dropped us from their roster on our GROUP_LEAVE, so the normal lexicographic offerer will
+     * not re-initiate the pairwise link. The receiver re-adds us via
+     * [ensureConferenceParticipantInRoster], restoring the full mesh (and roster count) on all
+     * participants, not just the host.
+     */
+    private fun reconnectConferenceMeshToOtherPeers(session: TalkbackSession) {
+        if (session.type != SessionType.CONFERENCE) return
+        val hostId = session.initiatorModuleId?.value
+        meshRoster(session)
+            .map { it.moduleId }
+            .filter { it != localModuleId && it.value != hostId }
+            .filter { !qosMonitor.isGroupConnected(it.value) }
+            .distinct()
+            .forEach { offerGroupMeshJoin(session, it) }
     }
 
     /** Existing canonical GROUP session: treat duplicate GROUP_INVITE as ICE-restart reconnect. */
@@ -4423,7 +4444,7 @@ class TalkbackCoordinator(
     }
 
     private fun memberModuleIds(session: TalkbackSession): Set<ModuleId> =
-        session.groupMembers.map { it.moduleId }.toSet()
+        meshRoster(session).map { it.moduleId }.toSet()
 
     private fun iceStateForModule(moduleId: String): String? =
         qosMonitor.snapshot(moduleId)?.iceState
