@@ -399,6 +399,51 @@ class TalkbackCoordinatorIntegrationTest {
     }
 
     @Test
+    fun conference_hostRemainsAliveAfterAllParticipantsLeave() {
+        val channelId = "CONF-HOST-SOLO"
+        val sessionId = nodeM01.runtime.requireConferenceCall(
+            nodeM01.localEndpoint,
+            listOf(
+                EndpointAddress(m02, EndpointId("E01")),
+                EndpointAddress(m03, EndpointId("E01"))
+            ),
+            channelId
+        )
+        assertTrue(nodeM02.waitForLog { it.contains("Conference invite accepted") || it.contains("invite accepted") })
+        assertTrue(nodeM03.waitForLog { it.contains("Conference invite accepted") || it.contains("invite accepted") })
+        Thread.sleep(3_500L)
+
+        val m02SessionId = nodeM02.runtime.activeSessionIds().single()
+        val m03SessionId = nodeM03.runtime.activeSessionIds().single()
+        nodeM02.runtime.leaveConference(m02SessionId)
+        nodeM03.runtime.leaveConference(m03SessionId)
+        Thread.sleep(1_500L)
+
+        assertTrue(nodeM02.runtime.activeSessionIds().isEmpty())
+        assertTrue(nodeM03.runtime.activeSessionIds().isEmpty())
+        assertEquals(listOf(sessionId), nodeM01.runtime.activeSessionIds())
+        assertEquals(ChannelMode.CONFERENCE, nodeM01.runtime.channelMode(channelId))
+        assertTrue(nodeM01.runtime.isConferenceHostForChannel(channelId))
+
+        // GROUP reclaim must not destroy a host-owned conference (ADR-0014 R-L5).
+        nodeM01.runtime.setMeetingPreferred(false, channelId)
+        nodeM01.runtime.refreshStaleGroupSession(channelId)
+        Thread.sleep(2_000L)
+
+        assertEquals(
+            "Host conference must survive after all participants leave",
+            listOf(sessionId),
+            nodeM01.runtime.activeSessionIds()
+        )
+        assertEquals(ChannelMode.CONFERENCE, nodeM01.runtime.channelMode(channelId))
+        assertFalse(
+            nodeM01.hasLog {
+                it.contains("Ending stale conference on $channelId for GROUP reclaim")
+            }
+        )
+    }
+
+    @Test
     fun conference_softLeftParticipant_hostEnds_clearsConferenceRuntime() {
         val channelId = "CONF-SOFT-LEFT-RUNTIME"
         val sessionId = nodeM01.runtime.requireConferenceCall(
