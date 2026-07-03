@@ -258,6 +258,39 @@ class TalkbackCoordinatorIntegrationTest {
     }
 
     @Test
+    fun conference_participantOffersMeshLinkToOtherParticipant() {
+        // Regression: a CONFERENCE participant must offer a media (mesh) link to the OTHER
+        // participants, not only to the host. Otherwise every non-host device only ever has a
+        // media link to the host, so its ConferenceParticipantProjector reports
+        // visibleParticipantCount = 2 (self + host) while the host reports 3.
+        //
+        // Root cause guarded against: completeGroupMesh() derived its member set from
+        // session.groupMembers, which is empty for CONFERENCE sessions (the roster lives in
+        // ConferenceParticipantManager). With an empty member set the mesh planner produced no
+        // join targets, so M02 never dialed M03.
+        nodeM01.runtime.requireConferenceCall(
+            nodeM01.localEndpoint,
+            listOf(
+                EndpointAddress(m02, EndpointId("E01")),
+                EndpointAddress(m03, EndpointId("E01"))
+            ),
+            "CONF-MESH"
+        )
+        assertTrue(nodeM02.waitForLog { it.contains("Conference invite accepted") || it.contains("invite accepted") })
+        assertTrue(nodeM03.waitForLog { it.contains("Conference invite accepted") || it.contains("invite accepted") })
+
+        // Host links become stable so the deferred full conference mesh can proceed.
+        nodeM02.runtime.simulateRemoteIceState("M01", "CONNECTED")
+        nodeM03.runtime.simulateRemoteIceState("M01", "CONNECTED")
+
+        assertTrue(
+            "Participant M02 never offered a conference mesh link to peer M03; " +
+                "non-host devices will stay stuck at visibleParticipantCount=2",
+            nodeM02.waitForLog(timeoutMs = 12_000L) { it.contains("join offered -> M03") }
+        )
+    }
+
+    @Test
     fun hangup_groupNotifiesAllPeers() {
         val sessionId = nodeM01.runtime.requireGroupCall(
             nodeM01.localEndpoint,
@@ -416,6 +449,63 @@ class TalkbackCoordinatorIntegrationTest {
         assertEquals(1, nodeM03.runtime.activeSessionIds().size)
         assertFalse(nodeM01.hasLog { it.contains("Call rejected session=$sessionId reason=BUSY") })
         assertFalse(nodeM02.hasLog { it.contains("Replacing incomplete mesh session") })
+    }
+
+    @Test
+    fun conferenceRejoin_participantLeavesAndRejoinsTwice_allNodesSeeFullRoster() {
+        // Regression for the field report: a participant (M03) leaves and rejoins twice. The host
+        // recovers to 3 both times, but the OTHER participant (and the rejoiner) end up showing only
+        // 2 people because their roster is not restored when the peer comes back.
+        val channelId = "CONF-REJOIN-TWICE"
+        val sessionId = nodeM01.runtime.requireConferenceCall(
+            nodeM01.localEndpoint,
+            listOf(
+                EndpointAddress(m02, EndpointId("E01")),
+                EndpointAddress(m03, EndpointId("E01"))
+            ),
+            channelId
+        )
+        assertTrue(nodeM02.waitForLog { it.contains("Conference invite accepted") || it.contains("invite accepted") })
+        assertTrue(nodeM03.waitForLog { it.contains("Conference invite accepted") || it.contains("invite accepted") })
+        Thread.sleep(3_000L)
+
+        repeat(2) { round ->
+            val m03SessionId = nodeM03.runtime.activeSessionIds().single()
+            nodeM03.runtime.leaveConference(m03SessionId)
+            Thread.sleep(1_500L)
+            assertTrue("round $round: M03 should have left", nodeM03.runtime.activeSessionIds().isEmpty())
+
+            val rejoinSessionId = nodeM03.runtime.requireConferenceCall(
+                nodeM03.localEndpoint,
+                emptyList(),
+                channelId
+            )
+            nodeM03.runtime.sendConferenceInvites(
+                rejoinSessionId,
+                listOf(EndpointAddress(m01, EndpointId("E01")))
+            )
+
+            val deadline = System.currentTimeMillis() + 8_000L
+            var rejoined = false
+            while (System.currentTimeMillis() < deadline) {
+                if (nodeM03.runtime.activeSessionIds() == listOf(sessionId)) {
+                    rejoined = true
+                    break
+                }
+                Thread.sleep(50L)
+            }
+            assertTrue("round $round: M03 should rejoin host session", rejoined)
+            Thread.sleep(2_500L)
+
+            fun rosterSize(node: TestTalkbackNode): Int =
+                node.runtime.sessionSnapshots()
+                    .firstOrNull { it.type == SessionType.CONFERENCE }
+                    ?.memberKeys?.size ?: 0
+
+            assertEquals("round $round: host M01 roster", 3, rosterSize(nodeM01))
+            assertEquals("round $round: other participant M02 roster", 3, rosterSize(nodeM02))
+            assertEquals("round $round: rejoiner M03 roster", 3, rosterSize(nodeM03))
+        }
     }
 
     @Test
