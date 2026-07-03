@@ -116,6 +116,18 @@ _Avoid_: 组呼, 组播, mesh 通话
 全双工会议 Session：Membership + Mesh + Media。发言粒度为 Module；无 Floor 抢权，各 Module 可同时收发。
 _Avoid_: 会议模式, Meeting, 全双工组呼
 
+**Conference Host Ownership**:
+Conference Session 由发起方 Host 拥有其生命周期；仅 Host 显式结束会议或离开会议可终止 Session。参与者 join/leave 不改变 Session 是否存在。
+_Avoid_: roster 决定会议结束, 最后一人离开即结束
+
+**Conference Session Exists**:
+Host 尚未结束或离开会议时，Conference Session 在运行态中持续存在；与当前是否有 connected remote 无关。Solo Host 等待他人加入时 Exists 仍为 true。
+_Avoid_: isLiveConferenceSession, 会议还活着
+
+**Conference Session Operational**:
+Conference Session 是否已有至少一条可用的远端媒体链路（transmit-ready）。Solo Host 常见 Exists=true、Operational=false；这是等待态，不是 Session 终止。
+_Avoid_: 会议已结束, channel ready
+
 **Membership**:
 组呼或会议 Session 内的参与方集合（Session Membership）：运行态事实，含世代（epoch）、可达性、evict/rejoin。单呼不存在 Membership。创建时可从 Channel Membership 做一次性 snapshot 作为初始邀请集，之后冻结、不再同步 Channel。
 _Avoid_: Channel 成员, 通讯录

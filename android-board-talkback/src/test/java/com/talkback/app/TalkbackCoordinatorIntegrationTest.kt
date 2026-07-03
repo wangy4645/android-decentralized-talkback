@@ -3,6 +3,7 @@ package com.talkback.app
 import com.talkback.core.model.EndpointAddress
 import com.talkback.core.model.EndpointId
 import com.talkback.core.model.ModuleId
+import com.talkback.core.session.ChannelMode
 import com.talkback.core.session.SessionType
 import com.talkback.core.signaling.InMemorySignalingHub
 import org.junit.After
@@ -395,6 +396,131 @@ class TalkbackCoordinatorIntegrationTest {
         assertTrue(m01Snap.memberKeys.none { it.startsWith("M03-") })
         assertTrue(nodeM01.waitForLog { it.contains("Conference peer left: M03") })
         assertFalse(nodeM01.hasLog { it.contains("Conference peer left: M02") })
+    }
+
+    @Test
+    fun conference_hostRemainsAliveAfterAllParticipantsLeave() {
+        val channelId = "CONF-HOST-SOLO"
+        val sessionId = nodeM01.runtime.requireConferenceCall(
+            nodeM01.localEndpoint,
+            listOf(
+                EndpointAddress(m02, EndpointId("E01")),
+                EndpointAddress(m03, EndpointId("E01"))
+            ),
+            channelId
+        )
+        assertTrue(nodeM02.waitForLog { it.contains("Conference invite accepted") || it.contains("invite accepted") })
+        assertTrue(nodeM03.waitForLog { it.contains("Conference invite accepted") || it.contains("invite accepted") })
+        Thread.sleep(3_500L)
+
+        val m02SessionId = nodeM02.runtime.activeSessionIds().single()
+        val m03SessionId = nodeM03.runtime.activeSessionIds().single()
+        nodeM02.runtime.leaveConference(m02SessionId)
+        nodeM03.runtime.leaveConference(m03SessionId)
+        Thread.sleep(1_500L)
+
+        assertTrue(nodeM02.runtime.activeSessionIds().isEmpty())
+        assertTrue(nodeM03.runtime.activeSessionIds().isEmpty())
+        assertEquals(listOf(sessionId), nodeM01.runtime.activeSessionIds())
+        assertEquals(ChannelMode.CONFERENCE, nodeM01.runtime.channelMode(channelId))
+        assertTrue(nodeM01.runtime.isConferenceHostForChannel(channelId))
+
+        // GROUP reclaim must not destroy a host-owned conference (ADR-0014 R-L5).
+        nodeM01.runtime.setMeetingPreferred(false, channelId)
+        nodeM01.runtime.refreshStaleGroupSession(channelId)
+        Thread.sleep(2_000L)
+
+        assertEquals(
+            "Host conference must survive after all participants leave",
+            listOf(sessionId),
+            nodeM01.runtime.activeSessionIds()
+        )
+        assertEquals(ChannelMode.CONFERENCE, nodeM01.runtime.channelMode(channelId))
+        assertFalse(
+            nodeM01.hasLog {
+                it.contains("Ending stale conference on $channelId for GROUP reclaim")
+            }
+        )
+    }
+
+    @Test
+    fun conference_softLeftParticipant_hostEnds_clearsConferenceRuntime() {
+        val channelId = "CONF-SOFT-LEFT-RUNTIME"
+        val sessionId = nodeM01.runtime.requireConferenceCall(
+            nodeM01.localEndpoint,
+            listOf(
+                EndpointAddress(m02, EndpointId("E01")),
+                EndpointAddress(m03, EndpointId("E01"))
+            ),
+            channelId
+        )
+        assertTrue(nodeM02.waitForLog { it.contains("Conference invite accepted") || it.contains("invite accepted") })
+        assertTrue(nodeM03.waitForLog { it.contains("Conference invite accepted") || it.contains("invite accepted") })
+        Thread.sleep(3_500L)
+
+        val m03SessionId = nodeM03.runtime.activeSessionIds().single()
+        nodeM03.runtime.leaveConference(m03SessionId)
+        Thread.sleep(1_500L)
+
+        assertNotNull(nodeM03.runtime.rejoinableConference(channelId))
+        assertTrue(nodeM01.waitForLog { it.contains("Conference peer left: M03") })
+
+        nodeM01.runtime.leaveConference(sessionId)
+        Thread.sleep(1_500L)
+
+        assertNull(nodeM03.runtime.rejoinableConference(channelId))
+        val channelMode = nodeM03.runtime.channelMode(channelId)
+        assertTrue(
+            "Conference channel mode should not remain CONFERENCE after host termination",
+            channelMode == ChannelMode.IDLE || channelMode == ChannelMode.GROUP_PTT
+        )
+        assertTrue(nodeM03.runtime.conferenceSessions().isEmpty())
+        assertTrue(
+            nodeM03.waitForLog(timeoutMs = 5_000L) {
+                it.contains("Conference channel released for GROUP PTT") ||
+                    it.contains("Conference terminated remotely")
+            }
+        )
+    }
+
+    @Test
+    fun conference_softLeftParticipant_acceptsGroupAfterTermination() {
+        val channelId = "CONF-SOFT-LEFT-GROUP"
+        val sessionId = nodeM01.runtime.requireConferenceCall(
+            nodeM01.localEndpoint,
+            listOf(
+                EndpointAddress(m02, EndpointId("E01")),
+                EndpointAddress(m03, EndpointId("E01"))
+            ),
+            channelId
+        )
+        assertTrue(nodeM02.waitForLog { it.contains("Conference invite accepted") || it.contains("invite accepted") })
+        assertTrue(nodeM03.waitForLog { it.contains("Conference invite accepted") || it.contains("invite accepted") })
+        Thread.sleep(3_500L)
+
+        val m03SessionId = nodeM03.runtime.activeSessionIds().single()
+        nodeM03.runtime.leaveConference(m03SessionId)
+        nodeM03.runtime.setMeetingPreferred(true, channelId)
+        Thread.sleep(1_500L)
+
+        nodeM01.runtime.leaveConference(sessionId)
+        Thread.sleep(1_500L)
+
+        nodeM02.runtime.requireGroupCall(
+            nodeM02.localEndpoint,
+            listOf(EndpointAddress(m03, EndpointId("E01"))),
+            channelId
+        )
+        assertTrue(
+            nodeM03.waitForLog(timeoutMs = 8_000L) {
+                it.contains("Group invite accepted") || it.contains("invite accepted")
+            }
+        )
+        assertFalse(
+            nodeM03.hasLog {
+                it.contains("Rejecting GROUP invite") && it.contains("preferred=true")
+            }
+        )
     }
 
     @Test
@@ -816,8 +942,7 @@ class TalkbackCoordinatorIntegrationTest {
             )
             assertTrue(
                 nodeM02.waitForLog(timeoutMs = 3_000L) {
-                    it.contains("Rejecting GROUP invite while conference active/preferred/pending") ||
-                        it.contains("Rejecting GROUP invite while meeting preferred")
+                    it.contains("Rejecting GROUP_invite") && it.contains("preferred=true")
                 }
             )
             assertTrue(nodeM02.runtime.activeSessionIds().isEmpty())
