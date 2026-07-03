@@ -2417,6 +2417,13 @@ class TalkbackCoordinator(
             val connectedPeerIds = connectedMeshPeerIds(session)
             val noConnectedRemotes = connectedPeerIds.isEmpty()
             if (session.initiatorModuleId == localModuleId && noConnectedRemotes) {
+                if (session.type == SessionType.CONFERENCE && conferenceSessionExists(session)) {
+                    log(
+                        "[${session.traceId}] Mesh invite rejected by $rejectorModuleId " +
+                            "reason=${signal.payload} (host-owned conference kept)"
+                    )
+                    return
+                }
                 val remainingRemoteIds = when (session.type) {
                     SessionType.CONFERENCE -> conferenceMemberRemoteIds(session)
                     else -> remoteModuleIds(session)
@@ -6516,10 +6523,19 @@ class TalkbackCoordinator(
     }
 
     /**
-     * After meeting tests, a lingering CONFERENCE session blocks GROUP on the same channel.
-     * Reclaim the channel when the app is no longer in meeting-preferred mode.
+     * ADR-0014 R-L4: Host-owned conference exists until explicit host hangup/leave.
+     * Solo host (zero connected remotes) is valid — not a stale session.
      */
-    private fun isLiveConferenceSession(session: TalkbackSession): Boolean {
+    private fun conferenceSessionExists(session: TalkbackSession): Boolean =
+        session.type == SessionType.CONFERENCE &&
+            session.accepted &&
+            isConferenceHostSession(session)
+
+    /**
+     * ADR-0014 R-L4: Whether conference media mesh has live or negotiating remotes.
+     * Distinct from [conferenceSessionExists] — solo host is Exists=true, Operational=false.
+     */
+    private fun conferenceSessionOperational(session: TalkbackSession): Boolean {
         if (!session.accepted) return false
         if (countConnectedRemotes(session) > 0) return true
         if (isConferenceSession(session) &&
@@ -6552,6 +6568,10 @@ class TalkbackCoordinator(
         return false
     }
 
+    /**
+     * After meeting tests, a lingering CONFERENCE session blocks GROUP on the same channel.
+     * Reclaim only non-host zombie sessions; host-owned conferences are never reclaimed (ADR-0014 R-L5).
+     */
     private fun endStaleConferenceBlockingGroup(channelId: String) {
         if (meetingPreferred || uiMeetingPreferredChannels[channelId] == true) return
         if (pendingConferenceInvitesByChannel.containsKey(channelId)) return
@@ -6559,7 +6579,8 @@ class TalkbackCoordinator(
             it.channelId == channelId && it.type == SessionType.CONFERENCE
         }
         if (stale.isEmpty()) return
-        if (stale.any(::isLiveConferenceSession)) return
+        if (stale.any(::conferenceSessionExists)) return
+        if (stale.any(::conferenceSessionOperational)) return
         stale.forEach { session ->
             log("[${session.traceId}] Ending stale conference on $channelId for GROUP reclaim")
             hangupInternal(session.id)
