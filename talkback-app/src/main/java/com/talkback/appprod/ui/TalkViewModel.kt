@@ -146,6 +146,13 @@ class TalkViewModel(
         }
         manager.applyMeetingAutoJoinPolicy(config.meetingAutoJoin)
         val conferenceActive = activeSession?.type == SessionType.CONFERENCE
+        if (!conferenceActive && serviceRunning && manager.getRuntime() != null) {
+            val rejoinHint = manager.rejoinableConference(config.defaultChannelId)
+            if (rejoinHint == null && talkTabMode == ChannelMode.CONFERENCE) {
+                talkTabMode = ChannelMode.GROUP_PTT
+                lastSyncedMeetingPreferred = false
+            }
+        }
         syncMeetingPreferredToCoordinator(
             config,
             talkTabMode == ChannelMode.CONFERENCE || conferenceActive

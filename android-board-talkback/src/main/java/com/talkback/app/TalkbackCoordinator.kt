@@ -467,6 +467,15 @@ class TalkbackCoordinator(
     private fun blocksGroupOnChannel(channelId: String): Boolean =
         ChannelLifecyclePolicy.blocksNewGroupMesh(channelGateState(channelId))
 
+    private fun logGroupInviteBlocked(channelId: String, joinPath: String = "invite") {
+        val gate = channelGateState(channelId)
+        log(
+            "Rejecting GROUP_$joinPath ch=$channelId " +
+                "mode=${gate.channelMode} pending=${gate.pendingConferenceInvite} " +
+                "preferred=${gate.meetingPreferredOnChannel}"
+        )
+    }
+
     /**
      * Explicit CONFERENCE teardown: return channel to IDLE and schedule GROUP mesh reconcile.
      * All participants should run this when the last conference session on the channel ends.
@@ -480,6 +489,43 @@ class TalkbackCoordinator(
         log("Conference channel released for GROUP PTT ch=$channelId reason=$reason")
         onChannelLifecycleEvent(channelId, ChannelLifecycleEvent.ConferenceEnded)
         emitGroupTopologyForChannel(TopologySnapshotReason.CONFERENCE_END, channelId)
+    }
+
+    /** Remote host ended the meeting; tear down local conference runtime when no active session remains. */
+    private fun releaseConferenceRuntimeAfterRemoteTermination(channelId: String, reason: String) {
+        if (sessions.values.any { it.channelId == channelId && it.type == SessionType.CONFERENCE }) {
+            return
+        }
+        releaseConferenceChannelForGroupPtt(channelId, reason)
+    }
+
+    private fun notifySoftLeftParticipantsMeetingEnded(session: TalkbackSession) {
+        if (session.type != SessionType.CONFERENCE) return
+        val leftEndpoints = linkedMapOf<String, EndpointAddress>()
+        conferenceParticipantManager.leftMemberEndpoints(session.id)?.let { leftEndpoints.putAll(it) }
+        session.leftMemberEndpoints.forEach { (moduleId, endpoint) ->
+            leftEndpoints.putIfAbsent(moduleId, endpoint)
+        }
+        if (leftEndpoints.isEmpty()) return
+        var notified = 0
+        leftEndpoints.forEach { (moduleId, endpoint) ->
+            if (moduleId == localModuleId.value) return@forEach
+            val peer = session.remotePeersByModule[moduleId] ?: discoveredByModule[moduleId] ?: return@forEach
+            sendSignal(
+                peer,
+                buildSignedEnvelope(
+                    SignalType.CALL_REJECT,
+                    session.local,
+                    endpoint,
+                    session.id,
+                    "MEETING_ENDED"
+                )
+            )
+            notified++
+        }
+        if (notified > 0) {
+            log("[${session.traceId}] Notified $notified soft-left participant(s) of meeting end")
+        }
     }
 
     private fun onChannelLifecycleEvent(channelId: String, event: ChannelLifecycleEvent) {
@@ -2332,10 +2378,18 @@ class TalkbackCoordinator(
         val session = sessions[signal.sessionId]
         if (session == null) {
             if (signal.payload == "MEETING_ENDED") {
-                lastRejoinableConferenceByChannel.entries
-                    .filter { it.value.hostSessionId == signal.sessionId }
-                    .forEach { (channelId, _) -> clearConferenceRejoinState(channelId) }
-                log("Conference rejoin rejected: meeting ended session=${signal.sessionId}")
+                val hostSessionId = signal.sessionId
+                val channelIds = lastRejoinableConferenceByChannel.entries
+                    .filter { it.value.hostSessionId == hostSessionId }
+                    .map { it.key }
+                    .toMutableSet()
+                pendingRejoinByChannel.entries
+                    .filter { it.value == hostSessionId }
+                    .forEach { channelIds.add(it.key) }
+                channelIds.forEach { channelId ->
+                    releaseConferenceRuntimeAfterRemoteTermination(channelId, "remote_meeting_ended")
+                }
+                log("Conference terminated remotely session=$hostSessionId channels=${channelIds.joinToString()}")
             } else {
                 parseBusyCanonical(signal.payload)?.let { canonical ->
                     if (tryYieldToCanonicalGroupFromBusy(signal.sessionId, canonical)) return
@@ -2895,7 +2949,7 @@ class TalkbackCoordinator(
         val incomingType = sessionTypeFromMode(payload.sessionMode)
         if (incomingType == SessionType.GROUP) {
             if (blocksGroupOnChannel(channelId)) {
-                log("Rejecting GROUP invite while conference active/preferred/pending on $channelId")
+                logGroupInviteBlocked(channelId)
                 return false
             }
         }
@@ -2993,7 +3047,7 @@ class TalkbackCoordinator(
         val channelId = payload?.channelId
         val incomingType = payload?.sessionMode?.let(::sessionTypeFromMode)
         if (incomingType == SessionType.GROUP && channelId != null && blocksGroupOnChannel(channelId)) {
-            log("Rejecting GROUP_JOIN while conference active/preferred/pending on $channelId")
+            logGroupInviteBlocked(channelId, joinPath = "JOIN")
             signal.to?.let { callee ->
                 sendGroupBusyReject(
                     fromPeer,
@@ -3936,6 +3990,7 @@ class TalkbackCoordinator(
                 clearRejoinHintsForSession(channelId, session.id)
                 cancelHostRejoinRetry(channelId)
             }
+            notifySoftLeftParticipantsMeetingEnded(session)
             disposeConferenceParticipantState(session.id)
         }
         pendingIceBySession.remove(sessionId)
