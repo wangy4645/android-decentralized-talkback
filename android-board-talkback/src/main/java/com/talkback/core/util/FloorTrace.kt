@@ -12,6 +12,8 @@ import java.util.concurrent.atomic.AtomicLong
  * Phases (in typical order):
  *   REQUEST_SEND -> REQUEST_OBSERVED -> ARBITRATION -> GRANT_BROADCAST
  *   -> GRANT_RECEIVED -> GRANT_APPLIED
+ * Async epoch sync (may precede or follow a PTT attempt):
+ *   HELLO_SNAPSHOT_RECORDED -> HELLO_SNAPSHOT_APPLIED | HELLO_SNAPSHOT_DEFERRED | HELLO_SNAPSHOT_IGNORED
  * Branches: REQUEST_DROPPED / GRANT_DROPPED with an explicit reason.
  *
  * [traceId] is allocated at REQUEST_SEND and carried in [FloorPayload.traceId] so all
@@ -45,6 +47,7 @@ object FloorTrace {
         mapOf(
             "sid" to sid,
             "requester" to requester,
+            "requestEpoch" to epoch.toString(),
             "epoch" to epoch.toString(),
             "version" to version.toString(),
             "authority" to (authority ?: "null"),
@@ -57,7 +60,10 @@ object FloorTrace {
         sid: String,
         from: String,
         authority: String?,
-        localIsAuthority: Boolean
+        localIsAuthority: Boolean,
+        requestEpoch: Long,
+        requestVersion: Long,
+        authorityEpoch: Long?
     ) = emit(
         traceId,
         "REQUEST_OBSERVED",
@@ -65,7 +71,10 @@ object FloorTrace {
             "sid" to sid,
             "from" to from,
             "authority" to (authority ?: "null"),
-            "localIsAuthority" to localIsAuthority.toString()
+            "localIsAuthority" to localIsAuthority.toString(),
+            "requestEpoch" to requestEpoch.toString(),
+            "requestVersion" to requestVersion.toString(),
+            "authorityEpoch" to (authorityEpoch?.toString() ?: "n/a")
         )
     )
 
@@ -87,6 +96,7 @@ object FloorTrace {
             "sid" to sid,
             "requester" to requester,
             "requestEpoch" to requestEpoch.toString(),
+            "authorityEpoch" to localEpoch.toString(),
             "localEpoch" to localEpoch.toString(),
             "requestVersion" to requestVersion.toString(),
             "localVersion" to localVersion.toString(),
@@ -96,10 +106,23 @@ object FloorTrace {
         )
     )
 
-    fun grantBroadcast(traceId: Long, sid: String, targets: String) = emit(
+    fun grantBroadcast(
+        traceId: Long,
+        sid: String,
+        grantEpoch: Long,
+        grantVersion: Long,
+        owner: String,
+        targets: String
+    ) = emit(
         traceId,
         "GRANT_BROADCAST",
-        mapOf("sid" to sid, "targets" to targets)
+        mapOf(
+            "sid" to sid,
+            "grantEpoch" to grantEpoch.toString(),
+            "grantVersion" to grantVersion.toString(),
+            "owner" to owner,
+            "targets" to targets
+        )
     )
 
     fun grantReceived(
@@ -108,7 +131,10 @@ object FloorTrace {
         from: String,
         requester: String,
         grantEpoch: Long,
-        localEpoch: Long
+        localEpoch: Long,
+        authorityModule: String?,
+        helloSnapshotEpoch: String,
+        requestEpoch: String
     ) = emit(
         traceId,
         "GRANT_RECEIVED",
@@ -117,7 +143,35 @@ object FloorTrace {
             "from" to from,
             "requester" to requester,
             "grantEpoch" to grantEpoch.toString(),
-            "localEpoch" to localEpoch.toString()
+            "localEpoch" to localEpoch.toString(),
+            "authorityModule" to (authorityModule ?: "null"),
+            "helloSnapshotEpoch" to helloSnapshotEpoch,
+            "requestEpoch" to requestEpoch
+        )
+    )
+
+    fun helloFloorSnapshot(
+        phase: String,
+        sid: String,
+        channelId: String,
+        authorityModule: String,
+        snapshotEpoch: Long,
+        snapshotVersion: Long,
+        localEpochBefore: Long,
+        localEpochAfter: Long,
+        result: String
+    ) = emit(
+        0L,
+        phase,
+        mapOf(
+            "sid" to sid,
+            "channelId" to channelId,
+            "authorityModule" to authorityModule,
+            "snapshotEpoch" to snapshotEpoch.toString(),
+            "snapshotVersion" to snapshotVersion.toString(),
+            "localEpochBefore" to localEpochBefore.toString(),
+            "localEpochAfter" to localEpochAfter.toString(),
+            "result" to result
         )
     )
 
