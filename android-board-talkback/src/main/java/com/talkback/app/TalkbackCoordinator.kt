@@ -103,6 +103,7 @@ import com.talkback.core.signaling.SignalingChannel
 import com.talkback.core.sync.RemoteModuleState
 import com.talkback.core.sync.StateSyncManager
 import com.talkback.core.util.FloorTrace
+import com.talkback.core.util.MeetingRecoveryLog
 import com.talkback.core.util.PttTimingLog
 import com.talkback.core.util.TalkbackLog
 import com.talkback.core.webrtc.ConferenceAudioBus
@@ -489,6 +490,7 @@ class TalkbackCoordinator(
         cancelHostRejoinRetry(channelId)
         channelModeFsm(channelId).reset()
         log("Conference channel released for GROUP PTT ch=$channelId reason=$reason")
+        MeetingRecoveryLog.onConferenceReleased(channelId, reason)
         onChannelLifecycleEvent(channelId, ChannelLifecycleEvent.ConferenceEnded)
         emitGroupTopologyForChannel(TopologySnapshotReason.CONFERENCE_END, channelId)
     }
@@ -2302,7 +2304,7 @@ class TalkbackCoordinator(
                                 "localOwner=${session.floor.owner()?.key ?: "null"}"
                         )
                         if (isLocalFloorHolder(session)) {
-                            PttTimingLog.grantApplied(session.id)
+                            onGrantAppliedForMetrics(session)
                             onLocalProtocolFloorAcquired(session)
                         } else if (session.floor.owner() != null && !isLocalFloorHolder(session)) {
                             acquireReleaseWatchdog.onFloorLost(session.id)
@@ -3669,7 +3671,7 @@ class TalkbackCoordinator(
                 return
             }
         }
-        PttTimingLog.grantApplied(session.id)
+        onGrantAppliedForMetrics(session)
         if (isLocalIdentity(session, owner)) {
             onLocalProtocolFloorAcquired(session)
         } else {
@@ -7773,6 +7775,16 @@ class TalkbackCoordinator(
         )
         if (previous != health.groupTopologyReadiness) {
             log(TopologySnapshotLogger.format(TopologySnapshotReason.READINESS_CHANGED, health))
+            if (health.groupTopologyReadiness == GroupTopologyReadiness.OPERATIONAL) {
+                session.channelId?.let { MeetingRecoveryLog.onMeshOperational(it) }
+            }
+        }
+    }
+
+    private fun onGrantAppliedForMetrics(session: TalkbackSession) {
+        PttTimingLog.grantApplied(session.id)
+        if (session.type == SessionType.GROUP) {
+            session.channelId?.let { MeetingRecoveryLog.onFirstFloorGrant(it) }
         }
     }
 
