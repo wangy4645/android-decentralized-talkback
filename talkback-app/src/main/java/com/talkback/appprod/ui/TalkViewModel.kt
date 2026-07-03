@@ -63,6 +63,9 @@ class TalkViewModel(
     private var conferenceEndReason: ConferenceEndReason = ConferenceEndReason.NONE
     @Volatile
     private var lastSyncedMeetingPreferred: Boolean? = null
+    /** Last seen rejoin host session id; used to detect remote meeting termination clearing the hint. */
+    @Volatile
+    private var lastRejoinHintSessionId: String? = null
     /** Talk page PTT/Meeting tab — not persisted; home defaults to PTT. */
     @Volatile
     private var talkTabMode: ChannelMode = ChannelMode.GROUP_PTT
@@ -147,11 +150,18 @@ class TalkViewModel(
         manager.applyMeetingAutoJoinPolicy(config.meetingAutoJoin)
         val conferenceActive = activeSession?.type == SessionType.CONFERENCE
         if (!conferenceActive && serviceRunning && manager.getRuntime() != null) {
-            val rejoinHint = manager.rejoinableConference(config.defaultChannelId)
-            if (rejoinHint == null && talkTabMode == ChannelMode.CONFERENCE) {
+            val rejoinHint = manager.rejoinableConference(config)
+            val rejoinSessionId = rejoinHint?.hostSessionId
+            if (
+                rejoinSessionId == null &&
+                lastRejoinHintSessionId != null &&
+                talkTabMode == ChannelMode.CONFERENCE &&
+                manager.pendingConferenceInvite(config.defaultChannelId) == null
+            ) {
                 talkTabMode = ChannelMode.GROUP_PTT
                 lastSyncedMeetingPreferred = false
             }
+            lastRejoinHintSessionId = rejoinSessionId
         }
         syncMeetingPreferredToCoordinator(
             config,
