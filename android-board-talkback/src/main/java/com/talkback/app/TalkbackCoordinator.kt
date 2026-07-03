@@ -410,6 +410,8 @@ class TalkbackCoordinator(
     private val conferenceReconnectStartedAtBySession = ConcurrentHashMap<String, Long>()
     private val lastGroupMeshReconnectMsByPeer = ConcurrentHashMap<String, Long>()
     private val lastSeenAuthorityDigestByChannel = ConcurrentHashMap<String, TopologyDigest>()
+    /** Last HELLO floor snapshot from the session floor authority (diagnostics only). */
+    private val lastSeenAuthorityFloorSnapshotByChannel = ConcurrentHashMap<String, FloorSnapshotDigest>()
     private val lastGroupTopologyReadinessBySession = ConcurrentHashMap<String, GroupTopologyReadiness>()
     private val lastConvergenceAnchorMsBySession = ConcurrentHashMap<String, Long>()
     private val lastPeriodicBuildingMsBySession = ConcurrentHashMap<String, Long>()
@@ -1294,6 +1296,7 @@ class TalkbackCoordinator(
             traceId = traceId
         ).encode()
         session.lastFloorRequestMs = System.currentTimeMillis()
+        session.lastFloorRequestEpoch = session.floor.epoch()
         dispatchFloorRequest(session, payload, traceId)
     }
 
@@ -2236,6 +2239,7 @@ class TalkbackCoordinator(
             }
         assertCanonicalConsistencyFromHello(payload)
         recordAuthorityDigestFromHello(payload)
+        recordAuthorityFloorSnapshotFromHello(payload)
         maybeRequestGroupResyncFromHello(payload)
         ensureCanonicalMemberPresent(payload, fromPeer)
         applyAuthorityFloorSnapshotFromHello(payload)
@@ -2250,12 +2254,34 @@ class TalkbackCoordinator(
         sessions.values
             .filter { it.type == SessionType.GROUP && it.accepted && it.channelId == channelId }
             .forEach { session ->
+                val localEpochBefore = session.floor.epoch()
                 val result = GroupFloorController.applyAuthorityFloorSnapshot(
                     session = session,
                     authorityModuleId = payload.moduleId,
                     digest = digest,
                     onOwnerChanged = { updateSessionReceivePlayback(session) }
                 )
+                val localEpochAfter = session.floor.epoch()
+                val snapshotPhase = when (result) {
+                    SnapshotResult.DEFERRED -> "HELLO_SNAPSHOT_DEFERRED"
+                    SnapshotResult.IGNORED_OLD_EPOCH,
+                    SnapshotResult.UNCHANGED -> "HELLO_SNAPSHOT_IGNORED"
+                    SnapshotResult.UPDATED,
+                    SnapshotResult.OWNER_CHANGED -> "HELLO_SNAPSHOT_APPLIED"
+                }
+                if (result != SnapshotResult.UNCHANGED) {
+                    FloorTrace.helloFloorSnapshot(
+                        snapshotPhase,
+                        session.id,
+                        channelId,
+                        payload.moduleId,
+                        digest.epoch,
+                        digest.version,
+                        localEpochBefore,
+                        localEpochAfter,
+                        result.name
+                    )
+                }
                 when (result) {
                     SnapshotResult.DEFERRED -> log(
                         "SNAPSHOT_DEFER ${sessionTag(session)} sid=${session.id} " +
@@ -3267,7 +3293,10 @@ class TalkbackCoordinator(
             session.id,
             signal.from.key,
             authorityModule,
-            localIsAuthority
+            localIsAuthority,
+            floorPayload.floorEpoch,
+            floorPayload.floorVersion,
+            session.floor.epoch().takeIf { localIsAuthority }
         )
         log(
             "REQUEST_OBSERVED ${sessionTag(session)} sid=${session.id} " +
@@ -3518,7 +3547,10 @@ class TalkbackCoordinator(
                 signal.from.key,
                 floorPayload.requesterKey,
                 floorPayload.floorEpoch,
-                session.floor.epoch()
+                session.floor.epoch(),
+                session.floorAuthorityModuleId?.value ?: session.initiatorModuleId?.value,
+                helloSnapshotEpochLabel(session),
+                requestEpochLabel(session, floorPayload.requesterKey)
             )
             val owner = GroupFloorController.resolveFloorOwner(session, floorPayload.requesterKey)
             log(
@@ -3544,7 +3576,8 @@ class TalkbackCoordinator(
                 floorPayload.floorEpoch,
                 floorPayload.priority,
                 floorAlreadyGranted = false,
-                traceId = traceId
+                traceId = traceId,
+                grantFrom = signal.from.key
             )
         } else {
             FloorTrace.grantDropped(
@@ -3567,7 +3600,8 @@ class TalkbackCoordinator(
         floorEpoch: Long,
         priority: EndpointPriority,
         floorAlreadyGranted: Boolean,
-        traceId: Long = 0L
+        traceId: Long = 0L,
+        grantFrom: String? = null
     ) {
         if (session.type != SessionType.GROUP) return
         val completion = FloorGrantCompletion(
@@ -3591,10 +3625,12 @@ class TalkbackCoordinator(
                     traceId,
                     session.id,
                     "STALE_EPOCH",
-                    mapOf(
-                        "grantEpoch" to floorEpoch.toString(),
-                        "localEpoch" to localEpochBefore.toString(),
-                        "owner" to owner.key
+                    floorEpochDivergenceDiagnostics(
+                        session = session,
+                        grantFrom = grantFrom,
+                        grantEpoch = floorEpoch,
+                        localEpoch = localEpochBefore,
+                        owner = owner
                     )
                 )
             }
@@ -3656,10 +3692,18 @@ class TalkbackCoordinator(
     }
 
     private fun broadcastFloorGranted(session: TalkbackSession, grantPayload: String, traceId: Long = 0L) {
+        val decoded = FloorPayload.decode(grantPayload)
         val targets = targetsForSession(session).joinToString(",") { (peer, remote) ->
             "${remote.key}@${peer.host}:${peer.port}"
         }
-        FloorTrace.grantBroadcast(traceId, session.id, "[$targets]")
+        FloorTrace.grantBroadcast(
+            traceId,
+            session.id,
+            decoded.floorEpoch,
+            decoded.floorVersion,
+            decoded.requesterKey,
+            "[$targets]"
+        )
         log(
             "GRANT_BROADCAST ${sessionTag(session)} sid=${session.id} " +
                 "targets=[$targets]"
@@ -7517,6 +7561,74 @@ class TalkbackCoordinator(
             meshGeneration = payload.meshGeneration,
             memberHash = payload.memberHash
         )
+    }
+
+    /** Records the latest authority HELLO floor snapshot for epoch-divergence diagnostics. */
+    private fun recordAuthorityFloorSnapshotFromHello(payload: HelloPayload) {
+        val channelId = payload.channelId ?: return
+        val digest = payload.floorSnapshot ?: return
+        val sessionsForChannel = sessions.values.filter {
+            it.type == SessionType.GROUP && it.accepted && it.channelId == channelId
+        }
+        val authorityId = sessionsForChannel.firstOrNull()?.let { session ->
+            session.floorAuthorityModuleId?.value ?: session.initiatorModuleId?.value
+        } ?: return
+        if (payload.moduleId != authorityId) return
+        lastSeenAuthorityFloorSnapshotByChannel[channelId] = digest
+        sessionsForChannel.forEach { session ->
+            val localEpoch = session.floor.epoch()
+            FloorTrace.helloFloorSnapshot(
+                "HELLO_SNAPSHOT_RECORDED",
+                session.id,
+                channelId,
+                payload.moduleId,
+                digest.epoch,
+                digest.version,
+                localEpoch,
+                localEpoch,
+                "recorded"
+            )
+        }
+    }
+
+    private fun helloSnapshotEpochLabel(session: TalkbackSession): String =
+        session.channelId?.let { lastSeenAuthorityFloorSnapshotByChannel[it]?.epoch?.toString() } ?: "none"
+
+    private fun requestEpochLabel(session: TalkbackSession, requesterKey: String): String {
+        val requester = GroupFloorController.resolveFloorOwner(session, requesterKey) ?: return "n/a"
+        return if (isLocalIdentity(session, requester) && session.lastFloorRequestEpoch >= 0L) {
+            session.lastFloorRequestEpoch.toString()
+        } else {
+            "n/a"
+        }
+    }
+
+    private fun floorEpochDivergenceDiagnostics(
+        session: TalkbackSession,
+        grantFrom: String?,
+        grantEpoch: Long,
+        localEpoch: Long,
+        owner: EndpointAddress
+    ): Map<String, String> {
+        val authorityModule = session.floorAuthorityModuleId?.value
+            ?: session.initiatorModuleId?.value
+            ?: "null"
+        val helloSnapshot = session.channelId?.let { lastSeenAuthorityFloorSnapshotByChannel[it] }
+        val fields = linkedMapOf(
+            "authorityModule" to authorityModule,
+            "authorityEpoch" to (helloSnapshot?.epoch?.toString() ?: "unknown"),
+            "helloSnapshotEpoch" to (helloSnapshot?.epoch?.toString() ?: "none"),
+            "localEpoch" to localEpoch.toString(),
+            "grantEpoch" to grantEpoch.toString(),
+            "grantFrom" to (grantFrom ?: "unknown"),
+            "owner" to owner.key,
+            "localIsAuthority" to GroupFloorController.isFloorAuthority(session, localModuleId.value).toString(),
+            "rosterEpoch" to session.rosterEpoch.toString()
+        )
+        if (isLocalIdentity(session, owner) && session.lastFloorRequestEpoch >= 0L) {
+            fields["requestEpoch"] = session.lastFloorRequestEpoch.toString()
+        }
+        return fields
     }
 
     private fun membershipDigestAlignedWithAuthority(session: TalkbackSession): Boolean {
