@@ -1,10 +1,17 @@
 package com.talkback.core.session
 
+import com.talkback.core.util.ChannelObservabilityLog
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Test
 
 class ChannelModeFsmTest {
+
+    @Before
+    fun setUp() {
+        ChannelObservabilityLog.resetForTest { }
+    }
 
     @Test
     fun idle_allowsGroupAndConference() {

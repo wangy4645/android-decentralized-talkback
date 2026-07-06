@@ -75,7 +75,7 @@ class PresenceSnapshotIntegrationTest {
     fun grantWithIceReady_uplinkGrantTrue() {
         val channelId = "PRESENCE-CAPTURE"
         setupGroup(channelId)
-        connectAnchorIce()
+        connectAnchorIce(channelId)
         val m03SessionId = nodeM03.runtime.activeSessionIds().single()
         nodeM03.pressPtt(m03SessionId)
         assertTrue(waitForProtocolOwner(nodeM03, m03SessionId, nodeM03.localEndpoint.key))
@@ -128,12 +128,8 @@ class PresenceSnapshotIntegrationTest {
         }
     }
 
-    private fun connectAnchorIce() {
-        nodeM02.runtime.simulateRemoteIceState(ANCHOR_ID, "CONNECTED")
-        nodeM03.runtime.simulateRemoteIceState(ANCHOR_ID, "CONNECTED")
-        nodeM01.runtime.simulateRemoteIceState("M02", "CONNECTED")
-        nodeM01.runtime.simulateRemoteIceState("M03", "CONNECTED")
-        Thread.sleep(200L)
+    private fun connectAnchorIce(channelId: String) {
+        connectGroupAnchorIce(nodeM01, nodeM02, nodeM03, channelId, ANCHOR_ID)
     }
 
     private fun waitForProtocolOwner(

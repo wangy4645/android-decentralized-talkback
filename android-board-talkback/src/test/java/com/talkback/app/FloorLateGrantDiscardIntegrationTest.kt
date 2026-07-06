@@ -52,7 +52,7 @@ class FloorLateGrantDiscardIntegrationTest {
     fun lateGrant_afterPttUp_discardsOwnershipOnRequester() {
         val channelId = "LATE-GRANT"
         setupGroup(channelId)
-        connectAnchorIce()
+        connectAnchorIce(channelId)
         val m03SessionId = nodeM03.runtime.activeSessionIds().single()
         val requestVersion = nodeM03.runtime.testArmFloorRequest(m03SessionId)
         assertTrue(requestVersion > 0L)
@@ -91,12 +91,8 @@ class FloorLateGrantDiscardIntegrationTest {
         }
     }
 
-    private fun connectAnchorIce() {
-        nodeM02.runtime.simulateRemoteIceState(ANCHOR_ID, "CONNECTED")
-        nodeM03.runtime.simulateRemoteIceState(ANCHOR_ID, "CONNECTED")
-        nodeM01.runtime.simulateRemoteIceState("M02", "CONNECTED")
-        nodeM01.runtime.simulateRemoteIceState("M03", "CONNECTED")
-        Thread.sleep(200L)
+    private fun connectAnchorIce(channelId: String) {
+        connectGroupAnchorIce(nodeM01, nodeM02, nodeM03, channelId, ANCHOR_ID)
     }
 
     companion object {

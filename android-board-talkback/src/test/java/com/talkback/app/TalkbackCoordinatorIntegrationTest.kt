@@ -535,7 +535,7 @@ class TalkbackCoordinatorIntegrationTest {
         )
         assertTrue(nodeM02.waitForLog { it.contains("Conference invite accepted") || it.contains("invite accepted") })
         assertTrue(nodeM03.waitForLog { it.contains("Conference invite accepted") || it.contains("invite accepted") })
-        Thread.sleep(3_500L)
+        connectConferenceHostIce(nodeM01, nodeM02, nodeM03)
 
         val m03SessionId = nodeM03.runtime.activeSessionIds().single()
         nodeM03.runtime.leaveConference(m03SessionId)
@@ -593,35 +593,59 @@ class TalkbackCoordinatorIntegrationTest {
         )
         assertTrue(nodeM02.waitForLog { it.contains("Conference invite accepted") || it.contains("invite accepted") })
         assertTrue(nodeM03.waitForLog { it.contains("Conference invite accepted") || it.contains("invite accepted") })
-        Thread.sleep(3_000L)
+        connectConferenceHostIce(nodeM01, nodeM02, nodeM03)
+        assertNull(
+            nodeM01.runtime.testGovernanceActiveTransitionTrigger(channelId)
+        )
 
         repeat(2) { round ->
             val m03SessionId = nodeM03.runtime.activeSessionIds().single()
             nodeM03.runtime.leaveConference(m03SessionId)
-            Thread.sleep(1_500L)
-            assertTrue("round $round: M03 should have left", nodeM03.runtime.activeSessionIds().isEmpty())
-
-            val rejoinSessionId = nodeM03.runtime.requireConferenceCall(
-                nodeM03.localEndpoint,
-                emptyList(),
-                channelId
+            assertTrue(
+                "round $round: M03 should leave",
+                nodeM03.waitForLog { it.contains("Left conference locally") }
             )
-            nodeM03.runtime.sendConferenceInvites(
-                rejoinSessionId,
-                listOf(EndpointAddress(m01, EndpointId("E01")))
+            assertTrue(
+                "round $round: host should observe M03 leave",
+                nodeM01.waitForLog { it.contains("Conference peer left: M03") }
             )
+            assertEquals(listOf(sessionId), nodeM01.runtime.activeSessionIds())
 
-            val deadline = System.currentTimeMillis() + 8_000L
+            val hint = requireNotNull(nodeM03.runtime.rejoinableConference(channelId)) {
+                "round $round: M03 should have rejoin hint"
+            }
+            val m01LogMark = synchronized(nodeM01.logs) { nodeM01.logs.size }
+            val m03LogMark = synchronized(nodeM03.logs) { nodeM03.logs.size }
+            assertTrue(
+                nodeM03.runtime.sendConferenceRejoin(
+                    channelId,
+                    EndpointAddress(m01, EndpointId("E01")),
+                    hint.hostSessionId
+                )
+            )
+            assertTrue(
+                "round $round: host should pull in M03",
+                nodeM01.waitForLogSince(m01LogMark, timeoutMs = 8_000L) {
+                    it.contains("Conference rejoin pull-in M03 sent=1")
+                }
+            )
+            val rejoinedDeadline = System.currentTimeMillis() + 8_000L
             var rejoined = false
-            while (System.currentTimeMillis() < deadline) {
+            while (System.currentTimeMillis() < rejoinedDeadline) {
                 if (nodeM03.runtime.activeSessionIds() == listOf(sessionId)) {
                     rejoined = true
                     break
                 }
                 Thread.sleep(50L)
             }
+            if (!rejoined) {
+                synchronized(nodeM03.logs) {
+                    nodeM03.logs.drop(m03LogMark).forEach { println("round $round M03: $it") }
+                }
+            }
             assertTrue("round $round: M03 should rejoin host session", rejoined)
             Thread.sleep(2_500L)
+            connectConferenceHostIce(nodeM01, nodeM02, nodeM03)
 
             fun rosterSize(node: TestTalkbackNode): Int =
                 node.runtime.sessionSnapshots()
@@ -647,7 +671,7 @@ class TalkbackCoordinatorIntegrationTest {
         )
         assertTrue(nodeM02.waitForLog { it.contains("Conference invite accepted") || it.contains("invite accepted") })
         assertTrue(nodeM03.waitForLog { it.contains("Conference invite accepted") || it.contains("invite accepted") })
-        Thread.sleep(3_500L)
+        connectConferenceHostIce(nodeM01, nodeM02, nodeM03)
 
         val m02SessionId = nodeM02.runtime.activeSessionIds().single()
         nodeM02.runtime.leaveConference(m02SessionId)
@@ -699,7 +723,7 @@ class TalkbackCoordinatorIntegrationTest {
         )
         assertTrue(nodeM02.waitForLog { it.contains("Conference invite accepted") || it.contains("invite accepted") })
         assertTrue(nodeM03.waitForLog { it.contains("Conference invite accepted") || it.contains("invite accepted") })
-        Thread.sleep(3_500L)
+        connectConferenceHostIce(nodeM01, nodeM02, nodeM03)
 
         nodeM02.runtime.setAutoAcceptConferenceInvites(false)
         val m02SessionId = nodeM02.runtime.activeSessionIds().single()
@@ -751,11 +775,14 @@ class TalkbackCoordinatorIntegrationTest {
         )
         assertTrue(nodeM01.waitForLog { it.contains("Conference invite accepted") || it.contains("invite accepted") })
         assertTrue(nodeM03.waitForLog { it.contains("Conference invite accepted") || it.contains("invite accepted") })
-        Thread.sleep(3_500L)
+        connectConferenceHostIce(nodeM02, nodeM01, nodeM03, hostModuleId = "M02")
+        Thread.sleep(500L)
 
         val m01SessionId = nodeM01.runtime.activeSessionIds().single()
         nodeM01.runtime.leaveConference(m01SessionId)
-        Thread.sleep(1_500L)
+        assertTrue(
+            nodeM01.waitForLog(timeoutMs = 8_000L) { it.contains("Left conference locally") }
+        )
         assertTrue(nodeM01.runtime.activeSessionIds().isEmpty())
 
         val m03LogMark = synchronized(nodeM03.logs) { nodeM03.logs.size }
@@ -1094,7 +1121,7 @@ class TalkbackCoordinatorIntegrationTest {
             channelId
         )
         assertTrue(nodeM02.waitForLog { it.contains("invite accepted") })
-        Thread.sleep(500L)
+        connectConferenceHostIce(nodeM01, nodeM02)
 
         nodeM03.runtime.setAutoAcceptConferenceInvites(false)
         nodeM01.runtime.sendConferenceInvites(
@@ -1232,5 +1259,81 @@ class TalkbackCoordinatorIntegrationTest {
             nodeM02.runtime.isChannelMediaReady(channelId)
         )
         assertTrue(nodeM03.runtime.isChannelMediaReady(channelId))
+    }
+
+    @Test
+    fun meetingStart_transitionCompletesAfterHostPeerIce_notAtCallReturn() {
+        val channelId = "TCC-MEETING-START"
+        nodeM01.runtime.requireConferenceCall(
+            nodeM01.localEndpoint,
+            listOf(
+                EndpointAddress(m02, EndpointId("E01")),
+                EndpointAddress(m03, EndpointId("E01"))
+            ),
+            channelId
+        )
+        assertEquals(
+            "MEETING_START should stay active until first peer ICE connects",
+            "MEETING_START",
+            nodeM01.runtime.testGovernanceActiveTransitionTrigger(channelId)
+        )
+        assertTrue(nodeM02.waitForLog { it.contains("invite accepted") })
+        nodeM01.runtime.simulateRemoteIceState("M02", "CONNECTED")
+        Thread.sleep(300L)
+        assertNull(
+            "MEETING_START should complete after host–peer ICE",
+            nodeM01.runtime.testGovernanceActiveTransitionTrigger(channelId)
+        )
+    }
+
+    @Test
+    fun meetingStart_participantNotMediaReadyUntilHostIce() {
+        val channelId = "TCC-PART-HOST-ICE"
+        nodeM01.runtime.requireConferenceCall(
+            nodeM01.localEndpoint,
+            listOf(EndpointAddress(m02, EndpointId("E01"))),
+            channelId
+        )
+        assertTrue(nodeM02.waitForLog { it.contains("invite accepted") })
+        assertFalse(
+            "Participant should not be media-ready before host ICE",
+            nodeM02.runtime.isChannelMediaReady(channelId)
+        )
+        nodeM02.runtime.simulateRemoteIceState("M01", "CONNECTED")
+        Thread.sleep(300L)
+        assertTrue(nodeM02.runtime.isChannelMediaReady(channelId))
+    }
+
+    @Test
+    fun meetingStart_deferredWhenSoloCallThenSendInvites() {
+        val channelId = "TCC-SOLO-THEN-INVITE"
+        nodeM01.runtime.configureChannelMembership(channelId, listOf("M01", "M02", "M03"))
+        val sessionId = nodeM01.runtime.requireConferenceCall(
+            nodeM01.localEndpoint,
+            emptyList(),
+            channelId
+        )
+        assertEquals(
+            "MEETING_START must stay active until invitee ICE when channel has members",
+            "MEETING_START",
+            nodeM01.runtime.testGovernanceActiveTransitionTrigger(channelId)
+        )
+        val remotes = listOf(
+            EndpointAddress(m02, EndpointId("E02")),
+            EndpointAddress(m03, EndpointId("E03"))
+        )
+        nodeM01.runtime.sendConferenceInvites(sessionId, remotes)
+        assertEquals(
+            "MEETING_START must stay active after invites until first peer ICE",
+            "MEETING_START",
+            nodeM01.runtime.testGovernanceActiveTransitionTrigger(channelId)
+        )
+        assertTrue(nodeM02.waitForLog { it.contains("invite accepted") })
+        nodeM01.runtime.simulateRemoteIceState("M02", "CONNECTED")
+        Thread.sleep(300L)
+        assertNull(
+            "MEETING_START should complete after host-peer ICE",
+            nodeM01.runtime.testGovernanceActiveTransitionTrigger(channelId)
+        )
     }
 }

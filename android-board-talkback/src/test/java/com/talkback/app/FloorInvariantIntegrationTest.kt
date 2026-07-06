@@ -67,7 +67,7 @@ class FloorInvariantIntegrationTest {
     fun followerGrant_enablesCaptureForOwner() {
         val channelId = "F1-GRANT"
         setupGroup(channelId)
-        connectAnchorIce()
+        connectAnchorIce(channelId)
         val m03SessionId = nodeM03.runtime.activeSessionIds().single()
         nodeM03.pressPtt(m03SessionId)
         assertTrue(waitForFloorOwner(nodeM03, m03SessionId, nodeM03.localEndpoint.key))
@@ -82,7 +82,7 @@ class FloorInvariantIntegrationTest {
     fun authorityGrantsRemote_anchorDoesNotCapture_listenerGetsGrant() {
         val channelId = "F1-REMOTE"
         setupGroup(channelId)
-        connectAnchorIce()
+        connectAnchorIce(channelId)
         val m01SessionId = nodeM01.runtime.activeSessionIds().single()
         val m03SessionId = nodeM03.runtime.activeSessionIds().single()
         nodeM03.pressPtt(m03SessionId)
@@ -98,7 +98,7 @@ class FloorInvariantIntegrationTest {
     fun deniedFloorRequest_doesNotCapture() {
         val channelId = "F1-DENY"
         setupGroup(channelId)
-        connectAnchorIce()
+        connectAnchorIce(channelId)
         val m01SessionId = nodeM01.runtime.activeSessionIds().single()
         val m03SessionId = nodeM03.runtime.activeSessionIds().single()
         nodeM01.pressPtt(m01SessionId)
@@ -132,12 +132,8 @@ class FloorInvariantIntegrationTest {
         }
     }
 
-    private fun connectAnchorIce() {
-        nodeM02.runtime.simulateRemoteIceState(ANCHOR_ID, "CONNECTED")
-        nodeM03.runtime.simulateRemoteIceState(ANCHOR_ID, "CONNECTED")
-        nodeM01.runtime.simulateRemoteIceState("M02", "CONNECTED")
-        nodeM01.runtime.simulateRemoteIceState("M03", "CONNECTED")
-        Thread.sleep(200L)
+    private fun connectAnchorIce(channelId: String) {
+        connectGroupAnchorIce(nodeM01, nodeM02, nodeM03, channelId, ANCHOR_ID)
     }
 
     private fun m02SessionId(): String = nodeM02.runtime.activeSessionIds().single()

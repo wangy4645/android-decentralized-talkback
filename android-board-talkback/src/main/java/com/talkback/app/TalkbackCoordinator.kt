@@ -106,6 +106,16 @@ import com.talkback.core.util.FloorTrace
 import com.talkback.core.util.MeetingRecoveryLog
 import com.talkback.core.util.PttTimingLog
 import com.talkback.core.util.TalkbackLog
+import com.talkback.app.governance.TalkbackChannelGovernanceHost
+import com.talkback.governance.capability.CapabilityReadiness
+import com.talkback.governance.coordinator.ChannelGovernanceRuntime
+import com.talkback.governance.coordinator.GroupChannelSnapshot
+import com.talkback.governance.coordinator.TopologyReadinessLabel
+import com.talkback.governance.gate.GateDecision
+import com.talkback.governance.gate.Operation
+import com.talkback.governance.GovernanceObservabilityLog
+import com.talkback.governance.transition.MeetingStartCompletion
+import com.talkback.governance.transition.TransitionTrigger
 import com.talkback.core.webrtc.ConferenceAudioBus
 import com.talkback.core.webrtc.MediaBearerScope
 import com.talkback.core.webrtc.SessionMediaRegistry
@@ -255,6 +265,10 @@ class TalkbackCoordinator(
     private val remoteHealthByModule = ConcurrentHashMap<String, AnchorHealthSnapshot>()
     @Volatile
     private var invariantF1BreakCount = 0
+
+    private val channelGovernance: ChannelGovernanceRuntime by lazy {
+        ChannelGovernanceRuntime(TalkbackChannelGovernanceHost(this))
+    }
 
     private fun groupLocalIdentity(session: TalkbackSession): EndpointAddress =
         IdentityResolver.local(session, localModuleId.value)
@@ -491,6 +505,7 @@ class TalkbackCoordinator(
         channelModeFsm(channelId).reset()
         log("Conference channel released for GROUP PTT ch=$channelId reason=$reason")
         MeetingRecoveryLog.onConferenceReleased(channelId, reason)
+        channelGovernance.beginTransition(TransitionTrigger.MEETING_END, channelId)
         onChannelLifecycleEvent(channelId, ChannelLifecycleEvent.ConferenceEnded)
         emitGroupTopologyForChannel(TopologySnapshotReason.CONFERENCE_END, channelId)
     }
@@ -746,7 +761,14 @@ class TalkbackCoordinator(
             }
         }
         scheduler.scheduleAtFixedRate(
-            { runOnCoordinator { cleanupExpiredSessions(); maybeEmitPeriodicBuildingSnapshots() } },
+            {
+                runOnCoordinator {
+                    channelGovernance.transitionCoordinator.expireTimeouts()
+                        .forEach(GovernanceObservabilityLog::transitionTerminal)
+                    cleanupExpiredSessions()
+                    maybeEmitPeriodicBuildingSnapshots()
+                }
+            },
             config.cleanupIntervalMs,
             config.cleanupIntervalMs,
             TimeUnit.MILLISECONDS
@@ -792,6 +814,13 @@ class TalkbackCoordinator(
 
     fun call(local: EndpointAddress, remote: EndpointAddress, channelId: String? = null): String =
         runOnCoordinatorSync {
+            when (val gate = channelGovernance.canStart(
+                Operation.SINGLE_CALL,
+                ChannelGovernanceRuntime.UNICAST_CHANNEL_ID
+            )) {
+                is GateDecision.Blocked -> error("GATE_BLOCKED:${gate.primaryReason.code}")
+                is GateDecision.Allow -> Unit
+            }
             when (val prep = prepareForUnicastOutgoing()) {
                 is UnicastOutgoingPrep.Ready -> Unit
                 is UnicastOutgoingPrep.Blocked -> error(prep.reason)
@@ -885,6 +914,18 @@ class TalkbackCoordinator(
         }
         val inviteTargets = (toAdd + reconnectTargets).distinctBy { it.key }
         if (inviteTargets.isEmpty()) return 0
+        session.channelId?.let { channelId ->
+            when (val gate = channelGovernance.canStart(Operation.MEETING_INVITE, channelId)) {
+                is GateDecision.Blocked -> {
+                    log(
+                        "CONFERENCE_INVITE_GATE blocked ch=$channelId " +
+                            "primary=${gate.primaryReason.code} transition=${gate.transitionId}"
+                    )
+                    return 0
+                }
+                is GateDecision.Allow -> Unit
+            }
+        }
 
         val allMembers = meshRoster(session)
         applyGroupTopology(session, allMembers.size)
@@ -942,6 +983,7 @@ class TalkbackCoordinator(
             val label = if (rejoin) "Conference rejoin invite" else "Conference invite"
             log("[${session.traceId}] $label sent -> ${remote.key}")
         }
+        session.channelId?.let { maybeEvaluateMeetingStartCompletion(it) }
         return sent
     }
 
@@ -1086,6 +1128,26 @@ class TalkbackCoordinator(
         require(soloConference || remoteEndpoints.isNotEmpty()) {
             "meshCall requires at least one remote endpoint"
         }
+        val meshOperation = when (sessionType) {
+            SessionType.CONFERENCE -> Operation.MEETING_JOIN
+            SessionType.GROUP -> Operation.GROUP_BOOTSTRAP
+            else -> null
+        }
+        meshOperation?.let { op ->
+            when (val gate = channelGovernance.canStart(op, channelId)) {
+                is GateDecision.Blocked -> {
+                    log(
+                        "MESH_GATE blocked op=$op ch=$channelId primary=${gate.primaryReason.code} " +
+                            "transition=${gate.transitionId}"
+                    )
+                    return null
+                }
+                is GateDecision.Allow -> Unit
+            }
+        }
+        if (sessionType == SessionType.CONFERENCE) {
+            channelGovernance.beginTransition(TransitionTrigger.MEETING_START, channelId)
+        }
         if (sessionType == SessionType.GROUP) {
             endStaleConferenceBlockingGroup(channelId)
             if (sessions.values.any { it.channelId == channelId && it.type == SessionType.CONFERENCE }) {
@@ -1226,9 +1288,13 @@ class TalkbackCoordinator(
                 ReDialRecord(local, remote, channelId, allMembers, sessionType)
         }
         val label = if (sessionType == SessionType.CONFERENCE) "Conference" else "Group call"
+        val configuredRemoteMembers = channelSnap.any { it != local.moduleId }
         if (soloConference) {
             tryEnsureConferenceDuplex(session)
             log("[${session.traceId}] $label ${local.key} solo on ch=$channelId")
+            if (!configuredRemoteMembers && inviteTargets.isEmpty()) {
+                maybeEvaluateMeetingStartCompletion(channelId)
+            }
         } else {
             log("[${session.traceId}] $label ${local.key} -> ${inviteTargets.size} targets ch=$channelId topology=${session.mediaTopology}")
         }
@@ -1250,6 +1316,20 @@ class TalkbackCoordinator(
         PttTimingLog.pttDown(sessionId)
         val session = sessions[sessionId] ?: return
         if (!session.type.usesFloorControl()) return
+        session.channelId?.let { channelId ->
+            if (session.type == SessionType.GROUP) {
+                when (val gate = channelGovernance.canStart(Operation.PTT, channelId)) {
+                    is GateDecision.Blocked -> {
+                        log(
+                            "PTT_GATE blocked ch=$channelId primary=${gate.primaryReason.code} " +
+                                "category=${gate.category} transition=${gate.transitionId}"
+                        )
+                        return
+                    }
+                    is GateDecision.Allow -> Unit
+                }
+            }
+        }
         session.localAcquireTimedOut = false
         val currentOwner = session.floor.owner()
         log(
@@ -1752,6 +1832,15 @@ class TalkbackCoordinator(
             }
     }
 
+    /** Test-only: align authority digest so governance PTT gate sees Authority READY on followers. */
+    internal fun testSeedAuthorityDigestForChannel(channelId: String) = runOnCoordinatorSync {
+        sessions.values
+            .firstOrNull { it.type == SessionType.GROUP && it.channelId == channelId && it.accepted }
+            ?.let { session ->
+                lastSeenAuthorityDigestByChannel[channelId] = TopologyDigest.fromSession(session)
+            }
+    }
+
     /** Test-only: seed a duplicate local GROUP session that wins session-authority over an incoming invite. */
     internal fun testSeedDuplicateGroupSession(
         channelId: String,
@@ -2185,7 +2274,10 @@ class TalkbackCoordinator(
             SignalType.CONFERENCE_REJOIN -> handleConferenceRejoin(signal, fromPeer)
             SignalType.WEBRTC_ICE -> handleIce(signal)
             SignalType.HEARTBEAT -> Unit
-            SignalType.FLOOR_REQUEST -> handleFloorRequest(signal)
+            SignalType.FLOOR_REQUEST -> {
+                logFloorRequestRecv(signal, fromPeer)
+                handleFloorRequest(signal)
+            }
             SignalType.FLOOR_REQUEST_CANCEL -> handleFloorRequestCancel(signal)
             SignalType.FLOOR_GRANTED -> handleFloorGranted(signal)
             SignalType.FLOOR_DENY -> handleFloorDeny(signal)
@@ -2518,7 +2610,10 @@ class TalkbackCoordinator(
                 it.initiatorModuleId == localModuleId &&
                 it.id != signal.sessionId
         } ?: return false
-        if (callerModuleId in conferenceMemberRemoteIds(hostConference) &&
+        val rejoiningLeftMember = conferenceParticipantManager
+            .leftMemberEndpoints(hostConference.id)?.containsKey(callerModuleId) == true
+        if (!rejoiningLeftMember &&
+            conferenceParticipantManager.containsParticipant(hostConference.id, callerModuleId) &&
             qosMonitor.isGroupConnected(callerModuleId)
         ) {
             return false
@@ -3258,6 +3353,22 @@ class TalkbackCoordinator(
         engine.addIceCandidate(signal.payload)
     }
 
+    private fun logFloorRequestRecv(signal: SignalEnvelope, fromPeer: PeerTarget) {
+        val session = sessions[signal.sessionId]
+        val authorityModule = session?.floorAuthorityModuleId?.value
+        val localIsAuthority = session?.let {
+            GroupFloorController.isFloorAuthority(it, localModuleId.value)
+        }
+        log(
+            "FLOOR_REQUEST_RECV local=${localModuleId.value} from=${signal.from.key} " +
+                "src=${fromPeer.host}:${fromPeer.port} " +
+                "envelopeTo=${signal.to?.key ?: "null"} " +
+                "sid=${signal.sessionId} " +
+                "authorityModule=${authorityModule ?: "n/a"} " +
+                "localIsAuthority=${localIsAuthority?.toString() ?: "n/a"}"
+        )
+    }
+
     private fun handleFloorRequest(signal: SignalEnvelope) {
         val floorPayload = FloorPayload.decode(signal.payload)
         val traceId = floorPayload.traceId
@@ -3976,8 +4087,8 @@ class TalkbackCoordinator(
         moduleId: String,
         forReconnect: Boolean = false
     ): Boolean {
-        if (qosMonitor.isGroupConnected(moduleId)) return false
         if (forReconnect) return true
+        if (qosMonitor.isGroupConnected(moduleId)) return false
         val participant = meshParticipant(session,moduleId)
         if (participant.invite == InviteState.INVITING || participant.invite == InviteState.RINGING) {
             if (System.currentTimeMillis() - participant.invitedAtMs < CONFERENCE_INVITE_MIN_INTERVAL_MS) {
@@ -5546,6 +5657,7 @@ class TalkbackCoordinator(
                         if (isConferenceUiReady(session)) {
                             conferenceReconnectStartedAtBySession.remove(session.id)
                         }
+                        session.channelId?.let { maybeEvaluateMeetingStartCompletion(it) }
                     }
                 sessions.values
                     .filter { it.type == SessionType.GROUP && it.accepted }
@@ -7776,7 +7888,10 @@ class TalkbackCoordinator(
         if (previous != health.groupTopologyReadiness) {
             log(TopologySnapshotLogger.format(TopologySnapshotReason.READINESS_CHANGED, health))
             if (health.groupTopologyReadiness == GroupTopologyReadiness.OPERATIONAL) {
-                session.channelId?.let { MeetingRecoveryLog.onMeshOperational(it) }
+                session.channelId?.let { channelId ->
+                    MeetingRecoveryLog.onMeshOperational(channelId)
+                    channelGovernance.maybeCompleteRecovery(channelId, recoveryReady = true)
+                }
             }
         }
     }
@@ -7787,6 +7902,88 @@ class TalkbackCoordinator(
             session.channelId?.let { MeetingRecoveryLog.onFirstFloorGrant(it) }
         }
     }
+
+    internal fun governanceSnapshotForChannel(channelId: String): GroupChannelSnapshot? {
+        val session = sessions.values.firstOrNull {
+            it.type == SessionType.GROUP && it.accepted && it.channelId == channelId
+        } ?: return null
+        val health = GroupRuntimeHealthProjector.project(buildGroupRuntimeHealthInput(session))
+        val identity = evaluateGroupIdentityStability(session)
+        val topology = when (health.groupTopologyReadiness) {
+            GroupTopologyReadiness.DISCOVERING -> TopologyReadinessLabel.DISCOVERING
+            GroupTopologyReadiness.MEMBERSHIP_PENDING -> TopologyReadinessLabel.MEMBERSHIP_PENDING
+            GroupTopologyReadiness.BUILDING -> TopologyReadinessLabel.BUILDING
+            GroupTopologyReadiness.OPERATIONAL -> TopologyReadinessLabel.OPERATIONAL
+        }
+        return GroupChannelSnapshot(
+            channelId = channelId,
+            membershipReconciled = health.membershipReconciled,
+            membershipDigestAligned = health.membershipDigestAligned,
+            topologyReadiness = topology,
+            transmitMissingPeers = health.transmitMissingPeers,
+            floorAuthorityKnown = session.floorAuthorityModuleId != null,
+            identityStable = identity.stable
+        )
+    }
+
+    internal fun governanceConferenceAdmission(channelId: String): CapabilityReadiness {
+        val active = channelGovernance.transitionCoordinator.activeTransition(channelId)
+        if (active?.isActive == true && active.trigger == TransitionTrigger.MEETING_END) {
+            return CapabilityReadiness.RECONCILING
+        }
+        val conference = sessions.values.firstOrNull {
+            it.channelId == channelId && it.type == SessionType.CONFERENCE && it.accepted
+        }
+        if (conference != null) {
+            if (!isConferenceHostSession(conference) && !isConferenceUiReady(conference)) {
+                return CapabilityReadiness.RECONCILING
+            }
+            return CapabilityReadiness.READY
+        }
+        if (blocksGroupOnChannel(channelId)) {
+            return CapabilityReadiness.NOT_READY
+        }
+        return CapabilityReadiness.READY
+    }
+
+    internal fun governanceConferenceSessionMedia(channelId: String): CapabilityReadiness? {
+        val session = sessions.values.firstOrNull {
+            it.channelId == channelId && it.type == SessionType.CONFERENCE && it.accepted
+        } ?: return null
+        return if (isConferenceUiReady(session)) {
+            CapabilityReadiness.READY
+        } else {
+            CapabilityReadiness.RECONCILING
+        }
+    }
+
+    private fun maybeEvaluateMeetingStartCompletion(channelId: String) {
+        val session = meshSessionForChannel(channelId) ?: return
+        if (session.type != SessionType.CONFERENCE || !session.accepted || !isConferenceHostSession(session)) {
+            return
+        }
+        val invited = conferenceMemberRemoteIds(session)
+        val connected = invited.count { isPeerMediaConnected(it) }
+        val eval = MeetingStartCompletion.evaluate(
+            conferenceAccepted = true,
+            expectedInviteeCount = invited.size,
+            connectedInviteeCount = connected
+        )
+        channelGovernance.maybeCompleteMeetingStart(channelId, eval)
+    }
+
+    internal fun testGovernanceActiveTransitionTrigger(channelId: String): TransitionTrigger? =
+        channelGovernance.activeTransition(channelId)?.takeIf { it.isActive }?.trigger
+
+    internal fun governanceDirectoryReadiness(): CapabilityReadiness =
+        if (countDialableRemoteModules() > 0) {
+            CapabilityReadiness.READY
+        } else {
+            CapabilityReadiness.NOT_READY
+        }
+
+    internal fun governanceUnicastRoutingReadiness(): CapabilityReadiness =
+        CapabilityReadiness.READY
 
     private fun log(message: String) {
         TalkbackLog.i(message)

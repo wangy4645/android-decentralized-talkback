@@ -458,7 +458,7 @@ class TalkFragment : Fragment() {
             val result = if (state.conferenceActive || state.channelConnecting) {
                 if (state.channelConnecting) PttDownResult.Connecting else PttDownResult.Ok
             } else {
-                viewModel.joinMeeting()
+                viewModel.joinMeeting(reason = "ui.openMeetingScreen")
             }
             when (result) {
                 is PttDownResult.Ok, is PttDownResult.Connecting -> {

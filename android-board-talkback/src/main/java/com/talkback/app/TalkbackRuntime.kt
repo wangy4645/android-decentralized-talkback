@@ -242,6 +242,10 @@ class TalkbackRuntime(
     fun isChannelConnecting(channelId: String): Boolean =
         runCatching { coordinator.isChannelConnecting(channelId) }.getOrElse { false }
 
+    fun testGovernanceActiveTransitionTrigger(channelId: String): String? =
+        runCatching { coordinator.testGovernanceActiveTransitionTrigger(channelId)?.name }
+            .getOrNull()
+
     fun channelReadiness(channelId: String): ChannelReadiness =
         runCatching { coordinator.channelReadiness(channelId) }.getOrElse { ChannelReadiness.NO_SERVICE }
 
@@ -327,6 +331,10 @@ class TalkbackRuntime(
 
     internal fun testForceGroupAnchorTopology(channelId: String) {
         coordinator.testForceGroupAnchorTopology(channelId)
+    }
+
+    internal fun testSeedAuthorityDigestForChannel(channelId: String) {
+        coordinator.testSeedAuthorityDigestForChannel(channelId)
     }
 
     internal fun testSeedDuplicateGroupSession(

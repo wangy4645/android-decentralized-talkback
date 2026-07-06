@@ -159,7 +159,7 @@ class ConferenceParticipantInvariantTest {
             channelId
         )
         assertTrue(nodeM02.waitForLog { it.contains("invite accepted") })
-        Thread.sleep(300L)
+        connectConferenceHostIce(nodeM01, nodeM02)
         val hostBefore = nodeM01.runtime.sessionSnapshots().first { it.sessionId == hostSessionId }
         val rosterBefore = hostBefore.memberKeys.toSet()
 

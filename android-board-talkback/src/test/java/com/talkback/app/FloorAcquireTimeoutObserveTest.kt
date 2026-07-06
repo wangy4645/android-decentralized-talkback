@@ -86,7 +86,7 @@ class FloorAcquireTimeoutObserveTest {
         PttTimingLog.resetForTest()
         val channelId = "ACQ-SINCE-GRANT"
         setupGroup(channelId)
-        connectAnchorIce()
+        connectAnchorIce(channelId)
         val sessionId = nodeM03.runtime.activeSessionIds().single()
         nodeM03.pressPtt(sessionId)
         assertTrue(waitForCapturing(nodeM03, sessionId))
@@ -115,12 +115,8 @@ class FloorAcquireTimeoutObserveTest {
         }
     }
 
-    private fun connectAnchorIce() {
-        nodeM02.runtime.simulateRemoteIceState(ANCHOR_ID, "CONNECTED")
-        nodeM03.runtime.simulateRemoteIceState(ANCHOR_ID, "CONNECTED")
-        nodeM01.runtime.simulateRemoteIceState("M02", "CONNECTED")
-        nodeM01.runtime.simulateRemoteIceState("M03", "CONNECTED")
-        Thread.sleep(200L)
+    private fun connectAnchorIce(channelId: String) {
+        connectGroupAnchorIce(nodeM01, nodeM02, nodeM03, channelId, ANCHOR_ID)
     }
 
     private fun waitForProtocolOwnerCleared(node: TestTalkbackNode, sessionId: String): Boolean {

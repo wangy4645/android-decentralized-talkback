@@ -78,6 +78,17 @@ internal class TestTalkbackNode(
         return false
     }
 
+    fun waitForLogSince(mark: Int, timeoutMs: Long = 5_000L, predicate: (String) -> Boolean): Boolean {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            synchronized(logs) {
+                if (logs.drop(mark).any(predicate)) return true
+            }
+            Thread.sleep(50)
+        }
+        return false
+    }
+
     fun hasLog(predicate: (String) -> Boolean): Boolean = synchronized(logs) { logs.any(predicate) }
 
     companion object {
@@ -106,4 +117,33 @@ internal fun TestTalkbackNode.pressPtt(sessionId: String) {
 
 internal fun TestTalkbackNode.releasePtt(sessionId: String) {
     runtime.releasePtt(sessionId)
+}
+
+internal fun connectGroupAnchorIce(
+    anchor: TestTalkbackNode,
+    peerM02: TestTalkbackNode,
+    peerM03: TestTalkbackNode,
+    channelId: String,
+    anchorModuleId: String = "M01"
+) {
+    peerM02.runtime.simulateRemoteIceState(anchorModuleId, "CONNECTED")
+    peerM03.runtime.simulateRemoteIceState(anchorModuleId, "CONNECTED")
+    anchor.runtime.simulateRemoteIceState("M02", "CONNECTED")
+    anchor.runtime.simulateRemoteIceState("M03", "CONNECTED")
+    Thread.sleep(200L)
+    listOf(anchor, peerM02, peerM03).forEach { it.runtime.testSeedAuthorityDigestForChannel(channelId) }
+}
+
+/** ADR-0016: complete host MEETING_START predicate in stub ICE tests. */
+internal fun connectConferenceHostIce(
+    host: TestTalkbackNode,
+    vararg participants: TestTalkbackNode,
+    hostModuleId: String = "M01"
+) {
+    participants.forEach { participant ->
+        val peerId = participant.moduleId.value
+        host.runtime.simulateRemoteIceState(peerId, "CONNECTED")
+        participant.runtime.simulateRemoteIceState(hostModuleId, "CONNECTED")
+    }
+    Thread.sleep(300L)
 }

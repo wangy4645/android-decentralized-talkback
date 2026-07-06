@@ -22,6 +22,7 @@ import com.talkback.core.ptt.PttState
 import com.talkback.core.session.ConferenceParticipantDisplayState
 import com.talkback.core.session.ConferenceParticipantViewState
 import com.talkback.core.session.SessionType
+import com.talkback.core.util.ChannelObservabilityLog
 import com.talkback.core.util.TalkbackLog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -380,9 +381,19 @@ class TalkViewModel(
         }
     }
 
-    suspend fun joinMeeting(): PttDownResult = pttMutex.withLock {
+    suspend fun joinMeeting(reason: String = "unspecified"): PttDownResult = pttMutex.withLock {
         syncServiceState()
         val config = configStore.load()
+        val activeBefore = manager.activeChannelSession(config)
+        ChannelObservabilityLog.joinMeetingTrace(
+            reason = reason,
+            channelId = config.defaultChannelId,
+            talkTabMode = talkTabMode.name,
+            meetingPreferred = lastSyncedMeetingPreferred,
+            coordinatorChannelMode = manager.getRuntime()?.channelMode(config.defaultChannelId)?.name,
+            configChannelMode = config.channelMode.name,
+            conferenceSessionActive = activeBefore?.type == SessionType.CONFERENCE
+        )
         if (!serviceRunning || manager.getRuntime() == null) {
             return PttDownResult.ServiceStopped
         }

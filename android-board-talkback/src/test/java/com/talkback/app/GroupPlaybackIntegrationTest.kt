@@ -49,7 +49,7 @@ class GroupPlaybackIntegrationTest {
     fun groupPlayback_remoteFloorHolder_enablesListenerPlayback() {
         val channelId = "PLAYBACK-FLOOR"
         setupGroup(channelId)
-        connectAnchorIce()
+        connectAnchorIce(channelId)
         val m03SessionId = nodeM03.runtime.activeSessionIds().single()
         nodeM03.pressPtt(m03SessionId)
         assertTrue(waitForPlayback(nodeM02, enabled = true))
@@ -60,7 +60,7 @@ class GroupPlaybackIntegrationTest {
     fun groupPlayback_idleSilence_noFloorPlaybackDisabled() {
         val channelId = "PLAYBACK-IDLE"
         setupGroup(channelId)
-        connectAnchorIce()
+        connectAnchorIce(channelId)
         Thread.sleep(300L)
         assertTrue(playbackDisabled(nodeM02))
         assertTrue(playbackDisabled(nodeM03))
@@ -70,7 +70,7 @@ class GroupPlaybackIntegrationTest {
     fun groupPlayback_iceFailedThenRecovered_restoresPlayback() {
         val channelId = "PLAYBACK-ICE"
         setupGroup(channelId)
-        connectAnchorIce()
+        connectAnchorIce(channelId)
         val m03SessionId = nodeM03.runtime.activeSessionIds().single()
         nodeM03.pressPtt(m03SessionId)
         assertTrue(waitForPlayback(nodeM02, enabled = true))
@@ -86,7 +86,7 @@ class GroupPlaybackIntegrationTest {
     fun groupPlayback_pttRelease_silencesListener() {
         val channelId = "PLAYBACK-RELEASE"
         setupGroup(channelId)
-        connectAnchorIce()
+        connectAnchorIce(channelId)
         val m03SessionId = nodeM03.runtime.activeSessionIds().single()
         nodeM03.pressPtt(m03SessionId)
         assertTrue(waitForPlayback(nodeM02, enabled = true))
@@ -116,6 +116,9 @@ class GroupPlaybackIntegrationTest {
             fastM03.runtime.simulateRemoteIceState(ANCHOR_ID, "CONNECTED")
             fastM01.runtime.simulateRemoteIceState("M02", "CONNECTED")
             fastM01.runtime.simulateRemoteIceState("M03", "CONNECTED")
+            listOf(fastM01, fastM02, fastM03).forEach {
+                it.runtime.testSeedAuthorityDigestForChannel(channelId)
+            }
             val m03SessionId = fastM03.runtime.activeSessionIds().single()
             fastM03.pressPtt(m03SessionId)
             assertTrue(waitForPlayback(fastM02, enabled = true))
@@ -160,12 +163,8 @@ class GroupPlaybackIntegrationTest {
         assertEquals(sessionId, host.runtime.activeSessionIds().single())
     }
 
-    private fun connectAnchorIce() {
-        nodeM02.runtime.simulateRemoteIceState(ANCHOR_ID, "CONNECTED")
-        nodeM03.runtime.simulateRemoteIceState(ANCHOR_ID, "CONNECTED")
-        nodeM01.runtime.simulateRemoteIceState("M02", "CONNECTED")
-        nodeM01.runtime.simulateRemoteIceState("M03", "CONNECTED")
-        Thread.sleep(200L)
+    private fun connectAnchorIce(channelId: String) {
+        connectGroupAnchorIce(nodeM01, nodeM02, nodeM03, channelId, ANCHOR_ID)
     }
 
     private fun waitForPlayback(node: TestTalkbackNode, enabled: Boolean): Boolean {

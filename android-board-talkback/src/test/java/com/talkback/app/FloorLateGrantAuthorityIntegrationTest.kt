@@ -50,7 +50,7 @@ class FloorLateGrantAuthorityIntegrationTest {
     fun lateGrant_afterPttUp_allNodesHaveNoFloorOwner() {
         val channelId = "LATE-GRANT-AUTH"
         setupGroup(channelId)
-        connectAnchorIce()
+        connectAnchorIce(channelId)
         val m02SessionId = nodeM02.runtime.activeSessionIds().single()
         nodeM02.pressPtt(m02SessionId)
         nodeM02.releasePtt(m02SessionId)
@@ -80,12 +80,8 @@ class FloorLateGrantAuthorityIntegrationTest {
         }
     }
 
-    private fun connectAnchorIce() {
-        nodeM02.runtime.simulateRemoteIceState(ANCHOR_ID, "CONNECTED")
-        nodeM03.runtime.simulateRemoteIceState(ANCHOR_ID, "CONNECTED")
-        nodeM01.runtime.simulateRemoteIceState("M02", "CONNECTED")
-        nodeM01.runtime.simulateRemoteIceState("M03", "CONNECTED")
-        Thread.sleep(200L)
+    private fun connectAnchorIce(channelId: String) {
+        connectGroupAnchorIce(nodeM01, nodeM02, nodeM03, channelId, ANCHOR_ID)
     }
 
     private fun m01SessionId(): String = nodeM01.runtime.activeSessionIds().single()
