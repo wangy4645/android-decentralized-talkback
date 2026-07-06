@@ -190,6 +190,138 @@ _Avoid_: 会话模式, 通话状态
 Talkback 本端运行时模型。资源属 Module（Activity 栈、媒体、ICE、采集）；身份属 Endpoint（Floor、PTT、信令主体）；业务对象属 Session（生命周期、Disposition、Membership）。对象定义见 `docs/adr/0001-talkback-runtime-model.md`；Facts 如何安全演化见 `docs/adr/0007-intent-reality-consistency.md`；Group PTT 收敛可观测投影见 `docs/adr/0008-group-runtime-health-projection.md`。
 _Avoid_: Endpoint Runtime, Module Runtime, Coordinator
 
+**Runtime Governance**:
+以可证明收敛为目标的运行时治理层。核心职责是统一准入、统一可观测与统一诊断，而非执行业务迁移本身。治理层不拥有 Runtime 事实，不替代 Runtime Owner。
+_Avoid_: 统一状态机（把业务执行搬进治理层）, 超级协调器
+
+**Transition Trigger**:
+触发一次运行时收敛过程的外部或内部原因标签（如 Meeting 结束、Rejoin、网络变化）。用于度量与归因，不等同于业务命令本身。
+_Avoid_: 隐式 transition, 无来源的收敛事件
+
+**Transition Coordinator**:
+Transition 的观察与聚合组件：汇总 Capability 就绪快照、提供超时与指标、输出可读快照；不直接驱动 Runtime 执行路径。其定位是 observer + gatekeeper，而非 owner。`transitionId` 仅由 Runtime Owner 通过 `beginTransition` 声明创建，Gate 与 UI 不得惰性创建或隐式触发。
+_Avoid_: transition manager（执行型）, 业务编排中心, Gate 懒创建 transition
+
+**Transition Declaration**:
+Runtime Owner 对“状态变化意图已开始”的显式声明（如 Meeting 结束、Group 重建）。Coordinator 据此分配 `transitionId` 并跟踪 phase；声明不等于请求执行业务，而是可观测事实的起点。v1 作用域为 per-channel：`transitionKey = (channelId, transitionId)`；同一 channel 同时最多一个 ACTIVE transition；禁止 v1 使用 cross-channel 或 global scope。
+_Avoid_: 由 Gate 阻塞时顺带创建 transition, 多处入口各自 begin, silent overlap
+
+**Channel Consistency Domain**:
+以 channelId 为边界的一致性域：Conference、Group Mesh、Floor、Routing 视图与 Transition 均归属同一 channel。治理与 Gate 默认以 channel 为隔离单元，避免单 channel 故障扩散为全机阻塞。
+_Avoid_: 全机单例 transition, 跨 channel 混用 readiness snapshot
+
+**Transition Overlap Policy**:
+同一 channel 已有 ACTIVE transition 时，新 `beginTransition` 默认 Reject（记录 `TRANSITION_IN_PROGRESS`），禁止 silent supersede。仅 Runtime Owner 经显式 `abortTransition(channelId, reason)` 将旧 transition 标为 `ABORTED` 后，方可再 begin。
+_Avoid_: 自动覆盖旧 transition, Gate 侧隐式 supersede
+
+**Transition Policy**:
+治理域中按 `TransitionTrigger` 定义 transition 生命周期策略（如超时、可选重试约束）。Coordinator 只执行 timer，不自行决定业务超时；超时属于领域策略而非实现细节。
+_Avoid_: Coordinator 内硬编码 magic number, 用 Operation 超时替代 transition 超时
+
+**Transition Terminal State**:
+Transition 的终态语义：`READY`（收敛成功）、`TIMED_OUT`（时间内未收敛）、`FAILED`（能力层显式失败）、`ABORTED`（Owner 显式中止）。`TIMED_OUT` 清除 active slot，但不隐含 Capability 已就绪。
+_Avoid_: 超时即放行, 将 TIMED_OUT 与 FAILED 混为同一指标桶
+
+**Transition Completion Contract (TCC)**:
+对 `completeTransition` 的显式契约：`TERMINAL=READY` 仅当对应 `TransitionTrigger` 的 Completion Predicate 为真。Runtime Owner 不得在业务函数返回时无条件标 READY；未满足时须记录 `TRANSITION_PREDICATE_EVAL`。见 `docs/adr/0016-transition-completion-contract.md`（ADR-0015 amendment）。
+_Avoid_: 建会函数返回即 READY, 语义完成冒充真实完成
+
+**Completion Predicate**:
+按 `TransitionTrigger` 定义的收敛判定（如 `MEETING_START`：Host solo 有 accepted CONFERENCE；Host 有 invitee 时须 ≥1 peer ICE CONNECTED；`MEETING_END`：GROUP OPERATIONAL + 无 active CONFERENCE）。Predicate 由 Runtime Owner 评估，Coordinator 只接收结果并记日志。
+_Avoid_: 用 transition 超时替代 predicate, 将 Capability 快照当作 completion 真值
+
+**Establishment vs Recovery Transition**:
+Establishment（如 `MEETING_START`）要求媒体/拓扑收敛后才可 READY；Recovery（如 `MEETING_END`）要求 GROUP 运行态恢复后才可 READY。二者 predicate 不同，不得共用「函数返回即完成」捷径。
+_Avoid_: 所有 transition 统一用调用返回作完成信号
+
+**Transition Declaration**:
+一次 Transition 的显式 Intent 快照（如 `MeetingMode`、`expectedInviteTargets`），由 Declaration Owner 在 Declaration Window 内写入，dispatch 完成后冻结。Predicate 只读冻结后的 Declaration，不得用运行时瞬时空集反推业务意图。见 `docs/adr/0017-transition-declaration-and-media-lifecycle.md`。
+_Avoid_: 用 `conferenceMemberRemoteIds.isEmpty()` 判 solo, 运行时 patch declaration
+
+**Declaration Owner**:
+每种 `TransitionTrigger` 的唯一声明写入者（如 `MEETING_START` → Runtime core / Coordinator）。仅 Owner 可 OPEN、更新（窗口内）、FROZEN；Coordinator 治理层与 Gate 只消费，不写入。
+_Avoid_: App 层、UI、Gate 各自 declare
+
+**Declaration Window**:
+Declaration 从 `beginTransition` 到 `inviteDispatchFinished` 的受限初始化阶段（OPEN）；完成后立即 FROZEN，字段不可变。`CompletionPredicate` 在 FROZEN 前可评估但不得满足。
+_Avoid_: begin 即冻结（尚不知 invite targets）, 冻结后改 targets
+
+**Meeting Mode**:
+`MEETING_START` Declaration 的显式业务意图：`SOLO_HOST` 或 `MULTI_PARTY`。与 `expectedInviteTargets` 强一致：`SOLO_HOST ⇔ targets 为空`；违反即 `INVALID_DECLARATION`。
+_Avoid_: soloHost 布尔从 targets 推导, 双真源 mode vs targets
+
+**Expected Invite Targets**:
+本次 `MEETING_START` 意图邀请的对端集合，属于 Declaration 而非 Runtime roster 快照。MULTI_PARTY 下 dispatch 须全部成功，不允许失败后降级改写 targets。
+_Avoid_: 发送失败后删目标, 用 participant manager 空集当 solo
+
+**Media Lifecycle State**:
+与 Transition 正交的媒体连通阶段观测（如 BOOTSTRAPPING、NEGOTIATING、PARTIAL_CONNECTED、CONNECTED）。仅供 UI、指标、soak；**不得**驱动 `completeTransition` / `abortTransition` / `beginTransition`。
+_Avoid_: ICE CONNECTED 触发 transition 完成, 把全员 CONNECTED 塞进 READY predicate
+
+**Dispatch Completed**:
+Invite 发送阶段的终态事件（success / failed），由 InviteDispatcher 在 Policy 约束下重试后产出；Coordinator 只消费此事件，不参与重试逻辑。
+_Avoid_: Coordinator 内 retry 循环, dispatch 失败自动改 declaration
+
+**Dual-Layer Admission Model**:
+准入的双层模型：Policy 层（transition 进行中等时间维约束）与 Readiness 层（Capability 快照）。Gate 不信时间，只信状态；`TIMED_OUT` 仅解除 transition 占用，不自动通过 Readiness 检查。
+_Avoid_: 时间到了即认为系统可用, 单层布尔 ready
+
+**Capability Probe**:
+Capability 就绪状态的只读查询契约。v1 以 Adapter Probe 实现：治理层委托现有 Runtime 状态，Coordinator 仅聚合 Probe 输出；Probe 必须无副作用。Phase 2 可将实现迁入各 Runtime Public API，接口保持不变。
+_Avoid_: Coordinator 内联读取 session 字段, Probe 内触发业务副作用
+
+**Capability**:
+对 Runtime 能力的稳定语义抽象（如 Membership Ready、Routing Ready、Authority Ready）。Operation 依赖 Capability，而不是依赖某个具体 Runtime 字段或 transition 类型。
+_Avoid_: 直接读 Runtime 内部状态做跨域准入
+
+**Capability Readiness**:
+某项 Capability 在当前时刻是否可用于准入决策的判定。就绪判定由对应 Runtime Owner 定义；Coordinator 只聚合，不持有权威副本。
+_Avoid_: Coordinator 缓存并拥有 readiness 真值
+
+**Capability Snapshot**:
+Transition Coordinator 在某一时刻对各 Capability readiness 的聚合视图。是读模型，不是事实所有权；用于 Gate 判定、日志与指标归因。
+_Avoid_: Coordinator 内部真值存储, Runtime readiness 副本
+
+**Operation Policy**:
+治理域中的策略对象，定义每个外部 Operation 的 Capability 依赖与准入相关规则（如优先级、超时、降级、重试约束）。是依赖关系唯一真源，独立于 Runtime 实现版本演进。
+_Avoid_: 依赖散落在入口 if, 仅作键值查找的 registry
+
+**Operation Gate**:
+所有外部发起操作的统一准入入口。每个操作先声明依赖 Capability 集，再做 ALLOW/BLOCK 判定，保证 PTT/Meeting/Single Call/Bootstrap 使用同一准入语义。
+_Avoid_: 各入口各自 if 判断, 旁路准入
+
+**Gate Decision**:
+Operation Gate 的结构化输出：是否放行，以及阻塞时的机器可读上下文（分类、原因码、关联 transition、重试建议、阻塞 capability）。供 UI、日志、指标与测试复用。
+_Avoid_: 仅返回布尔值, 仅返回文案字符串
+
+**Block Category**:
+Gate 阻塞的一层分类：`READINESS`（系统未就绪）与 `POLICY`（系统就绪但策略不允许）。该分类是治理责任边界：READINESS 指向 Runtime 收敛问题，POLICY 指向产品/治理策略约束。
+_Avoid_: 将全部阻塞混为 busy, 用来源模块名替代分类
+
+**Readiness Reason**:
+`READINESS` 下的阻塞原因码，表达某个必需 Capability 尚未达到可执行条件（如 `ROUTING_NOT_READY`、`AUTHORITY_NOT_READY`）。通常可随收敛自行恢复。
+_Avoid_: 把冷却/限流等策略性拒绝写成 readiness
+
+**Policy Reason**:
+`POLICY` 下的阻塞原因码，表达系统主动的准入约束（如 `COOLDOWN_ACTIVE`、`RATE_LIMITED`、`ROLE_RESTRICTED`）。表示“可用但不允许”，不等于 Runtime 未收敛。
+_Avoid_: 用 runtime not ready 解释策略拒绝
+
+**Blocking Capability**:
+在 `READINESS` 阻塞时被判定为未就绪的 Capability 标识，用于指标聚合与根因归属；应为强类型字段而非字符串解析。
+_Avoid_: 仅输出自由文本 reason, 依赖日志正则反推 capability
+
+**Transition Id**:
+一次治理判定关联的全局 transition 关联键。用于串联 Gate、Coordinator、Runtime 日志与指标；当无活动 transition 时使用显式 NONE，而非缺省缺失。
+_Avoid_: 可有可无的关联 id, 按日志时间猜测同一 transition
+
+**Primary Block Reason**:
+Operation Gate 在多重阻塞时选定的单一主因，供 UI 展示与 Metrics/SLI 聚合。必须由全局固定优先级算法选出，不得依赖代码遍历顺序或 Operation 类型特例。
+_Avoid_: 返回原因列表让调用方自选, 按 if 链先命中即返回
+
+**Gate Priority Resolver**:
+治理层中决定多重阻塞时 Primary Reason 的唯一排序器。先收集全部阻塞原因，再按文档化优先级（如 Readiness 细项序、Policy 细项序）选出主因，其余进入附加原因列表。
+_Avoid_: 各 Operation 各自定义优先级, 隐式依赖 requires 声明顺序
+
 **Late Completion**:
 过去发起的异步操作（信令、ICE、定时器等）在延迟后完成时，其所依赖的 Intent 可能已失效。未经验证即修改 Facts 是 Floor/Mesh/Conference 等竞态的共同根因。
 _Avoid_: 孤儿 Floor, 迟到 Grant（仅作口语）
