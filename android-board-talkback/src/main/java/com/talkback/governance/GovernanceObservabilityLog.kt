@@ -4,6 +4,7 @@ import com.talkback.core.util.TalkbackLog
 import com.talkback.governance.gate.GateDecision
 import com.talkback.governance.gate.Operation
 import com.talkback.governance.transition.BeginTransitionResult
+import com.talkback.governance.transition.MeetingStartDeclaration
 import com.talkback.governance.transition.TransitionPredicateEval
 import com.talkback.governance.transition.TransitionRecord
 import com.talkback.governance.transition.TransitionTrigger
@@ -63,6 +64,14 @@ object GovernanceObservabilityLog {
         TalkbackLog.i(
             "TRANSITION_PREDICATE_EVAL ch=$channelId trigger=$trigger " +
                 "satisfied=${eval.satisfied} reason=${eval.reason}"
+        )
+    }
+
+    fun declarationFrozen(channelId: String, declaration: MeetingStartDeclaration) {
+        TalkbackLog.i(
+            "DECLARATION_FROZEN ch=$channelId trigger=MEETING_START " +
+                "mode=${declaration.mode} targets=${declaration.expectedInviteTargets.size} " +
+                "inviteDispatchFinished=${declaration.inviteDispatchFinished}"
         )
     }
 }

@@ -53,6 +53,15 @@ class ChannelGovernanceRuntime(host: ChannelGovernanceHost) {
         maybeCompleteTransition(channelId, TransitionTrigger.MEETING_START) { eval }
     }
 
+    fun failMeetingStart(channelId: String, reason: String) {
+        val active = transitionCoordinator.activeTransition(channelId) ?: return
+        if (!active.isActive || active.trigger != TransitionTrigger.MEETING_START) return
+        val failed = transitionCoordinator.failTransition(channelId, reason)
+        if (failed != null) {
+            GovernanceObservabilityLog.transitionTerminal(failed)
+        }
+    }
+
     private fun maybeCompleteTransition(
         channelId: String,
         trigger: TransitionTrigger,

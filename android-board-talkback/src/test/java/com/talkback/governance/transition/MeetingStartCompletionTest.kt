@@ -1,5 +1,6 @@
 package com.talkback.governance.transition
 
+import com.talkback.core.model.EndpointId
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -7,10 +8,15 @@ import org.junit.Test
 
 class MeetingStartCompletionTest {
     @Test
-    fun soloHost_satisfiedWhenNoExpectedInvitees() {
+    fun soloHost_satisfiedWhenFrozenDeclaration() {
+        val declaration = MeetingStartDeclaration.frozen(
+            mode = MeetingMode.SOLO_HOST,
+            targets = emptySet(),
+            inviteDispatchFinished = true
+        )
         val eval = MeetingStartCompletion.evaluate(
+            declaration = declaration,
             conferenceAccepted = true,
-            expectedInviteeCount = 0,
             connectedInviteeCount = 0
         )
         assertTrue(eval.satisfied)
@@ -18,18 +24,44 @@ class MeetingStartCompletionTest {
     }
 
     @Test
-    fun hostWithInvitees_unsatisfiedUntilFirstPeerConnected() {
-        val pending = MeetingStartCompletion.evaluate(
+    fun openDeclaration_neverSatisfied() {
+        val declaration = MeetingStartDeclaration.open(
+            mode = MeetingMode.SOLO_HOST,
+            targets = emptySet()
+        )
+        val eval = MeetingStartCompletion.evaluate(
+            declaration = declaration,
             conferenceAccepted = true,
-            expectedInviteeCount = 2,
             connectedInviteeCount = 0
         )
-        assertFalse(pending.satisfied)
-        assertEquals("awaiting_first_invitee_ice", pending.reason)
+        assertFalse(eval.satisfied)
+        assertEquals("declaration_not_frozen", eval.reason)
+    }
+
+    @Test
+    fun multiParty_unsatisfiedUntilDispatchFrozenAndPeerConnected() {
+        val targets = setOf(EndpointId("E02"), EndpointId("E03"))
+        val open = MeetingStartDeclaration.open(MeetingMode.MULTI_PARTY, targets)!!
+        val pendingDispatch = MeetingStartCompletion.evaluate(open, conferenceAccepted = true, 0)
+        assertFalse(pendingDispatch.satisfied)
+        assertEquals("declaration_not_frozen", pendingDispatch.reason)
+
+        val frozenBeforeIce = MeetingStartDeclaration.frozen(
+            mode = MeetingMode.MULTI_PARTY,
+            targets = targets,
+            inviteDispatchFinished = true
+        )
+        val awaitingIce = MeetingStartCompletion.evaluate(
+            frozenBeforeIce,
+            conferenceAccepted = true,
+            connectedInviteeCount = 0
+        )
+        assertFalse(awaitingIce.satisfied)
+        assertEquals("awaiting_first_invitee_ice", awaitingIce.reason)
 
         val ready = MeetingStartCompletion.evaluate(
+            frozenBeforeIce,
             conferenceAccepted = true,
-            expectedInviteeCount = 2,
             connectedInviteeCount = 1
         )
         assertTrue(ready.satisfied)
@@ -38,9 +70,14 @@ class MeetingStartCompletionTest {
 
     @Test
     fun notAccepted_unsatisfied() {
+        val declaration = MeetingStartDeclaration.frozen(
+            mode = MeetingMode.SOLO_HOST,
+            targets = emptySet(),
+            inviteDispatchFinished = true
+        )
         val eval = MeetingStartCompletion.evaluate(
+            declaration = declaration,
             conferenceAccepted = false,
-            expectedInviteeCount = 0,
             connectedInviteeCount = 0
         )
         assertFalse(eval.satisfied)

@@ -130,10 +130,28 @@ class OperationGateTest {
         )
     )
 
-    private fun activeTransition(id: TransitionId): TransitionRecord = TransitionRecord(
+    @Test
+    fun allow_meetingInvite_duringMeetingStartTransition() {
+        val decision = gate.canStart(
+            operation = Operation.MEETING_INVITE,
+            channelId = channelId,
+            snapshot = CapabilitySnapshot(
+                channelId,
+                mapOf(Capability.Conference to CapabilityReadiness.READY)
+            ),
+            activeTransition = activeTransition(TransitionId(9L), TransitionTrigger.MEETING_START)
+        )
+
+        assertTrue(decision is GateDecision.Allow)
+    }
+
+    private fun activeTransition(
+        id: TransitionId,
+        trigger: TransitionTrigger = TransitionTrigger.MEETING_END
+    ): TransitionRecord = TransitionRecord(
         id = id,
         channelId = channelId,
-        trigger = TransitionTrigger.MEETING_END,
+        trigger = trigger,
         phase = TransitionPhase.RECONCILING,
         startedAtMs = 1_000L,
         deadlineMs = 13_000L

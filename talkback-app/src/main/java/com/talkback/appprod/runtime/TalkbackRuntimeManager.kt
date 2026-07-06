@@ -22,6 +22,7 @@ import com.talkback.core.qos.QosSnapshot
 import com.talkback.core.session.ChannelMeshHostElection
 import com.talkback.core.session.ChannelReadiness
 import com.talkback.core.session.SessionType
+import com.talkback.governance.transition.MeetingMode
 
 data class ChannelMeetingQos(
     val networkLabel: String,
@@ -241,6 +242,12 @@ class TalkbackRuntimeManager(private val appContext: Context) {
                 return requestConferenceRejoin(config)
             }
             TalkbackLog.i("Conference solo host by ${local.moduleId.value} on $channelId")
+            val inviteTargets = remotes?.map { it.endpointId }?.toSet() ?: emptySet()
+            val meetingMode = if (remotes != null) MeetingMode.MULTI_PARTY else MeetingMode.SOLO_HOST
+            if (!rt.submitMeetingStartIntent(channelId, meetingMode, inviteTargets)) {
+                TalkbackLog.i("MEETING_START intent rejected on $channelId mode=$meetingMode")
+                return null
+            }
             val sessionId = rt.conferenceCall(local, emptyList(), channelId) ?: return null
             if (remotes != null) {
                 val sent = rt.sendConferenceInvites(sessionId, remotes)

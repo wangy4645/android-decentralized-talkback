@@ -88,6 +88,12 @@ class TalkbackRuntime(
         channelId: String
     ): String? = coordinator.conferenceCall(from, remoteEndpoints, channelId)
 
+    fun submitMeetingStartIntent(
+        channelId: String,
+        mode: com.talkback.governance.transition.MeetingMode,
+        expectedInviteTargets: Set<EndpointId>
+    ): Boolean = coordinator.submitMeetingStartIntent(channelId, mode, expectedInviteTargets)
+
     fun sendConferenceInvites(sessionId: String, invitees: List<EndpointAddress>): Int =
         coordinator.sendConferenceInvites(sessionId, invitees)
 

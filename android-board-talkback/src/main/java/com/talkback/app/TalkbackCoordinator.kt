@@ -115,6 +115,9 @@ import com.talkback.governance.gate.GateDecision
 import com.talkback.governance.gate.Operation
 import com.talkback.governance.GovernanceObservabilityLog
 import com.talkback.governance.transition.MeetingStartCompletion
+import com.talkback.governance.transition.MeetingStartDeclaration
+import com.talkback.governance.transition.MeetingStartDeclarationWindow
+import com.talkback.governance.transition.MeetingMode
 import com.talkback.governance.transition.TransitionTrigger
 import com.talkback.core.webrtc.ConferenceAudioBus
 import com.talkback.core.webrtc.MediaBearerScope
@@ -436,6 +439,10 @@ class TalkbackCoordinator(
     private val lastPlaybackEnabledBySession = ConcurrentHashMap<String, Boolean>()
     private val lastEnsureCanonicalInviteMsByModule = ConcurrentHashMap<String, Long>()
     private val seenNoncesByModule = ConcurrentHashMap<String, MutableMap<String, Long>>()
+    private val pendingMeetingStartIntentByChannel =
+        ConcurrentHashMap<String, Pair<MeetingMode, Set<EndpointId>>>()
+    private val meetingStartDeclarationByChannel =
+        ConcurrentHashMap<String, MeetingStartDeclarationWindow>()
     private val coordinatorExecutor = Executors.newSingleThreadExecutor { r ->
         Thread(r, "talkback-coordinator")
     }
@@ -867,6 +874,22 @@ class TalkbackCoordinator(
     }
 
     /**
+     * ADR-0017: submit MEETING_START business intent before host conference mesh creation.
+     * App layer must not own declaration fields directly.
+     */
+    fun submitMeetingStartIntent(
+        channelId: String,
+        mode: MeetingMode,
+        expectedInviteTargets: Set<EndpointId>
+    ): Boolean = runOnCoordinatorSync {
+        if (MeetingStartDeclaration.validateConsistency(mode, expectedInviteTargets) != null) {
+            return@runOnCoordinatorSync false
+        }
+        pendingMeetingStartIntentByChannel[channelId] = mode to expectedInviteTargets.toSet()
+        true
+    }
+
+    /**
      * Sends conference invites without adding invitees to the host mesh yet.
      * Keeps solo-host media ready (Waiting) until a peer accepts via GROUP_ACCEPT.
      */
@@ -914,6 +937,10 @@ class TalkbackCoordinator(
         }
         val inviteTargets = (toAdd + reconnectTargets).distinctBy { it.key }
         if (inviteTargets.isEmpty()) return 0
+        if (!ensureMeetingStartDeclarationForInviteDispatch(channelId, inviteTargets, local)) {
+            failMeetingStartDeclaration(channelId, "INVALID_DECLARATION")
+            return 0
+        }
         session.channelId?.let { channelId ->
             when (val gate = channelGovernance.canStart(Operation.MEETING_INVITE, channelId)) {
                 is GateDecision.Blocked -> {
@@ -982,6 +1009,9 @@ class TalkbackCoordinator(
             sent++
             val label = if (rejoin) "Conference rejoin invite" else "Conference invite"
             log("[${session.traceId}] $label sent -> ${remote.key}")
+        }
+        meetingStartDeclaration(channelId)?.takeIf { it.mode == MeetingMode.MULTI_PARTY && !it.isFrozen }?.let {
+            freezeMeetingStartDeclaration(channelId, inviteDispatchFinished = true)
         }
         session.channelId?.let { maybeEvaluateMeetingStartCompletion(it) }
         return sent
@@ -1146,7 +1176,15 @@ class TalkbackCoordinator(
             }
         }
         if (sessionType == SessionType.CONFERENCE) {
+            clearMeetingStartDeclaration(channelId)
             channelGovernance.beginTransition(TransitionTrigger.MEETING_START, channelId)
+            resolveMeetingStartIntent(channelId, remoteEndpoints)?.let { (mode, targets) ->
+                if (openMeetingStartDeclaration(channelId, mode, targets) == null) {
+                    failMeetingStartDeclaration(channelId, "INVALID_DECLARATION")
+                    return null
+                }
+                consumeMeetingStartIntent(channelId)
+            }
         }
         if (sessionType == SessionType.GROUP) {
             endStaleConferenceBlockingGroup(channelId)
@@ -1288,13 +1326,20 @@ class TalkbackCoordinator(
                 ReDialRecord(local, remote, channelId, allMembers, sessionType)
         }
         val label = if (sessionType == SessionType.CONFERENCE) "Conference" else "Group call"
-        val configuredRemoteMembers = channelSnap.any { it != local.moduleId }
-        if (soloConference) {
-            tryEnsureConferenceDuplex(session)
-            log("[${session.traceId}] $label ${local.key} solo on ch=$channelId")
-            if (!configuredRemoteMembers && inviteTargets.isEmpty()) {
-                maybeEvaluateMeetingStartCompletion(channelId)
+        if (sessionType == SessionType.CONFERENCE) {
+            val declaration = meetingStartDeclaration(channelId)
+            if (declaration?.mode == MeetingMode.MULTI_PARTY && inviteTargets.isNotEmpty()) {
+                freezeMeetingStartDeclaration(channelId, inviteDispatchFinished = true)
+            } else if (declaration?.mode == MeetingMode.SOLO_HOST && inviteTargets.isEmpty()) {
+                freezeMeetingStartDeclaration(channelId, inviteDispatchFinished = true)
             }
+            if (soloConference) {
+                tryEnsureConferenceDuplex(session)
+                log("[${session.traceId}] $label ${local.key} solo on ch=$channelId")
+            } else {
+                log("[${session.traceId}] $label ${local.key} -> ${inviteTargets.size} targets ch=$channelId topology=${session.mediaTopology}")
+            }
+            maybeEvaluateMeetingStartCompletion(channelId)
         } else {
             log("[${session.traceId}] $label ${local.key} -> ${inviteTargets.size} targets ch=$channelId topology=${session.mediaTopology}")
         }
@@ -7962,14 +8007,94 @@ class TalkbackCoordinator(
         if (session.type != SessionType.CONFERENCE || !session.accepted || !isConferenceHostSession(session)) {
             return
         }
-        val invited = conferenceMemberRemoteIds(session)
-        val connected = invited.count { isPeerMediaConnected(it) }
+        val declaration = meetingStartDeclaration(channelId)
+        val connected = connectedExpectedInviteeCount(session, declaration?.expectedInviteTargets ?: emptySet())
         val eval = MeetingStartCompletion.evaluate(
+            declaration = declaration,
             conferenceAccepted = true,
-            expectedInviteeCount = invited.size,
             connectedInviteeCount = connected
         )
+        if (eval.reason == "invalid_declaration") {
+            failMeetingStartDeclaration(channelId, "INVALID_DECLARATION")
+            return
+        }
         channelGovernance.maybeCompleteMeetingStart(channelId, eval)
+        if (channelGovernance.activeTransition(channelId)?.trigger != TransitionTrigger.MEETING_START) {
+            clearMeetingStartDeclaration(channelId)
+        }
+    }
+
+    private fun resolveMeetingStartIntent(
+        channelId: String,
+        remoteEndpoints: List<EndpointAddress>
+    ): Pair<MeetingMode, Set<EndpointId>>? {
+        pendingMeetingStartIntentByChannel[channelId]?.let { return it }
+        if (remoteEndpoints.isNotEmpty()) {
+            return MeetingMode.MULTI_PARTY to remoteEndpoints.map { it.endpointId }.toSet()
+        }
+        return null
+    }
+
+    private fun consumeMeetingStartIntent(channelId: String) {
+        pendingMeetingStartIntentByChannel.remove(channelId)
+    }
+
+    private fun connectedExpectedInviteeCount(
+        session: TalkbackSession,
+        expectedTargets: Set<EndpointId>
+    ): Int {
+        if (expectedTargets.isEmpty()) return 0
+        return meshRoster(session)
+            .asSequence()
+            .filter { it.moduleId != session.local.moduleId }
+            .filter { it.endpointId in expectedTargets }
+            .count { isPeerMediaConnected(it.moduleId.value) }
+    }
+
+    private fun failMeetingStartDeclaration(channelId: String, reason: String) {
+        channelGovernance.failMeetingStart(channelId, reason)
+        clearMeetingStartDeclaration(channelId)
+    }
+
+    private fun ensureMeetingStartDeclarationForInviteDispatch(
+        channelId: String,
+        invitees: List<EndpointAddress>,
+        local: EndpointAddress
+    ): Boolean {
+        if (meetingStartDeclaration(channelId) != null) return true
+        val targets = invitees
+            .filter { it.moduleId != local.moduleId }
+            .map { it.endpointId }
+            .toSet()
+        if (targets.isEmpty()) return false
+        return openMeetingStartDeclaration(channelId, MeetingMode.MULTI_PARTY, targets) != null
+    }
+
+    private fun openMeetingStartDeclaration(
+        channelId: String,
+        mode: MeetingMode,
+        targets: Set<EndpointId>
+    ): MeetingStartDeclaration? {
+        val window = meetingStartDeclarationByChannel.getOrPut(channelId) { MeetingStartDeclarationWindow() }
+        return window.open(mode, targets)
+    }
+
+    private fun freezeMeetingStartDeclaration(
+        channelId: String,
+        inviteDispatchFinished: Boolean
+    ): MeetingStartDeclaration? {
+        val window = meetingStartDeclarationByChannel[channelId] ?: return null
+        val frozen = window.freeze(inviteDispatchFinished) ?: return null
+        GovernanceObservabilityLog.declarationFrozen(channelId, frozen)
+        return frozen
+    }
+
+    private fun meetingStartDeclaration(channelId: String): MeetingStartDeclaration? =
+        meetingStartDeclarationByChannel[channelId]?.current()
+
+    private fun clearMeetingStartDeclaration(channelId: String) {
+        meetingStartDeclarationByChannel.remove(channelId)
+        pendingMeetingStartIntentByChannel.remove(channelId)
     }
 
     internal fun testGovernanceActiveTransitionTrigger(channelId: String): TransitionTrigger? =

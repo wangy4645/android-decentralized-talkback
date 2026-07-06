@@ -74,12 +74,13 @@ class TransitionCoordinator(
         return completed
     }
 
-    fun failTransition(channelId: String): TransitionRecord? {
+    fun failTransition(channelId: String, reason: String? = null): TransitionRecord? {
         val current = activeByChannel[channelId] ?: return null
         if (!current.isActive) return current
         val failed = current.copy(
             terminal = TransitionTerminalState.FAILED,
-            terminalAtMs = clock()
+            terminalAtMs = clock(),
+            abortReason = reason
         )
         activeByChannel.remove(channelId)
         return failed

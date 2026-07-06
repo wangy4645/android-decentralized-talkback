@@ -8,6 +8,7 @@ import com.talkback.governance.capability.blocksAdmission
 import com.talkback.governance.capability.capabilitySnapshot
 import com.talkback.governance.transition.TransitionId
 import com.talkback.governance.transition.TransitionRecord
+import com.talkback.governance.transition.TransitionTrigger
 
 class OperationGate(
     private val policyProvider: (Operation) -> OperationPolicyRule = OperationPolicy::rule
@@ -32,7 +33,12 @@ class OperationGate(
         }
 
         if (policy.blocksDuringActiveTransition && activeTransition?.isActive == true) {
-            reasons[PolicyReason.TransitionInProgress] = null
+            val inviteDuringMeetingStart =
+                operation == Operation.MEETING_INVITE &&
+                    activeTransition.trigger == TransitionTrigger.MEETING_START
+            if (!inviteDuringMeetingStart) {
+                reasons[PolicyReason.TransitionInProgress] = null
+            }
         }
 
         extraPolicyBlocks.forEach { block ->

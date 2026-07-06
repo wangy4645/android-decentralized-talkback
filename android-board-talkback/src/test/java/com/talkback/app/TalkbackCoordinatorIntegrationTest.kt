@@ -1308,6 +1308,15 @@ class TalkbackCoordinatorIntegrationTest {
     fun meetingStart_deferredWhenSoloCallThenSendInvites() {
         val channelId = "TCC-SOLO-THEN-INVITE"
         nodeM01.runtime.configureChannelMembership(channelId, listOf("M01", "M02", "M03"))
+        val remotes = listOf(
+            EndpointAddress(m02, EndpointId("E01")),
+            EndpointAddress(m03, EndpointId("E01"))
+        )
+        nodeM01.runtime.submitMeetingStartIntent(
+            channelId,
+            com.talkback.governance.transition.MeetingMode.MULTI_PARTY,
+            remotes.map { it.endpointId }.toSet()
+        )
         val sessionId = nodeM01.runtime.requireConferenceCall(
             nodeM01.localEndpoint,
             emptyList(),
@@ -1317,10 +1326,6 @@ class TalkbackCoordinatorIntegrationTest {
             "MEETING_START must stay active until invitee ICE when channel has members",
             "MEETING_START",
             nodeM01.runtime.testGovernanceActiveTransitionTrigger(channelId)
-        )
-        val remotes = listOf(
-            EndpointAddress(m02, EndpointId("E02")),
-            EndpointAddress(m03, EndpointId("E03"))
         )
         nodeM01.runtime.sendConferenceInvites(sessionId, remotes)
         assertEquals(
