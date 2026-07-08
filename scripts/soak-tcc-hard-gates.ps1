@@ -166,20 +166,55 @@ if ($s8Reuse -gt 0) {
     Add-Warning "S8" "MEDIA_SESSION_REUSE markers absent (RO-M2 not instrumented yet)"
 }
 
-# --- S9: INVITE_DISPATCH_FAILED tracked; partial dispatch must not degrade to solo ---
-$dispatchFailed = ([regex]::Matches($allText, 'reason=INVITE_DISPATCH_FAILED')).Count
-$partialNonRetry = ([regex]::Matches($allText, 'INVITE_DISPATCH_COMPLETED.*FAILED_(NON_RETRYABLE|RETRY_EXHAUSTED)')).Count
-Write-Host "S9 INVITE_DISPATCH_FAILED terminals: $dispatchFailed"
-Write-Host "S9 partial dispatch outcomes: $partialNonRetry"
-if ($partialNonRetry -gt 0 -and $dispatchFailed -eq 0) {
-    Add-Failure "S9" "partial INVITE_DISPATCH outcome without INVITE_DISPATCH_FAILED terminal"
+# --- S9: MEETING_START establishment dispatch failures (ADR-0017 declaration window) ---
+# Post-freeze rejoin / counter-invite (typically sent=0/1) must not count as establishment failure.
+$meetingStartEstablishmentByChannel = @{}
+$establishmentDispatchFailures = 0
+$dispatchFailedTerminals = 0
+$establishmentPartialSoloRisk = @{}
+
+foreach ($line in $lines) {
+    if ($line -match 'TRANSITION_BEGIN id=\d+ ch=([^\s]+).*trigger=MEETING_START') {
+        $meetingStartEstablishmentByChannel[$Matches[1]] = $true
+    }
+    if ($line -match 'DECLARATION_FROZEN ch=([^\s]+).*trigger=MEETING_START') {
+        $ch = $Matches[1]
+        $meetingStartEstablishmentByChannel.Remove($ch) | Out-Null
+        $establishmentPartialSoloRisk.Remove($ch) | Out-Null
+    }
+    if ($line -match 'TRANSITION_TERMINAL.*ch=([^\s]+).*trigger=MEETING_START') {
+        $ch = $Matches[1]
+        $meetingStartEstablishmentByChannel.Remove($ch) | Out-Null
+        $establishmentPartialSoloRisk.Remove($ch) | Out-Null
+        if ($line -match 'reason=INVITE_DISPATCH_FAILED') {
+            $dispatchFailedTerminals++
+        }
+    }
+    if ($line -match 'INVITE_DISPATCH_COMPLETED ch=([^\s]+) outcome=(FAILED_NON_RETRYABLE|FAILED_RETRY_EXHAUSTED) sent=(\d+)/(\d+)') {
+        $ch = $Matches[1]
+        if ($meetingStartEstablishmentByChannel.ContainsKey($ch)) {
+            $establishmentDispatchFailures++
+            $establishmentPartialSoloRisk[$ch] = $true
+        }
+    }
+    if ($line -match 'TRANSITION_PREDICATE_EVAL ch=([^\s]+).*trigger=MEETING_START.*reason=host_solo_conference') {
+        $ch = $Matches[1]
+        if ($establishmentPartialSoloRisk.ContainsKey($ch)) {
+            Add-Failure "S9" "establishment partial dispatch degraded to host_solo_conference ch=$ch"
+            $establishmentPartialSoloRisk.Remove($ch) | Out-Null
+        }
+    }
 }
-$soloAfterPartial = [regex]::Matches(
+
+$rejoinDispatchFailures = ([regex]::Matches(
     $allText,
-    'INVITE_DISPATCH_COMPLETED.*FAILED_.*[\s\S]{0,500}?reason=host_solo_conference'
-)
-if ($soloAfterPartial.Count -gt 0) {
-    Add-Failure "S9" "partial dispatch degraded to host_solo_conference"
+    'INVITE_DISPATCH_COMPLETED.*outcome=FAILED_(NON_RETRYABLE|RETRY_EXHAUSTED) sent=\d+/1'
+)).Count
+Write-Host "S9 MEETING_START INVITE_DISPATCH_FAILED terminals: $dispatchFailedTerminals"
+Write-Host "S9 establishment-window dispatch failures: $establishmentDispatchFailures"
+Write-Host "S9 rejoin dispatch failures (informational, excluded): $rejoinDispatchFailures"
+if ($establishmentDispatchFailures -gt 0 -and $dispatchFailedTerminals -eq 0) {
+    Add-Failure "S9" "establishment INVITE_DISPATCH failure without INVITE_DISPATCH_FAILED terminal"
 }
 
 Write-Host ""
