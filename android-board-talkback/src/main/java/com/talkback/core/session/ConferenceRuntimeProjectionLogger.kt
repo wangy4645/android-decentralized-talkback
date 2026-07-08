@@ -1,0 +1,40 @@
+package com.talkback.core.session
+
+import com.talkback.core.util.TalkbackLog
+
+/**
+ * Serializes [ConferenceRuntimeState] and dual-track observability to logcat (RO-M2 PR-2).
+ */
+object ConferenceRuntimeProjectionLogger {
+
+    const val TAG = "CONFERENCE_RUNTIME_PROJECTION"
+
+    fun log(
+        sessionId: String,
+        channelId: String?,
+        runtime: ConferenceRuntimeState,
+        channelReadiness: ChannelReadiness?,
+        conferenceUiReady: Boolean
+    ) {
+        TalkbackLog.i(format(sessionId, channelId, runtime, channelReadiness, conferenceUiReady))
+    }
+
+    fun format(
+        sessionId: String,
+        channelId: String?,
+        runtime: ConferenceRuntimeState,
+        channelReadiness: ChannelReadiness?,
+        conferenceUiReady: Boolean
+    ): String = buildString {
+        append(TAG)
+        append(" sessionId=").append(sessionId)
+        append(" ch=").append(channelId ?: "null")
+        append(" phase=").append(runtime.phase.name)
+        append(" recovering=").append(runtime.mediaRecovering)
+        append(" awaiting=").append(runtime.awaitingAdditionalParticipants)
+        append(" controlReady=").append(runtime.transitionTerminalReady)
+        append(" connected=").append(runtime.connectedRemoteMediaCount)
+        append(" channelReadiness=").append(channelReadiness?.name ?: "null")
+        append(" conferenceUiReady=").append(conferenceUiReady)
+    }
+}

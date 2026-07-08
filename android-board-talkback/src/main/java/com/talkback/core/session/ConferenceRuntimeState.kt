@@ -1,0 +1,17 @@
+package com.talkback.core.session
+
+/**
+ * Read-only Conference runtime availability projection (RO-M2 PR-2).
+ * Drives meeting UI in PR-3; soak / diagnostics in PR-2.
+ */
+data class ConferenceRuntimeState(
+    val phase: ConferenceRuntimePhase,
+    /** True when [ConferenceRecoveryController] reports active media recovery (PR-3). */
+    val mediaRecovering: Boolean = false,
+    /** From [ConferenceParticipantProjector]; may coexist with [ConferenceRuntimePhase.ACTIVE]. */
+    val awaitingAdditionalParticipants: Boolean = false,
+    /** MEETING_START transition reached TERMINAL=READY (control plane). */
+    val transitionTerminalReady: Boolean = false,
+    /** Mesh ICE CONNECTED remote count (data plane). */
+    val connectedRemoteMediaCount: Int = 0
+)

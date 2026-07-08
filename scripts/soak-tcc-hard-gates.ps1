@@ -1,6 +1,6 @@
-# TCC / ADR-0016 + ADR-0017 soak hard gates (S1-S9)
+# TCC / ADR-0016 + ADR-0017 soak hard gates (S1-S10)
 # 用法: .\scripts\soak-tcc-hard-gates.ps1 -LogDir "d:\workspace\project\talkback\logs-tcc-xxxx"
-# 扩展 #58 (S1-S5) + #61 (S6-S9)
+# 扩展 #58 (S1-S5) + #61 (S6-S9) + #66 (S10 WARN)
 
 param(
     [Parameter(Mandatory = $true)]
@@ -215,6 +215,34 @@ Write-Host "S9 establishment-window dispatch failures: $establishmentDispatchFai
 Write-Host "S9 rejoin dispatch failures (informational, excluded): $rejoinDispatchFailures"
 if ($establishmentDispatchFailures -gt 0 -and $dispatchFailedTerminals -eq 0) {
     Add-Failure "S9" "establishment INVITE_DISPATCH failure without INVITE_DISPATCH_FAILED terminal"
+}
+
+# --- S10 WARN: MEETING_START READY + peer ICE CONNECTED should project runtime phase=ACTIVE (RO-M2 PR-2) ---
+foreach ($ready in $readyEvents) {
+    $windowEnd = $ready.At.AddSeconds(30)
+    $hasIceConnected = $false
+    $runtimePhase = $null
+    for ($j = $ready.Index + 1; $j -lt $lines.Count; $j++) {
+        $line = $lines[$j]
+        $ts = Parse-LogTimestamp $line
+        if ($ts -and $ts -gt $windowEnd) { break }
+        $lineCh = Get-ChannelFromLine $line
+        if ($lineCh -and $lineCh -ne $ready.Channel) { continue }
+        if ($line -match 'ICE\s+\S+\s+state=(CONNECTED|COMPLETED)') {
+            $hasIceConnected = $true
+        }
+        if ($line -match 'CONFERENCE_RUNTIME_PROJECTION.*\bch=' + [regex]::Escape($ready.Channel) + '\b.*\bphase=(\w+)') {
+            $runtimePhase = $Matches[1]
+        } elseif ($line -match 'CONFERENCE_RUNTIME_PROJECTION.*\bphase=(\w+).*\bch=' + [regex]::Escape($ready.Channel) + '\b') {
+            $runtimePhase = $Matches[1]
+        }
+        if ($hasIceConnected -and $null -ne $runtimePhase) { break }
+    }
+    if ($hasIceConnected -and $null -ne $runtimePhase -and $runtimePhase -ne 'ACTIVE') {
+        Add-Warning "S10" "MEETING_START READY + ICE CONNECTED but runtime phase=$runtimePhase ch=$($ready.Channel)"
+    } elseif ($hasIceConnected -and $null -eq $runtimePhase) {
+        Add-Warning "S10" "MEETING_START READY + ICE CONNECTED but no CONFERENCE_RUNTIME_PROJECTION ch=$($ready.Channel)"
+    }
 }
 
 Write-Host ""
