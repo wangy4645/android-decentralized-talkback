@@ -904,6 +904,39 @@ class TalkbackCoordinatorIntegrationTest {
     }
 
     @Test
+    fun conferenceInviteRetry_connectedPeer_preservesMediaGeneration() {
+        val channelId = "CONF-INVITE-RETRY"
+        val sessionId = nodeM01.runtime.requireConferenceCall(
+            nodeM01.localEndpoint,
+            listOf(
+                EndpointAddress(m02, EndpointId("E01")),
+                EndpointAddress(m03, EndpointId("E01"))
+            ),
+            channelId
+        )
+        assertTrue(nodeM02.waitForLog { it.contains("invite accepted") })
+        nodeM01.runtime.simulateRemoteIceState("M02", "CONNECTED")
+        Thread.sleep(200L)
+        val generationBefore = nodeM01.runtime.conferenceMediaGeneration("M02")
+        assertNotNull(generationBefore)
+
+        nodeM01.runtime.refreshStaleConferenceSession(channelId)
+        val resent = nodeM01.runtime.sendConferenceInvites(
+            sessionId,
+            listOf(EndpointAddress(m02, EndpointId("E01")))
+        )
+
+        assertEquals(0, resent)
+        assertEquals(0, nodeM01.runtime.mediaSessionReuseCount())
+        assertEquals(generationBefore, nodeM01.runtime.conferenceMediaGeneration("M02"))
+        val snapshot = nodeM01.runtime.sessionSnapshotForChannel(channelId)
+        assertEquals(
+            com.talkback.core.session.ConferenceRuntimePhase.ACTIVE,
+            snapshot?.conferenceRuntimeState?.phase
+        )
+    }
+
+    @Test
     fun conferenceInvite_ringTimeout_prunesExpiredFromRoster() {
         val peers = TestTalkbackNode.allPeers(m01 to 50021, m02 to 50022)
         val context = RuntimeEnvironment.getApplication()

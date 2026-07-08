@@ -16,6 +16,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.talkback.appprod.R
+import com.talkback.core.session.ConferenceRuntimePhase
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -129,7 +130,7 @@ class MeetingFragment : Fragment() {
 
     private fun maybeHandlePendingNavigation(state: TalkUiState) {
         if (navigationHandled || pendingNavigation == MeetingNavigation.MAIN) return
-        if (!state.conferenceActive || !state.channelReady) return
+        if (!state.conferenceActive || state.meeting.runtimePhase != ConferenceRuntimePhase.ACTIVE) return
         navigationHandled = true
         when (pendingNavigation) {
             MeetingNavigation.MEMBERS -> showSubPage(MeetingMembersFragment())
@@ -142,7 +143,12 @@ class MeetingFragment : Fragment() {
     fun handleMeetingBack() {
         val state = viewModel.uiState.value
         val awaitingRejoin = state.conferenceMode && !state.conferenceActive
-        val connecting = awaitingRejoin || (state.conferenceActive && !state.channelReady)
+        val runtimePhase = state.meeting.runtimePhase
+        val connecting = awaitingRejoin ||
+            (state.conferenceActive &&
+                (runtimePhase == ConferenceRuntimePhase.CONNECTING ||
+                    runtimePhase == ConferenceRuntimePhase.IDLE ||
+                    runtimePhase == null))
         if (connecting && !viewModel.isConferenceHost() && state.conferenceActive) {
             leaveMeeting()
         } else {
@@ -198,15 +204,21 @@ class MeetingFragment : Fragment() {
             getString(R.string.meeting_channel_title, state.channelTitle)
         view.findViewById<TextView>(R.id.txtMeetingSubtitle).text = state.channelSubtitle
         val awaitingRejoin = state.conferenceMode && !state.conferenceActive
-        val connecting = awaitingRejoin || (state.conferenceActive && !state.channelReady)
-        val live = state.conferenceActive && state.channelReady
+        val runtimePhase = state.meeting.runtimePhase
+        val connecting = awaitingRejoin ||
+            (state.conferenceActive &&
+                (runtimePhase == ConferenceRuntimePhase.CONNECTING ||
+                    runtimePhase == ConferenceRuntimePhase.IDLE ||
+                    runtimePhase == null))
+        val recovering = state.conferenceActive && runtimePhase == ConferenceRuntimePhase.RECOVERING
+        val live = state.conferenceActive && runtimePhase == ConferenceRuntimePhase.ACTIVE
         val muted = state.conferenceMuted
 
-        view.findViewById<View>(R.id.panelMeetingConnecting).isVisible = connecting
+        view.findViewById<View>(R.id.panelMeetingConnecting).isVisible = connecting || recovering
         view.findViewById<View>(R.id.panelMeetingLive).isVisible = live
         view.findViewById<View>(R.id.rowMeetingControls).isVisible = live
         view.findViewById<View>(R.id.btnMeetingLeave).isVisible = live
-        view.findViewById<View>(R.id.btnMeetingCancel).isVisible = connecting
+        view.findViewById<View>(R.id.btnMeetingCancel).isVisible = connecting || recovering
         view.findViewById<View>(R.id.btnMeetingLeaveTop).isVisible = live
         view.findViewById<TextView>(R.id.txtMeetingParticipantCount).isVisible = live
         if (live) {
@@ -215,10 +227,10 @@ class MeetingFragment : Fragment() {
                 getString(R.string.meeting_participants, inMeetingCount)
         }
 
-        bindStatusPill(view.findViewById(R.id.txtMeetingStatusPill), connecting, live, muted, state)
+        bindStatusPill(view.findViewById(R.id.txtMeetingStatusPill), connecting, recovering, live, muted, state)
 
         val txtTimer = view.findViewById<TextView>(R.id.txtMeetingTimer)
-        if (connecting) {
+        if (connecting || recovering) {
             if (connectingStartedAtMs == null) {
                 connectingStartedAtMs = System.currentTimeMillis()
             }
@@ -299,6 +311,7 @@ class MeetingFragment : Fragment() {
     private fun bindStatusPill(
         statusPill: TextView,
         connecting: Boolean,
+        recovering: Boolean,
         live: Boolean,
         muted: Boolean,
         state: TalkUiState
@@ -306,13 +319,13 @@ class MeetingFragment : Fragment() {
         val ctx = requireContext()
         val poorNetwork = state.meeting.networkLabel == "Poor" || state.networkLabel == "Poor"
         when {
-            state.conferenceReconnectFailed && connecting -> {
+            state.conferenceReconnectFailed && (connecting || recovering) -> {
                 statusPill.setCompoundDrawablesWithIntrinsicBounds(R.drawable.dot_meeting_connecting, 0, 0, 0)
                 statusPill.text = getString(R.string.meeting_reconnect_failed)
                 statusPill.setBackgroundResource(R.drawable.bg_meeting_connecting_pill)
                 statusPill.setTextColor(ContextCompat.getColor(ctx, R.color.tb_meeting_connecting))
             }
-            state.conferenceReconnecting && connecting -> {
+            state.conferenceReconnecting && (connecting || recovering) -> {
                 statusPill.setCompoundDrawablesWithIntrinsicBounds(R.drawable.dot_meeting_connecting, 0, 0, 0)
                 statusPill.text = getString(R.string.meeting_reconnecting)
                 statusPill.setBackgroundResource(R.drawable.bg_meeting_connecting_pill)
@@ -359,8 +372,11 @@ class MeetingFragment : Fragment() {
 
     private fun isWaitingAlone(state: TalkUiState): Boolean =
         state.conferenceActive &&
-            viewModel.isConferenceHost() &&
-            state.meeting.visibleParticipantCount <= 1
+            state.meeting.runtimePhase == ConferenceRuntimePhase.ACTIVE &&
+            (
+                state.meeting.awaitingAdditionalParticipants ||
+                    (viewModel.isConferenceHost() && state.meeting.visibleParticipantCount <= 1)
+                )
 
     private fun startVolumeMeterPolling(meter: MeetingVolumeMeterView) {
         meter.isVisible = true

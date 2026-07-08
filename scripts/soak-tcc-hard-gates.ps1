@@ -1,6 +1,6 @@
 # TCC / ADR-0016 + ADR-0017 soak hard gates (S1-S10)
 # 用法: .\scripts\soak-tcc-hard-gates.ps1 -LogDir "d:\workspace\project\talkback\logs-tcc-xxxx"
-# 扩展 #58 (S1-S5) + #61 (S6-S9) + #66 (S10 WARN)
+# 扩展 #58 (S1-S5) + #61 (S6-S9) + #66/#68 (S10 HARD)
 
 param(
     [Parameter(Mandatory = $true)]
@@ -217,7 +217,7 @@ if ($establishmentDispatchFailures -gt 0 -and $dispatchFailedTerminals -eq 0) {
     Add-Failure "S9" "establishment INVITE_DISPATCH failure without INVITE_DISPATCH_FAILED terminal"
 }
 
-# --- S10 WARN: MEETING_START READY + peer ICE CONNECTED should project runtime phase=ACTIVE (RO-M2 PR-2) ---
+# --- S10 HARD: MEETING_START READY + peer ICE CONNECTED must project runtime phase=ACTIVE (RO-M2 PR-3) ---
 foreach ($ready in $readyEvents) {
     $windowEnd = $ready.At.AddSeconds(30)
     $hasIceConnected = $false
@@ -239,9 +239,9 @@ foreach ($ready in $readyEvents) {
         if ($hasIceConnected -and $null -ne $runtimePhase) { break }
     }
     if ($hasIceConnected -and $null -ne $runtimePhase -and $runtimePhase -ne 'ACTIVE') {
-        Add-Warning "S10" "MEETING_START READY + ICE CONNECTED but runtime phase=$runtimePhase ch=$($ready.Channel)"
+        Add-Failure "S10" "MEETING_START READY + ICE CONNECTED but runtime phase=$runtimePhase ch=$($ready.Channel)"
     } elseif ($hasIceConnected -and $null -eq $runtimePhase) {
-        Add-Warning "S10" "MEETING_START READY + ICE CONNECTED but no CONFERENCE_RUNTIME_PROJECTION ch=$($ready.Channel)"
+        Add-Failure "S10" "MEETING_START READY + ICE CONNECTED but no CONFERENCE_RUNTIME_PROJECTION ch=$($ready.Channel)"
     }
 }
 

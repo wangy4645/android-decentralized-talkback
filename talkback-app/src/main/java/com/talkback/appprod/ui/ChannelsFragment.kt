@@ -14,6 +14,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.talkback.appprod.R
+import com.talkback.core.session.ConferenceRuntimePhase
 import kotlinx.coroutines.launch
 
 class ChannelsFragment : Fragment() {
@@ -78,7 +79,9 @@ class ChannelsFragment : Fragment() {
         txtOnlineCount.text = state.onlineCount.toString()
 
         val speaking = state.serviceRunning && state.sessionActive && (
-            (state.conferenceActive && state.channelReady && !state.conferenceMuted) ||
+            (state.conferenceActive &&
+                state.meeting.runtimePhase == ConferenceRuntimePhase.ACTIVE &&
+                !state.conferenceMuted) ||
                 state.talking != "--"
             )
         val floorLabel = when {
@@ -99,7 +102,11 @@ class ChannelsFragment : Fragment() {
             state.conferenceMode && !state.sessionActive -> getString(R.string.meeting_tap_to_join)
             !state.sessionActive -> getString(R.string.channel_status_waiting)
             state.conferenceActive && state.conferenceMuted -> getString(R.string.conference_status_muted)
-            state.conferenceActive && state.channelReady -> getString(R.string.conference_status_live)
+            state.conferenceActive && state.meeting.runtimePhase == ConferenceRuntimePhase.ACTIVE ->
+                getString(R.string.conference_status_live)
+            state.conferenceActive &&
+                state.meeting.runtimePhase == ConferenceRuntimePhase.RECOVERING ->
+                getString(R.string.meeting_reconnecting)
             state.conferenceActive -> getString(R.string.conference_status_connecting)
             speaking -> getString(R.string.status_speaking)
             else -> getString(R.string.channel_status_idle)

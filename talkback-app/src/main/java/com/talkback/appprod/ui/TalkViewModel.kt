@@ -11,6 +11,7 @@ import com.talkback.appprod.data.AppConfigStore
 import com.talkback.appprod.data.ChannelMode
 import com.talkback.appprod.runtime.ChannelWarmupPolicy
 import com.talkback.core.session.ChannelReadiness
+import com.talkback.core.session.ConferenceRuntimePhase
 import com.talkback.appprod.data.TaskProfile
 import com.talkback.appprod.data.TaskProfileManager
 import com.talkback.appprod.service.TalkbackForegroundService
@@ -515,7 +516,12 @@ class TalkViewModel(
     /** WebRTC audio level 0..1 for the current meeting center speaker. */
     fun meetingSpeakerAudioLevel(): Float {
         val state = _uiState.value
-        if (!state.conferenceActive || !state.channelReady || state.conferenceMuted) return 0f
+        if (!state.conferenceActive ||
+            state.meeting.runtimePhase != ConferenceRuntimePhase.ACTIVE ||
+            state.conferenceMuted
+        ) {
+            return 0f
+        }
         val speaker = state.endpoints.firstOrNull { it.status == EndpointStatus.SPEAKING } ?: return 0f
         return manager.meetingSpeakerAudioLevel(configStore.load(), speaker.key)
     }
@@ -855,7 +861,11 @@ class TalkViewModel(
         val channelAwaitingHost =
             channelReadiness == ChannelReadiness.AWAITING_PRIMARY && session == null
 
-        if (conferenceActive && channelReady) {
+        val runtimePhase = session?.conferenceRuntimeState?.phase
+        val conferenceRuntimeActive =
+            conferenceActive && runtimePhase == ConferenceRuntimePhase.ACTIVE
+
+        if (conferenceRuntimeActive) {
             if (meetingStartedAtMs == null) {
                 meetingStartedAtMs = System.currentTimeMillis()
             }
@@ -884,17 +894,17 @@ class TalkViewModel(
         }
         val conferenceRejoinInProgress = manager.isConferenceRejoinInProgress(config)
         val conferenceReconnecting = conferenceActive &&
-            !channelReady &&
-            manager.isConferenceReconnecting(config)
+            runtimePhase == ConferenceRuntimePhase.RECOVERING &&
+            !manager.isConferenceReconnectFailed(config)
         val conferenceReconnectFailed = conferenceActive &&
-            !channelReady &&
+            runtimePhase == ConferenceRuntimePhase.RECOVERING &&
             manager.isConferenceReconnectFailed(config)
 
-        if (conferenceActive && channelReady) {
+        if (conferenceRuntimeActive) {
             val visible = session?.visibleParticipantCount ?: 0
             val awaiting = session?.awaitingAdditionalParticipants == true
             TalkbackLog.i(
-                "Meeting pill: visible=$visible roster=${session?.memberKeys?.size ?: 0} awaiting=$awaiting"
+                "Meeting pill: visible=$visible roster=${session?.memberKeys?.size ?: 0} awaiting=$awaiting phase=$runtimePhase"
             )
         }
 
@@ -944,6 +954,7 @@ class TalkViewModel(
                 memberKeys = session?.memberKeys.orEmpty(),
                 visibleParticipantCount = session?.visibleParticipantCount ?: 0,
                 awaitingAdditionalParticipants = session?.awaitingAdditionalParticipants == true,
+                runtimePhase = runtimePhase,
                 startedAtMs = meetingStartedAtMs,
                 networkLabel = meetingQos?.networkLabel ?: runtime.networkQualityLabel(),
                 rttMs = meetingQos?.rttMs,
