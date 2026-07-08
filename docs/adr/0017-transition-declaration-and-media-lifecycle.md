@@ -326,9 +326,24 @@ RO-M2a does **NOT** solve:
 | Soak S6–S9 grep | scripts |
 | RO-M2b conference ICE + SDP | #64 |
 
+## Follow-on ADRs (RO-M2 conference lifecycle)
+
+RO-M1 / RO-M2a addressed declaration false-completion and GROUP→MEETING barrier. In-meeting
+`MEDIA_SESSION_REUSE=1` and invite-retry-driven PC churn are governed separately:
+
+| ADR | Topic |
+|-----|-------|
+| [ADR-0018](./0018-conference-media-lifecycle-ownership.md) (ADR-CONF-001) | Media session ownership, reuse policy, recovery escalation |
+| [ADR-0019](./0019-conference-signaling-media-separation.md) (ADR-CONF-002) | Signaling retry MUST NOT mutate media lifecycle |
+
+ADR-0017 Media Lifecycle observability (read-only) remains unchanged; ADR-0018/0019 define **who
+may mutate** PeerConnections and **when recreation is allowed**.
+
 ## References
 
 - ADR-0015 Runtime Governance
 - ADR-0016 Transition Completion Contract (amended)
+- [ADR-0018](./0018-conference-media-lifecycle-ownership.md) — Conference media ownership (ADR-CONF-001)
+- [ADR-0019](./0019-conference-signaling-media-separation.md) — Signaling vs media (ADR-CONF-002)
 - Soak logs: `logs-rog1-20260706-141845`, `logs-tcc-20260706-153352`, `logs-tcc-20260706-161922`
 - Epic: #50

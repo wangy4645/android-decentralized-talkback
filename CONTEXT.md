@@ -398,6 +398,26 @@ _Avoid_: ViewModel 内 `memberViews.filter`, 直接读 `invite`/`media`
 本机 ICE 媒体链路可达性（`meshConnectedPeerCount` / `connectedMeshPeerIds`）。用于 transmit readiness、信号质量与诊断；**不得**驱动 Conference UI（R42）。
 _Avoid_: 把 data-plane 当 control-plane
 
+**Conference Media Session**:
+Conference 范围内、按远端 `moduleId` 绑定的 PeerConnection 实例及其 generation。由 `MediaSessionManager` 创建与关闭；活跃会议中不得因 membership 或 invite retry 而隐式 recreate。见 `docs/adr/0018-conference-media-lifecycle-ownership.md`（ADR-CONF-001）。
+_Avoid_: mesh engine（未指明 scope 时）, 每次 invite 新建 PC
+
+**Media Session Reuse**:
+Soak 硬门禁 S8 指标：`MEDIA_SESSION_REUSE=1` 表示在 CONFERENCE scope 内对已有 live PC 执行了 destroy+recreate。活跃会议路径上必须为 0；仅 scope 切换 barrier 或 recovery escalation 后的合法 recreate 除外。
+_Avoid_: 把 reuse 当作性能优化开关
+
+**Conference Recovery Escalation**:
+Conference 媒体断连后的分级恢复：先 ICE restart（有界重试），仅在 FAILED / CHECKING 超时等条件满足后由 `ConferenceRecoveryController` 请求 PC recreate。`DISCONNECTED` 走 recovery，不立即 recreate。见 ADR-0018。
+_Avoid_: invite 超时即重建 PC, Coordinator 直接 close+create
+
+**Signaling–Media Separation**:
+Conference 控制面（invite 发送、retry、roster 更新）与数据面（PeerConnection 生命周期）正交。信令 retry **不得**调用 `MediaSessionManager.create/close/resetAll`；media recreate 仅 recovery authority 在 escalation 后发起。见 `docs/adr/0019-conference-signaling-media-separation.md`（ADR-CONF-002）。
+_Avoid_: resendConferenceInvites 顺带 acquireMeshEngine
+
+**Conference Runtime State**:
+会议可用性的只读投影（phase、recovering、awaiting 等），由 `ConferenceRuntimeProjector` 从 control + media facts 推导。会议 UI **必须**只读此投影；`channelReadiness` 仅用于 PTT/频道，不得驱动 Meeting pill。`ACTIVE` 可与 `awaitingAdditionalParticipants=true` 共存；`recovering` 仅 Projector 判定。PR-2/PR-3 落地。
+_Avoid_: channelReadiness 驱动会议 Connecting, UI 直接读 ICE 回调
+
 **UI Projection Principle**:
 UI 不得直接解释 Runtime Facts；一切用户可见语义必须有专用 Projection（R43）。Conference、Contacts、Presence、GroupRuntimeHealth 均遵守。
 _Avoid_: 在 ViewModel 散落业务 filter

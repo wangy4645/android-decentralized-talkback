@@ -9,6 +9,7 @@ import java.util.concurrent.ConcurrentHashMap
 /**
  * RO-M2a: session-bound mesh media lifecycle. One PeerConnection generation per scope transition.
  * GROUP → MEETING must not reuse a live GROUP PeerConnection (ADR-0017 / KPI MEDIA_SESSION_REUSE=0).
+ * CONFERENCE → CONFERENCE reuses a live PC for CONNECTED/CHECKING/DISCONNECTED/FAILED (ADR-0018).
  */
 class MediaSessionManager(
     private val factory: ModuleMediaEngineFactory,
@@ -34,6 +35,9 @@ class MediaSessionManager(
 
     fun create(moduleId: String, scope: MediaBearerScope): WebRtcAudioEngine {
         val existing = entries[moduleId]
+        if (existing != null && shouldReuseConferenceSession(existing, scope)) {
+            return existing.engine
+        }
         if (existing != null && !IceConnectivity.isClosed(existing.iceState)) {
             reuseViolations++
             MediaObservabilityLog.mediaSessionReuse(
@@ -148,6 +152,11 @@ class MediaSessionManager(
         }
         else -> current
     }
+
+    private fun shouldReuseConferenceSession(existing: Entry, requestedScope: MediaBearerScope): Boolean =
+        requestedScope == MediaBearerScope.CONFERENCE &&
+            existing.scope == MediaBearerScope.CONFERENCE &&
+            !IceConnectivity.isClosed(existing.iceState)
 
     private fun logLifecycle(entry: Entry) {
         MediaObservabilityLog.mediaLifecycle(

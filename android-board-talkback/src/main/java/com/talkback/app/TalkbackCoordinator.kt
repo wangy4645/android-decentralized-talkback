@@ -1106,26 +1106,21 @@ class TalkbackCoordinator(
             System.currentTimeMillis(),
             rejoin
         )
+        // ADR-0019: signaling retry must not acquire/recreate media; first attach only when no PC exists.
         val existingEngine = meshEngineForSession(session, moduleId)
+        val signalingRetry = existingEngine != null
         val engine = try {
-            if (rejoin && existingEngine != null &&
-                IceConnectivity.isConnected(qosMonitor.snapshot(moduleId)?.iceState)
-            ) {
-                existingEngine
-            } else {
-                if (rejoin) {
-                    releasePeerMediaOnly(session, moduleId)
-                    session.remotePeersByModule[moduleId] = peer
-                }
-                acquireMeshEngine(session, moduleId, forReconnect = rejoin)
-            }
+            existingEngine ?: acquireMeshEngine(session, moduleId, forReconnect = rejoin)
         } catch (e: Exception) {
             log("[${session.traceId}] Conference invite SDP failed for $moduleId: ${e.message}")
             return InviteDispatchSendResult.Failed(InviteDispatchError.SDP_BUILD_FAILED)
         }
         wireIceCallback(session, moduleId, engine)
         val offer = try {
-            engine.createOffer(iceRestart = rejoin)
+            if (signalingRetry) {
+                engine.rollbackNegotiation()
+            }
+            engine.createOffer(iceRestart = rejoin || signalingRetry)
         } catch (e: Exception) {
             log("[${session.traceId}] Conference invite offer failed for $moduleId: ${e.message}")
             return InviteDispatchSendResult.Failed(InviteDispatchError.SDP_BUILD_FAILED)

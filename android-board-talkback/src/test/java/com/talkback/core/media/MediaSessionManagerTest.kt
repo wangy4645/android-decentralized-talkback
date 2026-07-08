@@ -86,4 +86,55 @@ class MediaSessionManagerTest {
         manager.create("M02", MediaBearerScope.CONFERENCE)
         assertEquals(0, manager.mediaSessionReuseCount())
     }
+
+    @Test
+    fun create_conferenceConnected_reusesWithoutViolation() {
+        val first = manager.create("M02", MediaBearerScope.CONFERENCE)
+        manager.onIceStateChanged("M02", "CONNECTED")
+        val firstGen = manager.getState("M02")!!.generation
+
+        val second = manager.create("M02", MediaBearerScope.CONFERENCE)
+
+        assertEquals(first, second)
+        assertEquals(firstGen, manager.getState("M02")!!.generation)
+        assertEquals(0, manager.mediaSessionReuseCount())
+    }
+
+    @Test
+    fun create_conferenceDisconnected_reusesWithoutViolation() {
+        manager.create("M02", MediaBearerScope.CONFERENCE)
+        manager.onIceStateChanged("M02", "CONNECTED")
+        manager.onIceStateChanged("M02", "DISCONNECTED")
+
+        manager.create("M02", MediaBearerScope.CONFERENCE)
+
+        assertEquals(0, manager.mediaSessionReuseCount())
+        assertEquals("DISCONNECTED", manager.getState("M02")!!.iceState)
+        assertEquals(MediaLifecycle.DEGRADED, manager.getState("M02")!!.lifecycle)
+    }
+
+    @Test
+    fun create_conferenceChecking_reusesWithoutViolation() {
+        manager.create("M02", MediaBearerScope.CONFERENCE)
+        manager.onIceStateChanged("M02", "CHECKING")
+
+        manager.create("M02", MediaBearerScope.CONFERENCE)
+
+        assertEquals(0, manager.mediaSessionReuseCount())
+        assertEquals("CHECKING", manager.getState("M02")!!.iceState)
+    }
+
+    @Test
+    fun create_conferenceClosed_allowsNewGeneration() {
+        val first = manager.create("M02", MediaBearerScope.CONFERENCE)
+        manager.onIceStateChanged("M02", "CONNECTED")
+        val firstGen = manager.getState("M02")!!.generation
+        manager.close("M02")
+
+        val second = manager.create("M02", MediaBearerScope.CONFERENCE)
+
+        assertNotSame(first, second)
+        assertTrue(manager.getState("M02")!!.generation > firstGen)
+        assertEquals(0, manager.mediaSessionReuseCount())
+    }
 }
