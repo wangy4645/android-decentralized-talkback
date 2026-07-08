@@ -7,6 +7,8 @@ import com.talkback.governance.transition.BeginTransitionResult
 import com.talkback.governance.transition.MeetingStartDeclaration
 import com.talkback.governance.transition.TransitionPredicateEval
 import com.talkback.governance.transition.TransitionRecord
+import com.talkback.governance.transition.InviteDispatchResult
+import com.talkback.governance.transition.TransitionTerminalState
 import com.talkback.governance.transition.TransitionTrigger
 
 object GovernanceObservabilityLog {
@@ -49,10 +51,24 @@ object GovernanceObservabilityLog {
     }
 
     fun transitionTerminal(record: TransitionRecord) {
+        val reasonSuffix = when (record.terminal) {
+            TransitionTerminalState.FAILED,
+            TransitionTerminalState.ABORTED ->
+                record.abortReason?.let { " reason=$it" }.orEmpty()
+            else -> ""
+        }
         TalkbackLog.i(
             "TRANSITION_TERMINAL id=${record.id} ch=${record.channelId} " +
                 "trigger=${record.trigger} terminal=${record.terminal} " +
-                "durationMs=${record.terminalAtMs?.minus(record.startedAtMs)}"
+                "durationMs=${record.terminalAtMs?.minus(record.startedAtMs)}$reasonSuffix"
+        )
+    }
+
+    fun inviteDispatchCompleted(channelId: String, result: InviteDispatchResult) {
+        TalkbackLog.i(
+            "INVITE_DISPATCH_COMPLETED ch=$channelId outcome=${result.outcome} " +
+                "sent=${result.sentCount}/${result.targetCount}" +
+                (result.lastError?.let { " lastError=$it" }.orEmpty())
         )
     }
 

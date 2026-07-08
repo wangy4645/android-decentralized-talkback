@@ -16,7 +16,7 @@ sealed interface BeginTransitionResult {
  */
 class TransitionCoordinator(
     private val probes: List<CapabilityProbe>,
-    private val policyProvider: (TransitionTrigger) -> TransitionPolicyRule = TransitionPolicy::rule,
+    private val policyProvider: (TransitionTrigger) -> TransitionPolicyRule = PolicyRegistry::rule,
     private val clock: () -> Long = System::currentTimeMillis,
     private val idSource: () -> Long = { nextId.incrementAndGet() }
 ) {

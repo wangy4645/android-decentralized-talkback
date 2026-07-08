@@ -114,10 +114,16 @@ import com.talkback.governance.coordinator.TopologyReadinessLabel
 import com.talkback.governance.gate.GateDecision
 import com.talkback.governance.gate.Operation
 import com.talkback.governance.GovernanceObservabilityLog
+import com.talkback.governance.transition.InviteDispatchError
+import com.talkback.governance.transition.InviteDispatcher
+import com.talkback.governance.transition.InviteDispatchOutcome
+import com.talkback.governance.transition.InviteDispatchSendResult
 import com.talkback.governance.transition.MeetingStartCompletion
 import com.talkback.governance.transition.MeetingStartDeclaration
 import com.talkback.governance.transition.MeetingStartDeclarationWindow
 import com.talkback.governance.transition.MeetingMode
+import com.talkback.governance.transition.PolicyConfigurationException
+import com.talkback.governance.transition.TransitionPolicy
 import com.talkback.governance.transition.TransitionTrigger
 import com.talkback.core.webrtc.ConferenceAudioBus
 import com.talkback.core.webrtc.MediaBearerScope
@@ -941,16 +947,19 @@ class TalkbackCoordinator(
             failMeetingStartDeclaration(channelId, "INVALID_DECLARATION")
             return 0
         }
-        session.channelId?.let { channelId ->
-            when (val gate = channelGovernance.canStart(Operation.MEETING_INVITE, channelId)) {
-                is GateDecision.Blocked -> {
-                    log(
-                        "CONFERENCE_INVITE_GATE blocked ch=$channelId " +
-                            "primary=${gate.primaryReason.code} transition=${gate.transitionId}"
-                    )
-                    return 0
+        val usePolicyDispatch = meetingStartDeclaration(channelId)?.isFrozen == false
+        if (!usePolicyDispatch) {
+            session.channelId?.let { channelId ->
+                when (val gate = channelGovernance.canStart(Operation.MEETING_INVITE, channelId)) {
+                    is GateDecision.Blocked -> {
+                        log(
+                            "CONFERENCE_INVITE_GATE blocked ch=$channelId " +
+                                "primary=${gate.primaryReason.code} transition=${gate.transitionId}"
+                        )
+                        return 0
+                    }
+                    is GateDecision.Allow -> Unit
                 }
-                is GateDecision.Allow -> Unit
             }
         }
 
@@ -958,61 +967,180 @@ class TalkbackCoordinator(
         applyGroupTopology(session, allMembers.size)
         val payloadBase = groupPayloadBase(session).copy(rejoin = rejoin)
 
+        val sent = if (usePolicyDispatch) {
+            dispatchMeetingStartInvitesWithPolicy(
+                session = session,
+                channelId = channelId,
+                sessionId = sessionId,
+                inviteTargets = inviteTargets,
+                rejoin = rejoin,
+                allMembers = allMembers,
+                payloadBase = payloadBase
+            )
+        } else {
+            dispatchConferenceInvitesDirect(
+                session = session,
+                channelId = channelId,
+                sessionId = sessionId,
+                inviteTargets = inviteTargets,
+                rejoin = rejoin,
+                allMembers = allMembers,
+                payloadBase = payloadBase
+            )
+        }
+        session.channelId?.let { maybeEvaluateMeetingStartCompletion(it) }
+        return sent
+    }
+
+    private fun dispatchMeetingStartInvitesWithPolicy(
+        session: TalkbackSession,
+        channelId: String,
+        sessionId: String,
+        inviteTargets: List<EndpointAddress>,
+        rejoin: Boolean,
+        allMembers: List<EndpointAddress>,
+        payloadBase: GroupSessionPayload
+    ): Int {
+        val policy = try {
+            TransitionPolicy.meetingStartInviteDispatch()
+        } catch (_: PolicyConfigurationException) {
+            failMeetingStartDeclaration(channelId, "INVALID_POLICY")
+            return 0
+        }
+        val dispatcher = InviteDispatcher(
+            policy = policy,
+            // Coordinator thread must not block on backoff; immediate re-attempts only.
+            sleeper = { }
+        )
+        val result = dispatcher.dispatch(inviteTargets) { remote ->
+            trySendSingleConferenceInvite(
+                session = session,
+                channelId = channelId,
+                sessionId = sessionId,
+                remote = remote,
+                rejoin = rejoin,
+                allMembers = allMembers,
+                payloadBase = payloadBase
+            )
+        }
+        GovernanceObservabilityLog.inviteDispatchCompleted(channelId, result)
+        return when (result.outcome) {
+            InviteDispatchOutcome.SUCCESS -> {
+                onMeetingStartInviteDispatchCompleted(channelId, inviteTargets.size, result.sentCount)
+                result.sentCount
+            }
+            InviteDispatchOutcome.FAILED_NON_RETRYABLE,
+            InviteDispatchOutcome.FAILED_RETRY_EXHAUSTED -> {
+                failMeetingStartDeclaration(channelId, "INVITE_DISPATCH_FAILED")
+                result.sentCount
+            }
+        }
+    }
+
+    private fun dispatchConferenceInvitesDirect(
+        session: TalkbackSession,
+        channelId: String,
+        sessionId: String,
+        inviteTargets: List<EndpointAddress>,
+        rejoin: Boolean,
+        allMembers: List<EndpointAddress>,
+        payloadBase: GroupSessionPayload
+    ): Int {
         var sent = 0
         inviteTargets.forEach { remote ->
-            val moduleId = remote.moduleId.value
-            conferenceParticipantManager.leftMemberEndpoints(session.id)?.remove(moduleId)
-            val forReconnect = rejoin
-            if (!canSendConferenceInvite(session, moduleId, forReconnect = forReconnect)) {
-                return@forEach
+            when (
+                trySendSingleConferenceInvite(
+                    session = session,
+                    channelId = channelId,
+                    sessionId = sessionId,
+                    remote = remote,
+                    rejoin = rejoin,
+                    allMembers = allMembers,
+                    payloadBase = payloadBase
+                )
+            ) {
+                InviteDispatchSendResult.Sent -> sent++
+                is InviteDispatchSendResult.Failed -> Unit
             }
-            session.meshCompletedModules.remove(moduleId)
-            val peer = resolvePeerForModule(moduleId)
-            if (peer == null) {
+        }
+        onMeetingStartInviteDispatchCompleted(channelId, inviteTargets.size, sent)
+        return sent
+    }
+
+    private fun trySendSingleConferenceInvite(
+        session: TalkbackSession,
+        channelId: String,
+        sessionId: String,
+        remote: EndpointAddress,
+        rejoin: Boolean,
+        allMembers: List<EndpointAddress>,
+        payloadBase: GroupSessionPayload
+    ): InviteDispatchSendResult {
+        if (meetingStartDeclaration(channelId)?.isFrozen == false) {
+            when (channelGovernance.canStart(Operation.MEETING_INVITE, channelId)) {
+                is GateDecision.Blocked ->
+                    return InviteDispatchSendResult.Failed(InviteDispatchError.GATE_BLOCKED)
+                is GateDecision.Allow -> Unit
+            }
+        }
+        val moduleId = remote.moduleId.value
+        conferenceParticipantManager.leftMemberEndpoints(session.id)?.remove(moduleId)
+        if (!canSendConferenceInvite(session, moduleId, forReconnect = rejoin)) {
+            return InviteDispatchSendResult.Failed(InviteDispatchError.TRANSPORT_NOT_READY)
+        }
+        session.meshCompletedModules.remove(moduleId)
+        val peer = resolvePeerForModule(moduleId)
+            ?: run {
                 log("[${session.traceId}] Conference invite skipped: $moduleId not discovered")
-                return@forEach
+                return InviteDispatchSendResult.Failed(InviteDispatchError.UNKNOWN_ENDPOINT)
             }
-            session.remotePeersByModule[moduleId] = peer
-            conferenceParticipantManager.onInviteSent(
-                session.id,
-                moduleId,
-                System.currentTimeMillis(),
-                forReconnect
-            )
-            val existingEngine = getMeshEngine(moduleId)
-            val engine = if (forReconnect && existingEngine != null &&
+        session.remotePeersByModule[moduleId] = peer
+        conferenceParticipantManager.onInviteSent(
+            session.id,
+            moduleId,
+            System.currentTimeMillis(),
+            rejoin
+        )
+        val existingEngine = getMeshEngine(moduleId)
+        val engine = try {
+            if (rejoin && existingEngine != null &&
                 IceConnectivity.isConnected(qosMonitor.snapshot(moduleId)?.iceState)
             ) {
                 existingEngine
             } else {
-                if (forReconnect) {
+                if (rejoin) {
                     releasePeerMediaOnly(session, moduleId)
                     session.remotePeersByModule[moduleId] = peer
                 }
-                acquireMeshEngine(session, moduleId, forReconnect = forReconnect)
+                acquireMeshEngine(session, moduleId, forReconnect = rejoin)
             }
-            wireIceCallback(session, moduleId, engine)
-            val offer = engine.createOffer(iceRestart = forReconnect)
-            drainPendingIce(session.id, moduleId, engine)
-            sendSignal(
-                peer,
-                buildSignedEnvelope(
-                    SignalType.GROUP_INVITE,
-                    local,
-                    remote,
-                    sessionId,
-                    payloadBase.copy(sdp = offer).encode()
-                )
-            )
-            reDialByRemoteModule[moduleId] =
-                ReDialRecord(local, remote, channelId, allMembers, SessionType.CONFERENCE)
-            sent++
-            val label = if (rejoin) "Conference rejoin invite" else "Conference invite"
-            log("[${session.traceId}] $label sent -> ${remote.key}")
+        } catch (e: Exception) {
+            log("[${session.traceId}] Conference invite SDP failed for $moduleId: ${e.message}")
+            return InviteDispatchSendResult.Failed(InviteDispatchError.SDP_BUILD_FAILED)
         }
-        onMeetingStartInviteDispatchCompleted(channelId, inviteTargets.size, sent)
-        session.channelId?.let { maybeEvaluateMeetingStartCompletion(it) }
-        return sent
+        wireIceCallback(session, moduleId, engine)
+        val offer = try {
+            engine.createOffer(iceRestart = rejoin)
+        } catch (e: Exception) {
+            log("[${session.traceId}] Conference invite offer failed for $moduleId: ${e.message}")
+            return InviteDispatchSendResult.Failed(InviteDispatchError.SDP_BUILD_FAILED)
+        }
+        drainPendingIce(session.id, moduleId, engine)
+        sendSignal(
+            peer,
+            buildSignedEnvelope(
+                SignalType.GROUP_INVITE,
+                session.local,
+                remote,
+                sessionId,
+                payloadBase.copy(sdp = offer).encode()
+            )
+        )
+        reDialByRemoteModule[moduleId] =
+            ReDialRecord(session.local, remote, channelId, allMembers, SessionType.CONFERENCE)
+        val label = if (rejoin) "Conference rejoin invite" else "Conference invite"
+        log("[${session.traceId}] $label sent -> ${remote.key}")
+        return InviteDispatchSendResult.Sent
     }
 
     /** Add peers to an existing GROUP mesh (host pull-in / counter-invite). */

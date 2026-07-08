@@ -10,9 +10,13 @@ import com.talkback.governance.transition.MeetingStartDeclaration
 import com.talkback.governance.transition.TransitionCoordinator
 import com.talkback.governance.transition.TransitionRecord
 import com.talkback.governance.transition.TransitionPredicateEval
+import com.talkback.governance.transition.PolicyRegistry
 import com.talkback.governance.transition.TransitionTrigger
 
 class ChannelGovernanceRuntime(host: ChannelGovernanceHost) {
+    init {
+        PolicyRegistry.ensureValidated()
+    }
     private val channelProbes = CoordinatorCapabilityProbes(host)
     val transitionCoordinator = TransitionCoordinator(channelProbes.channelProbes)
     private val operationGate = OperationGate()

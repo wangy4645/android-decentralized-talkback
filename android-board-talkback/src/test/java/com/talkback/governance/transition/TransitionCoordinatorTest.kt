@@ -3,14 +3,22 @@ package com.talkback.governance.transition
 import com.talkback.governance.capability.Capability
 import com.talkback.governance.capability.CapabilityReadiness
 import com.talkback.governance.capability.adapter.StubCapabilityProbe
+import com.talkback.governance.transition.PolicyRegistry
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Test
 
 class TransitionCoordinatorTest {
     private var now = 1_000L
     private var nextId = 100L
+
+    @Before
+    fun setUp() {
+        PolicyRegistry.resetForTests()
+        PolicyRegistry.ensureValidated()
+    }
 
     private fun coordinator(): TransitionCoordinator = TransitionCoordinator(
         probes = listOf(

@@ -1425,4 +1425,36 @@ class TalkbackCoordinatorIntegrationTest {
         )
         assertTrue(nodeM01.runtime.isChannelMediaReady(channelId))
     }
+
+    @Test
+    fun meetingStart_partialInviteDispatch_failsWithInviteDispatchFailed() {
+        val channelId = "TCC-PARTIAL-DISPATCH"
+        val unknownModule = ModuleId("M99")
+        val remotes = listOf(
+            EndpointAddress(m02, EndpointId("E01")),
+            EndpointAddress(unknownModule, EndpointId("E01"))
+        )
+        nodeM01.runtime.submitMeetingStartIntent(
+            channelId,
+            com.talkback.governance.transition.MeetingMode.MULTI_PARTY,
+            remotes.map { it.endpointId }.toSet()
+        )
+        val sessionId = nodeM01.runtime.requireConferenceCall(
+            nodeM01.localEndpoint,
+            emptyList(),
+            channelId
+        )
+        assertEquals(
+            "MEETING_START must stay active until deferred invites",
+            "MEETING_START",
+            nodeM01.runtime.testGovernanceActiveTransitionTrigger(channelId)
+        )
+        val sent = nodeM01.runtime.sendConferenceInvites(sessionId, remotes)
+        assertTrue("Partial dispatch must not send all targets", sent < remotes.size)
+        Thread.sleep(300L)
+        assertNull(
+            "MEETING_START must fail after partial dispatch, not remain active until timeout",
+            nodeM01.runtime.testGovernanceActiveTransitionTrigger(channelId)
+        )
+    }
 }
