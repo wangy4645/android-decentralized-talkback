@@ -2,6 +2,7 @@ package com.talkback.app
 
 import com.talkback.core.ptt.PttState
 import com.talkback.core.session.ConferenceParticipantViewState
+import com.talkback.core.session.ConferenceRuntimeState
 import com.talkback.core.session.MemberView
 import com.talkback.core.session.SessionType
 import com.talkback.core.session.UnicastCallPhase
@@ -26,6 +27,11 @@ data class TalkbackSessionSnapshot(
     val visibleParticipantCount: Int = 0,
     /** True when roster still has invitees not yet visible in the meeting UI. */
     val awaitingAdditionalParticipants: Boolean = false,
+    /**
+     * Canonical Conference runtime availability projection (RO-M2 PR-2).
+     * Meeting UI must consume this in PR-3; null for non-CONFERENCE sessions.
+     */
+    val conferenceRuntimeState: ConferenceRuntimeState? = null,
     /** ICE-direct mesh peer count; diagnostics only — must not drive Conference UI. */
     val meshConnectedPeerCount: Int = 0,
     /**

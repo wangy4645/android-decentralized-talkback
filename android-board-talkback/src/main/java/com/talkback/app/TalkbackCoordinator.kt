@@ -62,6 +62,8 @@ import com.talkback.core.session.ChannelReadiness
 import com.talkback.core.session.ConferenceHostEndpointResolver
 import com.talkback.core.session.ConferenceParticipantManager
 import com.talkback.core.session.ConferenceParticipantProjector
+import com.talkback.core.session.ConferenceRuntimeProjectionLogger
+import com.talkback.core.session.ConferenceRuntimeProjector
 import com.talkback.core.session.ConferenceSnapshot
 import com.talkback.core.session.GroupMediaTopology
 import com.talkback.core.session.GroupIdentityStability
@@ -1720,10 +1722,14 @@ class TalkbackCoordinator(
     }
 
     fun channelReadiness(channelId: String): ChannelReadiness = runOnCoordinatorSync {
-        if (stopped) return@runOnCoordinatorSync ChannelReadiness.NO_SERVICE
+        resolveChannelReadiness(channelId)
+    }
+
+    private fun resolveChannelReadiness(channelId: String): ChannelReadiness {
+        if (stopped) return ChannelReadiness.NO_SERVICE
         val dialablePeers = countDialableRemoteModules()
         val session = meshSessionForChannel(channelId)
-        when {
+        return when {
             session != null && (
                 isSessionTransmitReady(session) ||
                     (session.type == SessionType.CONFERENCE && isConferenceUiReady(session))
@@ -1857,6 +1863,11 @@ class TalkbackCoordinator(
                 )
             )
         }
+        val runtimeState = if (isConferenceSession(session)) {
+            projectConferenceRuntimeState(session, projection)
+        } else {
+            null
+        }
         return TalkbackSessionSnapshot(
         sessionId = session.id,
         type = session.type,
@@ -1871,6 +1882,7 @@ class TalkbackCoordinator(
         visibleParticipants = projection?.visibleParticipants ?: emptyList(),
         visibleParticipantCount = projection?.visibleParticipantCount ?: 0,
         awaitingAdditionalParticipants = projection?.awaitingAdditionalParticipants ?: false,
+        conferenceRuntimeState = runtimeState,
         meshConnectedPeerCount = countConnectedRemotes(session),
         connectedRemoteCount = countConnectedRemotes(session),
         callPhase = session.unicastPhase,
@@ -1878,6 +1890,59 @@ class TalkbackCoordinator(
         localInitiated = session.localInitiated,
         muted = session.muted
     )
+    }
+
+    private fun isMeetingStartTransitionReady(session: TalkbackSession): Boolean {
+        val channelId = session.channelId ?: return false
+        val active = channelGovernance.activeTransition(channelId)
+        if (active?.isActive == true && active.trigger == TransitionTrigger.MEETING_START) {
+            return false
+        }
+        return true
+    }
+
+    private fun projectConferenceRuntimeState(
+        session: TalkbackSession,
+        participantProjection: ConferenceParticipantProjector.Output?
+    ) = ConferenceRuntimeProjector.project(
+        ConferenceRuntimeProjector.Input(
+            transitionTerminalReady = isMeetingStartTransitionReady(session),
+            connectedRemoteMediaCount = countConnectedRemotes(session),
+            sessionAccepted = session.accepted,
+            awaitingAdditionalParticipants = participantProjection?.awaitingAdditionalParticipants ?: false,
+            mediaRecovering = false
+        )
+    )
+
+    private fun emitConferenceRuntimeProjection(session: TalkbackSession) {
+        if (!isConferenceSession(session)) return
+        val conferenceSnap = conferenceSnapshot(session) ?: return
+        val memberViews = conferenceSnap.memberViews
+        val leftModuleIds = conferenceParticipantManager.leftMemberEndpoints(session.id)?.keys
+            ?: session.leftMemberEndpoints.keys
+        val projection = ConferenceParticipantProjector.project(
+            ConferenceParticipantProjector.Input(
+                localModuleId = localModuleId,
+                localKey = session.local.key,
+                sessionAccepted = session.accepted,
+                roster = meshRoster(session),
+                memberViews = memberViews,
+                leftModuleIds = leftModuleIds.toSet()
+            )
+        )
+        val runtime = projectConferenceRuntimeState(session, projection)
+        val channelId = session.channelId
+        val channelReady = channelId?.let { resolveChannelReadiness(it) }
+        val uiReady = isConferenceUiReady(session)
+        log(
+            ConferenceRuntimeProjectionLogger.format(
+                sessionId = session.id,
+                channelId = channelId,
+                runtime = runtime,
+                channelReadiness = channelReady,
+                conferenceUiReady = uiReady
+            )
+        )
     }
 
     fun networkQualityLabel(): String = runOnCoordinatorSync {
@@ -5850,6 +5915,7 @@ class TalkbackCoordinator(
                             conferenceReconnectStartedAtBySession.remove(session.id)
                         }
                         session.channelId?.let { maybeEvaluateMeetingStartCompletion(it) }
+                        emitConferenceRuntimeProjection(session)
                     }
                 sessions.values
                     .filter { it.type == SessionType.GROUP && it.accepted }
@@ -8169,6 +8235,9 @@ class TalkbackCoordinator(
         if (channelGovernance.activeTransition(channelId)?.trigger != TransitionTrigger.MEETING_START) {
             clearMeetingStartDeclaration(channelId)
         }
+        sessions.values
+            .filter { it.channelId == channelId && it.type == SessionType.CONFERENCE }
+            .forEach { emitConferenceRuntimeProjection(it) }
     }
 
     /**
