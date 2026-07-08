@@ -1010,9 +1010,7 @@ class TalkbackCoordinator(
             val label = if (rejoin) "Conference rejoin invite" else "Conference invite"
             log("[${session.traceId}] $label sent -> ${remote.key}")
         }
-        meetingStartDeclaration(channelId)?.takeIf { it.mode == MeetingMode.MULTI_PARTY && !it.isFrozen }?.let {
-            freezeMeetingStartDeclaration(channelId, inviteDispatchFinished = true)
-        }
+        onMeetingStartInviteDispatchCompleted(channelId, inviteTargets.size, sent)
         session.channelId?.let { maybeEvaluateMeetingStartCompletion(it) }
         return sent
     }
@@ -1176,7 +1174,8 @@ class TalkbackCoordinator(
             }
         }
         if (sessionType == SessionType.CONFERENCE) {
-            clearMeetingStartDeclaration(channelId)
+            channelGovernance.supersedeMeetingEndForNewMeeting(channelId)
+            meetingStartDeclarationByChannel.remove(channelId)
             channelGovernance.beginTransition(TransitionTrigger.MEETING_START, channelId)
             resolveMeetingStartIntent(channelId, remoteEndpoints)?.let { (mode, targets) ->
                 if (openMeetingStartDeclaration(channelId, mode, targets) == null) {
@@ -1235,8 +1234,13 @@ class TalkbackCoordinator(
             error("Active session limit reached: ${config.maxActiveSessions}")
         }
         val channelSnap = ChannelMembershipSnapshot.capture(channelManager, channelId)
+        val deferConferenceInviteDispatch = soloConference &&
+            meetingStartDeclaration(channelId)?.let {
+                it.mode == MeetingMode.MULTI_PARTY && it.expectedInviteTargets.isNotEmpty()
+            } == true
+        val effectiveChannelSnap = if (deferConferenceInviteDispatch) emptySet() else channelSnap
         val allMembers = ChannelMembershipSnapshot.resolveInitialInvites(
-            configured = channelSnap,
+            configured = effectiveChannelSnap,
             local = local,
             explicitRemotes = remoteEndpoints,
             resolveModule = { mid -> endpointForDialableModule(mid) }
@@ -1327,12 +1331,7 @@ class TalkbackCoordinator(
         }
         val label = if (sessionType == SessionType.CONFERENCE) "Conference" else "Group call"
         if (sessionType == SessionType.CONFERENCE) {
-            val declaration = meetingStartDeclaration(channelId)
-            if (declaration?.mode == MeetingMode.MULTI_PARTY && inviteTargets.isNotEmpty()) {
-                freezeMeetingStartDeclaration(channelId, inviteDispatchFinished = true)
-            } else if (declaration?.mode == MeetingMode.SOLO_HOST && inviteTargets.isEmpty()) {
-                freezeMeetingStartDeclaration(channelId, inviteDispatchFinished = true)
-            }
+            onMeetingStartInviteDispatchCompleted(channelId, inviteTargets.size, inviteTargets.size)
             if (soloConference) {
                 tryEnsureConferenceDuplex(session)
                 log("[${session.traceId}] $label ${local.key} solo on ch=$channelId")
@@ -8018,9 +8017,39 @@ class TalkbackCoordinator(
             failMeetingStartDeclaration(channelId, "INVALID_DECLARATION")
             return
         }
-        channelGovernance.maybeCompleteMeetingStart(channelId, eval)
+        channelGovernance.maybeCompleteMeetingStart(channelId, eval, declaration)
         if (channelGovernance.activeTransition(channelId)?.trigger != TransitionTrigger.MEETING_START) {
             clearMeetingStartDeclaration(channelId)
+        }
+    }
+
+    /**
+     * ADR-0017: consume invite dispatch outcome only — Coordinator does not retry sends.
+     * [sentCount] must reflect invites actually dispatched in this completion window.
+     */
+    private fun onMeetingStartInviteDispatchCompleted(
+        channelId: String,
+        targetCount: Int,
+        sentCount: Int
+    ) {
+        val declaration = meetingStartDeclaration(channelId) ?: return
+        if (declaration.isFrozen) return
+        when (declaration.mode) {
+            MeetingMode.SOLO_HOST -> {
+                if (targetCount == 0) {
+                    freezeMeetingStartDeclaration(channelId, inviteDispatchFinished = true)
+                }
+            }
+            MeetingMode.MULTI_PARTY -> {
+                if (targetCount == 0) return
+                val declaredTargetCount = declaration.expectedInviteTargets.size
+                when {
+                    sentCount < targetCount || sentCount < declaredTargetCount ->
+                        failMeetingStartDeclaration(channelId, "INVITE_DISPATCH_FAILED")
+                    else ->
+                        freezeMeetingStartDeclaration(channelId, inviteDispatchFinished = true)
+                }
+            }
         }
     }
 
@@ -8044,11 +8073,11 @@ class TalkbackCoordinator(
         expectedTargets: Set<EndpointId>
     ): Int {
         if (expectedTargets.isEmpty()) return 0
-        return meshRoster(session)
-            .asSequence()
-            .filter { it.moduleId != session.local.moduleId }
-            .filter { it.endpointId in expectedTargets }
-            .count { isPeerMediaConnected(it.moduleId.value) }
+        return meshRoster(session).count { member ->
+            member.moduleId != session.local.moduleId &&
+                member.endpointId in expectedTargets &&
+                isPeerMediaConnected(member.moduleId.value)
+        }
     }
 
     private fun failMeetingStartDeclaration(channelId: String, reason: String) {

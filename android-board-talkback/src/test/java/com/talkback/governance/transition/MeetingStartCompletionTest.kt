@@ -69,6 +69,24 @@ class MeetingStartCompletionTest {
     }
 
     @Test
+    fun multiParty_frozenWithoutDispatchFinished_unsatisfied() {
+        val targets = setOf(EndpointId("E02"))
+        val frozenPendingDispatch = MeetingStartDeclaration(
+            mode = MeetingMode.MULTI_PARTY,
+            expectedInviteTargets = targets,
+            inviteDispatchFinished = false,
+            phase = DeclarationPhase.FROZEN
+        )
+        val eval = MeetingStartCompletion.evaluate(
+            frozenPendingDispatch,
+            conferenceAccepted = true,
+            connectedInviteeCount = 1
+        )
+        assertFalse(eval.satisfied)
+        assertEquals("invite_dispatch_pending", eval.reason)
+    }
+
+    @Test
     fun notAccepted_unsatisfied() {
         val declaration = MeetingStartDeclaration.frozen(
             mode = MeetingMode.SOLO_HOST,

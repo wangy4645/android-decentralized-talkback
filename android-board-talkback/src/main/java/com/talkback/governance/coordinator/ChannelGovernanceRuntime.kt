@@ -6,6 +6,7 @@ import com.talkback.governance.gate.GateDecision
 import com.talkback.governance.gate.Operation
 import com.talkback.governance.gate.OperationGate
 import com.talkback.governance.transition.BeginTransitionResult
+import com.talkback.governance.transition.MeetingStartDeclaration
 import com.talkback.governance.transition.TransitionCoordinator
 import com.talkback.governance.transition.TransitionRecord
 import com.talkback.governance.transition.TransitionPredicateEval
@@ -40,17 +41,25 @@ class ChannelGovernanceRuntime(host: ChannelGovernanceHost) {
     }
 
     fun maybeCompleteRecovery(channelId: String, recoveryReady: Boolean) {
-        maybeCompleteTransition(channelId, TransitionTrigger.MEETING_END) {
-            if (recoveryReady) {
-                TransitionPredicateEval.satisfied("group_operational")
-            } else {
-                TransitionPredicateEval.unsatisfied("group_not_operational")
+        maybeCompleteTransition(
+            channelId,
+            TransitionTrigger.MEETING_END,
+            evalProvider = {
+                if (recoveryReady) {
+                    TransitionPredicateEval.satisfied("group_operational")
+                } else {
+                    TransitionPredicateEval.unsatisfied("group_not_operational")
+                }
             }
-        }
+        )
     }
 
-    fun maybeCompleteMeetingStart(channelId: String, eval: TransitionPredicateEval) {
-        maybeCompleteTransition(channelId, TransitionTrigger.MEETING_START) { eval }
+    fun maybeCompleteMeetingStart(
+        channelId: String,
+        eval: TransitionPredicateEval,
+        declaration: MeetingStartDeclaration? = null
+    ) {
+        maybeCompleteTransition(channelId, TransitionTrigger.MEETING_START, { eval }, declaration)
     }
 
     fun failMeetingStart(channelId: String, reason: String) {
@@ -62,15 +71,25 @@ class ChannelGovernanceRuntime(host: ChannelGovernanceHost) {
         }
     }
 
+    fun supersedeMeetingEndForNewMeeting(channelId: String) {
+        val active = transitionCoordinator.activeTransition(channelId) ?: return
+        if (!active.isActive || active.trigger != TransitionTrigger.MEETING_END) return
+        val aborted = transitionCoordinator.abortTransition(channelId, "SUPERSEDED_BY_MEETING_START")
+        if (aborted != null) {
+            GovernanceObservabilityLog.transitionTerminal(aborted)
+        }
+    }
+
     private fun maybeCompleteTransition(
         channelId: String,
         trigger: TransitionTrigger,
-        evalProvider: () -> TransitionPredicateEval
+        evalProvider: () -> TransitionPredicateEval,
+        declaration: MeetingStartDeclaration? = null
     ) {
         val active = transitionCoordinator.activeTransition(channelId) ?: return
         if (!active.isActive || active.trigger != trigger) return
         val eval = evalProvider()
-        GovernanceObservabilityLog.transitionPredicateEval(channelId, trigger, eval)
+        GovernanceObservabilityLog.transitionPredicateEval(channelId, trigger, eval, declaration)
         if (!eval.satisfied) return
         val completed = transitionCoordinator.completeTransition(channelId)
         if (completed != null) {

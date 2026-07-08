@@ -59,11 +59,20 @@ object GovernanceObservabilityLog {
     fun transitionPredicateEval(
         channelId: String,
         trigger: TransitionTrigger,
-        eval: TransitionPredicateEval
+        eval: TransitionPredicateEval,
+        declaration: MeetingStartDeclaration? = null
     ) {
+        val declarationContext = when {
+            declaration == null -> ""
+            declaration.isFrozen ->
+                " declarationFrozen=true mode=${declaration.mode} " +
+                    "targets=${declaration.expectedInviteTargets.size} " +
+                    "inviteDispatchFinished=${declaration.inviteDispatchFinished}"
+            else -> " declarationFrozen=false mode=${declaration.mode}"
+        }
         TalkbackLog.i(
             "TRANSITION_PREDICATE_EVAL ch=$channelId trigger=$trigger " +
-                "satisfied=${eval.satisfied} reason=${eval.reason}"
+                "satisfied=${eval.satisfied} reason=${eval.reason}$declarationContext"
         )
     }
 

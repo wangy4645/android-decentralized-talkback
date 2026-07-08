@@ -1327,18 +1327,102 @@ class TalkbackCoordinatorIntegrationTest {
             "MEETING_START",
             nodeM01.runtime.testGovernanceActiveTransitionTrigger(channelId)
         )
-        nodeM01.runtime.sendConferenceInvites(sessionId, remotes)
+        nodeM01.runtime.sendConferenceInvites(sessionId, remotes).also { sent ->
+            assertTrue("Conference invites should dispatch in deferred MEETING_START path", sent >= 1)
+        }
         assertEquals(
             "MEETING_START must stay active after invites until first peer ICE",
             "MEETING_START",
             nodeM01.runtime.testGovernanceActiveTransitionTrigger(channelId)
         )
         assertTrue(nodeM02.waitForLog { it.contains("invite accepted") })
-        nodeM01.runtime.simulateRemoteIceState("M02", "CONNECTED")
-        Thread.sleep(300L)
+        connectConferenceHostIce(nodeM01, nodeM02)
         assertNull(
             "MEETING_START should complete after host-peer ICE",
             nodeM01.runtime.testGovernanceActiveTransitionTrigger(channelId)
         )
+    }
+
+    @Test
+    fun meetingStart_meetingHangupMeeting_repeatedThreeTimes() {
+        val channelId = "TCC-MEETING-CYCLE"
+        val remotes = listOf(
+            EndpointAddress(m02, EndpointId("E01")),
+            EndpointAddress(m03, EndpointId("E01"))
+        )
+        repeat(3) { cycle ->
+            val sessionId = nodeM01.runtime.requireConferenceCall(
+                nodeM01.localEndpoint,
+                remotes,
+                channelId
+            )
+            assertEquals(
+                "MEETING_START active until first peer ICE (cycle $cycle)",
+                "MEETING_START",
+                nodeM01.runtime.testGovernanceActiveTransitionTrigger(channelId)
+            )
+            assertTrue(nodeM02.waitForLog { it.contains("invite accepted") })
+            connectConferenceHostIce(nodeM01, nodeM02)
+            assertNull(
+                "MEETING_START should complete after host-peer ICE (cycle $cycle)",
+                nodeM01.runtime.testGovernanceActiveTransitionTrigger(channelId)
+            )
+            nodeM01.runtime.hangup(sessionId)
+            assertTrue(
+                nodeM01.waitForLog(timeoutMs = 5_000L) {
+                    it.contains("Hangup") || it.contains("Conference channel released")
+                }
+            )
+            Thread.sleep(300L)
+            assertTrue(
+                "Host conference cleared before next cycle $cycle",
+                nodeM01.runtime.conferenceSessions().isEmpty()
+            )
+        }
+    }
+
+    @Test
+    fun meetingStart_pttThenSecondMeeting_hostIceRequired() {
+        val channelId = "TCC-PTT-THEN-MEETING"
+        val remotes = listOf(
+            EndpointAddress(m02, EndpointId("E01")),
+            EndpointAddress(m03, EndpointId("E01"))
+        )
+        val firstSessionId = nodeM01.runtime.requireConferenceCall(
+            nodeM01.localEndpoint,
+            remotes,
+            channelId
+        )
+        assertTrue(nodeM02.waitForLog { it.contains("invite accepted") })
+        connectConferenceHostIce(nodeM01, nodeM02, nodeM03)
+        assertNull(nodeM01.runtime.testGovernanceActiveTransitionTrigger(channelId))
+        nodeM01.runtime.hangup(firstSessionId)
+        Thread.sleep(800L)
+
+        val groupSessionId = nodeM01.runtime.requireGroupCall(
+            nodeM01.localEndpoint,
+            listOf(EndpointAddress(m02, EndpointId("E01"))),
+            channelId
+        )
+        connectGroupAnchorIce(nodeM01, nodeM02, nodeM03, channelId)
+        nodeM01.pressPtt(groupSessionId)
+        Thread.sleep(200L)
+        nodeM01.releasePtt(groupSessionId)
+        nodeM01.runtime.hangup(groupSessionId)
+        Thread.sleep(800L)
+
+        nodeM01.runtime.requireConferenceCall(nodeM01.localEndpoint, remotes, channelId)
+        assertEquals(
+            "Second MEETING_START must not complete at call return",
+            "MEETING_START",
+            nodeM01.runtime.testGovernanceActiveTransitionTrigger(channelId)
+        )
+        assertTrue(nodeM02.waitForLog { it.contains("invite accepted") })
+        connectConferenceHostIce(nodeM01, nodeM02)
+        assertNull(
+            "Second MEETING_START should complete after host-peer ICE",
+            nodeM01.runtime.testGovernanceActiveTransitionTrigger(channelId)
+        )
+        assertTrue(nodeM01.runtime.isChannelMediaReady(channelId))
     }
 }
