@@ -49,6 +49,8 @@ class RealWebRtcAudioEngine(
     @Volatile
     private var outboundLevel = 0f
     @Volatile
+    private var iceConnectionStateName = "NEW"
+    @Volatile
     private var programRelayMode = ProgramRelayMode.MICROPHONE
     private var inboundPcmSink: InboundPcmSink? = null
     private var programAudioSource: org.webrtc.AudioSource? = null
@@ -78,6 +80,7 @@ class RealWebRtcAudioEngine(
                 object : PeerConnection.Observer {
                     override fun onSignalingChange(state: PeerConnection.SignalingState) = Unit
                     override fun onIceConnectionChange(state: PeerConnection.IceConnectionState) {
+                        iceConnectionStateName = state.name
                         TalkbackLog.i("WebRTC ICE -> ${state.name}")
                         onIceConnectionState?.invoke(state.name)
                     }
@@ -294,6 +297,7 @@ class RealWebRtcAudioEngine(
     override fun release() {
         if (released) return
         released = true
+        iceConnectionStateName = "CLOSED"
         inboundLevel = 0f
         outboundLevel = 0f
         localAudioTrack.setEnabled(false)
@@ -319,6 +323,8 @@ class RealWebRtcAudioEngine(
     override fun inboundAudioLevel(): Float = inboundLevel
 
     override fun outboundAudioLevel(): Float = outboundLevel
+
+    override fun iceConnectionState(): String = iceConnectionStateName
 
     private fun applyStatsReport(report: RTCStatsReport) {
         var inbound = 0.0

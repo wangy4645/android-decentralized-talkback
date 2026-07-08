@@ -1,5 +1,6 @@
 package com.talkback.core.webrtc
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertNull
@@ -36,5 +37,40 @@ class SessionMediaRegistryTest {
 
         registry.releaseGroup("M02")
         assertNull(registry.getGroup("M02"))
+    }
+
+    @Test
+    fun groupThenConference_createsFreshPeerConnection() {
+        val context = RuntimeEnvironment.getApplication()
+        val registry = SessionMediaRegistry(
+            context,
+            useStub = true,
+            onMeshIce = { _, _ -> },
+            onUnicastIce = { _, _ -> }
+        )
+
+        val group = registry.groupEngine("M02")
+        val conference = registry.conferenceEngine("M02")
+
+        assertNotSame(group, conference)
+        assertEquals(
+            com.talkback.core.webrtc.MediaBearerScope.CONFERENCE,
+            registry.meshSessionState("M02")!!.scope
+        )
+    }
+
+    @Test
+    fun barrierResetBeforeConference_avoidsReuseMetric() {
+        val context = RuntimeEnvironment.getApplication()
+        val registry = SessionMediaRegistry(
+            context,
+            useStub = true,
+            onMeshIce = { _, _ -> },
+            onUnicastIce = { _, _ -> }
+        )
+        registry.groupEngine("M02")
+        registry.resetMeshForMeetingBarrier(listOf("M02"), channelId = "CH-01")
+        registry.conferenceEngine("M02")
+        assertEquals(0, registry.mediaSessionReuseCount())
     }
 }

@@ -39,6 +39,9 @@ interface WebRtcAudioEngine {
     /** Linear 0..1 level of audio sent from the local microphone. */
     fun outboundAudioLevel(): Float
 
+    /** Latest ICE connection state name (PeerConnection.IceConnectionState). */
+    fun iceConnectionState(): String = "UNKNOWN"
+
     /** Anchor relay: switch outbound between microphone and program track. */
     fun setProgramRelayMode(mode: ProgramRelayMode) = Unit
 

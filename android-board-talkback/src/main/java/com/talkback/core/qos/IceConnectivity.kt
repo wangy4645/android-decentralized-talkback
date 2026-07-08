@@ -17,4 +17,6 @@ object IceConnectivity {
 
     fun isLiveNegotiation(state: String?): Boolean =
         state == "CHECKING" || state == "NEW" || state == "CONNECTED" || state == "COMPLETED"
+
+    fun isClosed(state: String?): Boolean = state == "CLOSED"
 }

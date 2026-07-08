@@ -350,8 +350,14 @@ class TalkbackCoordinator(
 
     private fun getMeshEngine(moduleId: String): WebRtcAudioEngine? = mediaRegistry.getGroup(moduleId)
 
+    private fun meshEngineForSession(session: TalkbackSession, moduleId: String): WebRtcAudioEngine? =
+        when (session.type) {
+            SessionType.CONFERENCE -> mediaRegistry.getConference(moduleId)
+            else -> mediaRegistry.getGroup(moduleId)
+        }
+
     private fun getOrCreateMeshEngine(session: TalkbackSession, moduleId: String): WebRtcAudioEngine =
-        getMeshEngine(moduleId) ?: meshEngineFor(session, moduleId)
+        meshEngineForSession(session, moduleId) ?: meshEngineFor(session, moduleId)
 
     /**
      * Conference / fresh mesh invites must not inherit a wedged GROUP peer connection.
@@ -362,7 +368,7 @@ class TalkbackCoordinator(
         moduleId: String,
         forReconnect: Boolean
     ): WebRtcAudioEngine {
-        val existing = getMeshEngine(moduleId)
+        val existing = meshEngineForSession(session, moduleId)
         if (forReconnect && existing != null) {
             val ice = qosMonitor.snapshot(moduleId)?.iceState
             if (IceConnectivity.isConnected(ice)) {
@@ -370,7 +376,6 @@ class TalkbackCoordinator(
             }
         }
         if (existing != null) {
-            mediaRegistry.releaseGroup(moduleId)
             qosMonitor.resetGroup(moduleId)
             session.meshCompletedModules.remove(moduleId)
         }
@@ -1101,7 +1106,7 @@ class TalkbackCoordinator(
             System.currentTimeMillis(),
             rejoin
         )
-        val existingEngine = getMeshEngine(moduleId)
+        val existingEngine = meshEngineForSession(session, moduleId)
         val engine = try {
             if (rejoin && existingEngine != null &&
                 IceConnectivity.isConnected(qosMonitor.snapshot(moduleId)?.iceState)
@@ -1342,7 +1347,21 @@ class TalkbackCoordinator(
             log("Blocked ${sessionType.name} mesh: channel mode conflict on $channelId")
             return null
         }
+        val groupMeshModulesForBarrier = if (sessionType == SessionType.CONFERENCE) {
+            groupMeshModulesOnChannel(channelId)
+        } else {
+            emptySet()
+        }
         endConflictingMeshSessions(channelId, sessionType)
+        if (sessionType == SessionType.CONFERENCE && groupMeshModulesForBarrier.isNotEmpty()) {
+            val barrier = mediaRegistry.resetMeshForMeetingBarrier(groupMeshModulesForBarrier, channelId)
+            if (barrier.unresolvedCount > 0) {
+                log(
+                    "MEDIA_BARRIER unresolved=${barrier.unresolvedModuleIds} " +
+                        "ch=$channelId modules=${barrier.moduleCount}"
+                )
+            }
+        }
         findReusableMeshSession(channelId, sessionType)?.let { existing ->
             log("[${existing.traceId}] Reuse ${sessionType.name} session for channel=$channelId")
             return existing.id
@@ -3516,7 +3535,7 @@ class TalkbackCoordinator(
         val moduleId = signal.from.moduleId.value
         val engine = when (session.type) {
             SessionType.UNICAST -> mediaRegistry.getUnicast(session.id)
-            else -> getMeshEngine(moduleId)
+            else -> meshEngineForSession(session, moduleId)
         }
         if (engine == null) {
             queuePendingIce(signal.sessionId, moduleId, signal.payload)
@@ -4254,6 +4273,12 @@ class TalkbackCoordinator(
         return ids
     }
 
+    private fun groupMeshModulesOnChannel(channelId: String): Set<String> =
+        sessions.values
+            .filter { it.channelId == channelId && it.type == SessionType.GROUP }
+            .flatMap { meshMediaModuleIds(it) }
+            .toSet()
+
     private fun canSendConferenceInvite(
         session: TalkbackSession,
         moduleId: String,
@@ -4289,7 +4314,7 @@ class TalkbackCoordinator(
             return
         }
         val anyConnected = peers.any { id ->
-            getMeshEngine(id) != null && qosMonitor.isGroupConnected(id)
+            mediaRegistry.getMesh(id) != null && qosMonitor.isGroupConnected(id)
         }
         if (anyConnected) {
             ensureConferenceDuplex(session)
@@ -4386,10 +4411,10 @@ class TalkbackCoordinator(
         }
         val moduleIds = session.remotePeersByModule.keys
         if (moduleIds.isNotEmpty()) {
-            return moduleIds.mapNotNull { getMeshEngine(it) }
+            return moduleIds.mapNotNull { meshEngineForSession(session, it) }
         }
         val fallback = session.remote?.moduleId?.value ?: return emptyList()
-        return listOfNotNull(getMeshEngine(fallback))
+        return listOfNotNull(meshEngineForSession(session, fallback))
     }
 
     private fun enginesForAudioLevel(session: TalkbackSession): List<WebRtcAudioEngine> {
@@ -4401,7 +4426,7 @@ class TalkbackCoordinator(
                 moduleIds.add(id)
             }
         }
-        return moduleIds.mapNotNull { getMeshEngine(it) }
+        return moduleIds.mapNotNull { meshEngineForSession(session, it) }
     }
 
     private fun refreshConferenceAudioLevels() {
@@ -5985,7 +6010,7 @@ class TalkbackCoordinator(
             session.initiatorModuleId == localModuleId
 
     private fun isPeerMediaConnected(moduleId: String): Boolean =
-        getMeshEngine(moduleId) != null && qosMonitor.isGroupConnected(moduleId)
+        mediaRegistry.getMesh(moduleId) != null && qosMonitor.isGroupConnected(moduleId)
 
     private fun isUnicastMediaConnected(session: TalkbackSession): Boolean =
         mediaRegistry.getUnicast(session.id) != null && qosMonitor.isUnicastConnected(session.id)
@@ -6092,7 +6117,7 @@ class TalkbackCoordinator(
             return session.type == SessionType.CONFERENCE
         }
         return remoteIds.all { id ->
-            if (getMeshEngine(id) == null) return false
+            if (meshEngineForSession(session, id) == null) return false
             when (qosMonitor.snapshot(id)?.iceState) {
                 "DISCONNECTED", "FAILED" -> false
                 else -> true
@@ -6121,7 +6146,7 @@ class TalkbackCoordinator(
         }
         return candidates.filter { id ->
             id != localModuleId.value &&
-                getMeshEngine(id) != null &&
+                meshEngineForSession(session, id) != null &&
                 qosMonitor.isGroupConnected(id)
         }.toSet()
     }
@@ -6141,7 +6166,7 @@ class TalkbackCoordinator(
         }
         if (remoteIds.isEmpty()) return false
         return remoteIds.all { id ->
-            getMeshEngine(id) != null &&
+            meshEngineForSession(session, id) != null &&
                 IceConnectivity.isNegotiating(qosMonitor.snapshot(id)?.iceState)
         }
     }
@@ -6152,7 +6177,7 @@ class TalkbackCoordinator(
     ): Boolean = remoteIds.any { moduleId ->
         val ice = qosMonitor.snapshot(moduleId)?.iceState
         if (IceConnectivity.isLiveNegotiation(ice)) return true
-        return getMeshEngine(moduleId) != null || moduleId in session.meshCompletedModules
+        return mediaRegistry.getMesh(moduleId) != null || moduleId in session.meshCompletedModules
     }
 
     private fun isMeshSessionStuck(session: TalkbackSession): Boolean {
@@ -6172,7 +6197,7 @@ class TalkbackCoordinator(
         }
         if (now - session.lastActiveMs < config.meshNegotiationGraceMs) return false
         return remoteIds.any { id ->
-            val engine = getMeshEngine(id)
+            val engine = meshEngineForSession(session, id)
             val snap = qosMonitor.snapshot(id)
             val ice = snap?.iceState
             val since = snap?.updatedMs ?: session.lastActiveMs
@@ -6357,7 +6382,7 @@ class TalkbackCoordinator(
             log("[${session.traceId}] Conference ICE-restart skipped: no signal peer for $remoteModuleId")
             return false
         }
-        val engine = getMeshEngine(remoteModuleId)
+        val engine = meshEngineForSession(session, remoteModuleId)
         if (engine == null) {
             log("[${session.traceId}] Conference ICE-restart skipped: no mesh engine for $remoteModuleId")
             return false
@@ -6730,7 +6755,7 @@ class TalkbackCoordinator(
     ) {
         val accepted = moduleId in session.meshCompletedModules ||
             meshParticipant(session,moduleId).invite == InviteState.ACCEPTED
-        if (accepted || getMeshEngine(moduleId) != null) {
+        if (accepted || meshEngineForSession(session, moduleId) != null) {
             if (attemptConferencePeerIceRestart(session, moduleId, remote)) {
                 log("[${session.traceId}] Forcing conference ICE-restart for $moduleId stuck in $ice")
             }
@@ -7275,7 +7300,7 @@ class TalkbackCoordinator(
             "DISCONNECTED", "FAILED", "CLOSED" ->
                 now - unhealthySince > config.meshNegotiationGraceMs
             else ->
-                getMeshEngine(moduleId) == null &&
+                meshEngineForSession(session, moduleId) == null &&
                     now - unhealthySince.coerceAtLeast(session.lastActiveMs) > config.iceNegotiationTimeoutMs
         }
     }

@@ -253,7 +253,7 @@ Implementations: `MeetingStartPredicate`, `MeetingEndPredicate`, (future) `Boots
 |----|------|
 | S6 | No `MEETING_START` READY before `DeclarationFrozen` log |
 | S7 | No `host_solo_conference` when `MeetingMode=MULTI_PARTY` in declaration |
-| S8 | `MEDIA_SESSION_REUSE = 0` across GROUP→MEETING boundary (future RO-M2) |
+| S8 | `MEDIA_SESSION_REUSE = 0` across GROUP→MEETING boundary (RO-M2a #63) |
 | S9 | `INVITE_DISPATCH_FAILED` count tracked; partial dispatch never degrades to solo |
 
 ## Soak failure coverage (rules reverse-mapping)
@@ -266,28 +266,42 @@ media lifecycle implementation, not ADR alone.
 |--------------|---------|---------------------|----------------|
 | TCC false-green (`host_solo` 6ms) | M01 T12 READY before invites | **Covered** — explicit `MeetingMode`, frozen declaration, no empty-target inference | Wire declaration in coordinator + runtime manager |
 | Predicate before invite dispatch | READY then `Conference invites sent=2` | **Covered** — `DeclarationFrozen` prerequisite | Integration test prod path |
-| GROUP→Meeting ICE CLOSED at accept | `remoteTrackAttached ice=CLOSED` | **Partial** — READY no longer false-green; UI uses MediaLifecycle | RO-M2 MediaSession reset barrier |
+| GROUP→Meeting ICE CLOSED at accept | `remoteTrackAttached ice=CLOSED` | **Partial** — RO-M2a barrier resets PC; host-link may still need RO-M2b | RO-M2a implemented (#63); RO-M2b ICE path |
 | GROUP_JOIN throttle on conference restart | `ICE restart throttled from M02` | **Not covered** — out of scope | RO-M2: conference-scoped ICE path |
 | SDP setup attribute error | Coordinator error on answer SDP | **Not covered** — out of scope | RO-M2: per-transition PeerConnection |
-| Deferring >10s (S3) | M02 stuck Connecting ~20s | **Partial** — TIMED_OUT semantics clear; MediaLifecycle observable | RO-M2 media reset + soak S3 |
-| M02 Connecting UI | Participant `Deferring full conference mesh` | **Partial** — I4 separates READY vs full connect | MediaLifecycle projection to UI |
+| Deferring >10s (S3) | M02 stuck Connecting ~20s | **Partial** — TIMED_OUT semantics clear; MediaLifecycle observable | RO-M2a barrier + RO-M2b ICE path |
+| M02 Connecting UI | Participant `Deferring full conference mesh` | **Partial** — I4 separates READY vs full connect | RO-M2a MediaSession barrier + UI projection |
 
 **Conclusion:** ADR-0017 fully covers **control-plane false completion** (the recurring false-green).
-It does **not** alone fix ICE reuse / throttle / SDP — those require RO-M2 MediaSession lifecycle.
-Implementing ADR-0017 without RO-M2 will stop declaring success too early but may still show
-Connecting until media layer is rebuilt.
+RO-M2a (`#63`) addresses **PeerConnection reuse across GROUP→MEETING** via `MediaSessionManager` barrier
+and `MEDIA_SESSION_REUSE=0` instrumentation. ICE restart policy, SDP setup attribute, and conference-scoped
+ICE path remain **RO-M2b** (`#64`).
 
 ## Out of Scope (RO-M1)
 
 RO-M1 does **NOT** solve:
 
-- ICE restart policy (GROUP vs CONFERENCE path separation)
-- SDP negotiation / setup attribute generation
-- PeerConnection lifecycle reset across GROUP → MEETING
-- `MediaSessionManager` implementation
-- Full `MEDIA_SESSION_REUSE = 0` enforcement
+- ICE restart policy (GROUP vs CONFERENCE path separation) — **RO-M2b**
+- SDP negotiation / setup attribute generation — **RO-M2b**
+- Full per-transition PeerConnection factory — **RO-M2b** (partial: RO-M2a resets on scope change)
 
-These are tracked as **RO-M2 Media Lifecycle Spec**.
+## Out of Scope (RO-M2a — #63)
+
+RO-M2a does **NOT** solve:
+
+- Conference-scoped ICE restart throttle (`GROUP_JOIN ICE restart throttled`) — **RO-M2b**
+- SDP `setup attribute` errors on answer — **RO-M2b**
+- Full `MediaSessionManager` channel-scoped session ids (generation per module only)
+
+## In Scope (RO-M2a — #63)
+
+| Deliverable | Location |
+|-------------|----------|
+| `MediaSessionManager` (`create`, `close`, `resetAll`, `getState`) | `core/media/MediaSessionManager.kt` |
+| GROUP→MEETING barrier after GROUP hangup | `TalkbackCoordinator.meshCallInternal` |
+| `MediaLifecycle` enum + `MEDIA_LIFECYCLE` logs | `core/media/MediaLifecycle.kt`, `MediaObservabilityLog.kt` |
+| Soak S8 `MEDIA_SESSION_REUSE=0` | `MediaObservabilityLog`, `scripts/soak-tcc-hard-gates.ps1` |
+| Public API doc | `docs/runtime/runtime-public-api.md` § MediaRuntime |
 
 ## Consequences
 
@@ -308,8 +322,9 @@ These are tracked as **RO-M2 Media Lifecycle Spec**.
 | `TransitionPolicy` inviteDispatch block | governance |
 | `PolicyRegistry` startup validation | governance |
 | MediaLifecycle enum + logs (read-only) | media runtime |
+| MediaSessionManager + GROUP→MEETING barrier (RO-M2a) | `core/media` + Coordinator |
 | Soak S6–S9 grep | scripts |
-| RO-M2 MediaSession | follow-up ADR |
+| RO-M2b conference ICE + SDP | #64 |
 
 ## References
 

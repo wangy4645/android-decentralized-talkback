@@ -14,6 +14,8 @@ class StubWebRtcAudioEngine : WebRtcAudioEngine {
     private var iceListener: ((String) -> Unit)? = null
     @Volatile
     private var remotePlaybackEnabled = false
+    @Volatile
+    private var iceConnectionStateName = "NEW"
     override var playbackDiagnosticTag: String? = null
     override var remoteTrackDiagnosticLogger: ((Boolean) -> Unit)? = null
 
@@ -57,6 +59,13 @@ class StubWebRtcAudioEngine : WebRtcAudioEngine {
         capturing.set(false)
         remoteOffer = null
         remoteAnswer = null
+        iceConnectionStateName = "CLOSED"
+    }
+
+    override fun iceConnectionState(): String = iceConnectionStateName
+
+    fun simulateIceState(state: String) {
+        iceConnectionStateName = state
     }
 
     override fun refreshAudioLevel() = Unit

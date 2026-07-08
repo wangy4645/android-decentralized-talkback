@@ -158,12 +158,12 @@ if ($s7Hits -gt 0) {
     Add-Failure "S7" "host_solo_conference predicate with MULTI_PARTY declaration count=$s7Hits"
 }
 
-# --- S8: MEDIA_SESSION_REUSE = 0 (RO-M2 — warn only until media lifecycle lands) ---
-$s8Reuse = ([regex]::Matches($allText, 'MEDIA_SESSION_REUSE=[1-9]')).Count
+# --- S8: MEDIA_SESSION_REUSE = 0 (RO-M2a #63) ---
+$s8Reuse = ([regex]::Matches($allText, 'MEDIA_SESSION_REUSE=1')).Count
 if ($s8Reuse -gt 0) {
     Add-Failure "S8" "MEDIA_SESSION_REUSE > 0 count=$s8Reuse"
-} elseif (-not ($allText -match 'MEDIA_SESSION_REUSE')) {
-    Add-Warning "S8" "MEDIA_SESSION_REUSE markers absent (RO-M2 not instrumented yet)"
+} elseif (-not ($allText -match 'MEDIA_BARRIER_COMPLETE|MEDIA_SESSION_REUSE=0')) {
+    Add-Warning "S8" "MEDIA_BARRIER_COMPLETE / MEDIA_SESSION_REUSE=0 markers absent"
 }
 
 # --- S9: MEETING_START establishment dispatch failures (ADR-0017 declaration window) ---

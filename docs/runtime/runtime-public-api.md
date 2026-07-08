@@ -67,7 +67,9 @@
 | `remotePeer` / `remote` | Cache | `primaryRemotePeer()` | unicast 建立路径 | INTERNAL |
 | `mediaTopology` | Fact | `mediaTopology` | topology planner | INTERNAL |
 | `participants`（GROUP） | Derived | `participantView()` | `onIceStateChanged()` | **Forbidden** |
-| `participants.media` | Derived | Projector 只读 | `MediaRuntime.notify*` | **Forbidden** |
+| `participants.media` | Derived | Projector 只读 | `MediaRuntime.onIceStateChanged()` | **Forbidden** |
+| `MediaSessionManager` | Fact | `getState(moduleId)` | `create/close/resetAll` | N/A（非 session 字段） |
+| `MediaLifecycle` | Derived | `getState().lifecycle` | ICE 投影（只读） | **Forbidden**（Transition 决策） |
 
 ### Conference Runtime
 
@@ -190,33 +192,65 @@ class DelegatingTransportRegistry(
 
 ## MediaRuntime
 
-**Owner**：待提取 `MediaRuntime`（RO-7）；过渡期 Coordinator + qosMonitor
+**Owner**：`MediaRuntime`（RO-7 media 投影）+ `MediaSessionManager`（RO-M2a PeerConnection 生命周期）
+
+过渡期 Coordinator 仍编排 mesh dial；**PeerConnection 创建/销毁** 经 `MediaSessionManager` 单入口。
 
 ### 读 API
 
 | 方法 | 状态 | 说明 |
 |------|------|------|
+| `MediaSessionManager.getState(moduleId)` | **TARGET** | RO-M2a：scope、lifecycle、iceState、generation |
+| `MediaSessionManager.mediaSessionReuseCount()` | **TARGET** | soak S8；必须为 0 |
 | `session.remotePeersByModule[moduleId]` | CURRENT | 仅 ICE send / mesh engine |
 | `meshCompletedModules.contains(moduleId)` | CURRENT | invite gating |
 | `qosMonitor.snapshot(moduleId)?.iceState` | CURRENT | ICE 只读 |
 | `isMeshCompleted(session, moduleId)` | **TARGET** | 门面 |
+| `MediaRuntime.onIceStateChanged(...)` | **TARGET** | RO-7 唯一写 participants.media |
 
 ### 写 API
 
 | 方法 | 状态 | 说明 |
 |------|------|------|
+| `MediaSessionManager.create(moduleId, scope)` | **TARGET** | RO-M2a：GROUP / CONFERENCE 作用域 PC |
+| `MediaSessionManager.close(moduleId)` | **TARGET** | 释放单模块 PC |
+| `MediaSessionManager.resetAll(moduleIds)` | **TARGET** | GROUP→MEETING barrier（terminate → CLOSED → create） |
 | `markMeshLinkCompleted(session, moduleId)` | CURRENT | Coordinator 私有 |
-| `bindMeshPeer(session, moduleId, peer)` | **TARGET** | 收敛 20+ remotePeers 写 |
+| `bindMeshPeer(session, moduleId, peer)` | **TARGET** | 收敛 remotePeers 写 |
 | `onIceStateChanged(session, moduleId, iceState)` | **TARGET** | 唯一写 participants.media |
 | `clearMeshPeer(session, moduleId)` | **TARGET** | evict / handover |
+
+### MediaLifecycle（观测层，ADR-0017 §9）
+
+```
+IDLE → BOOTSTRAPPING → NEGOTIATING → PARTIAL_CONNECTED → CONNECTED → DEGRADED → FAILED
+```
+
+- 日志：`MEDIA_LIFECYCLE module=… scope=… lifecycle=… generation=… ice=…`
+- **MUST NOT** 调用 `beginTransition` / `completeTransition` / `abortTransition`
+- 合法组合：`Transition READY` + `MediaLifecycle.PARTIAL_CONNECTED`
+
+### GROUP → MEETING barrier（RO-M2a）
+
+`TalkbackCoordinator.meshCallInternal(CONFERENCE)` 在 `endConflictingMeshSessions` 之后、
+`acquireMeshEngine` 之前调用 `resetMeshForMeetingBarrier(moduleIds)`：
+
+1. `close` 所有 GROUP 作用域 PC
+2. 等待 ICE `CLOSED`（或 timeout）
+3. `conferenceEngine` → `create(..., CONFERENCE)` 新 generation
+
+KPI：`MEDIA_SESSION_REUSE=0`（违规时 `MEDIA_SESSION_REUSE=1` 日志 + soak S8 fail）
 
 ### Forbidden
 
 ```
-meshParticipant(...).media = ...     // Coordinator ICE 回调直写
+meshParticipant(...).media = ...     // Coordinator ICE 回调直写 → MediaRuntime
 session.remotePeersByModule[...] =   // 非 MediaRuntime 门面
 participants.media 用于 Floor 决策
 meshCompletedModules 用于 Floor authority
+groupEngine/conferenceEngine 绕过 MediaSessionManager  // RO-M2a
+MEDIA_SESSION_REUSE > 0 across GROUP→MEETING
+MediaLifecycle 驱动 Transition 状态
 ```
 
 ---
@@ -352,6 +386,7 @@ TalkbackCoordinator
 | RO-5 | TransportRuntime 写 API |
 | RO-6 | FloorRuntime 纯函数输入 |
 | RO-7 | MediaRuntime `onIceStateChanged` |
+| RO-M2a | MediaSessionManager + GROUP→MEETING barrier + MediaLifecycle |
 
 ---
 
