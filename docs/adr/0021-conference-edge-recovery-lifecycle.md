@@ -234,9 +234,10 @@ Decision inputs **MUST** combine:
 Connectivity Fact   (ICE/edge state — input only, not sole trigger)
 Membership Fact     (JOINED / LEFT — committed)
 Termination Reason  (why the edge ended — USER_LEAVE vs NETWORK_LOSS vs HOST_HANGUP)
+Recovery Reason     (policy source — USER_REJOIN vs NETWORK_RECOVERY vs HOST_REATTACH vs ICE_*)
 ```
 
-`ConferenceEdgeRecoveryController` **MUST NOT** treat raw ICE `CLOSED`/`DISCONNECTED` as sufficient approval. R4 eligibility is necessary but not sufficient once R20 is enforced in code (phase 2).
+`RecoveryDecisionTrigger` is the **event** (what happened). `RecoveryReason` is the **policy source** (why recovery is being considered). They MUST NOT be conflated.
 
 ### R21 — Membership Plane vs Connectivity Plane (frozen 2026-07-09)
 

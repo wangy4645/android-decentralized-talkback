@@ -173,7 +173,7 @@ adb logcat -d | rg "RECOVERY_EDGE_|RECOVERY_REATTACH_|RECOVERY_EVENT_DROPPED"
 | `CONFERENCE_LIFECYCLE_TIMELINE` | `event, ch, session, writer, cause` | meshCall、acceptInvite、hangup、remote termination、clearRejoin |
 | `AUTHORITY_TIMELINE` | `session, ch, host, reachable, hostIce, writer, cause` | `emitConferenceRuntimeProjection`（仅 reachable **变化**） |
 | Edge（已有） | `RECOVERY_*` | `ConferenceEdgeRecoveryController.onLog` |
-| **RecoveryDecision** | `trigger, terminationReason, policy, approved, attempt, edge` | `RECOVERY_DECISION` — 观测-only v1；行为 gate 在 phase 2 |
+| **RecoveryDecision** | `trigger, recoveryReason, terminationReason, policy, approved, attempt, edge` | `RECOVERY_DECISION` — Reason=策略来源，Trigger=事件；Policy 决策 phase 2 |
 
 实现：`ConferenceAuditTimelineLog.kt` + `TalkbackCoordinator` 挂钩；`RECOVERY_DECISION` 在 `ConferenceEdgeRecoveryController`。
 

@@ -77,6 +77,7 @@ class ConferenceEdgeRecoveryController(
                 sessionId = sessionId,
                 edge = remoteModuleId,
                 trigger = RecoveryDecisionTrigger.SESSION_CANCELLED,
+                recoveryReason = RecoveryReason.SESSION_CANCELLED,
                 terminationReason = RecoveryTerminationReason.CONFERENCE_TERMINATED,
                 policy = RecoveryDecisionPolicy.NO_RECOVERY,
                 approved = false,
@@ -143,9 +144,31 @@ class ConferenceEdgeRecoveryController(
         )
     }
 
-    fun onReattachAccepted(sessionId: String, remoteModuleId: String) {
+    fun onReattachAccepted(
+        sessionId: String,
+        remoteModuleId: String,
+        recoveryReason: RecoveryReason = RecoveryReason.UNKNOWN
+    ) {
         val key = ConferenceEdgeKey(sessionId, remoteModuleId)
-        val record = edges[key] ?: run {
+        val existing = edges[key]
+        if (existing?.phase == EdgeRecoveryPhase.REATTACH_ACCEPTED ||
+            existing?.phase == EdgeRecoveryPhase.ICE_RESTARTING ||
+            existing?.iceRestartIssued == true
+        ) {
+            logRecoveryDecision(
+                sessionId = sessionId,
+                edge = remoteModuleId,
+                trigger = RecoveryDecisionTrigger.REATTACH_ACCEPTED,
+                recoveryReason = recoveryReason,
+                terminationReason = RecoveryTerminationReason.UNKNOWN,
+                policy = RecoveryDecisionPolicy.ICE_RESTART_ONLY,
+                approved = false,
+                rejectReason = "duplicate_reattach_accepted",
+                attempt = existing.recoveryAttemptId
+            )
+            return
+        }
+        val record = existing ?: run {
             upsertEdge(
                 key,
                 channelId = "",
@@ -164,6 +187,7 @@ class ConferenceEdgeRecoveryController(
             sessionId = sessionId,
             edge = remoteModuleId,
             trigger = RecoveryDecisionTrigger.REATTACH_ACCEPTED,
+            recoveryReason = recoveryReason,
             terminationReason = RecoveryTerminationReason.UNKNOWN,
             policy = RecoveryDecisionPolicy.ICE_RESTART_ONLY,
             approved = true,
@@ -172,9 +196,9 @@ class ConferenceEdgeRecoveryController(
         )
         onLog(
             "RECOVERY_REATTACH_ACCEPTED session=$sessionId remote=$remoteModuleId " +
-                "attempt=${record.recoveryAttemptId}"
+                "attempt=${record.recoveryAttemptId} recoveryReason=$recoveryReason"
         )
-        issueBoundedIceRestart(record)
+        issueBoundedIceRestart(record, recoveryReason)
         notifyChanged(sessionId)
     }
 
@@ -273,11 +297,13 @@ class ConferenceEdgeRecoveryController(
     ) {
         if (!eligibility.isEligible()) {
             val terminationReason = inferTerminationReason(eligibility, trigger)
+            val recoveryReason = resolveRecoveryReason(trigger, initiatesReattach)
             val rejectReason = ineligibilityReason(eligibility)
             logRecoveryDecision(
                 sessionId = key.sessionId,
                 edge = key.remoteModuleId,
                 trigger = trigger,
+                recoveryReason = recoveryReason,
                 terminationReason = terminationReason,
                 policy = RecoveryDecisionPolicy.NO_RECOVERY,
                 approved = false,
@@ -302,10 +328,12 @@ class ConferenceEdgeRecoveryController(
         } else {
             RecoveryDecisionPolicy.ICE_RESTART_ONLY
         }
+        val recoveryReason = resolveRecoveryReason(trigger, initiatesReattach)
         logRecoveryDecision(
             sessionId = key.sessionId,
             edge = key.remoteModuleId,
             trigger = trigger,
+            recoveryReason = recoveryReason,
             terminationReason = RecoveryTerminationReason.NETWORK_LOSS,
             policy = policy,
             approved = true,
@@ -314,7 +342,8 @@ class ConferenceEdgeRecoveryController(
         )
         onLog(
             "RECOVERY_EDGE_STARTED session=${key.sessionId} remote=${key.remoteModuleId} " +
-                "attempt=${record.recoveryAttemptId} initiatesReattach=$initiatesReattach immediate=$immediate"
+                "attempt=${record.recoveryAttemptId} initiatesReattach=$initiatesReattach " +
+                "immediate=$immediate recoveryReason=$recoveryReason"
         )
         if (initiatesReattach) {
             val sent = onRequestReattach(
@@ -340,24 +369,22 @@ class ConferenceEdgeRecoveryController(
         notifyChanged(key.sessionId)
     }
 
-    private fun issueBoundedIceRestart(record: EdgeRecoveryRecord) {
+    private fun issueBoundedIceRestart(
+        record: EdgeRecoveryRecord,
+        recoveryReason: RecoveryReason = RecoveryReason.UNKNOWN
+    ) {
         if (record.iceRestartIssued) {
-            record.phase = EdgeRecoveryPhase.FAILED_MEDIA_RECOVERY
             logRecoveryDecision(
                 sessionId = record.key.sessionId,
                 edge = record.key.remoteModuleId,
                 trigger = RecoveryDecisionTrigger.ICE_RESTART,
+                recoveryReason = recoveryReason,
                 terminationReason = RecoveryTerminationReason.UNKNOWN,
                 policy = RecoveryDecisionPolicy.ICE_RESTART_ONLY,
                 approved = false,
-                rejectReason = "ice_restart_budget_exhausted",
+                rejectReason = "duplicate_ice_restart",
                 attempt = record.recoveryAttemptId
             )
-            onLog(
-                "FAILED_MEDIA_RECOVERY session=${record.key.sessionId} remote=${record.key.remoteModuleId} " +
-                    "reason=ice_restart_budget_exhausted"
-            )
-            notifyChanged(record.key.sessionId)
             return
         }
         record.phase = EdgeRecoveryPhase.ICE_RESTARTING
@@ -444,6 +471,16 @@ class ConferenceEdgeRecoveryController(
         onRecoveryStateChanged(sessionId)
     }
 
+    private fun resolveRecoveryReason(
+        trigger: RecoveryDecisionTrigger,
+        initiatesReattach: Boolean
+    ): RecoveryReason = when {
+        initiatesReattach -> RecoveryReason.HOST_REATTACH
+        trigger == RecoveryDecisionTrigger.ICE_FAILED -> RecoveryReason.ICE_FAILED
+        trigger == RecoveryDecisionTrigger.ICE_DISCONNECTED -> RecoveryReason.ICE_DISCONNECTED
+        else -> RecoveryReason.NETWORK_RECOVERY
+    }
+
     private fun inferTerminationReason(
         eligibility: EdgeRecoveryEligibility,
         trigger: RecoveryDecisionTrigger
@@ -470,6 +507,7 @@ class ConferenceEdgeRecoveryController(
         sessionId: String,
         edge: String,
         trigger: RecoveryDecisionTrigger,
+        recoveryReason: RecoveryReason,
         terminationReason: RecoveryTerminationReason,
         policy: RecoveryDecisionPolicy,
         approved: Boolean,
@@ -480,8 +518,8 @@ class ConferenceEdgeRecoveryController(
         val rejectPart = rejectReason?.let { " rejectReason=$it" } ?: ""
         onLog(
             "RECOVERY_DECISION session=$sessionId edge=$edge trigger=$trigger " +
-                "terminationReason=$terminationReason policy=$policy approved=$approved " +
-                "$attemptPart$rejectPart"
+                "recoveryReason=$recoveryReason terminationReason=$terminationReason " +
+                "policy=$policy approved=$approved $attemptPart$rejectPart"
         )
     }
 }

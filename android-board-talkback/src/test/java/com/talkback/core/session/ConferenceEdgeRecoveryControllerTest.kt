@@ -97,10 +97,16 @@ class ConferenceEdgeRecoveryControllerTest {
             eligibility = eligible(),
             initiatesReattach = false
         )
-        controller.onReattachAccepted("sess-1", "M02")
+        controller.onReattachAccepted("sess-1", "M02", RecoveryReason.USER_REJOIN)
         assertEquals(1, iceRestartCalls)
-        controller.onReattachAccepted("sess-1", "M02")
+        controller.onReattachAccepted("sess-1", "M02", RecoveryReason.USER_REJOIN)
         assertEquals(1, iceRestartCalls)
+        assertTrue(
+            decisionLogs.any {
+                it.contains("rejectReason=duplicate_reattach_accepted") &&
+                    it.contains("recoveryReason=USER_REJOIN")
+            }
+        )
     }
 
     @Test
@@ -138,6 +144,7 @@ class ConferenceEdgeRecoveryControllerTest {
         assertTrue(
             decisionLogs.any {
                 it.contains("RECOVERY_DECISION") &&
+                    it.contains("recoveryReason=ICE_FAILED") &&
                     it.contains("terminationReason=USER_LEAVE") &&
                     it.contains("approved=false")
             }

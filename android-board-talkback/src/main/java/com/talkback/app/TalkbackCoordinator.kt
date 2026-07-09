@@ -66,6 +66,7 @@ import com.talkback.core.session.ConferenceEdgeRecoveryController
 import com.talkback.core.session.ConferenceHostEndpointResolver
 import com.talkback.core.session.ConferenceParticipantManager
 import com.talkback.core.session.EdgeRecoveryEligibility
+import com.talkback.core.session.RecoveryReason
 import com.talkback.core.session.ConferenceParticipantProjector
 import com.talkback.core.session.ConferenceRuntimeProjectionLogger
 import com.talkback.core.session.ConferenceRuntimeProjector
@@ -3342,7 +3343,11 @@ class TalkbackCoordinator(
         }
 
         val sent = sendConferenceInvitesInternal(hostConference.id, listOf(signal.from), rejoin = true)
-        conferenceEdgeRecoveryController.onReattachAccepted(hostConference.id, rejoinerId)
+        conferenceEdgeRecoveryController.onReattachAccepted(
+            hostConference.id,
+            rejoinerId,
+            RecoveryReason.USER_REJOIN
+        )
         log(
             "[${hostConference.traceId}] RECOVERY_REATTACH accepted $rejoinerId sent=$sent " +
                 "epoch=${payload.membershipEpoch}"
@@ -3847,7 +3852,11 @@ class TalkbackCoordinator(
             if (session.type == SessionType.CONFERENCE) {
                 markConferenceParticipantActive(session, caller.moduleId.value)
                 if (payload.joinIntent == ConferenceJoinIntent.RECOVERY_REATTACH) {
-                    conferenceEdgeRecoveryController.onReattachAccepted(session.id, caller.moduleId.value)
+                    conferenceEdgeRecoveryController.onReattachAccepted(
+                        session.id,
+                        caller.moduleId.value,
+                        RecoveryReason.USER_REJOIN
+                    )
                 }
             }
             updateSessionReceivePlayback(session)

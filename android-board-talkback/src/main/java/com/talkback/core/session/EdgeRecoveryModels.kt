@@ -58,13 +58,30 @@ internal data class EdgeRecoveryRecord(
     var initiatesReattach: Boolean = false
 )
 
-/** Observability-only labels for RECOVERY_DECISION (ADR-0021 R20–R22). */
+/**
+ * Connectivity event that reached the recovery controller (ADR-0021 R20).
+ * Describes **what happened**, not why recovery was approved.
+ */
 internal enum class RecoveryDecisionTrigger {
     ICE_DISCONNECTED,
     ICE_FAILED,
     REATTACH_ACCEPTED,
     ICE_RESTART,
     SESSION_CANCELLED
+}
+
+/**
+ * Policy-source classification for recovery (ADR-0021 R20).
+ * Describes **why** recovery is being considered — distinct from [RecoveryDecisionTrigger].
+ */
+enum class RecoveryReason {
+    NETWORK_RECOVERY,
+    USER_REJOIN,
+    HOST_REATTACH,
+    ICE_FAILED,
+    ICE_DISCONNECTED,
+    SESSION_CANCELLED,
+    UNKNOWN
 }
 
 internal enum class RecoveryTerminationReason {
