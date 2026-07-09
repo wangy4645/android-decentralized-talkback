@@ -128,6 +128,34 @@ _Avoid_: isLiveConferenceSession, 会议还活着
 Conference Session 是否已有至少一条可用的远端媒体链路（transmit-ready）。Solo Host 常见 Exists=true、Operational=false；这是等待态，不是 Session 终止。
 _Avoid_: 会议已结束, channel ready
 
+**Conference Lifecycle Established**:
+Conference Session 已跨过建立边界后的持久生命周期事实；除明确的 Conference lifecycle authority 终止决策外不可降级。媒体断连、远端媒体数为 0、成员离开、恢复流程均不得撤销 Established。
+_Avoid_: 用 ICE/remoteMediaCount 推导未建立, 把恢复中当重新建会
+
+**Conference Connectivity Recovery**:
+已存在 Conference Session 内的媒体连接恢复过程；可影响 UI 投影为 Reconnecting，但不属于 Conference Lifecycle。会议可在一个或多个媒体路径 recovering/failed 时保持 Established。
+_Avoid_: Conference Lifecycle RECOVERING, 用恢复流程驱动会议重新开始
+
+**Conference Authority Reachability**:
+本端与 Conference lifecycle authority 之间是否存在可维持会议语义的有效关系；不是任意 peer media 连通。Participant ACTIVE 依赖 authority reachability，v1 可由 Host media connected 近似实现。
+_Avoid_: connectedRemoteMediaCount, 任意 peer ICE CONNECTED
+
+**Conference Participant Count**:
+会议主人数由已提交的 Conference Membership（JOINED）决定；邀请中、预期 roster、媒体 connected/recovering/failed 不改变人数。媒体变化只能改变成员状态展示。
+_Avoid_: visibleParticipantCount, roster.size, connectedRemoteMediaCount
+
+**Conference Membership Joined**:
+Conference Membership Authority 已确认并提交到运行时成员视图的入会事实；不是用户点击接受邀请，也不是媒体连通。`InvitationState.ACCEPTED` 与 `MembershipState.JOINED` 可在过渡窗口内不同步。
+_Avoid_: ACCEPTED == JOINED, ICE connected == joined, invitee 本地自判 joined
+
+**Local Conference Ready**:
+本端已跨过 Conference admission 边界、可进入会议体验的语义事实。Host ACTIVE 依赖 Established + Local Conference Ready；v1 可由 session accepted + transition terminal ready 映射，但术语不绑定 PeerConnection、ICE 或具体音频引擎。
+_Avoid_: session object exists, local PC created, remote media connected
+
+**Conference Degradation**:
+已存在会议中的能力下降或部分失败，是 UI Projection 的附加属性而非主 phase。Degraded 不替代 Lifecycle、Membership 或 Connectivity 状态；v1 可通过日志/status flag 表达。
+_Avoid_: DEGRADED 作为大杂烩 phase, 用 degraded 反推会议未建立
+
 **Membership**:
 组呼或会议 Session 内的参与方集合（Session Membership）：运行态事实，含世代（epoch）、可达性、evict/rejoin。单呼不存在 Membership。创建时可从 Channel Membership 做一次性 snapshot 作为初始邀请集，之后冻结、不再同步 Channel。
 _Avoid_: Channel 成员, 通讯录

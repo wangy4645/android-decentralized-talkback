@@ -53,6 +53,8 @@ class ConferenceParticipantProjectorTest {
             )
         )
         assertEquals(1, out.visibleParticipantCount)
+        assertEquals(1, out.joinedParticipantCount)
+        assertEquals(2, out.pendingInviteeCount)
         assertEquals("M01", out.visibleParticipants.single().moduleId)
         assertTrue(out.awaitingAdditionalParticipants)
     }

@@ -538,8 +538,15 @@ class TalkbackCoordinator(
         emitGroupTopologyForChannel(TopologySnapshotReason.CONFERENCE_END, channelId)
     }
 
-    /** Remote host ended the meeting; tear down local conference runtime when no active session remains. */
+    /**
+     * Remote/lifecycle terminal event for a conference channel.
+     *
+     * Must always clear rejoin hints (zombie rejoin guard), and only tear down channel runtime when
+     * no active conference session remains.
+     */
     private fun releaseConferenceRuntimeAfterRemoteTermination(channelId: String, reason: String) {
+        clearConferenceRejoinState(channelId)
+        log("CONFERENCE_TERMINATED ch=$channelId reason=$reason clearRejoinState=true")
         if (sessions.values.any { it.channelId == channelId && it.type == SessionType.CONFERENCE }) {
             return
         }
@@ -1889,6 +1896,8 @@ class TalkbackCoordinator(
         memberViews = memberViews,
         visibleParticipants = projection?.visibleParticipants ?: emptyList(),
         visibleParticipantCount = projection?.visibleParticipantCount ?: 0,
+        joinedParticipantCount = projection?.joinedParticipantCount ?: 0,
+        pendingInviteeCount = projection?.pendingInviteeCount ?: 0,
         awaitingAdditionalParticipants = projection?.awaitingAdditionalParticipants ?: false,
         conferenceRuntimeState = runtimeState,
         meshConnectedPeerCount = countConnectedRemotes(session),
@@ -1918,9 +1927,16 @@ class TalkbackCoordinator(
             connectedRemoteMediaCount = countConnectedRemotes(session),
             sessionAccepted = session.accepted,
             awaitingAdditionalParticipants = participantProjection?.awaitingAdditionalParticipants ?: false,
-            mediaRecovering = isConferenceMediaRecovering(session)
+            mediaRecovering = isConferenceMediaRecovering(session),
+            isConferenceHost = isConferenceHostSession(session),
+            authorityReachable = isConferenceAuthorityReachable(session)
         )
     )
+
+    private fun isConferenceAuthorityReachable(session: TalkbackSession): Boolean {
+        val hostModuleId = session.initiatorModuleId?.value ?: return false
+        return isPeerMediaConnected(hostModuleId)
+    }
 
     private fun isConferenceMediaRecovering(session: TalkbackSession): Boolean {
         val modules = linkedSetOf<String>()
@@ -1949,13 +1965,19 @@ class TalkbackCoordinator(
         val channelId = session.channelId
         val channelReady = channelId?.let { resolveChannelReadiness(it) }
         val uiReady = isConferenceUiReady(session)
+        val isHost = isConferenceHostSession(session)
+        val authorityReachable = isConferenceAuthorityReachable(session)
         log(
             ConferenceRuntimeProjectionLogger.format(
                 sessionId = session.id,
                 channelId = channelId,
                 runtime = runtime,
                 channelReadiness = channelReady,
-                conferenceUiReady = uiReady
+                conferenceUiReady = uiReady,
+                isConferenceHost = isHost,
+                authorityReachable = authorityReachable,
+                joinedParticipantCount = projection.joinedParticipantCount,
+                pendingInviteeCount = projection.pendingInviteeCount
             )
         )
     }
@@ -2796,6 +2818,15 @@ class TalkbackCoordinator(
         }
         val rejectorModuleId = signal.from.moduleId.value
         if (session.type.isMeshSession()) {
+            if (signal.payload == "MEETING_ENDED" && session.type == SessionType.CONFERENCE) {
+                val channelId = session.channelId
+                hangupInternal(session.id)
+                channelId?.let {
+                    releaseConferenceRuntimeAfterRemoteTermination(it, "remote_meeting_ended")
+                }
+                log("[${session.traceId}] Conference terminated remotely reason=MEETING_ENDED")
+                return
+            }
             parseBusyCanonical(signal.payload)?.let { canonical ->
                 tryYieldToCanonicalGroupFromBusy(signal.sessionId, canonical)
             }
@@ -4166,7 +4197,7 @@ class TalkbackCoordinator(
             groupMeshReconciler.clearChannel(ch)
             if (sessions.values.none { it.channelId == ch && it.type == SessionType.CONFERENCE }) {
                 if (removed.type == SessionType.CONFERENCE) {
-                    releaseConferenceChannelForGroupPtt(ch, "remote_hangup")
+                    releaseConferenceRuntimeAfterRemoteTermination(ch, "remote_hangup")
                 } else {
                     releaseChannelModeIfIdle(ch)
                 }
@@ -4188,6 +4219,10 @@ class TalkbackCoordinator(
         if (leavingModuleId == session.initiatorModuleId?.value) {
             log("[${session.traceId}] Conference host left via GROUP_LEAVE, ending session")
             hangupInternal(session.id)
+            session.channelId?.let { channelId ->
+                clearConferenceRejoinState(channelId)
+                log("CONFERENCE_TERMINATED ch=$channelId reason=host_group_leave clearRejoinState=true")
+            }
             return
         }
         // Do not apply the leaver's member roster — it is often incomplete (e.g. mesh still

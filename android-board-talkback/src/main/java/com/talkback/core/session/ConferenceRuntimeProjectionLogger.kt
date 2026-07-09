@@ -3,7 +3,7 @@ package com.talkback.core.session
 import com.talkback.core.util.TalkbackLog
 
 /**
- * Serializes [ConferenceRuntimeState] and dual-track observability to logcat (RO-M2 PR-2).
+ * Serializes [ConferenceRuntimeState] and dual-track observability to logcat (RO-M2 PR-2 / ADR-0020).
  */
 object ConferenceRuntimeProjectionLogger {
 
@@ -14,9 +14,25 @@ object ConferenceRuntimeProjectionLogger {
         channelId: String?,
         runtime: ConferenceRuntimeState,
         channelReadiness: ChannelReadiness?,
-        conferenceUiReady: Boolean
+        conferenceUiReady: Boolean,
+        isConferenceHost: Boolean,
+        authorityReachable: Boolean,
+        joinedParticipantCount: Int,
+        pendingInviteeCount: Int
     ) {
-        TalkbackLog.i(format(sessionId, channelId, runtime, channelReadiness, conferenceUiReady))
+        TalkbackLog.i(
+            format(
+                sessionId = sessionId,
+                channelId = channelId,
+                runtime = runtime,
+                channelReadiness = channelReadiness,
+                conferenceUiReady = conferenceUiReady,
+                isConferenceHost = isConferenceHost,
+                authorityReachable = authorityReachable,
+                joinedParticipantCount = joinedParticipantCount,
+                pendingInviteeCount = pendingInviteeCount
+            )
+        )
     }
 
     fun format(
@@ -24,12 +40,20 @@ object ConferenceRuntimeProjectionLogger {
         channelId: String?,
         runtime: ConferenceRuntimeState,
         channelReadiness: ChannelReadiness?,
-        conferenceUiReady: Boolean
+        conferenceUiReady: Boolean,
+        isConferenceHost: Boolean = false,
+        authorityReachable: Boolean = false,
+        joinedParticipantCount: Int = 0,
+        pendingInviteeCount: Int = 0
     ): String = buildString {
         append(TAG)
         append(" sessionId=").append(sessionId)
         append(" ch=").append(channelId ?: "null")
         append(" phase=").append(runtime.phase.name)
+        append(" host=").append(isConferenceHost)
+        append(" authority=").append(authorityReachable)
+        append(" joined=").append(joinedParticipantCount)
+        append(" pending=").append(pendingInviteeCount)
         append(" recovering=").append(runtime.mediaRecovering)
         append(" awaiting=").append(runtime.awaitingAdditionalParticipants)
         append(" controlReady=").append(runtime.transitionTerminalReady)

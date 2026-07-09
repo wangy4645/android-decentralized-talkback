@@ -49,6 +49,8 @@ data class MeetingUiState(
     val memberKeys: List<String> = emptyList(),
     /** Canonical Conference UI participant count (ADR-0010 R44). */
     val visibleParticipantCount: Int = 0,
+    /** Primary meeting size label (ADR-0020 P2); excludes pending invitees. */
+    val joinedParticipantCount: Int = 0,
     val awaitingAdditionalParticipants: Boolean = false,
     /** Conference runtime phase from [TalkbackSessionSnapshot.conferenceRuntimeState] (RO-M2 PR-3). */
     val runtimePhase: ConferenceRuntimePhase? = null,

@@ -953,6 +953,7 @@ class TalkViewModel(
                 sessionId = session?.sessionId?.takeIf { conferenceActive },
                 memberKeys = session?.memberKeys.orEmpty(),
                 visibleParticipantCount = session?.visibleParticipantCount ?: 0,
+                joinedParticipantCount = session?.joinedParticipantCount ?: 0,
                 awaitingAdditionalParticipants = session?.awaitingAdditionalParticipants == true,
                 runtimePhase = runtimePhase,
                 startedAtMs = meetingStartedAtMs,
