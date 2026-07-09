@@ -540,17 +540,74 @@ class TalkbackCoordinatorIntegrationTest {
 
         assertNull(nodeM02.runtime.rejoinableConference(channelId))
         val m02LogMark = synchronized(nodeM02.logs) { nodeM02.logs.size }
-        nodeM02.runtime.sendConferenceRejoin(
+        val sent = nodeM02.runtime.sendConferenceRejoin(
             channelId,
             EndpointAddress(m01, EndpointId("E01")),
             sessionId
         )
         Thread.sleep(1_500L)
+        assertFalse(sent)
         assertTrue(nodeM02.runtime.conferenceSessions().isEmpty())
         assertTrue(
             nodeM02.waitForLogSince(m02LogMark, timeoutMs = 5_000L) {
-                it.contains("Conference terminated remotely reason=MEETING_ENDED") ||
-                    (it.contains("CONFERENCE_TERMINATED ch=$channelId") && it.contains("clearRejoinState=true"))
+                it.contains("Conference rejoin skipped")
+            }
+        )
+    }
+
+    @Test
+    fun conference_channelTombstone_doesNotBlockRejoinHintWhenNewHostAlive() {
+        val channelId = "CONF-TOMBSTONE-REJOIN"
+        val priorSessionId = nodeM03.runtime.requireConferenceCall(
+            nodeM03.localEndpoint,
+            listOf(EndpointAddress(m01, EndpointId("E01"))),
+            channelId
+        )
+        assertTrue(nodeM01.waitForLog { it.contains("Conference invite accepted") || it.contains("invite accepted") })
+        Thread.sleep(3_500L)
+        nodeM03.runtime.hangup(priorSessionId)
+        Thread.sleep(1_500L)
+
+        val hostSessionId = nodeM02.runtime.requireConferenceCall(
+            nodeM02.localEndpoint,
+            listOf(
+                EndpointAddress(m01, EndpointId("E01")),
+                EndpointAddress(m03, EndpointId("E01"))
+            ),
+            channelId
+        )
+        assertTrue(nodeM01.waitForLog { it.contains("Conference invite accepted") || it.contains("invite accepted") })
+        Thread.sleep(3_500L)
+
+        val m01SessionId = nodeM01.runtime.activeSessionIds().single()
+        val m01LogMark = synchronized(nodeM01.logs) { nodeM01.logs.size }
+        nodeM01.runtime.leaveConference(m01SessionId)
+        Thread.sleep(1_500L)
+
+        val hint = nodeM01.runtime.rejoinableConference(channelId)
+        assertNotNull("M01 should save rejoin hint despite prior channel tombstone", hint)
+        assertEquals(hostSessionId, hint?.hostSessionId)
+        assertFalse(
+            nodeM01.waitForLogSince(m01LogMark, timeoutMs = 1_000L) {
+                it.contains("Conference rejoin memory skipped") && it.contains("channel_cancelled")
+            }
+        )
+        assertTrue(
+            nodeM01.waitForLogSince(m01LogMark, timeoutMs = 3_000L) {
+                it.contains("Conference rejoin memory saved ch=$channelId")
+            }
+        )
+
+        val m01SendMark = synchronized(nodeM01.logs) { nodeM01.logs.size }
+        val sent = nodeM01.runtime.sendConferenceRejoin(
+            channelId,
+            EndpointAddress(m02, EndpointId("E02")),
+            hostSessionId
+        )
+        assertTrue(sent)
+        assertFalse(
+            nodeM01.waitForLogSince(m01SendMark, timeoutMs = 1_000L) {
+                it.contains("RECOVERY_EVENT_DROPPED") && it.contains("channel_cancelled")
             }
         )
     }

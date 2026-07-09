@@ -1,0 +1,82 @@
+package com.talkback.core.session
+
+/**
+ * Edge recovery models for ADR-0021 / #73 Conference Edge Recovery Lifecycle.
+ */
+data class ConferenceEdgeKey(
+    val sessionId: String,
+    val remoteModuleId: String
+)
+
+enum class EdgeRecoveryPhase {
+    CONNECTED,
+    DISCONNECTED_DEBOUNCING,
+    RECOVERY_PENDING,
+    REATTACH_REQUESTED,
+    REATTACH_ACCEPTED,
+    ICE_RESTARTING,
+    RECOVERED,
+    FAILED_MEDIA_RECOVERY,
+    FAILED_IDENTITY_MISMATCH,
+    FAILED_STALE_LINEAGE,
+    FAILED_REQUIRES_USER_ACTION,
+    CANCELLED;
+
+    fun isActivelyRecovering(): Boolean = when (this) {
+        DISCONNECTED_DEBOUNCING,
+        RECOVERY_PENDING,
+        REATTACH_REQUESTED,
+        REATTACH_ACCEPTED,
+        ICE_RESTARTING -> true
+        else -> false
+    }
+}
+
+data class EdgeRecoveryEligibility(
+    val lifecycleEstablished: Boolean,
+    val localJoined: Boolean,
+    val remoteJoined: Boolean,
+    val conferenceTerminated: Boolean
+) {
+    fun isEligible(): Boolean =
+        lifecycleEstablished && localJoined && remoteJoined && !conferenceTerminated
+}
+
+data class EdgeRecoveryFacts(
+    val recoveringRemoteModuleIds: Set<String> = emptySet(),
+    val anyRecovering: Boolean = false
+)
+
+internal data class EdgeRecoveryRecord(
+    val key: ConferenceEdgeKey,
+    var phase: EdgeRecoveryPhase,
+    var channelId: String,
+    var recoveryAttemptId: Long,
+    var recoveryStartedAtMs: Long,
+    var epochRefreshUsed: Boolean = false,
+    var iceRestartIssued: Boolean = false,
+    var initiatesReattach: Boolean = false
+)
+
+/** Observability-only labels for RECOVERY_DECISION (ADR-0021 R20–R22). */
+internal enum class RecoveryDecisionTrigger {
+    ICE_DISCONNECTED,
+    ICE_FAILED,
+    REATTACH_ACCEPTED,
+    ICE_RESTART,
+    SESSION_CANCELLED
+}
+
+internal enum class RecoveryTerminationReason {
+    NETWORK_LOSS,
+    USER_LEAVE,
+    CONFERENCE_TERMINATED,
+    NOT_ESTABLISHED,
+    UNKNOWN
+}
+
+internal enum class RecoveryDecisionPolicy {
+    NO_RECOVERY,
+    REATTACH_THEN_ICE_RESTART,
+    ICE_RESTART_ONLY
+}

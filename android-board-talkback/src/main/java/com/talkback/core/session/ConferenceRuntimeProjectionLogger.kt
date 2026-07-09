@@ -55,6 +55,7 @@ object ConferenceRuntimeProjectionLogger {
         append(" joined=").append(joinedParticipantCount)
         append(" pending=").append(pendingInviteeCount)
         append(" recovering=").append(runtime.mediaRecovering)
+        append(" edgeRecovering=").append(runtime.edgeRecovering)
         append(" awaiting=").append(runtime.awaitingAdditionalParticipants)
         append(" controlReady=").append(runtime.transitionTerminalReady)
         append(" connected=").append(runtime.connectedRemoteMediaCount)

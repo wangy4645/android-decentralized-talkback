@@ -1,6 +1,6 @@
-# TCC / ADR-0016 + ADR-0017 soak hard gates (S1-S14)
+# TCC / ADR-0016 + ADR-0017 soak hard gates (S1-S16)
 # 用法: .\scripts\soak-tcc-hard-gates.ps1 -LogDir "d:\workspace\project\talkback\logs-tcc-xxxx"
-# 扩展 #58 (S1-S5) + #61 (S6-S9) + #66/#68 (S10 HARD) + ADR-0021 (S11-S14)
+# 扩展 #58 (S1-S5) + #61 (S6-S9) + #66/#68 (S10 HARD) + ADR-0021 (S11-S14) + PR-A (S15A/S15B) + #73 (S16)
 
 param(
     [Parameter(Mandatory = $true)]
@@ -319,60 +319,61 @@ if ($meetingStartLatenciesMs.Count -gt 0) {
     Add-Warning "S12" "No MEETING_START latency samples; verify manually if meeting flow was exercised"
 }
 
-# --- S13: RECOVERY_ATTACH latency (RECOVERING -> ACTIVE within 120s, T4 only) ---
-$recoveryAttachLatenciesMs = [System.Collections.Generic.List[double]]::new()
+# --- S13: edge recovery lifecycle (RECOVERY_EDGE_STARTED -> RECOVERY_EDGE_RECOVERED, T4) ---
+$recoveryEdgeLatenciesMs = [System.Collections.Generic.List[double]]::new()
 $recoveryGateFiles = 0
 Get-ChildItem (Join-Path $LogDir "*.txt") | ForEach-Object {
     $fileLines = (Get-Content $_.FullName -ErrorAction SilentlyContinue) -as [string[]]
     if (-not $fileLines) { return }
     $exerciseRecovery = @($fileLines | Where-Object {
-            $_ -match 'RECOVERY_REATTACH requested' -or
+            $_ -match 'RECOVERY_EDGE_STARTED' -or
+                $_ -match 'RECOVERY_REATTACH requested' -or
                 $_ -match 'Conference host ICE DISCONNECTED' -or
                 $_ -match 'ice=DISCONNECTED'
         }).Count -gt 0
     if ($exerciseRecovery) { $recoveryGateFiles++ }
-    $recoveringAt = $null
+    $startedAt = $null
     foreach ($line in $fileLines) {
         $ts = Parse-LogTimestamp $line
-        if ($line -match 'CONFERENCE_RUNTIME_PROJECTION.*\bphase=RECOVERING\b') {
-            $recoveringAt = $ts
+        if ($line -match 'RECOVERY_EDGE_STARTED') {
+            $startedAt = $ts
             continue
         }
-        if ($null -ne $recoveringAt -and $ts -and ($ts - $recoveringAt).TotalSeconds -gt 120) {
-            $recoveringAt = $null
+        if ($null -ne $startedAt -and $ts -and ($ts - $startedAt).TotalSeconds -gt 120) {
+            $startedAt = $null
         }
-        if ($null -ne $recoveringAt -and $line -match 'CONFERENCE_RUNTIME_PROJECTION.*\bphase=ACTIVE\b') {
+        if ($null -ne $startedAt -and $line -match 'RECOVERY_EDGE_RECOVERED') {
             if ($ts) {
-                $deltaMs = ($ts - $recoveringAt).TotalMilliseconds
+                $deltaMs = ($ts - $startedAt).TotalMilliseconds
                 if ($deltaMs -ge 0 -and $deltaMs -le 120000) {
-                    $recoveryAttachLatenciesMs.Add($deltaMs)
+                    $recoveryEdgeLatenciesMs.Add($deltaMs)
                 }
-                $recoveringAt = $null
+                $startedAt = $null
             }
         }
     }
 }
-if ($recoveryAttachLatenciesMs.Count -gt 0) {
-    $sorted = $recoveryAttachLatenciesMs | Sort-Object
+if ($recoveryEdgeLatenciesMs.Count -gt 0) {
+    $sorted = $recoveryEdgeLatenciesMs | Sort-Object
     $p50 = $sorted[[int][Math]::Floor(($sorted.Count - 1) * 0.50)]
     $p95 = $sorted[[int][Math]::Floor(($sorted.Count - 1) * 0.95)]
-    Write-Host "S13 RECOVERY_ATTACH_LATENCY samples=$($sorted.Count) P50=${p50}ms P95=${p95}ms"
+    Write-Host "S13 RECOVERY_EDGE_LATENCY samples=$($sorted.Count) P50=${p50}ms P95=${p95}ms"
     if ($recoveryGateFiles -gt 0) {
         foreach ($latency in $sorted) {
             if ($latency -gt 60000) {
-                Add-Failure "S13" "RECOVERY_ATTACH latency ${latency}ms exceeds 60s"
+                Add-Failure "S13" "RECOVERY_EDGE latency ${latency}ms exceeds 60s"
             }
         }
         if ($p95 -gt 15000) {
-            Add-Warning "S13" "RECOVERY_ATTACH P95=${p95}ms exceeds 15s target"
+            Add-Warning "S13" "RECOVERY_EDGE P95=${p95}ms exceeds 15s target"
         }
     } else {
-        Add-Warning "S13" "RECOVERY_ATTACH samples without T4 markers; informational only"
+        Add-Warning "S13" "RECOVERY_EDGE samples without T4 markers; informational only"
     }
 } elseif ($recoveryGateFiles -gt 0) {
-    Add-Warning "S13" "T4 recovery exercised but no RECOVERING->ACTIVE pairs within 120s"
+    Add-Warning "S13" "T4 recovery exercised but no RECOVERY_EDGE_STARTED->RECOVERED pairs within 120s"
 } else {
-    Add-Warning "S13" "No RECOVERY_ATTACH latency samples; run T4 WiFi loss/recovery"
+    Add-Warning "S13" "No RECOVERY_EDGE latency samples; run T4 WiFi loss/recovery"
 }
 
 # --- S14 HARD (T7): no recovery reattach after conference termination ---
@@ -408,6 +409,90 @@ foreach ($line in $lines) {
     }
 }
 Write-Host "S14 stale recovery after termination: $staleRecoveryAfterTermination"
+
+# --- S15A HARD (PR-A): rejoin hint must not be blocked by Edge channel tombstone ---
+$s15aBlocked = 0
+foreach ($line in $lines) {
+    if ($line -match 'Conference rejoin memory skipped.*reason=channel_cancelled') {
+        $s15aBlocked++
+        Add-Failure "S15A" "Rejoin hint blocked by channel_cancelled: $($line.Trim())"
+    }
+}
+Write-Host "S15A rejoin hint blocked by channel_cancelled: $s15aBlocked"
+
+# --- S15B HARD (PR-A): after hint saved, openMeetingScreen must not fork new conference ---
+$hintSavedAtByFile = @{}
+foreach ($logFile in Get-ChildItem (Join-Path $LogDir "*.txt")) {
+    $fileLines = Get-Content $logFile.FullName -ErrorAction SilentlyContinue
+    $hintAt = $null
+    foreach ($line in $fileLines) {
+        if ($line -match 'Conference rejoin memory saved ch=([^\s]+)') {
+            $hintAt = Parse-LogTimestamp $line
+            $hintSavedAtByFile[$logFile.Name] = $hintAt
+            continue
+        }
+        if ($null -eq $hintAt) { continue }
+        if ($line -match 'JOIN_MEETING_TRACE reason=ui\.openMeetingScreen') {
+            $openAt = Parse-LogTimestamp $line
+            if ($openAt -and $openAt -ge $hintAt) {
+                $hintAt = $null
+            }
+            continue
+        }
+        if ($line -match 'joinMeeting: new conference') {
+            $newAt = Parse-LogTimestamp $line
+            if ($newAt -and $newAt -ge $hintAt) {
+                Add-Failure "S15B" "$($logFile.Name): new conference after rejoin hint saved (session continuity broken)"
+                $hintAt = $null
+            }
+        }
+        if ($line -match 'joinMeeting: silent rejoin') {
+            $hintAt = $null
+        }
+    }
+}
+Write-Host "S15B session continuity violations checked per log file"
+
+# --- S16 HARD (#73): after explicit USER_LEAVE, Recovery must not approve within 120s ---
+$s16Violations = 0
+foreach ($logFile in Get-ChildItem (Join-Path $LogDir "*.txt")) {
+    $fileLines = Get-Content $logFile.FullName -ErrorAction SilentlyContinue
+    $leaveAtByRemote = @{}
+    foreach ($line in $fileLines) {
+        $ts = Parse-LogTimestamp $line
+        if ($line -match 'Conference peer left:\s+(\S+)') {
+            if ($ts) { $leaveAtByRemote[$Matches[1]] = $ts }
+            continue
+        }
+        if ($line -match 'RECOVERY_EDGE_CANCELLED session=\S+ remote=(\S+) reason=member_left') {
+            if ($ts) { $leaveAtByRemote[$Matches[1]] = $ts }
+            continue
+        }
+        if ($line -match 'Left conference locally') {
+            if ($ts) { $leaveAtByRemote['LOCAL'] = $ts }
+            continue
+        }
+        if ($null -eq $ts) { continue }
+        foreach ($remote in @($leaveAtByRemote.Keys)) {
+            $leftAt = $leaveAtByRemote[$remote]
+            if (-not $leftAt) { continue }
+            $deltaSec = ($ts - $leftAt).TotalSeconds
+            if ($deltaSec -lt 0 -or $deltaSec -gt 120) { continue }
+            if ($line -match 'RECOVERY_REATTACH_ACCEPTED session=\S+ remote=(\S+)') {
+                $reattachRemote = $Matches[1]
+                if ($remote -eq 'LOCAL' -or $reattachRemote -eq $remote) {
+                    $s16Violations++
+                    Add-Failure "S16" "$($logFile.Name): RECOVERY_REATTACH after USER_LEAVE remote=$reattachRemote (${deltaSec}s)"
+                }
+            }
+            if ($line -match 'RECOVERY_DECISION.*approved=true.*terminationReason=USER_LEAVE') {
+                $s16Violations++
+                Add-Failure "S16" "$($logFile.Name): RECOVERY_DECISION approved after USER_LEAVE (${deltaSec}s)"
+            }
+        }
+    }
+}
+Write-Host "S16 recovery after USER_LEAVE violations: $s16Violations"
 
 Write-Host ""
 Write-Host "--- Gate results ---"

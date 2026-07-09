@@ -13,6 +13,7 @@ class ConferenceRuntimeProjectorTest {
         connectedRemoteMediaCount: Int = 0,
         awaitingAdditionalParticipants: Boolean = false,
         mediaRecovering: Boolean = false,
+        edgeRecovering: Boolean = false,
         isConferenceHost: Boolean = false,
         authorityReachable: Boolean = false
     ) = ConferenceRuntimeProjector.Input(
@@ -21,6 +22,7 @@ class ConferenceRuntimeProjectorTest {
         connectedRemoteMediaCount = connectedRemoteMediaCount,
         awaitingAdditionalParticipants = awaitingAdditionalParticipants,
         mediaRecovering = mediaRecovering,
+        edgeRecovering = edgeRecovering,
         isConferenceHost = isConferenceHost,
         authorityReachable = authorityReachable
     )
@@ -94,6 +96,23 @@ class ConferenceRuntimeProjectorTest {
             )
         )
         assertEquals(ConferenceRuntimePhase.RECOVERING, state.phase)
+        assertTrue(state.mediaRecovering)
+    }
+
+    @Test
+    fun gate_g5_edgeRecovering_activeWithDegradedFlag() {
+        val state = ConferenceRuntimeProjector.project(
+            input(
+                sessionAccepted = true,
+                transitionTerminalReady = true,
+                connectedRemoteMediaCount = 0,
+                isConferenceHost = false,
+                authorityReachable = false,
+                edgeRecovering = true
+            )
+        )
+        assertEquals(ConferenceRuntimePhase.ACTIVE, state.phase)
+        assertTrue(state.edgeRecovering)
         assertTrue(state.mediaRecovering)
     }
 
