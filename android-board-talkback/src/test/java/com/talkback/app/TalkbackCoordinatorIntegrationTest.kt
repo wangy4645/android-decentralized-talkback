@@ -755,7 +755,7 @@ class TalkbackCoordinatorIntegrationTest {
             assertTrue(
                 "round $round: host should pull in M03",
                 nodeM01.waitForLogSince(m01LogMark, timeoutMs = 8_000L) {
-                    it.contains("RECOVERY_REATTACH accepted M03 sent=1") ||
+                    it.contains("JOIN_RESTORE_STARTED remote=M03") ||
                         it.contains("Conference rejoin pull-in M03 sent=1")
                 }
             )
@@ -874,7 +874,7 @@ class TalkbackCoordinatorIntegrationTest {
         )
         assertTrue(
             nodeM01.waitForLog {
-                it.contains("RECOVERY_REATTACH accepted M02 sent=1") ||
+                it.contains("JOIN_RESTORE_STARTED remote=M02") ||
                     it.contains("Conference rejoin pull-in M02 sent=1")
             }
         )

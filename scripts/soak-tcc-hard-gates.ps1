@@ -1,6 +1,6 @@
-# TCC / ADR-0016 + ADR-0017 soak hard gates (S1-S16)
+# TCC / ADR-0016 + ADR-0017 soak hard gates (S1-S17)
 # 用法: .\scripts\soak-tcc-hard-gates.ps1 -LogDir "d:\workspace\project\talkback\logs-tcc-xxxx"
-# 扩展 #58 (S1-S5) + #61 (S6-S9) + #66/#68 (S10 HARD) + ADR-0021 (S11-S14) + PR-A (S15A/S15B) + #73 (S16)
+# 扩展 #58 (S1-S5) + #61 (S6-S9) + #66/#68 (S10 HARD) + ADR-0021 (S11-S14) + PR-A (S15A/S15B) + #73 (S16/S17)
 
 param(
     [Parameter(Mandatory = $true)]
@@ -493,6 +493,29 @@ foreach ($logFile in Get-ChildItem (Join-Path $LogDir "*.txt")) {
     }
 }
 Write-Host "S16 recovery after USER_LEAVE violations: $s16Violations"
+
+# --- S17 HARD (#73): Membership USER_REJOIN must not produce Recovery control flow ---
+$s17Violations = 0
+foreach ($logFile in Get-ChildItem (Join-Path $LogDir "*.txt")) {
+    $fileLines = Get-Content $logFile.FullName -ErrorAction SilentlyContinue
+    foreach ($line in $fileLines) {
+        if ($line -match 'RECOVERY_DECISION.*recoveryReason=USER_REJOIN.*approved=true') {
+            $s17Violations++
+            Add-Failure "S17" "$($logFile.Name): USER_REJOIN approved by RecoveryController"
+        }
+        if ($line -match 'RECOVERY_REATTACH_ACCEPTED.*recoveryReason=USER_REJOIN') {
+            $s17Violations++
+            Add-Failure "S17" "$($logFile.Name): RECOVERY_REATTACH_ACCEPTED with USER_REJOIN"
+        }
+        if ($line -match 'onReattachAccepted.*USER_REJOIN|RecoveryReason\.USER_REJOIN') {
+            $s17Violations++
+            Add-Failure "S17" "$($logFile.Name): USER_REJOIN still referenced in Recovery path"
+        }
+    }
+}
+# Positive Membership marker expected when rejoin exercised (informational if absent)
+$joinRestore = ($lines | Where-Object { $_ -match 'JOIN_RESTORE_STARTED|USER_REJOIN requested' }).Count
+Write-Host "S17 USER_REJOIN recovery-boundary violations: $s17Violations (JOIN_RESTORE/USER_REJOIN markers=$joinRestore)"
 
 Write-Host ""
 Write-Host "--- Gate results ---"

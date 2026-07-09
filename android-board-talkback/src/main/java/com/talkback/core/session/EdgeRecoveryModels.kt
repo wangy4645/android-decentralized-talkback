@@ -71,17 +71,29 @@ internal enum class RecoveryDecisionTrigger {
 }
 
 /**
- * Policy-source classification for recovery (ADR-0021 R20).
- * Describes **why** recovery is being considered — distinct from [RecoveryDecisionTrigger].
+ * Policy-source classification for recovery (ADR-0021 R20 / addendum).
+ * Connectivity-plane only — Membership intents (USER_REJOIN) MUST NOT appear here.
  */
 enum class RecoveryReason {
     NETWORK_RECOVERY,
-    USER_REJOIN,
     HOST_REATTACH,
     ICE_FAILED,
     ICE_DISCONNECTED,
     SESSION_CANCELLED,
+    /** Rejected Membership / non-connectivity attempt to enter Recovery. */
+    NON_CONNECTIVITY,
     UNKNOWN
+}
+
+/** Who may start Recovery (ADR-0021 addendum Phase B). */
+enum class RecoverySource {
+    ICE_MONITOR,
+    TRANSPORT_MONITOR,
+    RECOVERY_TIMER,
+    /** Illegal for production Recovery start — Membership / invite / user action. */
+    JOIN_HANDLER,
+    INVITE_HANDLER,
+    USER_ACTION
 }
 
 internal enum class RecoveryTerminationReason {

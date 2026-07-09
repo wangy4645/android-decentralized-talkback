@@ -1,8 +1,14 @@
 package com.talkback.core.model
 
-/** ADR-0021 D1: distinguishes first admission from membership-preserving recovery. */
+/**
+ * Membership / join-plane intent (ADR-0021 addendum).
+ *
+ * USER_REJOIN is Membership Intent — MUST NOT enter RecoveryController.
+ * RECOVERY_REATTACH is Connectivity recovery control-plane — only from Recovery FSM.
+ */
 enum class ConferenceJoinIntent {
     NORMAL_JOIN,
+    USER_REJOIN,
     RECOVERY_REATTACH;
 
     fun encode(): String = name

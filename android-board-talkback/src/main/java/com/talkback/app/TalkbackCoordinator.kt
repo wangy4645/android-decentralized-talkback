@@ -67,6 +67,7 @@ import com.talkback.core.session.ConferenceHostEndpointResolver
 import com.talkback.core.session.ConferenceParticipantManager
 import com.talkback.core.session.EdgeRecoveryEligibility
 import com.talkback.core.session.RecoveryReason
+import com.talkback.core.session.RecoverySource
 import com.talkback.core.session.ConferenceParticipantProjector
 import com.talkback.core.session.ConferenceRuntimeProjectionLogger
 import com.talkback.core.session.ConferenceRuntimeProjector
@@ -3175,7 +3176,12 @@ class TalkbackCoordinator(
             log("Conference rejoin skipped: no live host session or rejoin hint ch=$channelId session=$hostSessionId")
             return false
         }
-        return dispatchConferenceRejoinSignal(channelId, authority, hostSessionId)
+        return dispatchConferenceRejoinSignal(
+            channelId,
+            authority,
+            hostSessionId,
+            intent = ConferenceJoinIntent.USER_REJOIN
+        )
     }
 
     /** Recovery-triggered reattach. Edge Recovery may drop late attempts after cancellation. */
@@ -3188,13 +3194,19 @@ class TalkbackCoordinator(
             log("RECOVERY_EVENT_DROPPED ch=$channelId reason=channel_cancelled")
             return false
         }
-        return dispatchConferenceRejoinSignal(channelId, authority, hostSessionId)
+        return dispatchConferenceRejoinSignal(
+            channelId,
+            authority,
+            hostSessionId,
+            intent = ConferenceJoinIntent.RECOVERY_REATTACH
+        )
     }
 
     private fun dispatchConferenceRejoinSignal(
         channelId: String,
         authority: EndpointAddress,
-        hostSessionId: String
+        hostSessionId: String,
+        intent: ConferenceJoinIntent
     ): Boolean {
         val peer = resolvePeerForModule(authority.moduleId.value) ?: run {
             log("Conference rejoin skipped: authority ${authority.moduleId.value} not reachable")
@@ -3215,7 +3227,7 @@ class TalkbackCoordinator(
             membershipEpoch = membershipEpoch,
             endpointId = local.endpointId.value
         )
-        val payload = request.toRejoinPayload().encode()
+        val payload = request.toRejoinPayload(intent).encode()
         sendSignal(
             peer,
             buildSignedEnvelope(
@@ -3235,8 +3247,13 @@ class TalkbackCoordinator(
         sessions.values
             .filter { it.channelId == channelId && it.type == SessionType.CONFERENCE }
             .forEach { conferenceReconnectStartedAtBySession[it.id] = System.currentTimeMillis() }
+        val label = when (intent) {
+            ConferenceJoinIntent.USER_REJOIN -> "USER_REJOIN"
+            ConferenceJoinIntent.RECOVERY_REATTACH -> "RECOVERY_REATTACH"
+            ConferenceJoinIntent.NORMAL_JOIN -> "NORMAL_JOIN"
+        }
         log(
-            "RECOVERY_REATTACH requested by ${local.moduleId.value} -> authority " +
+            "$label requested by ${local.moduleId.value} -> authority " +
                 "${authority.moduleId.value} session=$hostSessionId ch=$channelId " +
                 "epoch=$membershipEpoch endpoint=${local.endpointId.value}"
         )
@@ -3323,13 +3340,18 @@ class TalkbackCoordinator(
         }
         if (hostConference.initiatorModuleId != localModuleId) return
 
-        validateRecoveryReattachLineage(payload, signal, hostConference)?.let { lineageReason ->
-            log(
-                "[${hostConference.traceId}] RECOVERY_REATTACH denied: $rejoinerId reason=$lineageReason " +
-                    "epoch=${payload.membershipEpoch} hostEpoch=${hostConference.rosterEpoch}"
-            )
-            rejectRecoveryReattach(fromPeer, signal.from, hostConference.id, "RECOVERY_LINEAGE_INVALID")
-            return
+        val isMembershipRejoin = payload.intent == ConferenceJoinIntent.USER_REJOIN ||
+            payload.intent == ConferenceJoinIntent.NORMAL_JOIN
+
+        if (!isMembershipRejoin) {
+            validateRecoveryReattachLineage(payload, signal, hostConference)?.let { lineageReason ->
+                log(
+                    "[${hostConference.traceId}] RECOVERY_REATTACH denied: $rejoinerId reason=$lineageReason " +
+                        "epoch=${payload.membershipEpoch} hostEpoch=${hostConference.rosterEpoch}"
+                )
+                rejectRecoveryReattach(fromPeer, signal.from, hostConference.id, "RECOVERY_LINEAGE_INVALID")
+                return
+            }
         }
 
         val leftKeys = conferenceParticipantManager.leftMemberEndpoints(hostConference.id)?.keys
@@ -3343,10 +3365,20 @@ class TalkbackCoordinator(
         }
 
         val sent = sendConferenceInvitesInternal(hostConference.id, listOf(signal.from), rejoin = true)
-        conferenceEdgeRecoveryController.onReattachAccepted(
+        if (isMembershipRejoin) {
+            // Membership plane only — MUST NOT enter RecoveryController (ADR-0021 addendum).
+            log(
+                "[${hostConference.traceId}] JOIN_RESTORE_STARTED remote=$rejoinerId " +
+                    "intent=${payload.intent} sent=$sent epoch=${payload.membershipEpoch}"
+            )
+            return
+        }
+
+        conferenceEdgeRecoveryController.onRecoveryReattachAccepted(
             hostConference.id,
             rejoinerId,
-            RecoveryReason.USER_REJOIN
+            recoveryReason = RecoveryReason.NETWORK_RECOVERY,
+            source = RecoverySource.ICE_MONITOR
         )
         log(
             "[${hostConference.traceId}] RECOVERY_REATTACH accepted $rejoinerId sent=$sent " +
@@ -3788,6 +3820,7 @@ class TalkbackCoordinator(
         if (incomingType == SessionType.GROUP &&
             channelId != null &&
             payload?.joinIntent != ConferenceJoinIntent.RECOVERY_REATTACH &&
+            payload?.joinIntent != ConferenceJoinIntent.USER_REJOIN &&
             blocksGroupOnChannel(channelId)
         ) {
             logGroupInviteBlocked(channelId, joinPath = "JOIN")
@@ -3851,11 +3884,13 @@ class TalkbackCoordinator(
             log("${sessionTag(session)} Group mesh ICE restart accepted $peerId ice=$ice intent=${payload.joinIntent}")
             if (session.type == SessionType.CONFERENCE) {
                 markConferenceParticipantActive(session, caller.moduleId.value)
+                // Connectivity Recovery only — USER_REJOIN must not enter RecoveryController.
                 if (payload.joinIntent == ConferenceJoinIntent.RECOVERY_REATTACH) {
-                    conferenceEdgeRecoveryController.onReattachAccepted(
+                    conferenceEdgeRecoveryController.onRecoveryReattachAccepted(
                         session.id,
                         caller.moduleId.value,
-                        RecoveryReason.USER_REJOIN
+                        recoveryReason = RecoveryReason.NETWORK_RECOVERY,
+                        source = RecoverySource.ICE_MONITOR
                     )
                 }
             }

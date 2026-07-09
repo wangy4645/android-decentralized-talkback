@@ -2,13 +2,13 @@ package com.talkback.core.model
 
 import org.json.JSONObject
 
-/** Payload for [SignalType.CONFERENCE_REJOIN] - recovery reattach with conference lineage (ADR-0021). */
+/** Payload for [SignalType.CONFERENCE_REJOIN] — Membership USER_REJOIN or Connectivity RECOVERY_REATTACH. */
 data class ConferenceRejoinPayload(
     val channelId: String,
     val hostSessionId: String,
     val membershipEpoch: Long = 0L,
     val endpointId: String = "",
-    val intent: ConferenceJoinIntent = ConferenceJoinIntent.RECOVERY_REATTACH
+    val intent: ConferenceJoinIntent = ConferenceJoinIntent.USER_REJOIN
 ) {
     fun encode(): String = JSONObject()
         .put("channelId", channelId)
@@ -29,6 +29,7 @@ data class ConferenceRejoinPayload(
                 intent = if (json.has("intent")) {
                     ConferenceJoinIntent.fromPayload(json.optString("intent"))
                 } else {
+                    // Legacy wire default was recovery; Membership path now sets USER_REJOIN explicitly.
                     ConferenceJoinIntent.RECOVERY_REATTACH
                 }
             )

@@ -97,14 +97,41 @@ class ConferenceEdgeRecoveryControllerTest {
             eligibility = eligible(),
             initiatesReattach = false
         )
-        controller.onReattachAccepted("sess-1", "M02", RecoveryReason.USER_REJOIN)
+        controller.onRecoveryReattachAccepted(
+            "sess-1",
+            "M02",
+            RecoveryReason.NETWORK_RECOVERY,
+            RecoverySource.ICE_MONITOR
+        )
         assertEquals(1, iceRestartCalls)
-        controller.onReattachAccepted("sess-1", "M02", RecoveryReason.USER_REJOIN)
+        controller.onRecoveryReattachAccepted(
+            "sess-1",
+            "M02",
+            RecoveryReason.NETWORK_RECOVERY,
+            RecoverySource.ICE_MONITOR
+        )
         assertEquals(1, iceRestartCalls)
         assertTrue(
             decisionLogs.any {
                 it.contains("rejectReason=duplicate_reattach_accepted") &&
-                    it.contains("recoveryReason=USER_REJOIN")
+                    it.contains("recoveryReason=NETWORK_RECOVERY")
+            }
+        )
+    }
+
+    @Test
+    fun membershipJoinHandler_rejectedAsNonConnectivity() {
+        controller.onRecoveryReattachAccepted(
+            "sess-1",
+            "M03",
+            RecoveryReason.NETWORK_RECOVERY,
+            RecoverySource.JOIN_HANDLER
+        )
+        assertEquals(0, iceRestartCalls)
+        assertTrue(
+            decisionLogs.any {
+                it.contains("rejectReason=NON_CONNECTIVITY_TRIGGER") &&
+                    it.contains("approved=false")
             }
         )
     }

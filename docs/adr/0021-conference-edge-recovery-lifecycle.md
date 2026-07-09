@@ -279,6 +279,27 @@ A new Join / Rejoin **MUST** allocate a new Attempt (and reset budget). `USER_LE
 
 Refines R17/R18: Edge is identity; Attempt is policy scope.
 
+### R23 — Membership Intent and Connectivity Recovery Isolation (frozen 2026-07-09)
+
+1. `USER_REJOIN` is a **Membership** operation. It **MUST NOT** enter `ConferenceEdgeRecoveryController`.
+2. RecoveryController **only** accepts Connectivity Facts / sources (`ICE_MONITOR`, `TRANSPORT_MONITOR`, `RECOVERY_TIMER`).
+3. `RECOVERY_REATTACH` **MUST NOT** be used for `USER_REJOIN`.
+4. Media repair policy **MUST NOT** be selected by JoinReason.
+5. Recovery and Rejoin **MAY** share `MediaSessionManager` but **MUST NOT** share control flow.
+
+Wire intents:
+
+```text
+ConferenceJoinIntent.USER_REJOIN        → JOIN_RESTORE_STARTED (Membership)
+ConferenceJoinIntent.RECOVERY_REATTACH  → onRecoveryReattachAccepted (Connectivity only)
+```
+
+Illegal Membership → Recovery attempts log:
+
+```text
+RECOVERY_DECISION … approved=false rejectReason=NON_CONNECTIVITY_TRIGGER
+```
+
 ## #73 v1 Edge Recovery FSM
 
 ```text
@@ -356,7 +377,25 @@ RECOVERY_REATTACH_ACCEPTED … remote=<M>   (same member re-entering via Recover
 RECOVERY_DECISION … approved=true terminationReason=USER_LEAVE
 ```
 
-User re-enter **MUST** use Membership `RejoinIntent` / silent rejoin (R21), not Connectivity `RECOVERY_REATTACH`.
+User re-enter **MUST** use Membership `RejoinIntent` / silent rejoin (R21 / R23), not Connectivity `RECOVERY_REATTACH`.
+
+### S17 — Membership / Recovery boundary integrity (hard, frozen 2026-07-09)
+
+**USER_REJOIN path MUST NOT** produce:
+
+```text
+RECOVERY_DECISION … recoveryReason=USER_REJOIN approved=true
+RECOVERY_REATTACH_ACCEPTED … recoveryReason=USER_REJOIN
+```
+
+**USER_REJOIN path SHOULD** produce:
+
+```text
+USER_REJOIN requested
+JOIN_RESTORE_STARTED
+```
+
+**NETWORK / ICE recovery path MUST still** produce Connectivity Recovery markers when exercised.
 
 ### S11 — Zombie rejoin (hard, unchanged intent)
 

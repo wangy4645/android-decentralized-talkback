@@ -196,6 +196,7 @@ adb logcat -d | rg "RECOVERY_EDGE_|RECOVERY_REATTACH_|RECOVERY_EVENT_DROPPED"
 | 2 | **RECOVERY_DECISION + S16**（本步） | soak 可见 `approved` / `terminationReason` |
 | 3 | Recovery Eligibility + `TerminationReason` gate | S16 PASS；无 `USER_LEAVE → approved=true` |
 | 4 | Rejoin ≠ `RECOVERY_REATTACH`；Attempt 生命周期 | B2 无声/Connecting 消失 |
+| 5 | **Phase A/B**：USER_REJOIN 移出 Recovery 输入域；S17 | `JOIN_RESTORE_STARTED`；零 `USER_REJOIN approved=true` |
 | 5 | **Host Link Bootstrap**（独立 issue，非 #73） | S3 10s 阶梯优化 |
 
 ---

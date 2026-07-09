@@ -144,11 +144,30 @@ class ConferenceEdgeRecoveryController(
         )
     }
 
-    fun onReattachAccepted(
+    /**
+     * Connectivity-plane only. Callers from Membership / Join / Invite MUST NOT use this.
+     * Illegal [RecoverySource] or [RecoveryReason] is rejected with NON_CONNECTIVITY_TRIGGER.
+     */
+    fun onRecoveryReattachAccepted(
         sessionId: String,
         remoteModuleId: String,
-        recoveryReason: RecoveryReason = RecoveryReason.UNKNOWN
+        recoveryReason: RecoveryReason = RecoveryReason.NETWORK_RECOVERY,
+        source: RecoverySource = RecoverySource.ICE_MONITOR
     ) {
+        if (!isConnectivityRecoverySource(source) || !isConnectivityRecoveryReason(recoveryReason)) {
+            logRecoveryDecision(
+                sessionId = sessionId,
+                edge = remoteModuleId,
+                trigger = RecoveryDecisionTrigger.REATTACH_ACCEPTED,
+                recoveryReason = RecoveryReason.NON_CONNECTIVITY,
+                terminationReason = RecoveryTerminationReason.UNKNOWN,
+                policy = RecoveryDecisionPolicy.NO_RECOVERY,
+                approved = false,
+                rejectReason = "NON_CONNECTIVITY_TRIGGER",
+                attempt = edges[ConferenceEdgeKey(sessionId, remoteModuleId)]?.recoveryAttemptId
+            )
+            return
+        }
         val key = ConferenceEdgeKey(sessionId, remoteModuleId)
         val existing = edges[key]
         if (existing?.phase == EdgeRecoveryPhase.REATTACH_ACCEPTED ||
@@ -196,10 +215,24 @@ class ConferenceEdgeRecoveryController(
         )
         onLog(
             "RECOVERY_REATTACH_ACCEPTED session=$sessionId remote=$remoteModuleId " +
-                "attempt=${record.recoveryAttemptId} recoveryReason=$recoveryReason"
+                "attempt=${record.recoveryAttemptId} recoveryReason=$recoveryReason source=$source"
         )
         issueBoundedIceRestart(record, recoveryReason)
         notifyChanged(sessionId)
+    }
+
+    @Deprecated("Use onRecoveryReattachAccepted — Membership must not call Recovery", ReplaceWith("onRecoveryReattachAccepted(sessionId, remoteModuleId, recoveryReason)"))
+    fun onReattachAccepted(
+        sessionId: String,
+        remoteModuleId: String,
+        recoveryReason: RecoveryReason = RecoveryReason.UNKNOWN
+    ) {
+        onRecoveryReattachAccepted(
+            sessionId,
+            remoteModuleId,
+            recoveryReason,
+            source = RecoverySource.JOIN_HANDLER
+        )
     }
 
     fun onReattachRequested(sessionId: String, channelId: String, remoteModuleId: String) {
@@ -479,6 +512,25 @@ class ConferenceEdgeRecoveryController(
         trigger == RecoveryDecisionTrigger.ICE_FAILED -> RecoveryReason.ICE_FAILED
         trigger == RecoveryDecisionTrigger.ICE_DISCONNECTED -> RecoveryReason.ICE_DISCONNECTED
         else -> RecoveryReason.NETWORK_RECOVERY
+    }
+
+    private fun isConnectivityRecoverySource(source: RecoverySource): Boolean = when (source) {
+        RecoverySource.ICE_MONITOR,
+        RecoverySource.TRANSPORT_MONITOR,
+        RecoverySource.RECOVERY_TIMER -> true
+        RecoverySource.JOIN_HANDLER,
+        RecoverySource.INVITE_HANDLER,
+        RecoverySource.USER_ACTION -> false
+    }
+
+    private fun isConnectivityRecoveryReason(reason: RecoveryReason): Boolean = when (reason) {
+        RecoveryReason.NETWORK_RECOVERY,
+        RecoveryReason.HOST_REATTACH,
+        RecoveryReason.ICE_FAILED,
+        RecoveryReason.ICE_DISCONNECTED -> true
+        RecoveryReason.SESSION_CANCELLED,
+        RecoveryReason.NON_CONNECTIVITY,
+        RecoveryReason.UNKNOWN -> false
     }
 
     private fun inferTerminationReason(
