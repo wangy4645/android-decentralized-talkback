@@ -1,6 +1,6 @@
-# TCC / ADR-0016 + ADR-0017 soak hard gates (S1-S10)
+# TCC / ADR-0016 + ADR-0017 soak hard gates (S1-S12)
 # 用法: .\scripts\soak-tcc-hard-gates.ps1 -LogDir "d:\workspace\project\talkback\logs-tcc-xxxx"
-# 扩展 #58 (S1-S5) + #61 (S6-S9) + #66 (S10 WARN)
+# 扩展 #58 (S1-S5) + #61 (S6-S9) + #66/#68 (S10 HARD) + ADR-0021 (S11-S12)
 
 param(
     [Parameter(Mandatory = $true)]
@@ -217,7 +217,7 @@ if ($establishmentDispatchFailures -gt 0 -and $dispatchFailedTerminals -eq 0) {
     Add-Failure "S9" "establishment INVITE_DISPATCH failure without INVITE_DISPATCH_FAILED terminal"
 }
 
-# --- S10 WARN: MEETING_START READY + peer ICE CONNECTED should project runtime phase=ACTIVE (RO-M2 PR-2) ---
+# --- S10 HARD: MEETING_START READY + peer ICE CONNECTED must project runtime phase=ACTIVE (RO-M2 PR-3) ---
 foreach ($ready in $readyEvents) {
     $windowEnd = $ready.At.AddSeconds(30)
     $hasIceConnected = $false
@@ -239,10 +239,84 @@ foreach ($ready in $readyEvents) {
         if ($hasIceConnected -and $null -ne $runtimePhase) { break }
     }
     if ($hasIceConnected -and $null -ne $runtimePhase -and $runtimePhase -ne 'ACTIVE') {
-        Add-Warning "S10" "MEETING_START READY + ICE CONNECTED but runtime phase=$runtimePhase ch=$($ready.Channel)"
+        Add-Failure "S10" "MEETING_START READY + ICE CONNECTED but runtime phase=$runtimePhase ch=$($ready.Channel)"
     } elseif ($hasIceConnected -and $null -eq $runtimePhase) {
-        Add-Warning "S10" "MEETING_START READY + ICE CONNECTED but no CONFERENCE_RUNTIME_PROJECTION ch=$($ready.Channel)"
+        Add-Failure "S10" "MEETING_START READY + ICE CONNECTED but no CONFERENCE_RUNTIME_PROJECTION ch=$($ready.Channel)"
     }
+}
+
+# --- S11 HARD + S12: per-device log analysis (ADR-0021) ---
+$zombieRejoinCount = 0
+$meetingStartLatenciesMs = [System.Collections.Generic.List[double]]::new()
+Get-ChildItem (Join-Path $LogDir "*.txt") | ForEach-Object {
+    $fileLines = (Get-Content $_.FullName -ErrorAction SilentlyContinue) -as [string[]]
+    if (-not $fileLines) { return }
+
+    $lastMeetingStartBeginByChannel = @{}
+    $terminatedAtByChannel = @{}
+    foreach ($line in $fileLines) {
+        if ($line -match 'TRANSITION_BEGIN id=([^\s]+) ch=([^\s]+).*trigger=MEETING_START') {
+            $ch = $Matches[2]
+            $ts = Parse-LogTimestamp $line
+            if ($ts) { $lastMeetingStartBeginByChannel[$ch] = $ts }
+            $terminatedAtByChannel.Remove($ch) | Out-Null
+        }
+        if ($line -match 'CONFERENCE_TERMINATED ch=([^\s]+).*clearRejoinState=true') {
+            $ch = $Matches[1]
+            $ts = Parse-LogTimestamp $line
+            if ($ts) { $terminatedAtByChannel[$ch] = $ts }
+        }
+        if ($line -match 'Conference rejoin memory saved ch=([^\s]+)') {
+            $ch = $Matches[1]
+            $ts = Parse-LogTimestamp $line
+            if (-not $ts) { continue }
+            if ($terminatedAtByChannel.ContainsKey($ch) -and $ts -gt $terminatedAtByChannel[$ch]) {
+                $newMeetingStarted = $false
+                if ($lastMeetingStartBeginByChannel.ContainsKey($ch)) {
+                    $newMeetingStarted = $lastMeetingStartBeginByChannel[$ch] -gt $terminatedAtByChannel[$ch]
+                }
+                if (-not $newMeetingStarted) {
+                    $zombieRejoinCount++
+                    Add-Failure "S11" "zombie rejoin memory saved after termination ch=$ch file=$($_.Name)"
+                }
+            }
+        }
+    }
+
+    $openMeetingStartById = @{}
+    foreach ($line in $fileLines) {
+        if ($line -match 'TRANSITION_BEGIN id=([^\s]+) ch=([^\s]+).*trigger=MEETING_START') {
+            $id = $Matches[1]
+            $ts = Parse-LogTimestamp $line
+            if ($ts) { $openMeetingStartById[$id] = $ts }
+        }
+        if ($line -match 'TRANSITION_TERMINAL id=([^\s]+) ch=([^\s]+).*trigger=MEETING_START.*terminal=READY') {
+            $id = $Matches[1]
+            $ts = Parse-LogTimestamp $line
+            if ($ts -and $openMeetingStartById.ContainsKey($id)) {
+                $deltaMs = ($ts - $openMeetingStartById[$id]).TotalMilliseconds
+                if ($deltaMs -ge 0) { $meetingStartLatenciesMs.Add($deltaMs) }
+                $openMeetingStartById.Remove($id) | Out-Null
+            }
+        }
+    }
+}
+Write-Host "S11 zombie rejoin count: $zombieRejoinCount"
+if ($meetingStartLatenciesMs.Count -gt 0) {
+    $sorted = $meetingStartLatenciesMs | Sort-Object
+    $p50 = $sorted[[int][Math]::Floor(($sorted.Count - 1) * 0.50)]
+    $p95 = $sorted[[int][Math]::Floor(($sorted.Count - 1) * 0.95)]
+    Write-Host "S12 MEETING_START_LATENCY samples=$($sorted.Count) P50=${p50}ms P95=${p95}ms"
+    foreach ($latency in $sorted) {
+        if ($latency -gt 10000) {
+            Add-Failure "S12" "MEETING_START latency ${latency}ms exceeds 10s"
+        }
+    }
+    if ($p95 -gt 5000) {
+        Add-Warning "S12" "MEETING_START P95=${p95}ms exceeds 5s target"
+    }
+} else {
+    Add-Warning "S12" "No MEETING_START latency samples; verify manually if meeting flow was exercised"
 }
 
 Write-Host ""

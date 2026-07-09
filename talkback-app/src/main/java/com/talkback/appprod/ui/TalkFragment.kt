@@ -22,6 +22,7 @@ import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.talkback.appprod.R
 import com.talkback.core.session.ChannelReadiness
+import com.talkback.core.session.ConferenceRuntimePhase
 import kotlinx.coroutines.launch
 
 class TalkFragment : Fragment() {
@@ -189,10 +190,15 @@ class TalkFragment : Fragment() {
             talkingLabel.text = getString(R.string.meeting_participants_label)
             view.findViewById<TextView>(R.id.txtFloorOwner).text = when {
                 state.conferenceMuted -> getString(R.string.conference_status_muted)
-                state.conferenceActive && state.channelReady -> getString(R.string.meeting_in_progress)
+                state.meeting.runtimePhase == ConferenceRuntimePhase.ACTIVE ->
+                    getString(R.string.meeting_in_progress)
                 state.conferenceReconnectFailed -> getString(R.string.meeting_reconnect_failed)
-                state.conferenceReconnecting -> getString(R.string.meeting_reconnecting)
-                state.conferenceActive -> getString(R.string.conference_status_connecting)
+                state.conferenceReconnecting ||
+                    state.meeting.runtimePhase == ConferenceRuntimePhase.RECOVERING ->
+                    getString(R.string.meeting_reconnecting)
+                state.conferenceActive ||
+                    state.meeting.runtimePhase == ConferenceRuntimePhase.CONNECTING ->
+                    getString(R.string.conference_status_connecting)
                 else -> "--"
             }
             view.findViewById<TextView>(R.id.txtTalking).text = state.onlineCount.toString()
@@ -259,18 +265,44 @@ class TalkFragment : Fragment() {
             state.conferenceMode && !state.conferenceActive && !rejoinableMeeting -> View.GONE
             pendingInvite -> View.VISIBLE
             rejoinableMeeting -> View.VISIBLE
+            state.conferenceActive &&
+                state.meeting.runtimePhase == ConferenceRuntimePhase.ACTIVE &&
+                state.meeting.awaitingAdditionalParticipants -> View.VISIBLE
+            state.conferenceActive &&
+                (
+                    state.meeting.runtimePhase == ConferenceRuntimePhase.CONNECTING ||
+                        state.meeting.runtimePhase == ConferenceRuntimePhase.RECOVERING ||
+                        state.meeting.runtimePhase == ConferenceRuntimePhase.IDLE ||
+                        state.meeting.runtimePhase == null
+                    ) -> View.VISIBLE
             state.channelReadiness == ChannelReadiness.DISCOVERING -> View.VISIBLE
             state.channelReadiness == ChannelReadiness.AWAITING_PRIMARY ||
             (state.channelReadiness == ChannelReadiness.DIRECTORY_SYNC && state.channelAwaitingHost) -> View.VISIBLE
             state.channelReadiness == ChannelReadiness.DIRECTORY_SYNC -> View.VISIBLE
-            state.channelReadiness == ChannelReadiness.CONNECTING -> View.VISIBLE
-            state.channelConnecting -> View.VISIBLE
-            !state.channelReady && !state.sessionActive -> View.VISIBLE
+            !state.conferenceMode &&
+                state.channelReadiness == ChannelReadiness.CONNECTING -> View.VISIBLE
+            !state.conferenceMode && state.channelConnecting -> View.VISIBLE
+            !state.conferenceMode && !state.channelReady && !state.sessionActive -> View.VISIBLE
             else -> View.GONE
         }
         txtTalkHint.text = when {
             pendingInvite -> getString(R.string.meeting_invite_pending)
             rejoinableMeeting -> getString(R.string.meeting_rejoin_hint)
+            state.conferenceActive &&
+                state.meeting.runtimePhase == ConferenceRuntimePhase.ACTIVE &&
+                state.meeting.awaitingAdditionalParticipants ->
+                getString(R.string.meeting_status_waiting)
+            state.conferenceActive &&
+                state.meeting.runtimePhase == ConferenceRuntimePhase.RECOVERING -> when {
+                state.conferenceReconnectFailed -> getString(R.string.meeting_reconnect_failed)
+                else -> getString(R.string.meeting_reconnecting)
+            }
+            state.conferenceActive &&
+                (
+                    state.meeting.runtimePhase == ConferenceRuntimePhase.CONNECTING ||
+                        state.meeting.runtimePhase == ConferenceRuntimePhase.IDLE ||
+                        state.meeting.runtimePhase == null
+                    ) -> getString(R.string.conference_status_connecting)
             state.channelReadiness == ChannelReadiness.DISCOVERING ->
                 getString(R.string.channel_discovering)
             state.channelReadiness == ChannelReadiness.AWAITING_PRIMARY ||
@@ -278,12 +310,11 @@ class TalkFragment : Fragment() {
                 getString(R.string.channel_awaiting_host)
             state.channelReadiness == ChannelReadiness.DIRECTORY_SYNC ->
                 getString(R.string.channel_syncing)
-            state.channelReadiness == ChannelReadiness.CONNECTING ||
-                state.channelConnecting -> when {
-                state.conferenceReconnectFailed -> getString(R.string.meeting_reconnect_failed)
-                state.conferenceReconnecting -> getString(R.string.meeting_reconnecting)
-                else -> getString(R.string.channel_connecting)
-            }
+            !state.conferenceMode &&
+                (
+                    state.channelReadiness == ChannelReadiness.CONNECTING ||
+                        state.channelConnecting
+                    ) -> getString(R.string.channel_connecting)
             state.sessionActive && !state.channelReady -> getString(R.string.ptt_setting_up_channel)
             !state.sessionActive -> getString(R.string.ptt_join_hint)
             else -> getString(R.string.ptt_join_hint)
@@ -315,11 +346,15 @@ class TalkFragment : Fragment() {
         if (state.conferenceMode) {
             txtPttLabel.text = getString(R.string.meeting_title)
             txtPttHint.text = getString(R.string.meeting_participants, state.onlineCount) + "\n" +
-                if (state.conferenceActive && state.channelReady) {
+                if (state.meeting.runtimePhase == ConferenceRuntimePhase.ACTIVE) {
                     getString(R.string.meeting_tap_to_view)
                 } else if (state.conferenceReconnectFailed) {
                     getString(R.string.meeting_reconnect_failed)
-                } else if (state.conferenceReconnecting || state.conferenceRejoinInProgress) {
+                } else if (
+                    state.conferenceReconnecting ||
+                        state.meeting.runtimePhase == ConferenceRuntimePhase.RECOVERING ||
+                        state.conferenceRejoinInProgress
+                ) {
                     getString(R.string.meeting_reconnecting)
                 } else if (state.rejoinableMeeting != null) {
                     getString(R.string.meeting_tap_to_join)
@@ -327,7 +362,7 @@ class TalkFragment : Fragment() {
                     getString(R.string.meeting_tap_to_join)
                 }
             btnPttRef.setBackgroundResource(
-                if (state.conferenceActive && state.channelReady) {
+                if (state.meeting.runtimePhase == ConferenceRuntimePhase.ACTIVE) {
                     R.drawable.bg_ptt_button_active
                 } else {
                     R.drawable.bg_ptt_button

@@ -24,6 +24,9 @@ object ConferenceParticipantProjector {
         val rosterParticipants: List<MemberView>,
         val visibleParticipants: List<ConferenceParticipantViewState>,
         val visibleParticipantCount: Int,
+        /** Membership-joined count for primary meeting size (ADR-0020 P2); pending invitees excluded. */
+        val joinedParticipantCount: Int,
+        val pendingInviteeCount: Int,
         val awaitingAdditionalParticipants: Boolean
     )
 
@@ -35,9 +38,28 @@ object ConferenceParticipantProjector {
             rosterParticipants = rosterParticipants,
             visibleParticipants = visible,
             visibleParticipantCount = visible.count { it.countsTowardParticipantTotal },
+            joinedParticipantCount = countJoinedParticipants(input),
+            pendingInviteeCount = countPendingInvitees(input),
             awaitingAdditionalParticipants = awaiting
         )
     }
+
+    private fun countJoinedParticipants(input: Input): Int {
+        if (!input.sessionAccepted) return 0
+        val joinedRemotes = input.memberViews.count { view ->
+            view.moduleId != input.localModuleId.value &&
+                view.moduleId !in input.leftModuleIds &&
+                view.invite == InviteState.ACCEPTED
+        }
+        return 1 + joinedRemotes
+    }
+
+    private fun countPendingInvitees(input: Input): Int =
+        input.memberViews.count { view ->
+            view.moduleId != input.localModuleId.value &&
+                view.moduleId !in input.leftModuleIds &&
+                (view.invite == InviteState.INVITING || view.invite == InviteState.RINGING)
+        }
 
     private fun buildVisibleParticipants(input: Input): List<ConferenceParticipantViewState> {
         if (!input.sessionAccepted) return emptyList()

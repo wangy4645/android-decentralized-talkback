@@ -25,6 +25,9 @@ data class TalkbackSessionSnapshot(
     val visibleParticipants: List<ConferenceParticipantViewState> = emptyList(),
     /** [visibleParticipants] with [ConferenceParticipantViewState.countsTowardParticipantTotal]. */
     val visibleParticipantCount: Int = 0,
+    /** Primary meeting size (ADR-0020 P2); excludes pending invitees. */
+    val joinedParticipantCount: Int = 0,
+    val pendingInviteeCount: Int = 0,
     /** True when roster still has invitees not yet visible in the meeting UI. */
     val awaitingAdditionalParticipants: Boolean = false,
     /**

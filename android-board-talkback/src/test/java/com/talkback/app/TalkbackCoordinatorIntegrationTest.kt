@@ -477,8 +477,80 @@ class TalkbackCoordinatorIntegrationTest {
         assertTrue(nodeM03.runtime.conferenceSessions().isEmpty())
         assertTrue(
             nodeM03.waitForLog(timeoutMs = 5_000L) {
-                it.contains("Conference channel released for GROUP PTT") ||
+                (it.contains("CONFERENCE_TERMINATED ch=$channelId") && it.contains("clearRejoinState=true")) ||
+                    it.contains("Conference channel released for GROUP PTT") ||
                     it.contains("Conference terminated remotely")
+            }
+        )
+    }
+
+    @Test
+    fun conference_remoteHangup_afterParticipantLeft_clearsRejoinMemory() {
+        val channelId = "CONF-REMOTE-HANGUP-REJOIN"
+        val sessionId = nodeM01.runtime.requireConferenceCall(
+            nodeM01.localEndpoint,
+            listOf(
+                EndpointAddress(m02, EndpointId("E01")),
+                EndpointAddress(m03, EndpointId("E01"))
+            ),
+            channelId
+        )
+        assertTrue(nodeM02.waitForLog { it.contains("Conference invite accepted") || it.contains("invite accepted") })
+        assertTrue(nodeM03.waitForLog { it.contains("Conference invite accepted") || it.contains("invite accepted") })
+        Thread.sleep(3_500L)
+
+        val m02SessionId = nodeM02.runtime.activeSessionIds().single()
+        nodeM02.runtime.leaveConference(m02SessionId)
+        Thread.sleep(1_500L)
+        assertNotNull(nodeM02.runtime.rejoinableConference(channelId))
+
+        nodeM01.runtime.hangup(sessionId)
+        Thread.sleep(1_500L)
+
+        assertNull(nodeM02.runtime.rejoinableConference(channelId))
+        assertTrue(nodeM02.runtime.conferenceSessions().isEmpty())
+        assertTrue(
+            nodeM02.waitForLog(timeoutMs = 5_000L) {
+                it.contains("CONFERENCE_TERMINATED ch=$channelId") && it.contains("clearRejoinState=true")
+            }
+        )
+    }
+
+    @Test
+    fun conference_terminatedConference_noStaleRejoinAvailable() {
+        val channelId = "CONF-TERMINATED-NO-REJOIN"
+        val sessionId = nodeM01.runtime.requireConferenceCall(
+            nodeM01.localEndpoint,
+            listOf(
+                EndpointAddress(m02, EndpointId("E01")),
+                EndpointAddress(m03, EndpointId("E01"))
+            ),
+            channelId
+        )
+        assertTrue(nodeM02.waitForLog { it.contains("Conference invite accepted") || it.contains("invite accepted") })
+        Thread.sleep(3_500L)
+
+        val m02SessionId = nodeM02.runtime.activeSessionIds().single()
+        nodeM02.runtime.leaveConference(m02SessionId)
+        Thread.sleep(1_500L)
+        assertNotNull(nodeM02.runtime.rejoinableConference(channelId))
+
+        nodeM01.runtime.hangup(sessionId)
+        Thread.sleep(2_000L)
+
+        assertNull(nodeM02.runtime.rejoinableConference(channelId))
+        val m02LogMark = synchronized(nodeM02.logs) { nodeM02.logs.size }
+        nodeM02.runtime.sendConferenceRejoin(
+            channelId,
+            EndpointAddress(m01, EndpointId("E01")),
+            sessionId
+        )
+        Thread.sleep(1_500L)
+        assertTrue(nodeM02.runtime.conferenceSessions().isEmpty())
+        assertTrue(
+            nodeM02.waitForLogSince(m02LogMark, timeoutMs = 5_000L) {
+                it.contains("Conference terminated remotely reason=MEETING_ENDED") ||
+                    (it.contains("CONFERENCE_TERMINATED ch=$channelId") && it.contains("clearRejoinState=true"))
             }
         )
     }
@@ -904,6 +976,39 @@ class TalkbackCoordinatorIntegrationTest {
     }
 
     @Test
+    fun conferenceInviteRetry_connectedPeer_preservesMediaGeneration() {
+        val channelId = "CONF-INVITE-RETRY"
+        val sessionId = nodeM01.runtime.requireConferenceCall(
+            nodeM01.localEndpoint,
+            listOf(
+                EndpointAddress(m02, EndpointId("E01")),
+                EndpointAddress(m03, EndpointId("E01"))
+            ),
+            channelId
+        )
+        assertTrue(nodeM02.waitForLog { it.contains("invite accepted") })
+        nodeM01.runtime.simulateRemoteIceState("M02", "CONNECTED")
+        Thread.sleep(200L)
+        val generationBefore = nodeM01.runtime.conferenceMediaGeneration("M02")
+        assertNotNull(generationBefore)
+
+        nodeM01.runtime.refreshStaleConferenceSession(channelId)
+        val resent = nodeM01.runtime.sendConferenceInvites(
+            sessionId,
+            listOf(EndpointAddress(m02, EndpointId("E01")))
+        )
+
+        assertEquals(0, resent)
+        assertEquals(0, nodeM01.runtime.mediaSessionReuseCount())
+        assertEquals(generationBefore, nodeM01.runtime.conferenceMediaGeneration("M02"))
+        val snapshot = nodeM01.runtime.sessionSnapshotForChannel(channelId)
+        assertEquals(
+            com.talkback.core.session.ConferenceRuntimePhase.ACTIVE,
+            snapshot?.conferenceRuntimeState?.phase
+        )
+    }
+
+    @Test
     fun conferenceInvite_ringTimeout_prunesExpiredFromRoster() {
         val peers = TestTalkbackNode.allPeers(m01 to 50021, m02 to 50022)
         val context = RuntimeEnvironment.getApplication()
@@ -1105,6 +1210,11 @@ class TalkbackCoordinatorIntegrationTest {
         assertTrue(nodeM03.runtime.conferenceSessions().isEmpty())
         assertTrue(nodeM02.waitForLog { it.contains("Remote hangup") || it.contains("Hangup") })
         assertTrue(nodeM03.waitForLog { it.contains("Remote hangup") || it.contains("Hangup") })
+        assertTrue(
+            nodeM02.waitForLog(timeoutMs = 5_000L) {
+                it.contains("CONFERENCE_TERMINATED ch=CONF-END") && it.contains("clearRejoinState=true")
+            }
+        )
         assertTrue(
             nodeM01.waitForLog(timeoutMs = 5_000L) {
                 it.contains("Conference channel released for GROUP PTT")

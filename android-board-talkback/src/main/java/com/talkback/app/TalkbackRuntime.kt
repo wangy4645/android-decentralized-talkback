@@ -360,6 +360,11 @@ class TalkbackRuntime(
     internal fun hasGroupMediaEngine(remoteModuleId: String): Boolean =
         coordinator.hasGroupMediaEngine(remoteModuleId)
 
+    internal fun mediaSessionReuseCount(): Int = coordinator.mediaSessionReuseCount()
+
+    internal fun conferenceMediaGeneration(remoteModuleId: String): Long? =
+        coordinator.conferenceMediaGeneration(remoteModuleId)
+
     internal fun testInjectGroupInvite(
         callerModuleId: String,
         channelId: String,

@@ -2,6 +2,7 @@ package com.talkback.appprod.ui
 
 import com.talkback.core.session.UnicastCallPhase
 import com.talkback.core.session.ChannelReadiness
+import com.talkback.core.session.ConferenceRuntimePhase
 
 enum class ConferenceEndReason {
     NONE,
@@ -48,7 +49,11 @@ data class MeetingUiState(
     val memberKeys: List<String> = emptyList(),
     /** Canonical Conference UI participant count (ADR-0010 R44). */
     val visibleParticipantCount: Int = 0,
+    /** Primary meeting size label (ADR-0020 P2); excludes pending invitees. */
+    val joinedParticipantCount: Int = 0,
     val awaitingAdditionalParticipants: Boolean = false,
+    /** Conference runtime phase from [TalkbackSessionSnapshot.conferenceRuntimeState] (RO-M2 PR-3). */
+    val runtimePhase: ConferenceRuntimePhase? = null,
     val startedAtMs: Long? = null,
     val networkLabel: String = "N/A",
     val rttMs: Long? = null,
