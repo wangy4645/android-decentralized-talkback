@@ -1,6 +1,6 @@
-# TCC / ADR-0016 + ADR-0017 soak hard gates (S1-S12)
+# TCC / ADR-0016 + ADR-0017 soak hard gates (S1-S14)
 # 用法: .\scripts\soak-tcc-hard-gates.ps1 -LogDir "d:\workspace\project\talkback\logs-tcc-xxxx"
-# 扩展 #58 (S1-S5) + #61 (S6-S9) + #66/#68 (S10 HARD) + ADR-0021 (S11-S12)
+# 扩展 #58 (S1-S5) + #61 (S6-S9) + #66/#68 (S10 HARD) + ADR-0021 (S11-S14)
 
 param(
     [Parameter(Mandatory = $true)]
@@ -318,6 +318,96 @@ if ($meetingStartLatenciesMs.Count -gt 0) {
 } else {
     Add-Warning "S12" "No MEETING_START latency samples; verify manually if meeting flow was exercised"
 }
+
+# --- S13: RECOVERY_ATTACH latency (RECOVERING -> ACTIVE within 120s, T4 only) ---
+$recoveryAttachLatenciesMs = [System.Collections.Generic.List[double]]::new()
+$recoveryGateFiles = 0
+Get-ChildItem (Join-Path $LogDir "*.txt") | ForEach-Object {
+    $fileLines = (Get-Content $_.FullName -ErrorAction SilentlyContinue) -as [string[]]
+    if (-not $fileLines) { return }
+    $exerciseRecovery = @($fileLines | Where-Object {
+            $_ -match 'RECOVERY_REATTACH requested' -or
+                $_ -match 'Conference host ICE DISCONNECTED' -or
+                $_ -match 'ice=DISCONNECTED'
+        }).Count -gt 0
+    if ($exerciseRecovery) { $recoveryGateFiles++ }
+    $recoveringAt = $null
+    foreach ($line in $fileLines) {
+        $ts = Parse-LogTimestamp $line
+        if ($line -match 'CONFERENCE_RUNTIME_PROJECTION.*\bphase=RECOVERING\b') {
+            $recoveringAt = $ts
+            continue
+        }
+        if ($null -ne $recoveringAt -and $ts -and ($ts - $recoveringAt).TotalSeconds -gt 120) {
+            $recoveringAt = $null
+        }
+        if ($null -ne $recoveringAt -and $line -match 'CONFERENCE_RUNTIME_PROJECTION.*\bphase=ACTIVE\b') {
+            if ($ts) {
+                $deltaMs = ($ts - $recoveringAt).TotalMilliseconds
+                if ($deltaMs -ge 0 -and $deltaMs -le 120000) {
+                    $recoveryAttachLatenciesMs.Add($deltaMs)
+                }
+                $recoveringAt = $null
+            }
+        }
+    }
+}
+if ($recoveryAttachLatenciesMs.Count -gt 0) {
+    $sorted = $recoveryAttachLatenciesMs | Sort-Object
+    $p50 = $sorted[[int][Math]::Floor(($sorted.Count - 1) * 0.50)]
+    $p95 = $sorted[[int][Math]::Floor(($sorted.Count - 1) * 0.95)]
+    Write-Host "S13 RECOVERY_ATTACH_LATENCY samples=$($sorted.Count) P50=${p50}ms P95=${p95}ms"
+    if ($recoveryGateFiles -gt 0) {
+        foreach ($latency in $sorted) {
+            if ($latency -gt 60000) {
+                Add-Failure "S13" "RECOVERY_ATTACH latency ${latency}ms exceeds 60s"
+            }
+        }
+        if ($p95 -gt 15000) {
+            Add-Warning "S13" "RECOVERY_ATTACH P95=${p95}ms exceeds 15s target"
+        }
+    } else {
+        Add-Warning "S13" "RECOVERY_ATTACH samples without T4 markers; informational only"
+    }
+} elseif ($recoveryGateFiles -gt 0) {
+    Add-Warning "S13" "T4 recovery exercised but no RECOVERING->ACTIVE pairs within 120s"
+} else {
+    Add-Warning "S13" "No RECOVERY_ATTACH latency samples; run T4 WiFi loss/recovery"
+}
+
+# --- S14 HARD (T7): no recovery reattach after conference termination ---
+$terminatedAtByChannel = @{}
+$lastMeetingStartBeginByChannel = @{}
+$staleRecoveryAfterTermination = 0
+foreach ($line in $lines) {
+    if ($line -match 'TRANSITION_BEGIN id=([^\s]+) ch=([^\s]+).*trigger=MEETING_START') {
+        $ch = $Matches[2]
+        $ts = Parse-LogTimestamp $line
+        if ($ts) { $lastMeetingStartBeginByChannel[$ch] = $ts }
+        $terminatedAtByChannel.Remove($ch) | Out-Null
+    }
+    if ($line -match 'CONFERENCE_TERMINATED ch=([^\s]+).*clearRejoinState=true') {
+        $ch = $Matches[1]
+        $ts = Parse-LogTimestamp $line
+        if ($ts) { $terminatedAtByChannel[$ch] = $ts }
+    }
+    if ($line -match 'RECOVERY_REATTACH requested\b.*\bch=([^\s]+)') {
+        $ch = $Matches[1]
+        $ts = Parse-LogTimestamp $line
+        if (-not $ts) { continue }
+        if ($terminatedAtByChannel.ContainsKey($ch) -and $ts -gt $terminatedAtByChannel[$ch]) {
+            $newMeetingStarted = $false
+            if ($lastMeetingStartBeginByChannel.ContainsKey($ch)) {
+                $newMeetingStarted = $lastMeetingStartBeginByChannel[$ch] -gt $terminatedAtByChannel[$ch]
+            }
+            if (-not $newMeetingStarted) {
+                $staleRecoveryAfterTermination++
+                Add-Failure "S14" "RECOVERY_REATTACH after termination ch=$ch"
+            }
+        }
+    }
+}
+Write-Host "S14 stale recovery after termination: $staleRecoveryAfterTermination"
 
 Write-Host ""
 Write-Host "--- Gate results ---"
