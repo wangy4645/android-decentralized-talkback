@@ -24,6 +24,7 @@ import com.talkback.core.discovery.ModuleDiscoveryService
 import com.talkback.core.discovery.ModulePresence
 import com.talkback.core.discovery.StaticPeerEntry
 import java.util.concurrent.CopyOnWriteArrayList
+import com.talkback.core.model.ConferenceJoinIntent
 import com.talkback.core.model.ConferenceRejoinPayload
 import com.talkback.core.model.EndpointAddress
 import com.talkback.core.model.EndpointId
@@ -37,6 +38,7 @@ import com.talkback.core.model.MembershipSnapshot
 import com.talkback.core.model.MeshSessionMode
 import com.talkback.core.model.HelloPayload
 import com.talkback.core.model.ModuleId
+import com.talkback.core.model.RecoveryReattachRequest
 import com.talkback.core.model.RemoteEndpointInfo
 import com.talkback.core.model.SignalEnvelope
 import com.talkback.core.model.SignalType
@@ -228,7 +230,8 @@ private data class RejoinableConferenceRecord(
     val hostSessionId: String,
     val hostModuleId: String,
     val hostKey: String,
-    val leftAtMs: Long
+    val leftAtMs: Long,
+    val membershipEpoch: Long
 ) {
     fun isExpired(now: Long = System.currentTimeMillis(), ttlMs: Long): Boolean =
         now - leftAtMs > ttlMs
@@ -668,7 +671,8 @@ class TalkbackCoordinator(
             channelId = record.channelId,
             hostModuleId = record.hostModuleId,
             hostKey = record.hostKey,
-            leftAtMs = record.leftAtMs
+            leftAtMs = record.leftAtMs,
+            membershipEpoch = record.membershipEpoch
         )
     }
 
@@ -2952,7 +2956,8 @@ class TalkbackCoordinator(
             hostSessionId = session.id,
             hostModuleId = hostModuleId,
             hostKey = hostKey,
-            leftAtMs = System.currentTimeMillis()
+            leftAtMs = System.currentTimeMillis(),
+            membershipEpoch = session.rosterEpoch
         )
         lastRejoinableConferenceByChannel[channelId] = record
         pendingRejoinByChannel[channelId] = session.id
@@ -2984,11 +2989,22 @@ class TalkbackCoordinator(
             log("Conference rejoin skipped: authority ${authority.moduleId.value} not reachable")
             return false
         }
-        val payload = ConferenceRejoinPayload(
-            channelId = channelId,
-            hostSessionId = hostSessionId
-        ).encode()
         val local = EndpointAddress(localModuleId, localEndpointId())
+        val hint = lastRejoinableConferenceByChannel[channelId]
+        val hostSession = hostSessionId.takeIf { it.isNotBlank() }?.let { sessions[it] }
+        val membershipEpoch = hint?.membershipEpoch
+            ?: hostSession?.rosterEpoch
+            ?: sessions.values.firstOrNull {
+                it.channelId == channelId && it.type == SessionType.CONFERENCE
+            }?.rosterEpoch
+            ?: 0L
+        val request = RecoveryReattachRequest(
+            conferenceId = channelId,
+            hostSessionId = hostSessionId,
+            membershipEpoch = membershipEpoch,
+            endpointId = local.endpointId.value
+        )
+        val payload = request.toRejoinPayload().encode()
         sendSignal(
             peer,
             buildSignedEnvelope(
@@ -3009,10 +3025,60 @@ class TalkbackCoordinator(
             .filter { it.channelId == channelId && it.type == SessionType.CONFERENCE }
             .forEach { conferenceReconnectStartedAtBySession[it.id] = System.currentTimeMillis() }
         log(
-            "Conference rejoin requested by ${local.moduleId.value} -> authority " +
-                "${authority.moduleId.value} session=$hostSessionId ch=$channelId"
+            "RECOVERY_REATTACH requested by ${local.moduleId.value} -> authority " +
+                "${authority.moduleId.value} session=$hostSessionId ch=$channelId " +
+                "epoch=$membershipEpoch endpoint=${local.endpointId.value}"
         )
         return true
+    }
+
+    private fun validateRecoveryReattachLineage(
+        payload: ConferenceRejoinPayload,
+        signal: SignalEnvelope,
+        hostConference: TalkbackSession
+    ): String? {
+        if (payload.channelId != hostConference.channelId) return "channel_mismatch"
+        if (payload.hostSessionId.isNotBlank() && payload.hostSessionId != hostConference.id) {
+            return "session_mismatch"
+        }
+        val lineageRequired = payload.intent == ConferenceJoinIntent.RECOVERY_REATTACH ||
+            payload.membershipEpoch > 0L ||
+            payload.endpointId.isNotBlank()
+        if (!lineageRequired) return null
+        if (payload.endpointId.isNotBlank() &&
+            payload.endpointId != signal.from.endpointId.value
+        ) {
+            return "endpoint_mismatch"
+        }
+        if (payload.membershipEpoch > 0L &&
+            hostConference.rosterEpoch > 0L &&
+            payload.membershipEpoch > hostConference.rosterEpoch
+        ) {
+            log(
+                "[${hostConference.traceId}] RECOVERY_REATTACH stale epoch requester=${signal.from.moduleId.value} " +
+                    "epoch=${payload.membershipEpoch} hostEpoch=${hostConference.rosterEpoch}"
+            )
+        }
+        return null
+    }
+
+    private fun rejectRecoveryReattach(
+        fromPeer: PeerTarget,
+        requester: EndpointAddress,
+        hostSessionId: String,
+        reason: String
+    ) {
+        val local = EndpointAddress(localModuleId, localEndpointId())
+        sendSignal(
+            fromPeer,
+            buildSignedEnvelope(
+                SignalType.CALL_REJECT,
+                local,
+                requester,
+                hostSessionId,
+                reason
+            )
+        )
     }
 
     private fun handleConferenceRejoin(signal: SignalEnvelope, fromPeer: PeerTarget) {
@@ -3046,6 +3112,15 @@ class TalkbackCoordinator(
         }
         if (hostConference.initiatorModuleId != localModuleId) return
 
+        validateRecoveryReattachLineage(payload, signal, hostConference)?.let { lineageReason ->
+            log(
+                "[${hostConference.traceId}] RECOVERY_REATTACH denied: $rejoinerId reason=$lineageReason " +
+                    "epoch=${payload.membershipEpoch} hostEpoch=${hostConference.rosterEpoch}"
+            )
+            rejectRecoveryReattach(fromPeer, signal.from, hostConference.id, "RECOVERY_LINEAGE_INVALID")
+            return
+        }
+
         val leftKeys = conferenceParticipantManager.leftMemberEndpoints(hostConference.id)?.keys
             ?: hostConference.leftMemberEndpoints.keys
         val wasMember = rejoinerId in leftKeys ||
@@ -3057,7 +3132,10 @@ class TalkbackCoordinator(
         }
 
         val sent = sendConferenceInvitesInternal(hostConference.id, listOf(signal.from), rejoin = true)
-        log("[${hostConference.traceId}] Conference rejoin pull-in $rejoinerId sent=$sent")
+        log(
+            "[${hostConference.traceId}] RECOVERY_REATTACH accepted $rejoinerId sent=$sent " +
+                "epoch=${payload.membershipEpoch}"
+        )
     }
 
     private fun markConferenceParticipantLeft(session: TalkbackSession, moduleId: String) {
@@ -3483,7 +3561,11 @@ class TalkbackCoordinator(
         val payload = GroupSessionPayload.decode(signal.payload)
         val channelId = payload?.channelId
         val incomingType = payload?.sessionMode?.let(::sessionTypeFromMode)
-        if (incomingType == SessionType.GROUP && channelId != null && blocksGroupOnChannel(channelId)) {
+        if (incomingType == SessionType.GROUP &&
+            channelId != null &&
+            payload?.joinIntent != ConferenceJoinIntent.RECOVERY_REATTACH &&
+            blocksGroupOnChannel(channelId)
+        ) {
             logGroupInviteBlocked(channelId, joinPath = "JOIN")
             signal.to?.let { callee ->
                 sendGroupBusyReject(
@@ -3542,7 +3624,7 @@ class TalkbackCoordinator(
                 fromPeer,
                 buildSignedEnvelope(SignalType.GROUP_ACCEPT, callee, caller, signal.sessionId, answer)
             )
-            log("${sessionTag(session)} Group mesh ICE restart accepted $peerId ice=$ice")
+            log("${sessionTag(session)} Group mesh ICE restart accepted $peerId ice=$ice intent=${payload.joinIntent}")
             if (session.type == SessionType.CONFERENCE) {
                 markConferenceParticipantActive(session, caller.moduleId.value)
             }
@@ -5532,7 +5614,10 @@ class TalkbackCoordinator(
                 !qosMonitor.isGroupConnected(remote.moduleId.value)
         }
 
-    private fun groupPayloadBase(session: TalkbackSession): GroupSessionPayload {
+    private fun groupPayloadBase(
+        session: TalkbackSession,
+        joinIntent: ConferenceJoinIntent = ConferenceJoinIntent.NORMAL_JOIN
+    ): GroupSessionPayload {
         val initiator = session.initiatorModuleId ?: localModuleId
         val authority = session.floorAuthorityModuleId ?: initiator
         val usesAnchorPayload = session.mediaTopology == GroupMediaTopology.ANCHOR &&
@@ -5553,7 +5638,8 @@ class TalkbackCoordinator(
             rosterEpochMs = session.rosterEpochMs,
             rosterEpoch = session.rosterEpoch,
             memberHash = GroupMembershipSupport.memberHashForSession(session)
-                .takeIf { session.type == SessionType.GROUP } ?: 0
+                .takeIf { session.type == SessionType.GROUP } ?: 0,
+            joinIntent = joinIntent
         )
     }
 
@@ -6558,7 +6644,14 @@ class TalkbackCoordinator(
                 session.local,
                 remote,
                 session.id,
-                groupPayloadBase(session).copy(sdp = offer).encode()
+                groupPayloadBase(
+                    session,
+                    joinIntent = if (iceRestart) {
+                        ConferenceJoinIntent.RECOVERY_REATTACH
+                    } else {
+                        ConferenceJoinIntent.NORMAL_JOIN
+                    }
+                ).copy(sdp = offer).encode()
             )
         )
         log(

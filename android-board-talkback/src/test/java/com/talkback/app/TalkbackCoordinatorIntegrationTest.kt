@@ -698,7 +698,8 @@ class TalkbackCoordinatorIntegrationTest {
             assertTrue(
                 "round $round: host should pull in M03",
                 nodeM01.waitForLogSince(m01LogMark, timeoutMs = 8_000L) {
-                    it.contains("Conference rejoin pull-in M03 sent=1")
+                    it.contains("RECOVERY_REATTACH accepted M03 sent=1") ||
+                        it.contains("Conference rejoin pull-in M03 sent=1")
                 }
             )
             val rejoinedDeadline = System.currentTimeMillis() + 8_000L
@@ -814,7 +815,12 @@ class TalkbackCoordinatorIntegrationTest {
                 sessionId
             )
         )
-        assertTrue(nodeM01.waitForLog { it.contains("Conference rejoin pull-in M02 sent=1") })
+        assertTrue(
+            nodeM01.waitForLog {
+                it.contains("RECOVERY_REATTACH accepted M02 sent=1") ||
+                    it.contains("Conference rejoin pull-in M02 sent=1")
+            }
+        )
         assertFalse(
             synchronized(nodeM02.logs) {
                 nodeM02.logs.drop(m02LogMark).any { it.contains("Conference invite pending") }
