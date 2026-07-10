@@ -71,6 +71,8 @@ import com.talkback.core.session.RecoveryReason
 import com.talkback.core.session.RecoverySource
 import com.talkback.core.session.ConferenceParticipantProjector
 import com.talkback.core.session.ConferenceRuntimeProjectionLogger
+import com.talkback.core.session.ConferencePresenceProjector
+import com.talkback.core.session.ConferencePresenceProjection
 import com.talkback.core.session.ConferenceRuntimeProjector
 import com.talkback.core.session.ConferenceRuntimeState
 import com.talkback.core.session.ConferenceSnapshot
@@ -1955,6 +1957,11 @@ class TalkbackCoordinator(
         } else {
             null
         }
+        val presenceState = if (isConferenceSession(session)) {
+            projectConferencePresenceState(session, projection)
+        } else {
+            null
+        }
         return TalkbackSessionSnapshot(
         sessionId = session.id,
         type = session.type,
@@ -1972,6 +1979,7 @@ class TalkbackCoordinator(
         pendingInviteeCount = projection?.pendingInviteeCount ?: 0,
         awaitingAdditionalParticipants = projection?.awaitingAdditionalParticipants ?: false,
         conferenceRuntimeState = runtimeState,
+        conferencePresenceProjection = presenceState,
         meshConnectedPeerCount = countConnectedRemotes(session),
         connectedRemoteCount = countConnectedRemotes(session),
         callPhase = session.unicastPhase,
@@ -2025,6 +2033,21 @@ class TalkbackCoordinator(
             edgeRecoveryFailed = edgeFacts.anyFailedMediaRecovery
         )
         return runtime
+    }
+
+    private fun projectConferencePresenceState(
+        session: TalkbackSession,
+        participantProjection: ConferenceParticipantProjector.Output?
+    ): ConferencePresenceProjection {
+        val edgeFacts = conferenceEdgeRecoveryController.factsForSession(session.id)
+        return ConferencePresenceProjector.project(
+            ConferencePresenceProjector.Input(
+                sessionAccepted = session.accepted,
+                joinedParticipantCount = participantProjection?.joinedParticipantCount ?: 0,
+                connectedRemoteModuleIds = connectedMeshPeerIds(session),
+                recoveringRemoteModuleIds = edgeFacts.recoveringRemoteModuleIds
+            )
+        )
     }
 
     /**

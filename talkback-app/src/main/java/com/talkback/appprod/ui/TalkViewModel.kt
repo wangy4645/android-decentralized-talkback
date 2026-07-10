@@ -901,12 +901,24 @@ class TalkViewModel(
             manager.isConferenceReconnectFailed(config)
 
         if (conferenceRuntimeActive) {
-            val visible = session?.visibleParticipantCount ?: 0
+            val presence = session?.conferencePresenceProjection
+            val connected = presence?.connectedCount ?: session?.visibleParticipantCount ?: 0
+            val joined = presence?.joinedCount ?: session?.joinedParticipantCount ?: 0
+            val recovering = presence?.recoveringPeers?.joinToString(",") ?: ""
             val awaiting = session?.awaitingAdditionalParticipants == true
             TalkbackLog.i(
-                "Meeting pill: visible=$visible roster=${session?.memberKeys?.size ?: 0} awaiting=$awaiting phase=$runtimePhase"
+                "Meeting pill: connected=$connected joined=$joined recovering=[$recovering] awaiting=$awaiting phase=$runtimePhase"
             )
         }
+
+        val conferencePresence = session?.conferencePresenceProjection
+        val meetingConnectedCount = conferencePresence?.connectedCount
+            ?: session?.visibleParticipantCount
+            ?: 0
+        val meetingJoinedCount = conferencePresence?.joinedCount
+            ?: session?.joinedParticipantCount
+            ?: 0
+        val meetingRecoveringPeers = conferencePresence?.recoveringPeers ?: emptySet()
 
         return TalkUiState(
             serviceRunning = true,
@@ -916,7 +928,7 @@ class TalkViewModel(
             channelTitle = config.channelTitle(),
             channelSubtitle = if (taskName.isNotBlank()) taskName else config.channelDisplayName,
             onlineCount = if (conferenceActive) {
-                session?.visibleParticipantCount ?: 1
+                meetingConnectedCount.coerceAtLeast(1)
             } else {
                 endpoints.count { it.status != EndpointStatus.OFFLINE }
             },
@@ -953,7 +965,9 @@ class TalkViewModel(
                 sessionId = session?.sessionId?.takeIf { conferenceActive },
                 memberKeys = session?.memberKeys.orEmpty(),
                 visibleParticipantCount = session?.visibleParticipantCount ?: 0,
-                joinedParticipantCount = session?.joinedParticipantCount ?: 0,
+                joinedParticipantCount = meetingJoinedCount,
+                connectedParticipantCount = meetingConnectedCount,
+                recoveringPeers = meetingRecoveringPeers,
                 awaitingAdditionalParticipants = session?.awaitingAdditionalParticipants == true,
                 runtimePhase = runtimePhase,
                 startedAtMs = meetingStartedAtMs,

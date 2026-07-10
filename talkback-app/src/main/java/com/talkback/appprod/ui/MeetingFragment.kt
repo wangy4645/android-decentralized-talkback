@@ -222,7 +222,10 @@ class MeetingFragment : Fragment() {
         view.findViewById<View>(R.id.btnMeetingLeaveTop).isVisible = live
         view.findViewById<TextView>(R.id.txtMeetingParticipantCount).isVisible = live
         if (live) {
-            val inMeetingCount = state.meeting.joinedParticipantCount
+            val inMeetingCount = when {
+                state.meeting.recoveringPeers.isNotEmpty() -> state.meeting.connectedParticipantCount
+                else -> state.meeting.joinedParticipantCount
+            }
             view.findViewById<TextView>(R.id.txtMeetingParticipantCount).text =
                 getString(R.string.meeting_participants, inMeetingCount)
         }
