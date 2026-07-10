@@ -260,6 +260,7 @@ ICE_CONNECTED 后 5s 内必须二选一：
 
 ## 8. 参考文件
 
+- `docs/audit/s13b-recovery-reattach-reachability.md` — #73-B Phase 1：Reattach 信令可达性 + S13-B 矩阵
 - `docs/audit/r25-false-conference-termination.md` — R25 写入链 + 升级矩阵
 - `android-board-talkback/.../ConferenceEdgeRecoveryController.kt`
 - `android-board-talkback/.../TalkbackCoordinator.kt`（`conferenceEdgeRecoveryController` lazy 块）

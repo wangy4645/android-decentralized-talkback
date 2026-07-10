@@ -3326,14 +3326,29 @@ class TalkbackCoordinator(
         )
     }
 
+    private fun isRecoveryReattachTransportReady(channelId: String): Boolean {
+        if (stopped) return false
+        return resolveChannelReadiness(channelId) == ChannelReadiness.READY
+    }
+
     private fun dispatchConferenceRejoinSignal(
         channelId: String,
         authority: EndpointAddress,
         hostSessionId: String,
         intent: ConferenceJoinIntent
     ): Boolean {
-        val peer = resolvePeerForModule(authority.moduleId.value) ?: run {
-            log("Conference rejoin skipped: authority ${authority.moduleId.value} not reachable")
+        val transportReady = isRecoveryReattachTransportReady(channelId)
+        val authorityId = authority.moduleId.value
+        val peer = resolvePeerForModule(authorityId) ?: run {
+            if (intent == ConferenceJoinIntent.RECOVERY_REATTACH) {
+                log(
+                    "RECOVERY_REATTACH_SEND_FAILED session=$hostSessionId ch=$channelId " +
+                        "to=$authorityId err=peer_unreachable peerReachable=false " +
+                        "transportReady=$transportReady"
+                )
+            } else {
+                log("Conference rejoin skipped: authority $authorityId not reachable")
+            }
             return false
         }
         val local = EndpointAddress(localModuleId, localEndpointId())
@@ -3352,16 +3367,36 @@ class TalkbackCoordinator(
             endpointId = local.endpointId.value
         )
         val payload = request.toRejoinPayload(intent).encode()
-        sendSignal(
-            peer,
-            buildSignedEnvelope(
-                SignalType.CONFERENCE_REJOIN,
-                local,
-                authority,
-                hostSessionId.ifBlank { UUID.randomUUID().toString() },
-                payload
-            )
+        val envelope = buildSignedEnvelope(
+            SignalType.CONFERENCE_REJOIN,
+            local,
+            authority,
+            hostSessionId.ifBlank { UUID.randomUUID().toString() },
+            payload
         )
+        if (intent == ConferenceJoinIntent.RECOVERY_REATTACH) {
+            log(
+                "RECOVERY_REATTACH_ENQUEUED session=$hostSessionId ch=$channelId " +
+                    "from=${local.moduleId.value} to=$authorityId epoch=$membershipEpoch " +
+                    "peerReachable=true transportReady=$transportReady"
+            )
+            runCatching {
+                signalingChannel.send(peer, envelope)
+            }.onSuccess {
+                log(
+                    "RECOVERY_REATTACH_SENT session=$hostSessionId ch=$channelId to=$authorityId " +
+                        "nonce=${envelope.nonce} peerReachable=true transportReady=$transportReady"
+                )
+            }.onFailure {
+                log(
+                    "RECOVERY_REATTACH_SEND_FAILED session=$hostSessionId ch=$channelId " +
+                        "to=$authorityId err=${it.message} peerReachable=true " +
+                        "transportReady=$transportReady"
+                )
+            }
+        } else {
+            sendSignal(peer, envelope)
+        }
         if (hostSessionId.isNotBlank()) {
             pendingRejoinByChannel[channelId] = hostSessionId
         }
@@ -3437,6 +3472,13 @@ class TalkbackCoordinator(
         val payload = ConferenceRejoinPayload.decode(signal.payload) ?: return
         val rejoinerId = signal.from.moduleId.value
         val channelId = payload.channelId
+        if (payload.intent == ConferenceJoinIntent.RECOVERY_REATTACH) {
+            val inboundSessionId = payload.hostSessionId.takeIf { it.isNotBlank() } ?: signal.sessionId
+            log(
+                "RECOVERY_REATTACH_INBOUND session=$inboundSessionId ch=$channelId " +
+                    "from=$rejoinerId intent=${payload.intent} epoch=${payload.membershipEpoch}"
+            )
+        }
         rememberSignalPeer(rejoinerId, fromPeer)
 
         val hostConference = when {

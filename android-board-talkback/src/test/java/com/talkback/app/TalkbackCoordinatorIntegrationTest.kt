@@ -670,6 +670,48 @@ class TalkbackCoordinatorIntegrationTest {
     }
 
     @Test
+    fun conference_s13b_recoveryReattachProbeMarkers() {
+        val channelId = "CONF-S13B-PROBE"
+        nodeM01.runtime.setAutoAcceptConferenceInvites(true)
+        val sessionId = nodeM02.runtime.requireConferenceCall(
+            nodeM02.localEndpoint,
+            listOf(EndpointAddress(m01, EndpointId("E01"))),
+            channelId
+        )
+        assertTrue(nodeM01.waitForLog { it.contains("Conference invite accepted") || it.contains("invite accepted") })
+        connectConferenceHostIce(nodeM02, nodeM01, hostModuleId = "M02")
+        nodeM01.runtime.simulateRemoteIceState("M02", "CONNECTED")
+        Thread.sleep(500L)
+
+        val m01LogMark = synchronized(nodeM01.logs) { nodeM01.logs.size }
+        val m02LogMark = synchronized(nodeM02.logs) { nodeM02.logs.size }
+        nodeM01.runtime.simulateRemoteIceState("M02", "DISCONNECTED")
+        assertTrue(
+            nodeM01.waitForLogSince(m01LogMark, timeoutMs = 8_000L) {
+                it.contains("RECOVERY_REATTACH_ENQUEUED") &&
+                    it.contains("session=$sessionId") &&
+                    it.contains("ch=$channelId") &&
+                    it.contains("peerReachable=true")
+            }
+        )
+        assertTrue(
+            nodeM01.waitForLogSince(m01LogMark, timeoutMs = 3_000L) {
+                it.contains("RECOVERY_REATTACH_SENT") &&
+                    it.contains("to=M02") &&
+                    it.contains("transportReady=")
+            }
+        )
+        assertTrue(
+            nodeM02.waitForLogSince(m02LogMark, timeoutMs = 5_000L) {
+                it.contains("RECOVERY_REATTACH_INBOUND") &&
+                    it.contains("session=$sessionId") &&
+                    it.contains("from=M01") &&
+                    it.contains("epoch=")
+            }
+        )
+    }
+
+    @Test
     fun conference_channelTombstone_doesNotBlockRejoinHintWhenNewHostAlive() {
         val channelId = "CONF-TOMBSTONE-REJOIN"
         val priorSessionId = nodeM03.runtime.requireConferenceCall(
