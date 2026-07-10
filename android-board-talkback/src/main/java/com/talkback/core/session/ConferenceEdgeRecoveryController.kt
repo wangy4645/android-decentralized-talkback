@@ -34,13 +34,20 @@ class ConferenceEdgeRecoveryController(
     private var attemptSeq = 0L
 
     fun factsForSession(sessionId: String): EdgeRecoveryFacts {
-        val recovering = edges.values
-            .filter { it.key.sessionId == sessionId && it.phase.isActivelyRecovering() }
+        val sessionEdges = edges.values.filter { it.key.sessionId == sessionId }
+        val recovering = sessionEdges
+            .filter { it.phase.isActivelyRecovering() }
+            .map { it.key.remoteModuleId }
+            .toSet()
+        val failed = sessionEdges
+            .filter { it.phase.isFailedMediaRecovery() }
             .map { it.key.remoteModuleId }
             .toSet()
         return EdgeRecoveryFacts(
             recoveringRemoteModuleIds = recovering,
-            anyRecovering = recovering.isNotEmpty()
+            anyRecovering = recovering.isNotEmpty(),
+            failedRemoteModuleIds = failed,
+            anyFailedMediaRecovery = failed.isNotEmpty()
         )
     }
 

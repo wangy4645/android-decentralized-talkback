@@ -1186,7 +1186,8 @@ class TalkbackCoordinatorIntegrationTest {
             Thread.sleep(200L)
             assertTrue(
                 nodeParticipant.hasLog {
-                    it.contains("Conference host ICE DISCONNECTED (participant waiting for recovery)")
+                    it.contains("Conference host ICE DISCONNECTED") &&
+                        it.contains("edge recovery active for M01")
                 }
             )
             assertEquals(1, nodeParticipant.runtime.activeSessionIds().size)
@@ -1202,7 +1203,9 @@ class TalkbackCoordinatorIntegrationTest {
     }
 
     @Test
-    fun conferenceHostIceDisconnectBeyondGrace_endsSession() {
+    fun conferenceHostIceDisconnectBeyondGrace_keepsSessionUnderEdgeRecovery() {
+        // Participant host-link loss is owned by EdgeRecovery (ADR-0021), not host ICE hangup grace.
+        // Session must remain; R24-A later projects ACTIVE+degraded if the attempt fails.
         val peers = TestTalkbackNode.allPeers(m01 to 50031, m02 to 50032)
         val context = RuntimeEnvironment.getApplication()
         val nodeHost = TestTalkbackNode(
@@ -1240,7 +1243,8 @@ class TalkbackCoordinatorIntegrationTest {
             Thread.sleep(1_000L)
             assertTrue(
                 nodeParticipant.hasLog {
-                    it.contains("Conference host ICE DISCONNECTED (participant waiting for recovery)")
+                    it.contains("Conference host ICE DISCONNECTED") &&
+                        it.contains("edge recovery active for M01")
                 }
             )
             assertEquals(1, nodeParticipant.runtime.activeSessionIds().size)

@@ -63,6 +63,7 @@ import com.talkback.core.session.ChannelMode
 import com.talkback.core.session.ChannelModeFsm
 import com.talkback.core.session.ChannelReadiness
 import com.talkback.core.session.ConferenceEdgeRecoveryController
+import com.talkback.core.session.ConferenceBootstrapDeferral
 import com.talkback.core.session.ConferenceHostEndpointResolver
 import com.talkback.core.session.ConferenceParticipantManager
 import com.talkback.core.session.EdgeRecoveryEligibility
@@ -323,6 +324,10 @@ class TalkbackCoordinator(
     }
     private val remoteHealthByModule = ConcurrentHashMap<String, AnchorHealthSnapshot>()
     private val lastAuthorityReachableBySession = ConcurrentHashMap<String, Boolean>()
+    /** Dedup key for [CONFERENCE_RUNTIME_DECISION] (Issue2 probe). */
+    private val lastConferenceRuntimeDecisionBySession = ConcurrentHashMap<String, String>()
+    /** Dedup key for [CONFERENCE_RUNTIME_MISSING] (Gate-R1-B). */
+    private val lastConferenceRuntimeMissingByPeer = ConcurrentHashMap<String, String>()
     @Volatile
     private var invariantF1BreakCount = 0
 
@@ -1990,16 +1995,133 @@ class TalkbackCoordinator(
         participantProjection: ConferenceParticipantProjector.Output?
     ): ConferenceRuntimeState {
         val edgeFacts = conferenceEdgeRecoveryController.factsForSession(session.id)
-        return ConferenceRuntimeProjector.project(
+        val transitionTerminalReady = isMeetingStartTransitionReady(session)
+        val connectedRemoteMediaCount = countConnectedRemotes(session)
+        val isHost = isConferenceHostSession(session)
+        val authorityReachable = isConferenceAuthorityReachable(session)
+        val mediaRecovering = isConferenceAuthorityMediaRecovering(session)
+        val runtime = ConferenceRuntimeProjector.project(
             ConferenceRuntimeProjector.Input(
-                transitionTerminalReady = isMeetingStartTransitionReady(session),
-                connectedRemoteMediaCount = countConnectedRemotes(session),
+                transitionTerminalReady = transitionTerminalReady,
+                connectedRemoteMediaCount = connectedRemoteMediaCount,
                 sessionAccepted = session.accepted,
                 awaitingAdditionalParticipants = participantProjection?.awaitingAdditionalParticipants ?: false,
-                mediaRecovering = isConferenceAuthorityMediaRecovering(session),
+                mediaRecovering = mediaRecovering,
                 edgeRecovering = edgeFacts.anyRecovering,
-                isConferenceHost = isConferenceHostSession(session),
-                authorityReachable = isConferenceAuthorityReachable(session)
+                edgeRecoveryFailed = edgeFacts.anyFailedMediaRecovery,
+                isConferenceHost = isHost,
+                authorityReachable = authorityReachable
+            )
+        )
+        maybeLogConferenceRuntimeDecision(
+            session = session,
+            runtime = runtime,
+            transitionTerminalReady = transitionTerminalReady,
+            connectedRemoteMediaCount = connectedRemoteMediaCount,
+            isHost = isHost,
+            authorityReachable = authorityReachable,
+            mediaRecovering = mediaRecovering,
+            edgeRecovering = edgeFacts.anyRecovering,
+            edgeRecoveryFailed = edgeFacts.anyFailedMediaRecovery
+        )
+        return runtime
+    }
+
+    /**
+     * Issue2 probe: dump projector inputs whenever the decision signature changes.
+     * Lives on the snapshot path (UI poll) so it fires even when emit-only projection logs are absent.
+     */
+    private fun maybeLogConferenceRuntimeDecision(
+        session: TalkbackSession,
+        runtime: ConferenceRuntimeState,
+        transitionTerminalReady: Boolean,
+        connectedRemoteMediaCount: Int,
+        isHost: Boolean,
+        authorityReachable: Boolean,
+        mediaRecovering: Boolean,
+        edgeRecovering: Boolean,
+        edgeRecoveryFailed: Boolean
+    ) {
+        val hostModuleId = session.initiatorModuleId?.value
+        val hostIce = hostModuleId?.let { qosMonitor.snapshot(it)?.iceState }
+        val hostEnginePresent = hostModuleId != null && mediaRegistry.getMesh(hostModuleId) != null
+        val hostConferenceEngine =
+            hostModuleId != null && mediaRegistry.getConference(hostModuleId) != null
+        val meshIcePeers = connectedMeshPeerIds(session).sorted().joinToString(",")
+        val uiReady = isConferenceUiReady(session)
+        val localConferenceReady = session.accepted && transitionTerminalReady
+        val conferenceGeneration = session.rosterEpoch
+        val signature = listOf(
+            runtime.phase.name,
+            isHost,
+            session.accepted,
+            localConferenceReady,
+            transitionTerminalReady,
+            authorityReachable,
+            hostIce ?: "null",
+            hostEnginePresent,
+            hostConferenceEngine,
+            meshIcePeers,
+            connectedRemoteMediaCount,
+            edgeRecovering,
+            edgeRecoveryFailed,
+            runtime.conferenceDegraded,
+            mediaRecovering,
+            uiReady,
+            conferenceGeneration
+        ).joinToString("|")
+        val previous = lastConferenceRuntimeDecisionBySession.put(session.id, signature)
+        if (previous == signature) return
+        log(
+            ConferenceRuntimeProjectionLogger.formatDecision(
+                sessionId = session.id,
+                channelId = session.channelId,
+                phase = runtime.phase,
+                isConferenceHost = isHost,
+                sessionAccepted = session.accepted,
+                localConferenceReady = localConferenceReady,
+                transitionTerminalReady = transitionTerminalReady,
+                authorityReachable = authorityReachable,
+                hostModuleId = hostModuleId,
+                hostIce = hostIce,
+                hostEnginePresent = hostEnginePresent,
+                hostConferenceEngine = hostConferenceEngine,
+                meshIcePeers = meshIcePeers,
+                connectedRemoteMediaCount = connectedRemoteMediaCount,
+                edgeRecovering = edgeRecovering,
+                edgeRecoveryFailed = edgeRecoveryFailed,
+                conferenceDegraded = runtime.conferenceDegraded,
+                mediaRecovering = mediaRecovering,
+                conferenceUiReady = uiReady,
+                conferenceSessionPresent = true,
+                conferenceGeneration = conferenceGeneration
+            )
+        )
+    }
+
+    /**
+     * Gate-R1-B: mesh ICE recovered while no Conference session exists.
+     * Makes the A/B fork explicit — forbids "ICE up + silence".
+     */
+    private fun maybeLogConferenceRuntimeMissing(remoteModuleId: String, iceState: String) {
+        val conferenceSessions = sessions.values.filter { it.type == SessionType.CONFERENCE }
+        if (conferenceSessions.isNotEmpty()) return
+        val channelId = sessions.values
+            .mapNotNull { it.channelId }
+            .groupingBy { it }
+            .eachCount()
+            .maxByOrNull { it.value }
+            ?.key
+        val signature = listOf(channelId ?: "null", remoteModuleId, iceState, conferenceSessions.size).joinToString("|")
+        val previous = lastConferenceRuntimeMissingByPeer.put(remoteModuleId, signature)
+        if (previous == signature) return
+        log(
+            ConferenceRuntimeProjectionLogger.formatMissing(
+                channelId = channelId,
+                peerModuleId = remoteModuleId,
+                iceState = iceState,
+                reason = "no_conference_session",
+                conferenceSessionCount = 0
             )
         )
     }
@@ -4822,6 +4944,8 @@ class TalkbackCoordinator(
                 cause = "local_hangup"
             )
             lastAuthorityReachableBySession.remove(sessionId)
+            lastConferenceRuntimeDecisionBySession.remove(sessionId)
+            lastConferenceRuntimeMissingByPeer.clear()
         }
         val wasUnicast = session.type == SessionType.UNICAST
         if (session.type == SessionType.CONFERENCE) {
@@ -5323,8 +5447,15 @@ class TalkbackCoordinator(
     private fun shouldDeferConferenceFullMesh(session: TalkbackSession): Boolean {
         if (session.type != SessionType.CONFERENCE || !session.accepted) return false
         if (isConferenceHostSession(session)) return false
+        val edgeFacts = conferenceEdgeRecoveryController.factsForSession(session.id)
         val hostId = session.initiatorModuleId?.value ?: return false
-        return !IceConnectivity.isConnected(qosMonitor.snapshot(hostId)?.iceState)
+        val hostIceConnected = IceConnectivity.isConnected(qosMonitor.snapshot(hostId)?.iceState)
+        return ConferenceBootstrapDeferral.shouldDeferFullMesh(
+            isParticipantConference = true,
+            edgeAnyRecovering = edgeFacts.anyRecovering,
+            edgeAnyFailedMediaRecovery = edgeFacts.anyFailedMediaRecovery,
+            hostIceConnected = hostIceConnected
+        )
     }
 
     private fun groupInviteTargets(
@@ -6278,6 +6409,8 @@ class TalkbackCoordinator(
             log("ICE $remoteModuleId state=$state ${qosMonitor.formatSummary()}")
             maybeEmitIceTopologySnapshot(remoteModuleId)
             if (IceConnectivity.isConnected(state)) {
+                // Gate-R1: ICE up must yield DECISION (session alive) or MISSING (session gone).
+                maybeLogConferenceRuntimeMissing(remoteModuleId, state)
                 sessions.values
                     .filter { it.type == SessionType.GROUP && it.channelId != null }
                     .forEach { session ->
@@ -6530,6 +6663,9 @@ class TalkbackCoordinator(
     private fun isConferenceUiReady(session: TalkbackSession): Boolean {
         if (!session.accepted) return false
         if (isConferenceHostSession(session)) return true
+        // R24-A / R15: meeting stays UI-open while edge recovering or after FAILED_MEDIA_RECOVERY
+        val edgeFacts = conferenceEdgeRecoveryController.factsForSession(session.id)
+        if (edgeFacts.anyRecovering || edgeFacts.anyFailedMediaRecovery) return true
         val required = conferencePeersRequiredForReady(session)
         if (required.isEmpty()) return countConnectedRemotes(session) > 0
         return required.all { isPeerMediaConnected(it) }

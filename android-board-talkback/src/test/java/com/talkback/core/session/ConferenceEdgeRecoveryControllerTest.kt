@@ -191,5 +191,26 @@ class ConferenceEdgeRecoveryControllerTest {
         assertEquals(1, reattachCalls)
         controller.onIceConnected("sess-1", "M01")
         assertFalse(controller.factsForSession("sess-1").anyRecovering)
+        assertFalse(controller.factsForSession("sess-1").anyFailedMediaRecovery)
+    }
+
+    @Test
+    fun attemptTimeout_exposesFailedMediaRecoveryFacts_notRecovering() {
+        controller.onIceStateChanged(
+            sessionId = "sess-1",
+            channelId = "CH-1",
+            remoteModuleId = "M01",
+            iceState = "FAILED",
+            eligibility = eligible(),
+            initiatesReattach = true
+        )
+        assertTrue(controller.factsForSession("sess-1").anyRecovering)
+        // Watchdog uses wall clock: min(attemptBudgetMs=500, iceRestartTimeoutMs+debounce=250) = 250ms
+        Thread.sleep(350)
+        val facts = controller.factsForSession("sess-1")
+        assertFalse(facts.anyRecovering)
+        assertTrue(facts.anyFailedMediaRecovery)
+        assertTrue(facts.failedRemoteModuleIds.contains("M01"))
+        assertTrue(decisionLogs.any { it.contains("FAILED_MEDIA_RECOVERY") && it.contains("attempt_timeout") })
     }
 }

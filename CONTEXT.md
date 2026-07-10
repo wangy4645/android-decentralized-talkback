@@ -136,6 +136,22 @@ _Avoid_: 用 ICE/remoteMediaCount 推导未建立, 把恢复中当重新建会
 已存在 Conference Session 内的媒体连接恢复过程；可影响 UI 投影为 Reconnecting，但不属于 Conference Lifecycle。会议可在一个或多个媒体路径 recovering/failed 时保持 Established。
 _Avoid_: Conference Lifecycle RECOVERING, 用恢复流程驱动会议重新开始
 
+**Conference Connectivity Edge Recovery**:
+Conference Connectivity Recovery 的最小恢复粒度：`(conferenceSessionId, remoteModuleId)` 标识的一条本端到远端 Module 的媒体连接边。某条 edge recovering/failed 不改变 Conference Lifecycle Established；UI 与指标可将多条 edge 聚合为参与者级 Reconnecting 或会议级 Degraded 投影。
+_Avoid_: 一个 peer 断网导致整场 Conference recovering, 用 channelId 或 sessionId 作为唯一恢复状态键
+
+**Conference Edge Recovery Controller**:
+每条 Conference connectivity edge 的 recovery 决策与状态机唯一 owner。负责 eligibility、RECOVERY_REATTACH 编排、bounded ICE restart 策略、termination 取消与 EdgeRecoveryFacts 产出；不直接操作 PeerConnection，不修改 Membership。见 ADR-0021。
+_Avoid_: InviteHandler 顺手恢复, ICE 回调直接 recreate PC, Conference 级 recovery 状态机
+
+**Edge Recovery Fact**:
+`ConferenceEdgeRecoveryController` 产出的只读 recovery 事实（edge 状态、attempt、reject reason 等）。`ConferenceRuntimeProjector` 的唯一 recovery 输入；不得从 ICE/connectedCount 反推。
+_Avoid_: UI 根据 transport 猜 Reconnecting, Projection 读 ICE 回调
+
+**Recovery Admission**:
+`RECOVERY_REATTACH` 控制面准入协议：校验 lineage 后允许已有 JOINED 成员恢复 edge binding；不改变 Membership。由 #72 实现；#73 补自动触发与 FSM。
+_Avoid_: 把 RECOVERY_REATTACH 当作 NORMAL_JOIN, admission 完成即 recovery 完成
+
 **Conference Authority Reachability**:
 本端与 Conference lifecycle authority 之间是否存在可维持会议语义的有效关系；不是任意 peer media 连通。Participant ACTIVE 依赖 authority reachability，v1 可由 Host media connected 近似实现。
 _Avoid_: connectedRemoteMediaCount, 任意 peer ICE CONNECTED

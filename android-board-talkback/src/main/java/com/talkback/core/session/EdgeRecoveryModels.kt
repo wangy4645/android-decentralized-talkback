@@ -30,6 +30,13 @@ enum class EdgeRecoveryPhase {
         ICE_RESTARTING -> true
         else -> false
     }
+
+    /** Terminal media-recovery failure retained for R24 Strategy A residency. */
+    fun isFailedMediaRecovery(): Boolean = when (this) {
+        FAILED_MEDIA_RECOVERY,
+        FAILED_REQUIRES_USER_ACTION -> true
+        else -> false
+    }
 }
 
 data class EdgeRecoveryEligibility(
@@ -44,7 +51,10 @@ data class EdgeRecoveryEligibility(
 
 data class EdgeRecoveryFacts(
     val recoveringRemoteModuleIds: Set<String> = emptySet(),
-    val anyRecovering: Boolean = false
+    val anyRecovering: Boolean = false,
+    /** Remotes whose last attempt ended in FAILED_MEDIA_RECOVERY* (ADR-0021 R24-A). */
+    val failedRemoteModuleIds: Set<String> = emptySet(),
+    val anyFailedMediaRecovery: Boolean = false
 )
 
 internal data class EdgeRecoveryRecord(

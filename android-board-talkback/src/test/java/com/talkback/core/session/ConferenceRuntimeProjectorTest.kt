@@ -14,6 +14,7 @@ class ConferenceRuntimeProjectorTest {
         awaitingAdditionalParticipants: Boolean = false,
         mediaRecovering: Boolean = false,
         edgeRecovering: Boolean = false,
+        edgeRecoveryFailed: Boolean = false,
         isConferenceHost: Boolean = false,
         authorityReachable: Boolean = false
     ) = ConferenceRuntimeProjector.Input(
@@ -23,6 +24,7 @@ class ConferenceRuntimeProjectorTest {
         awaitingAdditionalParticipants = awaitingAdditionalParticipants,
         mediaRecovering = mediaRecovering,
         edgeRecovering = edgeRecovering,
+        edgeRecoveryFailed = edgeRecoveryFailed,
         isConferenceHost = isConferenceHost,
         authorityReachable = authorityReachable
     )
@@ -68,6 +70,7 @@ class ConferenceRuntimeProjectorTest {
             )
         )
         assertEquals(ConferenceRuntimePhase.CONNECTING, state.phase)
+        assertFalse(state.conferenceDegraded)
     }
 
     @Test
@@ -82,6 +85,7 @@ class ConferenceRuntimeProjectorTest {
             )
         )
         assertEquals(ConferenceRuntimePhase.ACTIVE, state.phase)
+        assertFalse(state.conferenceDegraded)
     }
 
     @Test
@@ -97,6 +101,7 @@ class ConferenceRuntimeProjectorTest {
         )
         assertEquals(ConferenceRuntimePhase.RECOVERING, state.phase)
         assertTrue(state.mediaRecovering)
+        assertFalse(state.conferenceDegraded)
     }
 
     @Test
@@ -113,7 +118,45 @@ class ConferenceRuntimeProjectorTest {
         )
         assertEquals(ConferenceRuntimePhase.ACTIVE, state.phase)
         assertTrue(state.edgeRecovering)
-        assertTrue(state.mediaRecovering)
+        assertTrue(state.conferenceDegraded)
+        assertFalse(state.mediaRecovering)
+    }
+
+    @Test
+    fun r24a_failedMediaRecovery_staysActiveDegraded_notConnecting() {
+        val state = ConferenceRuntimeProjector.project(
+            input(
+                sessionAccepted = true,
+                transitionTerminalReady = true,
+                connectedRemoteMediaCount = 0,
+                isConferenceHost = false,
+                authorityReachable = false,
+                edgeRecovering = false,
+                edgeRecoveryFailed = true
+            )
+        )
+        assertEquals(ConferenceRuntimePhase.ACTIVE, state.phase)
+        assertTrue(state.conferenceDegraded)
+        assertFalse(state.edgeRecovering)
+        assertFalse(state.mediaRecovering)
+    }
+
+    @Test
+    fun r24a_edgeRecovering_takesPrecedenceOverFailed() {
+        val state = ConferenceRuntimeProjector.project(
+            input(
+                sessionAccepted = true,
+                transitionTerminalReady = true,
+                connectedRemoteMediaCount = 0,
+                isConferenceHost = false,
+                authorityReachable = false,
+                edgeRecovering = true,
+                edgeRecoveryFailed = true
+            )
+        )
+        assertEquals(ConferenceRuntimePhase.ACTIVE, state.phase)
+        assertTrue(state.edgeRecovering)
+        assertTrue(state.conferenceDegraded)
     }
 
     @Test
@@ -170,6 +213,7 @@ class ConferenceRuntimeProjectorTest {
         )
         assertEquals(ConferenceRuntimePhase.ACTIVE, state.phase)
         assertFalse(state.mediaRecovering)
+        assertFalse(state.conferenceDegraded)
         assertFalse(state.awaitingAdditionalParticipants)
         assertTrue(state.transitionTerminalReady)
         assertEquals(2, state.connectedRemoteMediaCount)

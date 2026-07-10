@@ -2,7 +2,7 @@
 
 ## Status
 
-**Draft** (2026-07-09) — depends on #72 Recovery Admission Foundation; implemented by #73 Edge Recovery Lifecycle.
+**Draft** (2026-07-10) — depends on #72 Recovery Admission Foundation; implemented by #73 Edge Recovery Lifecycle. **R24** frozen from Gate-R1 soak (owner vacuum after `attempt_timeout`).
 
 Supersedes implicit “ICE event → action” recovery behavior. Complements ADR-0018 (media ownership), ADR-0019 (signaling/media separation), ADR-0020 (runtime projection).
 
@@ -300,6 +300,77 @@ Illegal Membership → Recovery attempts log:
 RECOVERY_DECISION … approved=false rejectReason=NON_CONNECTIVITY_TRIGGER
 ```
 
+### R24 — Recovery Completion Ownership (frozen 2026-07-10)
+
+**P0 root cause (Gate-R1 soak `logs-gate-r1-20260710-101344`):** after `FAILED_MEDIA_RECOVERY` /
+`attempt_timeout`, `edgeRecovering=false` while `hostIce=FAILED` and `conferenceSessionPresent=true`,
+with HELLO restored but still `Deferring full conference mesh until host link is stable` — **no
+controller owns the next recovery step**. Projector then correctly emits `CONNECTING` (not a UI bug).
+
+`ConferenceEdgeRecoveryController` **MUST**, when a recovery attempt ends (timeout / ice_restart_failed /
+budget exhausted), enter **exactly one** of:
+
+```text
+A. Terminal degraded ownership (stay in Connectivity plane)
+   edge.state = FAILED_MEDIA_RECOVERY (or FAILED_REQUIRES_USER_ACTION)
+   conference Runtime: ACTIVE + degraded  (or explicit RECOVERY_FAILED phase)
+   wait for: new connectivity cycle  OR  explicit user action
+
+B. Explicit handoff to HostLinkBootstrap (out of #73 Edge Recovery)
+   handoff fact logged (e.g. RECOVERY_HANDOFF_HOST_LINK)
+   HostLinkBootstrap owns re-establishing host ICE / mesh until authorityReachable
+```
+
+**Forbidden vacuum** (architecture hole):
+
+```text
+edgeRecovering = false
+AND hostIce = FAILED (or not CONNECTED for participant)
+AND conferenceSessionPresent = true
+AND MeetingStart / HostLinkBootstrap is not active owner
+AND no controller owns the next restore step
+```
+
+UI phase `CONNECTING` **MUST NOT** be used as the terminal face of a failed mid-meeting recovery
+attempt (that masquerades as first-time join). Strategy choice among A/B (degraded vs handoff vs
+retry) is product policy; **absence of an owner is not**.
+
+**NOTE — v1 default = Strategy A (degraded residency):**
+
+```text
+v1 MUST implement Strategy A only:
+
+  edge.state = FAILED_MEDIA_RECOVERY
+  conference.phase = ACTIVE
+  conference.degraded = true
+  conferenceUiReady = true
+  participant.connectivity = DEGRADED   (failed edge)
+
+MUST NOT after attempt end:
+  phase = CONNECTING
+  re-trigger MeetingStart / HostLinkBootstrap
+  auto ICE restart (budget already exhausted for this attempt)
+
+Wait for: new connectivity cycle  OR  explicit user action.
+```
+
+Strategy B (handoff to HostLinkBootstrap) is **deferred**. It **MUST NOT** ship until proven:
+
+1. HostLinkBootstrap supports **mid-call** ownership (not only MeetingStart bootstrap)
+2. Ownership is unique (no dual owner with EdgeRecovery)
+3. Retry budget is explicit and owned by one plane
+4. Handoff **MUST NOT** form a cycle: Recovery timeout → bootstrap → bootstrap timeout → Recovery
+
+Until then, treating HostLinkBootstrap as mid-call repair owner silently expands MeetingStart scope and
+re-entangles S3 (`Deferring full conference mesh…`) with #73 — rejected for v1.
+
+Complements R5 (ownership during attempt), R16 (facts), R21 (planes). Does **not** authorize
+Recovery to delete `ConferenceSession` (see Write Matrix **WM-R5** Guardrail).
+
+**Note on Gate-R1-B (same soak):** `CONFERENCE_RUNTIME_MISSING` at `10:17:12` followed Host
+`leaveConferenceInternal` / `MEETING_ENDED` — **not** Recovery deleting the session. Do not treat
+that R1-B as R24 / WM-R5 violation evidence.
+
 ## #73 v1 Edge Recovery FSM
 
 ```text
@@ -415,6 +486,8 @@ JOIN_RESTORE_STARTED
 - New log markers: `RECOVERY_EDGE_STARTED`, `RECOVERY_EDGE_RECOVERED`, `RECOVERY_EVENT_DROPPED`, `RECOVERY_DECISION`.
 - S13 migrates from conference `RECOVERING→ACTIVE` to edge lifecycle pairs.
 - #73 v1 completion definition: **JOINED participant, brief connectivity loss, auto recovery via REATTACH + 1 ICE restart, no user re-enter.**
+- **R24 (P0):** attempt end **MUST** leave either degraded ownership or explicit HostLinkBootstrap handoff — never an owner vacuum that projects as mid-meeting `CONNECTING`.
+- **R24-A v1 shipped:** `EdgeRecoveryFacts.anyFailedMediaRecovery` + `ConferenceRuntimeState.conferenceDegraded`; projector keeps `ACTIVE`; bootstrap deferral skipped while recovering/failed.
 
 ## References
 
