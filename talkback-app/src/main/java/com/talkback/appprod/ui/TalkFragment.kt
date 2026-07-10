@@ -178,7 +178,11 @@ class TalkFragment : Fragment() {
         view.findViewById<TextView>(R.id.txtChannelTitle).text = state.channelTitle
         view.findViewById<TextView>(R.id.txtChannelSubtitle).text = buildChannelSubtitle(state)
         view.findViewById<TextView>(R.id.txtOnlineCount).text =
-            getString(R.string.online_count_compact, state.onlineCount)
+            if (state.conferenceMode && state.conferenceActive) {
+                getString(R.string.online_count_presence, state.meeting.participantCountLabel)
+            } else {
+                getString(R.string.online_count_compact, state.onlineCount)
+            }
 
         val floorOwnerLabel = view.findViewById<TextView>(R.id.txtFloorOwnerLabel)
         val talkingLabel = view.findViewById<TextView>(R.id.txtTalkingLabel)
@@ -201,7 +205,7 @@ class TalkFragment : Fragment() {
                     getString(R.string.conference_status_connecting)
                 else -> "--"
             }
-            view.findViewById<TextView>(R.id.txtTalking).text = state.onlineCount.toString()
+            view.findViewById<TextView>(R.id.txtTalking).text = state.meeting.participantCountLabel
             imgFloorIndicator.isVisible = false
             talkingIcon.isVisible = false
         } else {
@@ -345,7 +349,7 @@ class TalkFragment : Fragment() {
 
         if (state.conferenceMode) {
             txtPttLabel.text = getString(R.string.meeting_title)
-            txtPttHint.text = getString(R.string.meeting_participants, state.onlineCount) + "\n" +
+            txtPttHint.text = getString(R.string.meeting_participants_presence, state.meeting.participantCountLabel) + "\n" +
                 if (state.meeting.runtimePhase == ConferenceRuntimePhase.ACTIVE) {
                     getString(R.string.meeting_tap_to_view)
                 } else if (state.conferenceReconnectFailed) {

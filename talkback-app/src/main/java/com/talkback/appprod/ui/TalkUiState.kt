@@ -55,6 +55,8 @@ data class MeetingUiState(
     val connectedParticipantCount: Int = 0,
     /** Remote peers with active edge recovery on this device (ADR-0022 R27′). */
     val recoveringPeers: Set<String> = emptySet(),
+    /** View label from presence divergence: "3" or "2/3" (R27′-fix). */
+    val participantCountLabel: String = "0",
     val awaitingAdditionalParticipants: Boolean = false,
     /** Conference runtime phase from [TalkbackSessionSnapshot.conferenceRuntimeState] (RO-M2 PR-3). */
     val runtimePhase: ConferenceRuntimePhase? = null,

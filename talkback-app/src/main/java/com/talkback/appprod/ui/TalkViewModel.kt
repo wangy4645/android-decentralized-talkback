@@ -906,8 +906,9 @@ class TalkViewModel(
             val joined = presence?.joinedCount ?: session?.joinedParticipantCount ?: 0
             val recovering = presence?.recoveringPeers?.joinToString(",") ?: ""
             val awaiting = session?.awaitingAdditionalParticipants == true
+            val display = MeetingPresenceDisplay.participantCountLabel(connected, joined)
             TalkbackLog.i(
-                "Meeting pill: connected=$connected joined=$joined recovering=[$recovering] awaiting=$awaiting phase=$runtimePhase"
+                "Meeting pill: display=$display connected=$connected joined=$joined recovering=[$recovering] awaiting=$awaiting phase=$runtimePhase"
             )
         }
 
@@ -919,6 +920,10 @@ class TalkViewModel(
             ?: session?.joinedParticipantCount
             ?: 0
         val meetingRecoveringPeers = conferencePresence?.recoveringPeers ?: emptySet()
+        val meetingParticipantLabel = MeetingPresenceDisplay.participantCountLabel(
+            connectedCount = meetingConnectedCount,
+            joinedCount = meetingJoinedCount
+        )
 
         return TalkUiState(
             serviceRunning = true,
@@ -968,6 +973,7 @@ class TalkViewModel(
                 joinedParticipantCount = meetingJoinedCount,
                 connectedParticipantCount = meetingConnectedCount,
                 recoveringPeers = meetingRecoveringPeers,
+                participantCountLabel = meetingParticipantLabel,
                 awaitingAdditionalParticipants = session?.awaitingAdditionalParticipants == true,
                 runtimePhase = runtimePhase,
                 startedAtMs = meetingStartedAtMs,
