@@ -2493,6 +2493,10 @@ class TalkbackCoordinator(
             ?.let { cleanupUnhealthyConferenceSession(it) }
     }
 
+    internal fun testConferenceMembershipEpoch(sessionId: String): Long = runOnCoordinatorSync {
+        sessions[sessionId]?.rosterEpoch ?: 0L
+    }
+
     fun remoteModuleStates(): List<RemoteModuleState> = mergeRemoteModuleViews()
 
     fun isRemoteModuleReachable(moduleId: String): Boolean = runOnCoordinatorSync {

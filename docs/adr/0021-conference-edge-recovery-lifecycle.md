@@ -429,6 +429,67 @@ still consumes `isChannelCancelled` (Rejoin path was fixed in PR-A). See
 Complements R14 (termination dominates recovery), R21 (planes), R24 (recovery **after** attempt ends).
 R24 fixes *recovery completion*; R25 fixes *recovery admission*.
 
+### R26 — Recovery Ownership Window (frozen 2026-07-10)
+
+**P0 (Gate-R1-R26A soak `logs-gate-r1-r26a-20260710-114335`, session `0cfa4c0a`, M02 host):**
+Membership **ICE-inferred prune** cancelled active edge recovery within ~7s of
+`RECOVERY_EDGE_STARTED` (R25A era). **PR-R26A** defers ICE/health prune while
+`isEdgeRecovering(sessionId, remoteModuleId)`.
+
+Symmetric complement to **R10** (Recovery MUST NOT mutate Membership):
+
+```text
+R10 (已有): Recovery → 不得写 Membership
+R26 (新增): Membership → 不得在 recovery window 内写 roster
+```
+
+For edge `(sessionId, remoteModuleId)` the **recovery ownership window** is:
+
+```text
+RECOVERY_EDGE_STARTED
+    ↓
+terminal:
+    RECOVERED
+    FAILED_MEDIA_RECOVERY
+    CANCELLED (explicit leave / conference termination)
+```
+
+Within this window, **Membership Authority MUST NOT** infer participant removal from
+connectivity facts, including:
+
+```text
+ICE_DISCONNECTED
+ICE_FAILED
+transport degradation
+health cleanup (cleanupUnhealthyConferenceSession / canPruneConferenceParticipant)
+```
+
+Forbidden mutations:
+
+```text
+removeConferenceParticipant()
+membershipEpoch++   (rosterEpoch advance via prune/replace)
+roster mutation     (member removed from committed conference roster)
+```
+
+**Explicit leave** (`Conference peer left`, `USER_LEAVE`, host hangup) and **conference
+termination** are **not** constrained by R26.
+
+Implementation v1 (shipped `ab73ad8`):
+
+```text
+ConferenceEdgeRecoveryController.isEdgeRecovering(sessionId, remoteModuleId)
+    → scheduleParticipantPrune: RECOVERY_PRUNE_DEFERRED
+    → canPruneConferenceParticipant: return false
+```
+
+**Out of scope (R26 v2 — separate ADR):** semantics after `FAILED_MEDIA_RECOVERY`
+(persistent degraded vs quarantine vs post-terminal prune). Phase B soak showed
+`cleanupUnhealthyConferenceSession` may prune ~3s after terminal — that is **post-window**
+behavior and **must not** be changed under R26 without a Membership product decision.
+
+Complements R10, R19 (terminal retention), R24-A (degraded residency). Gate: **S18**.
+
 ## #73 v1 Edge Recovery FSM
 
 ```text
@@ -526,6 +587,28 @@ JOIN_RESTORE_STARTED
 
 **NETWORK / ICE recovery path MUST still** produce Connectivity Recovery markers when exercised.
 
+### S18 — Recovery ownership window membership integrity (hard, frozen 2026-07-10)
+
+**Given:** three-party conference, `ESTABLISHED`, all `JOINED`, host observes participant
+`P` connectivity loss.
+
+**When:** host-side edge recovery for `P` is active (`edgeRecovering=true` for `(sessionId, P)`).
+
+**Then within the recovery attempt budget:**
+
+```text
+membershipEpoch (rosterEpoch) unchanged
+roster keys / size unchanged (memberKeys)
+roster still contains P
+```
+
+**State assertions only** — do not gate on log strings (`pruning peer`, `member_left`, etc.).
+
+Explicit `USER_LEAVE` / host hangup **MAY** remove `P` during recovery (S16); S18 exercises
+**connectivity-inferred** prune paths only.
+
+Integration: `conference_s18_recoveryWindow_preservesMembershipState`.
+
 ### S11 — Zombie rejoin (hard, unchanged intent)
 
 ## Considered Options
@@ -546,7 +629,8 @@ JOIN_RESTORE_STARTED
 - #73 v1 completion definition: **JOINED participant, brief connectivity loss, auto recovery via REATTACH + 1 ICE restart, no user re-enter.**
 - **R24 (P0):** attempt end **MUST** leave either degraded ownership or explicit HostLinkBootstrap handoff — never an owner vacuum that projects as mid-meeting `CONNECTING`.
 - **R24-A v1 shipped:** `EdgeRecoveryFacts.anyFailedMediaRecovery` + `ConferenceRuntimeState.conferenceDegraded`; projector keeps `ACTIVE`; bootstrap deferral skipped while recovering/failed.
-- **R25 (P0 open):** stale channel tombstone misread as conference termination — **PR-R25A** decouples Recovery from `isChannelCancelled`; **R25B** session-scoped token. See `docs/audit/r25-false-conference-termination.md`.
+- **R25 (P0 shipped):** stale channel tombstone misread as conference termination — **PR-R25A** decouples Recovery from `isChannelCancelled`; **R25B** session-scoped token. See `docs/audit/r25-false-conference-termination.md`.
+- **R26 (P0 shipped):** Membership ICE/health prune during edge recovery window — **PR-R26A** `isEdgeRecovering` guard on `scheduleParticipantPrune` + `canPruneConferenceParticipant`. Gate **S18**. Post-`FAILED_MEDIA_RECOVERY` roster semantics deferred (R26 v2).
 
 ## References
 

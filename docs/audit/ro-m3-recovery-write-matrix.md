@@ -79,7 +79,9 @@ Recovery Plane    →  Membership mutation            ❌ (R10)
 | `acceptGroupInvite` | 🟢 参与方入会 | 🟢 绑定 host sessionId | 🟢 onInviteAccepted | — | — | 🟢 mesh | 参与方不得换 sessionId |
 | `hangupInternal` | 🟢 LOCAL 终止 | 🟢 remove session | 🟢 dispose | 🟢 clear rejoin | 🟢 cancelChannel/Session | 🟢 release media | 本地挂断权威 |
 | `releaseConferenceRuntimeAfterRemoteTermination` | 🟢 REMOTE 终止 | — | — | 🟢 clearRejoin | 🟢 cancelChannel | 🟡 条件 release channel | 须先于 recovery 完成 |
-| `removeConferenceParticipant` | — | — | 🟢 LEFT | — | 🟢 cancelEdge | — | member_left 应阻断 recovery |
+| `removeConferenceParticipant` | — | — | 🟢 LEFT | — | 🟢 cancelEdge | — | member_left 应阻断 recovery；**R26**：ICE/health 路径在 `isEdgeRecovering` 窗口内禁止调用 |
+| `scheduleParticipantPrune` | — | — | 🟡 prune | — | — | — | **R26**：`RECOVERY_PRUNE_DEFERRED` while edge recovering |
+| `cleanupUnhealthyConferenceSession` | — | — | 🟡 prune | — | — | — | **R26 v1**：defer via `canPruneConferenceParticipant`; post-terminal prune = R26 v2 |
 | `clearConferenceRejoinState` | — | — | — | 🟢 | — | — | T3：终止后须 clear，否则 zombie rejoin |
 | `sendConferenceRejoinIntentInternal` | — | — | — | 🟢 pendingRejoin | — | — | Conference rejoin intent；不读 Recovery |
 | `sendRecoveryReattachInternal` | — | — | — | 🟡 pendingRejoin | 🟢 drop if cancelled | — | Recovery reattach only |
@@ -119,10 +121,18 @@ joinMeeting → new conference → 新 sessionId
 - `edgeRecovering` / `mediaRecovering` 分属两套 controller（#72 media vs #73 edge）。
 - **禁止**：为修 T2（authority=false → Connecting）去改 lifecycle 或强制 SOLO_HOST。
 
-### 3.4 UI 触发 Recovery（T4）
+### 3.5 Membership prune vs Edge Recovery window — **R26 已证实并修复（PR-R26A）**
 
-`TalkViewModel.joinMeeting(reason=ui.openMeetingScreen)` → `requestConferenceRejoin` / `hasRejoinableConference`  
-Recovery 应按 **ICE debounce + eligibility** 自动触发，不应依赖用户 reopen。
+```text
+RECOVERY_EDGE_STARTED(P)
+    ↓ (R25A 前)
+scheduleParticipantPrune(FAILED) → removeConferenceParticipant → cancelEdge(member_left)
+    ↓ (R26A)
+RECOVERY_PRUNE_DEFERRED → recovery runs full attempt budget
+```
+
+Post-terminal `cleanupUnhealthyConferenceSession` prune **after** `FAILED_MEDIA_RECOVERY` is
+**out of R26 v1 scope** (Membership survival semantics — R26 v2 / separate ADR).
 
 ---
 
@@ -204,8 +214,16 @@ ICE_CONNECTED 后 5s 内必须二选一：
 | 阶段 | 判定 | 说明 |
 |------|------|------|
 | M03→M02 recovery timeout | **R24-A OK** | `edgeRecoveryFailed=true` + `conferenceDegraded=true` + `phase=ACTIVE` |
-| M01 WiFi loss `40f26355` | **R25 / P0** | tombstone from `10:51:01 remote_hangup` + 新 session 未 clear → Recovery blocked。详见 `docs/audit/r25-false-conference-termination.md` |
+| M01 WiFi loss `40f26355` | **R25 / P0** | tombstone from prior `remote_hangup` → Recovery blocked。详见 `docs/audit/r25-false-conference-termination.md` |
 | M02 `visible=3` vs M03 `visible=2` | **P2** | Host roster 正确；participant projection 滞后 — 不阻塞 R25 |
+
+#### Gate-R1-R26A soak 结论（`logs-gate-r1-r26a-20260710-114335-manual`，M02 host，M01 WiFi）
+
+| 阶段 | 判定 | 说明 |
+|------|------|------|
+| Recovery window | **R26 PASS** | `RECOVERY_PRUNE_DEFERRED` ×2；无 `pruning peer`；roster=3 至 `attempt_timeout` |
+| Post-terminal | **R26 v2 待决策** | `11:47:02` `Pruning unhealthy conference peer M01`（post-window，不属 Phase A fail） |
+| S13 闭环 | **FAIL** | 无 `RECOVERY_EDGE_RECOVERED`；participant 离线时 reattach 无法完成 — 与 R26 正交 |
 
 实现：`ConferenceAuditTimelineLog.kt` + `TalkbackCoordinator` 挂钩；`RECOVERY_DECISION` 在 `ConferenceEdgeRecoveryController`。
 
@@ -217,6 +235,7 @@ ICE_CONNECTED 后 5s 内必须二选一：
 - **R24 v1 = Strategy A only**（已落地）；禁止 Strategy B handoff 未证明前上线
 - **禁止 P0-A″**：`hostIce=FAILED` + debounce → 强制 `ACTIVE+degraded`（会掩盖 R25 false termination）
 - **R25A 已落地**：Recovery 解耦 `isChannelCancelled`；**不做** `clearChannelCancellation`（留 R25B）
+- **R26A 已落地**：Recovery window Membership guard；**R26 v2 / R27 冻结**
 - **R25 根因未明前**：禁止再改 CONNECTING / ACTIVE 投影规则（CONNECTING 可能是正确后果）
 
 ---
@@ -228,9 +247,11 @@ ICE_CONNECTED 后 5s 内必须二选一：
 | 1–5 | PR-A / RECOVERY_DECISION / Phase A/B | 已完成 |
 | **6** | **R24 Strategy A** | **已落地**（`53fe19f`）；recovery timeout → `ACTIVE+conferenceDegraded` |
 | **7** | **PR-R25A** — Recovery 解耦 channel tombstone | **已落地**；S17 PASS |
-| 8 | **R25B session-scoped CancellationToken** | tombstone key = `(channelId, sessionId, generation)` |
-| 9 | **WM-R6** 断言/门禁 | Connectivity loss 不 tombstone channel（Recovery 侧已解耦） |
-| 9 | **WM-R5** Guardrail | `FAILED_MEDIA_RECOVERY` 后无 lifecycle 越权 |
+| **8** | **PR-R26A** — Recovery ownership window guard | **已落地** `ab73ad8`；S18 PASS |
+| 9 | **R25B session-scoped CancellationToken** | tombstone key = `(channelId, sessionId, generation)` |
+| 10 | **WM-R6** 断言/门禁 | Connectivity loss 不 tombstone channel（Recovery 侧已解耦） |
+| 11 | **WM-R5** Guardrail | `FAILED_MEDIA_RECOVERY` 后无 lifecycle 越权 |
+| — | **R26 v2** post-terminal roster semantics | **冻结** — 不在 #73 收尾 |
 | — | Host Link Bootstrap / R24-B | 冻结 |
 | — | Issue1 Host LIVE | 冻结 |
 | — | M02 `visible=3` vs host `visible=2` | **P2**（roster ∩ presence） |

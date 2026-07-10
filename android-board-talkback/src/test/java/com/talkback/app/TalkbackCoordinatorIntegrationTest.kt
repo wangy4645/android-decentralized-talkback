@@ -610,6 +610,66 @@ class TalkbackCoordinatorIntegrationTest {
     }
 
     @Test
+    fun conference_s18_recoveryWindow_preservesMembershipState() {
+        val channelId = "CONF-S18-R26"
+        nodeM01.runtime.setAutoAcceptConferenceInvites(true)
+        nodeM03.runtime.setAutoAcceptConferenceInvites(true)
+        val sessionId = nodeM02.runtime.requireConferenceCall(
+            nodeM02.localEndpoint,
+            listOf(
+                EndpointAddress(m01, EndpointId("E01")),
+                EndpointAddress(m03, EndpointId("E01"))
+            ),
+            channelId
+        )
+        assertTrue(nodeM01.waitForLog { it.contains("Conference invite accepted") || it.contains("invite accepted") })
+        assertTrue(nodeM03.waitForLog { it.contains("Conference invite accepted") || it.contains("invite accepted") })
+        connectConferenceHostIce(nodeM02, nodeM01, nodeM03, hostModuleId = "M02")
+        nodeM01.runtime.simulateRemoteIceState("M02", "CONNECTED")
+        nodeM03.runtime.simulateRemoteIceState("M02", "CONNECTED")
+        Thread.sleep(500L)
+
+        val baselineEpoch = nodeM02.runtime.testConferenceMembershipEpoch(sessionId)
+        val baseline = nodeM02.runtime.sessionSnapshots().first { it.sessionId == sessionId }
+        val baselineMemberKeys = baseline.memberKeys.toSet()
+        assertTrue(baselineMemberKeys.any { it.startsWith("M01") })
+
+        nodeM02.runtime.simulateRemoteIceState("M01", "DISCONNECTED")
+        val recoveringDeadline = System.currentTimeMillis() + 8_000L
+        var recovering = false
+        while (System.currentTimeMillis() < recoveringDeadline) {
+            val snap = nodeM02.runtime.sessionSnapshots().first { it.sessionId == sessionId }
+            if (snap.conferenceRuntimeState?.edgeRecovering == true) {
+                recovering = true
+                break
+            }
+            Thread.sleep(200L)
+        }
+        assertTrue("host should observe edgeRecovering for M01", recovering)
+
+        fun assertMembershipPreserved(label: String) {
+            val snap = nodeM02.runtime.sessionSnapshots().first { it.sessionId == sessionId }
+            assertEquals("$label: membershipEpoch", baselineEpoch, nodeM02.runtime.testConferenceMembershipEpoch(sessionId))
+            assertEquals("$label: roster size", baselineMemberKeys.size, snap.memberKeys.size)
+            assertEquals("$label: roster keys", baselineMemberKeys, snap.memberKeys.toSet())
+            assertTrue("$label: roster must still contain M01", snap.memberKeys.any { it.startsWith("M01") })
+        }
+
+        assertMembershipPreserved("during recovery")
+        nodeM02.runtime.testRunConferenceHealthCleanup(channelId)
+        assertMembershipPreserved("after health cleanup during recovery")
+
+        nodeM02.runtime.simulateRemoteIceState("M01", "FAILED")
+        assertTrue(
+            nodeM02.runtime.sessionSnapshots().first { it.sessionId == sessionId }
+                .conferenceRuntimeState?.edgeRecovering == true
+        )
+        assertMembershipPreserved("after ICE FAILED while recovering")
+        nodeM02.runtime.testRunConferenceHealthCleanup(channelId)
+        assertMembershipPreserved("after health cleanup on FAILED while recovering")
+    }
+
+    @Test
     fun conference_channelTombstone_doesNotBlockRejoinHintWhenNewHostAlive() {
         val channelId = "CONF-TOMBSTONE-REJOIN"
         val priorSessionId = nodeM03.runtime.requireConferenceCall(

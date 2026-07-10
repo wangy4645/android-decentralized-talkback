@@ -386,4 +386,7 @@ class TalkbackRuntime(
     internal fun testRunConferenceHealthCleanup(channelId: String) {
         coordinator.testRunConferenceHealthCleanup(channelId)
     }
+
+    internal fun testConferenceMembershipEpoch(sessionId: String): Long =
+        coordinator.testConferenceMembershipEpoch(sessionId)
 }
