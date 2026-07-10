@@ -21,7 +21,10 @@ $devices = @{
     M03 = "MDX0220416001963"
 }
 
+# ADR-0022: RECOVERY_WAITING / DEFERRED are protocol state, not debug noise.
 $probeFilter = @(
+    "RECOVERY_WAITING",
+    "RECOVERY_REATTACH_DEFERRED",
     "RECOVERY_REATTACH",
     "RECOVERY_EDGE_",
     "RECOVERY_PRUNE_DEFERRED",
@@ -87,6 +90,8 @@ if ($AnalyzeOnly) {
     Write-Host "S13-B matrix summary for: $OutDir"
     Write-Host ""
     $rows = @(
+        (Test-MatrixMarker -Files $files -Id "G-R28-D1" -Pattern "RECOVERY_REATTACH_DEFERRED.*WAITING_FOR_ROUTE|RECOVERY_WAITING.*WAITING_FOR_ROUTE" -ExpectOn @("M01")),
+        (Test-MatrixMarker -Files $files -Id "G-R28-D2" -Pattern "RECOVERY_REATTACH_SENT" -ExpectOn @("M01")),
         (Test-MatrixMarker -Files $files -Id "S13-A1" -Pattern "RECOVERY_REATTACH requested|RECOVERY_REATTACH_REQUESTED" -ExpectOn @("M01")),
         (Test-MatrixMarker -Files $files -Id "S13-A2" -Pattern "RECOVERY_REATTACH_ENQUEUED" -ExpectOn @("M01")),
         (Test-MatrixMarker -Files $files -Id "S13-A3" -Pattern "RECOVERY_REATTACH_SENT" -ExpectOn @("M01")),
@@ -96,8 +101,8 @@ if ($AnalyzeOnly) {
         (Test-MatrixMarker -Files $files -Id "S13-E" -Pattern "RECOVERY_EDGE_RECOVERED" -ExpectOn @("M01", "M02", "M03"))
     )
     $rows | Format-Table -AutoSize
-    Write-Host "Probe detail (M01 send chain):"
-    Select-String -Path $files.M01 -Pattern "RECOVERY_REATTACH_(ENQUEUED|SENT|SEND_FAILED)" -ErrorAction SilentlyContinue |
+    Write-Host "R28 gate (M01):"
+    Select-String -Path $files.M01 -Pattern "RECOVERY_(WAITING|REATTACH_DEFERRED|REATTACH_ENQUEUED|REATTACH_SENT|REATTACH_SEND_FAILED)" -ErrorAction SilentlyContinue |
         ForEach-Object { $_.Line }
     Write-Host ""
     Write-Host "Host inbound (M02):"

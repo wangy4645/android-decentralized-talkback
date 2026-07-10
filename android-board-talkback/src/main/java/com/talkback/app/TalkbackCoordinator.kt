@@ -66,7 +66,9 @@ import com.talkback.core.session.ConferenceEdgeRecoveryController
 import com.talkback.core.session.ConferenceBootstrapDeferral
 import com.talkback.core.session.ConferenceHostEndpointResolver
 import com.talkback.core.session.ConferenceParticipantManager
+import com.talkback.core.session.EdgeReachabilitySnapshot
 import com.talkback.core.session.EdgeRecoveryEligibility
+import com.talkback.core.session.ReattachDispatchOutcome
 import com.talkback.core.session.RecoveryReason
 import com.talkback.core.session.RecoverySource
 import com.talkback.core.session.ConferenceParticipantProjector
@@ -280,16 +282,16 @@ class TalkbackCoordinator(
             scheduler = scheduler,
             onLog = { message -> log(message) },
             onRequestReattach = { sessionId, channelId, remoteModuleId ->
-                var sent = false
+                var outcome = ReattachDispatchOutcome.DEFERRED
                 runOnCoordinatorSync {
                     val session = sessions[sessionId] ?: return@runOnCoordinatorSync
                     val hostId = session.initiatorModuleId?.value ?: return@runOnCoordinatorSync
                     if (remoteModuleId != hostId || isConferenceHostSession(session)) return@runOnCoordinatorSync
                     val hostSessionId = resolveHostSessionIdForChannel(channelId, hostId) ?: return@runOnCoordinatorSync
                     val authority = resolveConferenceHostEndpoint(session, hostId)
-                    sent = sendRecoveryReattachInternal(channelId, authority, hostSessionId)
+                    outcome = dispatchRecoveryReattachOutcome(channelId, authority, hostSessionId)
                 }
-                sent
+                outcome
             },
             onIceRestart = { sessionId, remoteModuleId ->
                 var restarted = false
@@ -3331,27 +3333,130 @@ class TalkbackCoordinator(
         )
     }
 
-    /** Recovery-triggered reattach. Edge Recovery may drop late attempts after cancellation. */
-    private fun sendRecoveryReattachInternal(
+    /** Recovery-triggered reattach with R28 reachability gate (ADR-0022). */
+    private fun dispatchRecoveryReattachOutcome(
         channelId: String,
         authority: EndpointAddress,
         hostSessionId: String
-    ): Boolean {
+    ): ReattachDispatchOutcome {
         if (conferenceEdgeRecoveryController.isSessionCancelled(hostSessionId)) {
             log("RECOVERY_EVENT_DROPPED session=$hostSessionId reason=session_cancelled")
-            return false
+            return ReattachDispatchOutcome.SESSION_CANCELLED
         }
-        return dispatchConferenceRejoinSignal(
-            channelId,
-            authority,
-            hostSessionId,
-            intent = ConferenceJoinIntent.RECOVERY_REATTACH
+        val session = sessions[hostSessionId]
+        val authorityId = authority.moduleId.value
+        val reachability = buildRecoveryEdgeReachabilitySnapshot(channelId, session, authorityId)
+        if (!reachability.canDispatchRecoverySignal()) {
+            val waiting = reachability.dispatchWaitingReason()!!
+            log(
+                "RECOVERY_REATTACH_DEFERRED session=$hostSessionId ch=$channelId to=$authorityId " +
+                    "reason=$waiting ${reachability.formatProbeFields()}"
+            )
+            log(
+                "RECOVERY_WAITING session=$hostSessionId edge=$authorityId reason=$waiting " +
+                    reachability.formatProbeFields()
+            )
+            return ReattachDispatchOutcome.DEFERRED
+        }
+        return executeRecoveryReattachSend(
+            channelId = channelId,
+            authority = authority,
+            hostSessionId = hostSessionId,
+            reachability = reachability
         )
     }
 
-    private fun isRecoveryReattachTransportReady(channelId: String): Boolean {
-        if (stopped) return false
-        return resolveChannelReadiness(channelId) == ChannelReadiness.READY
+    private fun buildRecoveryEdgeReachabilitySnapshot(
+        channelId: String,
+        session: TalkbackSession?,
+        remoteModuleId: String
+    ): EdgeReachabilitySnapshot {
+        val linkReady = !stopped && resolveChannelReadiness(channelId) == ChannelReadiness.READY
+        val peerDiscovered = resolvePeerForModule(remoteModuleId) != null
+        // v1: mesh ICE CONNECTED to remote == signaling/mesh route converged for this edge.
+        val routeConverged = qosMonitor.isGroupConnected(remoteModuleId)
+        val authorityReachable = session?.let { isConferenceAuthorityReachable(it) } ?: false
+        return EdgeReachabilitySnapshot(
+            linkReady = linkReady,
+            peerDiscovered = peerDiscovered,
+            routeConverged = routeConverged,
+            authorityReachable = authorityReachable
+        )
+    }
+
+    private fun executeRecoveryReattachSend(
+        channelId: String,
+        authority: EndpointAddress,
+        hostSessionId: String,
+        reachability: EdgeReachabilitySnapshot
+    ): ReattachDispatchOutcome {
+        val authorityId = authority.moduleId.value
+        val peer = resolvePeerForModule(authorityId) ?: run {
+            log(
+                "RECOVERY_REATTACH_SEND_FAILED session=$hostSessionId ch=$channelId " +
+                    "to=$authorityId err=peer_unreachable ${reachability.formatProbeFields()}"
+            )
+            return ReattachDispatchOutcome.PEER_UNREACHABLE
+        }
+        val local = EndpointAddress(localModuleId, localEndpointId())
+        val hint = lastRejoinableConferenceByChannel[channelId]
+        val hostSession = sessions[hostSessionId]
+        val membershipEpoch = hint?.membershipEpoch
+            ?: hostSession?.rosterEpoch
+            ?: sessions.values.firstOrNull {
+                it.channelId == channelId && it.type == SessionType.CONFERENCE
+            }?.rosterEpoch
+            ?: 0L
+        val request = RecoveryReattachRequest(
+            conferenceId = channelId,
+            hostSessionId = hostSessionId,
+            membershipEpoch = membershipEpoch,
+            endpointId = local.endpointId.value
+        )
+        val payload = request.toRejoinPayload(ConferenceJoinIntent.RECOVERY_REATTACH).encode()
+        val envelope = buildSignedEnvelope(
+            SignalType.CONFERENCE_REJOIN,
+            local,
+            authority,
+            hostSessionId.ifBlank { UUID.randomUUID().toString() },
+            payload
+        )
+        log(
+            "RECOVERY_REATTACH_ENQUEUED session=$hostSessionId ch=$channelId " +
+                "from=${local.moduleId.value} to=$authorityId epoch=$membershipEpoch " +
+                reachability.formatProbeFields()
+        )
+        var sent = false
+        runCatching {
+            signalingChannel.send(peer, envelope)
+        }.onSuccess {
+            sent = true
+            log(
+                "RECOVERY_REATTACH_SENT session=$hostSessionId ch=$channelId to=$authorityId " +
+                    "nonce=${envelope.nonce} ${reachability.formatProbeFields()}"
+            )
+        }.onFailure {
+            log(
+                "RECOVERY_REATTACH_SEND_FAILED session=$hostSessionId ch=$channelId " +
+                    "to=$authorityId err=${it.message} ${reachability.formatProbeFields()}"
+            )
+        }
+        if (!sent) return ReattachDispatchOutcome.SEND_FAILED
+        if (hostSessionId.isNotBlank()) {
+            pendingRejoinByChannel[channelId] = hostSessionId
+        }
+        hostRejoinAttemptByChannel.remove(channelId)
+        cancelHostRejoinRetry(channelId)
+        conferenceRejoinStartedAtByChannel[channelId] = System.currentTimeMillis()
+        sessions.values
+            .filter { it.channelId == channelId && it.type == SessionType.CONFERENCE }
+            .forEach { conferenceReconnectStartedAtBySession[it.id] = System.currentTimeMillis() }
+        log(
+            "RECOVERY_REATTACH requested by ${local.moduleId.value} -> authority " +
+                "${authority.moduleId.value} session=$hostSessionId ch=$channelId " +
+                "epoch=$membershipEpoch endpoint=${local.endpointId.value}"
+        )
+        return ReattachDispatchOutcome.SENT
     }
 
     private fun dispatchConferenceRejoinSignal(
@@ -3360,18 +3465,9 @@ class TalkbackCoordinator(
         hostSessionId: String,
         intent: ConferenceJoinIntent
     ): Boolean {
-        val transportReady = isRecoveryReattachTransportReady(channelId)
         val authorityId = authority.moduleId.value
         val peer = resolvePeerForModule(authorityId) ?: run {
-            if (intent == ConferenceJoinIntent.RECOVERY_REATTACH) {
-                log(
-                    "RECOVERY_REATTACH_SEND_FAILED session=$hostSessionId ch=$channelId " +
-                        "to=$authorityId err=peer_unreachable peerReachable=false " +
-                        "transportReady=$transportReady"
-                )
-            } else {
-                log("Conference rejoin skipped: authority $authorityId not reachable")
-            }
+            log("Conference rejoin skipped: authority $authorityId not reachable")
             return false
         }
         val local = EndpointAddress(localModuleId, localEndpointId())
@@ -3397,29 +3493,7 @@ class TalkbackCoordinator(
             hostSessionId.ifBlank { UUID.randomUUID().toString() },
             payload
         )
-        if (intent == ConferenceJoinIntent.RECOVERY_REATTACH) {
-            log(
-                "RECOVERY_REATTACH_ENQUEUED session=$hostSessionId ch=$channelId " +
-                    "from=${local.moduleId.value} to=$authorityId epoch=$membershipEpoch " +
-                    "peerReachable=true transportReady=$transportReady"
-            )
-            runCatching {
-                signalingChannel.send(peer, envelope)
-            }.onSuccess {
-                log(
-                    "RECOVERY_REATTACH_SENT session=$hostSessionId ch=$channelId to=$authorityId " +
-                        "nonce=${envelope.nonce} peerReachable=true transportReady=$transportReady"
-                )
-            }.onFailure {
-                log(
-                    "RECOVERY_REATTACH_SEND_FAILED session=$hostSessionId ch=$channelId " +
-                        "to=$authorityId err=${it.message} peerReachable=true " +
-                        "transportReady=$transportReady"
-                )
-            }
-        } else {
-            sendSignal(peer, envelope)
-        }
+        sendSignal(peer, envelope)
         if (hostSessionId.isNotBlank()) {
             pendingRejoinByChannel[channelId] = hostSessionId
         }

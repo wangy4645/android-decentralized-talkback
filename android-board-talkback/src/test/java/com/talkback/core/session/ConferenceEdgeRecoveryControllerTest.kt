@@ -32,7 +32,7 @@ class ConferenceEdgeRecoveryControllerTest {
             onLog = { message -> decisionLogs.add(message) },
             onRequestReattach = { _, _, _ ->
                 reattachCalls++
-                true
+                ReattachDispatchOutcome.SENT
             },
             onIceRestart = { _, _ ->
                 iceRestartCalls++
@@ -53,6 +53,46 @@ class ConferenceEdgeRecoveryControllerTest {
         remoteJoined = true,
         conferenceTerminated = false
     )
+
+    @Test
+    fun deferredReattach_keepsRecoveryPending() {
+        controller = ConferenceEdgeRecoveryController(
+            debounceMs = 50L,
+            iceRestartTimeoutMs = 200L,
+            attemptBudgetMs = 500L,
+            clock = { nowMs },
+            scheduler = scheduler,
+            onLog = { message -> decisionLogs.add(message) },
+            onRequestReattach = { _, _, _ ->
+                reattachCalls++
+                ReattachDispatchOutcome.DEFERRED
+            },
+            onIceRestart = { _, _ ->
+                iceRestartCalls++
+                true
+            }
+        )
+        controller.onIceStateChanged(
+            sessionId = "sess-1",
+            channelId = "CH-1",
+            remoteModuleId = "M01",
+            iceState = "DISCONNECTED",
+            eligibility = eligible(),
+            initiatesReattach = true
+        )
+        nowMs = 60L
+        Thread.sleep(80)
+        assertEquals(1, reattachCalls)
+        assertTrue(controller.factsForSession("sess-1").anyRecovering)
+        assertTrue(
+            decisionLogs.any {
+                it.contains("RECOVERY_EDGE_STARTED") && it.contains("initiatesReattach=true")
+            }
+        )
+        assertFalse(
+            decisionLogs.any { it.contains("RECOVERY_REATTACH_REQUESTED") }
+        )
+    }
 
     @Test
     fun participantHostDisconnect_triggersReattachAfterDebounce() {

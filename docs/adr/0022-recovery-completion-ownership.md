@@ -236,8 +236,10 @@ R24 Strategy A (degraded residency) **remains v1 default**; R28 does not authori
 
 1. **P0 docs:** this ADR + audit cross-links (`s13b-recovery-reattach-reachability.md`, `ro-m3-recovery-write-matrix.md`).
 2. **P1 R27′ (implemented 2026-07-10):** `ConferencePresenceProjector` + `TalkbackSessionSnapshot.conferencePresenceProjection`; Meeting pill reads `connectedCount` / `recoveringPeers` — not roster size.
-3. **P1 R28 reachability:** wire four facts into controller; gate dispatch on `canDispatchRecoverySignal`.
-4. **P2:** retire probe-only bools from decision paths; S13→E matrix update in write matrix.
+3. **P1 R28 reachability (implemented 2026-07-10):** `EdgeReachabilitySnapshot` gates `dispatchRecoveryReattachOutcome`; `DEFERRED` → `RECOVERY_PENDING` + `RECOVERY_WAITING(reason)`; v1 `routeConverged = qosMonitor.isGroupConnected(remoteModuleId)`. Soak G-R28-D PASS (`logs-s13b-reattach-reachability-20260710-161257`): no `RECOVERY_REATTACH_SENT` while `routeConverged=false`.
+4. **P2-A completion trigger (seam, not retry):** when edge `state == RECOVERY_PENDING` and `ReachabilitySnapshot` transitions (e.g. `WAITING_FOR_ROUTE` → route converged), controller **MUST re-evaluate** completion — **MUST NOT** hard-code `routeConverged → resend()`.
+5. **P2-B re-evaluate actions:** after re-evaluate, allow `dispatch RECOVERY_REATTACH`, bounded ICE restart, `WAITING_FOR_INBOUND`, or `SUPERSEDED(nextAttempt)` — decision owned by controller, not coordinator resend patch.
+6. **P2 cleanup:** retire probe-only bools from decision paths; S13→E matrix update in write matrix.
 
 ## Soak gates (future)
 

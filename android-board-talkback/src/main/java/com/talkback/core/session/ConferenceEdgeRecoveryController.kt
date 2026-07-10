@@ -22,7 +22,7 @@ class ConferenceEdgeRecoveryController(
         sessionId: String,
         channelId: String,
         remoteModuleId: String
-    ) -> Boolean,
+    ) -> ReattachDispatchOutcome,
     private val onIceRestart: (sessionId: String, remoteModuleId: String) -> Boolean,
     private val onRecoveryStateChanged: (sessionId: String) -> Unit = {}
 ) {
@@ -392,23 +392,34 @@ class ConferenceEdgeRecoveryController(
                 "immediate=$immediate recoveryReason=$recoveryReason"
         )
         if (initiatesReattach) {
-            val sent = onRequestReattach(
-                key.sessionId,
-                channelId,
-                key.remoteModuleId
-            )
-            if (sent) {
-                record.phase = EdgeRecoveryPhase.REATTACH_REQUESTED
-                onLog(
-                    "RECOVERY_REATTACH_REQUESTED session=${key.sessionId} remote=${key.remoteModuleId} " +
-                        "attempt=${record.recoveryAttemptId}"
+            when (
+                val outcome = onRequestReattach(
+                    key.sessionId,
+                    channelId,
+                    key.remoteModuleId
                 )
-            } else {
-                record.phase = EdgeRecoveryPhase.FAILED_MEDIA_RECOVERY
-                onLog(
-                    "FAILED_MEDIA_RECOVERY session=${key.sessionId} remote=${key.remoteModuleId} " +
-                        "reason=reattach_send_failed"
-                )
+            ) {
+                ReattachDispatchOutcome.SENT -> {
+                    record.phase = EdgeRecoveryPhase.REATTACH_REQUESTED
+                    onLog(
+                        "RECOVERY_REATTACH_REQUESTED session=${key.sessionId} remote=${key.remoteModuleId} " +
+                            "attempt=${record.recoveryAttemptId}"
+                    )
+                }
+                ReattachDispatchOutcome.DEFERRED -> {
+                    record.phase = EdgeRecoveryPhase.RECOVERY_PENDING
+                }
+                ReattachDispatchOutcome.SESSION_CANCELLED -> {
+                    cancelEdge(key, "session_cancelled")
+                }
+                ReattachDispatchOutcome.PEER_UNREACHABLE,
+                ReattachDispatchOutcome.SEND_FAILED -> {
+                    record.phase = EdgeRecoveryPhase.FAILED_MEDIA_RECOVERY
+                    onLog(
+                        "FAILED_MEDIA_RECOVERY session=${key.sessionId} remote=${key.remoteModuleId} " +
+                            "reason=reattach_send_failed"
+                    )
+                }
             }
         }
         scheduleWatchdog(record)

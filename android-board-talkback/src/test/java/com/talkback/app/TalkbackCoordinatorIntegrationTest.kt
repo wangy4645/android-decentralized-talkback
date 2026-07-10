@@ -684,29 +684,40 @@ class TalkbackCoordinatorIntegrationTest {
         Thread.sleep(500L)
 
         val m01LogMark = synchronized(nodeM01.logs) { nodeM01.logs.size }
-        val m02LogMark = synchronized(nodeM02.logs) { nodeM02.logs.size }
         nodeM01.runtime.simulateRemoteIceState("M02", "DISCONNECTED")
         assertTrue(
             nodeM01.waitForLogSince(m01LogMark, timeoutMs = 8_000L) {
-                it.contains("RECOVERY_REATTACH_ENQUEUED") &&
+                it.contains("RECOVERY_REATTACH_DEFERRED") &&
                     it.contains("session=$sessionId") &&
                     it.contains("ch=$channelId") &&
-                    it.contains("peerReachable=true")
+                    it.contains("reason=WAITING_FOR_ROUTE") &&
+                    it.contains("routeConverged=false")
             }
         )
         assertTrue(
             nodeM01.waitForLogSince(m01LogMark, timeoutMs = 3_000L) {
-                it.contains("RECOVERY_REATTACH_SENT") &&
-                    it.contains("to=M02") &&
-                    it.contains("transportReady=")
+                it.contains("RECOVERY_WAITING") &&
+                    it.contains("session=$sessionId") &&
+                    it.contains("reason=WAITING_FOR_ROUTE") &&
+                    it.contains("routeConverged=false")
             }
         )
+        val logsDuringDisconnect = synchronized(nodeM01.logs) {
+            nodeM01.logs.drop(m01LogMark)
+        }
+        assertFalse(
+            "reattach must not send while route is not converged (R28-D1)",
+            logsDuringDisconnect.any {
+                it.contains("RECOVERY_REATTACH_SENT") && it.contains("to=M02")
+            }
+        )
+
+        nodeM01.runtime.simulateRemoteIceState("M02", "CONNECTED")
         assertTrue(
-            nodeM02.waitForLogSince(m02LogMark, timeoutMs = 5_000L) {
-                it.contains("RECOVERY_REATTACH_INBOUND") &&
+            nodeM01.waitForLogSince(m01LogMark, timeoutMs = 5_000L) {
+                it.contains("RECOVERY_EDGE_RECOVERED") &&
                     it.contains("session=$sessionId") &&
-                    it.contains("from=M01") &&
-                    it.contains("epoch=")
+                    it.contains("remote=M02")
             }
         )
     }
