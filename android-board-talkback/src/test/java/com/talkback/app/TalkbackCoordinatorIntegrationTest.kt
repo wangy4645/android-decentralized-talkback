@@ -556,6 +556,60 @@ class TalkbackCoordinatorIntegrationTest {
     }
 
     @Test
+    fun conference_s17_staleChannelTombstone_mustNotBlockRecovery() {
+        val channelId = "CONF-S17-TOMBSTONE"
+        val priorSessionId = nodeM03.runtime.requireConferenceCall(
+            nodeM03.localEndpoint,
+            listOf(EndpointAddress(m01, EndpointId("E01"))),
+            channelId
+        )
+        assertTrue(nodeM01.waitForLog { it.contains("Conference invite accepted") || it.contains("invite accepted") })
+        Thread.sleep(3_500L)
+        nodeM03.runtime.hangup(priorSessionId)
+        Thread.sleep(1_500L)
+        assertTrue(
+            nodeM01.waitForLog(timeoutMs = 5_000L) {
+                it.contains("CONFERENCE_TERMINATED ch=$channelId") && it.contains("clearRejoinState=true")
+            }
+        )
+
+        nodeM02.runtime.requireConferenceCall(
+            nodeM02.localEndpoint,
+            listOf(EndpointAddress(m01, EndpointId("E01"))),
+            channelId
+        )
+        assertTrue(nodeM01.waitForLog { it.contains("Conference invite accepted") || it.contains("invite accepted") })
+        Thread.sleep(500L)
+        nodeM01.runtime.simulateRemoteIceState("M02", "CONNECTED")
+        Thread.sleep(300L)
+
+        val m01LogMark = synchronized(nodeM01.logs) { nodeM01.logs.size }
+        nodeM01.runtime.simulateRemoteIceState("M02", "DISCONNECTED")
+        Thread.sleep(4_000L)
+        assertTrue(
+            nodeM01.waitForLogSince(m01LogMark, timeoutMs = 5_000L) {
+                (it.contains("RECOVERY_DECISION") && it.contains("approved=true")) ||
+                    (it.contains("Conference host ICE DISCONNECTED") &&
+                        it.contains("edge recovery active for M02")) ||
+                    it.contains("RECOVERY_EDGE_STARTED")
+            }
+        )
+        assertFalse(
+            nodeM01.waitForLogSince(m01LogMark, timeoutMs = 1_000L) {
+                it.contains("trigger=SESSION_CANCELLED") &&
+                    it.contains("rejectReason=session_cancelled")
+            }
+        )
+        assertFalse(
+            nodeM01.waitForLogSince(m01LogMark, timeoutMs = 1_000L) {
+                it.contains("RECOVERY_EVENT_DROPPED") &&
+                    (it.contains("reason=session_cancelled") || it.contains("reason=channel_cancelled"))
+            }
+        )
+        assertEquals(1, nodeM01.runtime.activeSessionIds().size)
+    }
+
+    @Test
     fun conference_channelTombstone_doesNotBlockRejoinHintWhenNewHostAlive() {
         val channelId = "CONF-TOMBSTONE-REJOIN"
         val priorSessionId = nodeM03.runtime.requireConferenceCall(

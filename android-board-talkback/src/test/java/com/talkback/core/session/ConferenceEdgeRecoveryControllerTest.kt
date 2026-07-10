@@ -137,7 +137,8 @@ class ConferenceEdgeRecoveryControllerTest {
     }
 
     @Test
-    fun terminationCancelsPendingRecovery() {
+    fun sessionCancellation_blocksRecovery() {
+        controller.cancelSession("sess-1", "local_hangup")
         controller.onIceStateChanged(
             sessionId = "sess-1",
             channelId = "CH-1",
@@ -146,11 +147,41 @@ class ConferenceEdgeRecoveryControllerTest {
             eligibility = eligible(),
             initiatesReattach = true
         )
-        controller.cancelChannel("CH-1", "CONFERENCE_TERMINATED")
         nowMs = 100L
         Thread.sleep(80)
         assertEquals(0, reattachCalls)
         assertFalse(controller.factsForSession("sess-1").anyRecovering)
+        assertTrue(
+            decisionLogs.any {
+                it.contains("rejectReason=session_cancelled") &&
+                    it.contains("approved=false")
+            }
+        )
+    }
+
+    @Test
+    fun staleChannelTombstone_doesNotBlockRecovery() {
+        controller.cancelChannel("CH-1", "remote_hangup")
+        controller.onIceStateChanged(
+            sessionId = "sess-1",
+            channelId = "CH-1",
+            remoteModuleId = "M01",
+            iceState = "DISCONNECTED",
+            eligibility = eligible(),
+            initiatesReattach = true
+        )
+        nowMs = 60L
+        Thread.sleep(80)
+        assertEquals(1, reattachCalls)
+        assertTrue(controller.factsForSession("sess-1").anyRecovering)
+        assertTrue(
+            decisionLogs.any {
+                it.contains("RECOVERY_DECISION") &&
+                    it.contains("approved=true") &&
+                    !it.contains("rejectReason=session_cancelled")
+            }
+        )
+        assertFalse(decisionLogs.any { it.contains("reason=session_cancelled") })
     }
 
     @Test

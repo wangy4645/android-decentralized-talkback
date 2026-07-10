@@ -2175,7 +2175,6 @@ class TalkbackCoordinator(
         session: TalkbackSession,
         remoteModuleId: String
     ): EdgeRecoveryEligibility {
-        val channelId = session.channelId
         val left = conferenceParticipantManager.leftMemberEndpoints(session.id)?.keys
             ?: session.leftMemberEndpoints.keys
         val localJoined = session.accepted && localModuleId.value !in left
@@ -2189,8 +2188,7 @@ class TalkbackCoordinator(
             lifecycleEstablished = session.accepted && isMeetingStartTransitionReady(session),
             localJoined = localJoined,
             remoteJoined = remoteJoined,
-            conferenceTerminated = channelId != null &&
-                conferenceEdgeRecoveryController.isChannelCancelled(channelId)
+            conferenceTerminated = conferenceEdgeRecoveryController.isSessionCancelled(session.id)
         )
     }
 
@@ -3312,8 +3310,8 @@ class TalkbackCoordinator(
         authority: EndpointAddress,
         hostSessionId: String
     ): Boolean {
-        if (conferenceEdgeRecoveryController.isChannelCancelled(channelId)) {
-            log("RECOVERY_EVENT_DROPPED ch=$channelId reason=channel_cancelled")
+        if (conferenceEdgeRecoveryController.isSessionCancelled(hostSessionId)) {
+            log("RECOVERY_EVENT_DROPPED session=$hostSessionId reason=session_cancelled")
             return false
         }
         return dispatchConferenceRejoinSignal(

@@ -1,13 +1,13 @@
 # RO-M3 Recovery Write Matrix（审计草案）
 
-**状态**：Draft（2026-07-10）— PR-A 已落地；R20–R24 + Gate-R1；WM-R5 Guardrail  
+**状态**：Draft（2026-07-10）— R20–R25 + Gate-R1/R24A；WM-R5/R6 Guardrail  
 **目的**：冻结各事实域的 **Single Writer**，标出 #73 Edge Recovery 集成后可能 **越权写入** 的 callsite。  
 **配套**：ADR-0021（Edge Recovery Lifecycle）、本文件 §4 T3 复现与 grep 模板。  
 **原则**：PR-A 只恢复依赖方向；#73 先观测（RECOVERY_DECISION + S16）再改 Eligibility / Attempt。
 
 ---
 
-## 0. 冻结不变量（WM-R1 – WM-R5）
+## 0. 冻结不变量（WM-R1 – WM-R6）
 
 | ID | 规则 |
 |----|------|
@@ -16,6 +16,7 @@
 | **WM-R3** | Recovery Commands may consume Conference Facts；Conference Facts **must not** consume Recovery Commands |
 | **WM-R4** | **Membership Plane** emits `RejoinIntent` only；**Connectivity Plane** owns Recovery approval. Planes read facts; neither issues the other's commands (ADR-0021 R21) |
 | **WM-R5** | **`FAILED_MEDIA_RECOVERY` Guardrail（防护约束，非本轮根因）**：不得删除 `ConferenceSession`；不得触发 Lifecycle transition；不得改 Membership。只允许 `edge.state = FAILED*`。**本 soak：未违反**（R1-B = Host `MEETING_ENDED`）。见 ADR-0021 **R24** |
+| **WM-R6** | **False termination Guardrail（R25 P0）**：Connectivity facts（`NETWORK_LOSS` / `ICE_FAILED` / `TRANSPORT_LOST`）**不得**写入 `SESSION_CANCELLED`、`CONFERENCE_TERMINATED`、`channel_cancelled` / tombstone。只允许 `edge.state = RECOVERING` 或 `FAILED_MEDIA_RECOVERY*`。**R24A soak：tombstone 生命周期 bug** — 合法 `remote_hangup` tombstone 未在新 session clear，Recovery 误读。见 `docs/audit/r25-false-conference-termination.md` |
 
 ### 双平面（冻结 2026-07-09）
 
@@ -195,8 +196,16 @@ ICE_CONNECTED 后 5s 内必须二选一：
 
 | 阶段 | 判定 | 说明 |
 |------|------|------|
-| `10:15:06` | **R1-A / P0** | `FAILED_MEDIA_RECOVERY` → `edgeRecovering=false` + `hostIce=FAILED` → `CONNECTING`；HELLO 恢复后仍 `Deferring … host link` — **owner vacuum**（ADR R24） |
-| `10:17:09–12` | **R1-B（后果，非根因）** | Host `leaveConferenceInternal` → `MEETING_ENDED` → MISSING；**≠** Recovery 删 Session；**WM-R5 本轮未违反** |
+| `10:15:06` | **R1-A / R24** | `FAILED_MEDIA_RECOVERY` → owner vacuum → **R24-A 已修**（recovery 跑完怎么办） |
+| `10:17:09–12` | **R1-B（后果，非根因）** | Host Leave → MISSING；**WM-R5 本轮未违反** |
+
+#### Gate-R1-R24A soak 结论（`logs-gate-r1-r24a-20260710-104756`，M03 host，M01 WiFi）
+
+| 阶段 | 判定 | 说明 |
+|------|------|------|
+| M03→M02 recovery timeout | **R24-A OK** | `edgeRecoveryFailed=true` + `conferenceDegraded=true` + `phase=ACTIVE` |
+| M01 WiFi loss `40f26355` | **R25 / P0** | tombstone from `10:51:01 remote_hangup` + 新 session 未 clear → Recovery blocked。详见 `docs/audit/r25-false-conference-termination.md` |
+| M02 `visible=3` vs M03 `visible=2` | **P2** | Host roster 正确；participant projection 滞后 — 不阻塞 R25 |
 
 实现：`ConferenceAuditTimelineLog.kt` + `TalkbackCoordinator` 挂钩；`RECOVERY_DECISION` 在 `ConferenceEdgeRecoveryController`。
 
@@ -204,12 +213,11 @@ ICE_CONNECTED 后 5s 内必须二选一：
 
 ## 6. 本阶段禁止项
 
-- 不 merge #73 行为修复（Eligibility / Rejoin≠Reattach）直到第二轮 soak 用 `RECOVERY_DECISION` 证实假设
-- 不加 S3「>10s 强制 restart」类 patch — **S3 = Host Link Bootstrap Optimization**，与 #73 脱钩
-- **R24 v1 = Strategy A only**；禁止 `FAILED_MEDIA_RECOVERY → HostLinkBootstrap.resume()`（Strategy B 未证明 mid-call ownership / budget / 无 ping-pong 前不做）
-- 不用 Projection 掩盖 `authority=false`；但 **允许** Projection 在 `edge.state=FAILED*` 时保持 `ACTIVE + degraded`（这是 R24-A 的合法输出，不是掩盖）
-- 不把本 soak 的 R1-B 记成 Recovery 越权根因
-- 不堆 Recovery 功能；先拿 `RECOVERY_DECISION` + S16 证明 Write Matrix 标红项；**下一步 P0 = 落地 R24 Strategy A**
+- 不 merge #73 行为修复（Eligibility / Rejoin≠Reattach）直到 `RECOVERY_DECISION` 证实假设
+- **R24 v1 = Strategy A only**（已落地）；禁止 Strategy B handoff 未证明前上线
+- **禁止 P0-A″**：`hostIce=FAILED` + debounce → 强制 `ACTIVE+degraded`（会掩盖 R25 false termination）
+- **R25A 已落地**：Recovery 解耦 `isChannelCancelled`；**不做** `clearChannelCancellation`（留 R25B）
+- **R25 根因未明前**：禁止再改 CONNECTING / ACTIVE 投影规则（CONNECTING 可能是正确后果）
 
 ---
 
@@ -217,21 +225,21 @@ ICE_CONNECTED 后 5s 内必须二选一：
 
 | 步 | 内容 | 验证 |
 |----|------|------|
-| 1 | **Commit PR-A** | S15A/B PASS |
-| 2 | **RECOVERY_DECISION + S16** | soak 可见 `approved` / `terminationReason` |
-| 3 | Recovery Eligibility + `TerminationReason` gate | S16 PASS；无 `USER_LEAVE → approved=true` |
-| 4 | Rejoin ≠ `RECOVERY_REATTACH`；Attempt 生命周期 | B2 无声/Connecting 消失 |
-| 5 | **Phase A/B**：USER_REJOIN 移出 Recovery 输入域；S17 | `JOIN_RESTORE_STARTED`；零 `USER_REJOIN approved=true` |
-| **6** | **P0：R24 Strategy A（degraded residency）** — timeout 后 `ACTIVE+degraded`；禁 `CONNECTING` / 禁 bootstrap / 禁 auto ICE restart | **落地**：`conferenceDegraded` + `anyFailedMediaRecovery`；`ConferenceBootstrapDeferral` 跳过会中 residency；Gate-R1 soak 待复验 |
-| 7 | **WM-R5** 断言/门禁（Guardrail） | `FAILED_MEDIA_RECOVERY` 后无 `sessions.remove` / Lifecycle |
-| 8 | **Host Link Bootstrap / R24-B**（独立；须先证明 mid-call ownership） | 未开；防 Recovery↔bootstrap ping-pong |
-| — | Issue1 Host LIVE（ADR-0020） | **冻结** |
-| — | M03 `visible=3` Projection | **P2** |
+| 1–5 | PR-A / RECOVERY_DECISION / Phase A/B | 已完成 |
+| **6** | **R24 Strategy A** | **已落地**（`53fe19f`）；recovery timeout → `ACTIVE+conferenceDegraded` |
+| **7** | **PR-R25A** — Recovery 解耦 channel tombstone | **已落地**；S17 PASS |
+| 8 | **R25B session-scoped CancellationToken** | tombstone key = `(channelId, sessionId, generation)` |
+| 9 | **WM-R6** 断言/门禁 | Connectivity loss 不 tombstone channel（Recovery 侧已解耦） |
+| 9 | **WM-R5** Guardrail | `FAILED_MEDIA_RECOVERY` 后无 lifecycle 越权 |
+| — | Host Link Bootstrap / R24-B | 冻结 |
+| — | Issue1 Host LIVE | 冻结 |
+| — | M02 `visible=3` vs host `visible=2` | **P2**（roster ∩ presence） |
 
 ---
 
 ## 8. 参考文件
 
+- `docs/audit/r25-false-conference-termination.md` — R25 写入链 + 升级矩阵
 - `android-board-talkback/.../ConferenceEdgeRecoveryController.kt`
 - `android-board-talkback/.../TalkbackCoordinator.kt`（`conferenceEdgeRecoveryController` lazy 块）
 - `docs/adr/0021-conference-edge-recovery-lifecycle.md`

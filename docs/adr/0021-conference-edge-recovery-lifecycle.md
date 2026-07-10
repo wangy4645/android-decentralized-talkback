@@ -371,6 +371,64 @@ Recovery to delete `ConferenceSession` (see Write Matrix **WM-R5** Guardrail).
 `leaveConferenceInternal` / `MEETING_ENDED` — **not** Recovery deleting the session. Do not treat
 that R1-B as R24 / WM-R5 violation evidence.
 
+### R25 — False Conference Termination (frozen 2026-07-10)
+
+**P0 (Gate-R1-R24A soak `logs-gate-r1-r24a-20260710-104756`, session `40f26355`, M03 host):**
+M01 local WiFi loss produced:
+
+```text
+RECOVERY_DECISION trigger=SESSION_CANCELLED terminationReason=CONFERENCE_TERMINATED
+rejectReason=session_or_channel_cancelled
+RECOVERY_EVENT_DROPPED reason=cancelled
+```
+
+Conference was **not** host-terminated; Recovery was **forbidden to start**. Participant UI
+`CONNECTING` is a **consequence**, not the root cause. Misclassification:
+
+```text
+NETWORK_LOSS  →  (wrong) CONFERENCE_TERMINATED / SESSION_CANCELLED
+```
+
+**Forbidden:**
+
+```text
+Local WiFi / transport loss / ICE loss on participant device
+    ↓
+SESSION_CANCELLED
+    ↓
+CONFERENCE_TERMINATED (for Recovery eligibility)
+    ↓
+Recovery never starts (edgeRecoveryFailed stays false)
+```
+
+**CONFERENCE_TERMINATED / channel tombstone / SESSION_CANCELLED MAY be written only when:**
+
+```text
+Host explicit hangup (lifecycle authority)
+OR membership removed / USER_LEAVE committed
+OR conference authority ended (remote MEETING_ENDED, host leave for all)
+```
+
+Connectivity plane **MUST NOT** promote network loss to lifecycle termination (see Write Matrix
+**WM-R6**). Allowed connectivity outputs on loss: `edge.state = RECOVERING` or
+`edge.state = FAILED_MEDIA_RECOVERY` (after bounded attempt).
+
+**Rejected workaround (do not ship):** P0-A″ — projecting `ACTIVE + degraded` when
+`hostIce=FAILED` + debounce without `edgeRecoveryFailed`. That masks false termination and mixes
+`SESSION_CANCELLED` with `NETWORK_LOSS`; harder to debug than current `CONNECTING`.
+
+**Investigation target:** identify the callsite that sets `cancelChannel` / `cancelSession` /
+`isChannelCancelled` on local network loss while `ConferenceSession` remains ESTABLISHED.
+
+**Gate-R1-R24A finding (2026-07-10):** root cause is **not** connectivity writing tombstone — it is
+**stale channel tombstone** from prior `remote_hangup` (`10:51:01`) surviving into new session
+`40f26355` (`10:51:29`) because `acceptGroupInvite` does not clear `cancelledChannels`. Recovery
+still consumes `isChannelCancelled` (Rejoin path was fixed in PR-A). See
+`docs/audit/r25-false-conference-termination.md`.
+
+Complements R14 (termination dominates recovery), R21 (planes), R24 (recovery **after** attempt ends).
+R24 fixes *recovery completion*; R25 fixes *recovery admission*.
+
 ## #73 v1 Edge Recovery FSM
 
 ```text
@@ -488,6 +546,7 @@ JOIN_RESTORE_STARTED
 - #73 v1 completion definition: **JOINED participant, brief connectivity loss, auto recovery via REATTACH + 1 ICE restart, no user re-enter.**
 - **R24 (P0):** attempt end **MUST** leave either degraded ownership or explicit HostLinkBootstrap handoff — never an owner vacuum that projects as mid-meeting `CONNECTING`.
 - **R24-A v1 shipped:** `EdgeRecoveryFacts.anyFailedMediaRecovery` + `ConferenceRuntimeState.conferenceDegraded`; projector keeps `ACTIVE`; bootstrap deferral skipped while recovering/failed.
+- **R25 (P0 open):** stale channel tombstone misread as conference termination — **PR-R25A** decouples Recovery from `isChannelCancelled`; **R25B** session-scoped token. See `docs/audit/r25-false-conference-termination.md`.
 
 ## References
 

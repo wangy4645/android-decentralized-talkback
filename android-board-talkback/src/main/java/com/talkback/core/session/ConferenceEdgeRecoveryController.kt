@@ -79,7 +79,7 @@ class ConferenceEdgeRecoveryController(
         eligibility: EdgeRecoveryEligibility,
         initiatesReattach: Boolean
     ) {
-        if (isSessionCancelled(sessionId) || isChannelCancelled(channelId)) {
+        if (isSessionCancelled(sessionId)) {
             logRecoveryDecision(
                 sessionId = sessionId,
                 edge = remoteModuleId,
@@ -88,10 +88,10 @@ class ConferenceEdgeRecoveryController(
                 terminationReason = RecoveryTerminationReason.CONFERENCE_TERMINATED,
                 policy = RecoveryDecisionPolicy.NO_RECOVERY,
                 approved = false,
-                rejectReason = "session_or_channel_cancelled",
+                rejectReason = "session_cancelled",
                 attempt = edges[ConferenceEdgeKey(sessionId, remoteModuleId)]?.recoveryAttemptId
             )
-            onLog("RECOVERY_EVENT_DROPPED session=$sessionId remote=$remoteModuleId reason=cancelled")
+            onLog("RECOVERY_EVENT_DROPPED session=$sessionId remote=$remoteModuleId reason=session_cancelled")
             return
         }
         val key = ConferenceEdgeKey(sessionId, remoteModuleId)
