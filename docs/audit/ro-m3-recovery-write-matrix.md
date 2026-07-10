@@ -264,7 +264,7 @@ ICE_CONNECTED 后 5s 内必须二选一：
 | **7** | **PR-R25A** — Recovery 解耦 channel tombstone | **已落地**；S17 PASS |
 | **8** | **PR-R26A** — Recovery ownership window guard | **已落地** `ab73ad8`；S18 PASS |
 | **9** | **R28 reachability gate** — `EdgeReachabilitySnapshot` + DEFERRED/WAITING | **已落地** `baf393b`；G-R28-D PASS |
-| 10 | **P2-A** — completion re-evaluate seam | 见 `docs/audit/p2a-completion-re-evaluate-seam.md` |
+| 10 | **P2-A** — completion re-evaluate seam (R28-E/F/G) | **Frozen** — `p2a-completion-re-evaluate-seam.md` Accepted; code pending |
 | 11 | **P2-B** — re-evaluate 动作决策树 | S13-E / INBOUND |
 | 12 | **R25B session-scoped CancellationToken** | tombstone key = `(channelId, sessionId, generation)` |
 | 13 | **WM-R6** 断言/门禁 | Connectivity loss 不 tombstone channel（Recovery 侧已解耦） |
