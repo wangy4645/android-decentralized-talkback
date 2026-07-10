@@ -330,5 +330,117 @@ class ConferenceEdgeRecoveryControllerTest {
         assertTrue(facts.anyFailedMediaRecovery)
         assertTrue(facts.failedRemoteModuleIds.contains("M01"))
         assertTrue(decisionLogs.any { it.contains("FAILED_MEDIA_RECOVERY") && it.contains("attempt_timeout") })
+        assertTrue(decisionLogs.any { it.contains("RECOVERY_FINAL_EVALUATION") && it.contains("reason=ATTEMPT_TIMEOUT") })
+    }
+
+    @Test
+    fun deferredReattach_iceConnected_blocked_emitsReevaluateOnCapabilityChange() {
+        controller = ConferenceEdgeRecoveryController(
+            debounceMs = 50L,
+            iceRestartTimeoutMs = 200L,
+            attemptBudgetMs = 500L,
+            clock = { nowMs },
+            scheduler = scheduler,
+            onLog = { message -> decisionLogs.add(message) },
+            onRequestReattach = { _, _, _ ->
+                reattachCalls++
+                ReattachDispatchOutcome.DEFERRED
+            },
+            onIceRestart = { _, _ ->
+                iceRestartCalls++
+                true
+            }
+        )
+        controller.onIceStateChanged(
+            sessionId = "sess-1",
+            channelId = "CH-1",
+            remoteModuleId = "M01",
+            iceState = "DISCONNECTED",
+            eligibility = eligible(),
+            initiatesReattach = true
+        )
+        nowMs = 60L
+        Thread.sleep(80)
+        controller.onIceConnected("sess-1", "M01")
+        assertTrue(controller.factsForSession("sess-1").anyRecovering)
+        assertFalse(decisionLogs.any { it.contains("RECOVERY_EDGE_RECOVERED") })
+
+        val snapshot = EdgeReachabilitySnapshot(
+            linkReady = true,
+            peerDiscovered = true,
+            routeConverged = true,
+            authorityReachable = false
+        )
+        val before = RecoveryCapabilitySignature(
+            permittedActions = emptySet(),
+            waitingReason = RecoveryWaitingReason.WAITING_FOR_ROUTE
+        )
+        val after = projectRecoveryCapabilitySignature(
+            snapshot,
+            initiatesReattach = true,
+            controlPlaneStarted = false
+        )
+        controller.onRecoveryReachabilityChanged(
+            sessionId = "sess-1",
+            channelId = "CH-1",
+            remoteModuleId = "M01",
+            snapshot = snapshot,
+            signature = after,
+            capabilityBefore = before,
+            trigger = RecoveryReevaluateTrigger.ROUTE_CONVERGED
+        )
+        assertTrue(
+            decisionLogs.any {
+                it.contains("RECOVERY_REEVALUATE") &&
+                    it.contains("trigger=ROUTE_CONVERGED") &&
+                    it.contains("controlPlaneStarted=false")
+            }
+        )
+        assertFalse(decisionLogs.any { it.contains("RECOVERY_EDGE_RECOVERED") })
+    }
+
+    @Test
+    fun failedMediaRecovery_materialTransition_emitsReevaluate() {
+        controller.onIceStateChanged(
+            sessionId = "sess-1",
+            channelId = "CH-1",
+            remoteModuleId = "M01",
+            iceState = "FAILED",
+            eligibility = eligible(),
+            initiatesReattach = true
+        )
+        Thread.sleep(350)
+        assertTrue(controller.factsForSession("sess-1").anyFailedMediaRecovery)
+
+        val snapshot = EdgeReachabilitySnapshot(
+            linkReady = true,
+            peerDiscovered = true,
+            routeConverged = true,
+            authorityReachable = false
+        )
+        val before = RecoveryCapabilitySignature(
+            permittedActions = emptySet(),
+            waitingReason = RecoveryWaitingReason.WAITING_FOR_ROUTE
+        )
+        val after = projectRecoveryCapabilitySignature(
+            snapshot,
+            initiatesReattach = true,
+            controlPlaneStarted = false
+        )
+        controller.onRecoveryReachabilityChanged(
+            sessionId = "sess-1",
+            channelId = "CH-1",
+            remoteModuleId = "M01",
+            snapshot = snapshot,
+            signature = after,
+            capabilityBefore = before,
+            trigger = RecoveryReevaluateTrigger.ROUTE_CONVERGED
+        )
+        assertTrue(decisionLogs.any { it.contains("RECOVERY_REEVALUATE") })
+        assertTrue(
+            decisionLogs.any {
+                it.contains("decision=SUPERSEDED") || it.contains("decision=EVALUATE_STUB")
+            }
+        )
     }
 }

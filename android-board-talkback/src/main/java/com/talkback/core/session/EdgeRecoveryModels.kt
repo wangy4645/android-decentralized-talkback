@@ -66,7 +66,18 @@ internal data class EdgeRecoveryRecord(
     var epochRefreshUsed: Boolean = false,
     var iceRestartIssued: Boolean = false,
     var initiatesReattach: Boolean = false
-)
+) {
+    /** True once attempt crossed the control-plane boundary (ADR-0022 R28-E). */
+    fun controlPlaneStarted(): Boolean = when (phase) {
+        EdgeRecoveryPhase.REATTACH_REQUESTED,
+        EdgeRecoveryPhase.REATTACH_ACCEPTED,
+        EdgeRecoveryPhase.ICE_RESTARTING -> true
+        else -> false
+    }
+
+    fun edgeObligationOpen(): Boolean =
+        phase.isActivelyRecovering() || phase.isFailedMediaRecovery()
+}
 
 /**
  * Connectivity event that reached the recovery controller (ADR-0021 R20).

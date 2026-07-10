@@ -59,6 +59,40 @@ class ConferenceEdgeRecoveryController(
         return record.phase.isActivelyRecovering()
     }
 
+    /** Whether current attempt crossed the control-plane boundary (ADR-0022 R28-E). */
+    fun isControlPlaneStarted(sessionId: String, remoteModuleId: String): Boolean {
+        val record = edges[ConferenceEdgeKey(sessionId, remoteModuleId)] ?: return false
+        return record.controlPlaneStarted()
+    }
+
+    /**
+     * Capability materiality notification from Coordinator (ADR-0022 R28-G).
+     * Fact writers MUST NOT call this — only [TalkbackCoordinator] after signature comparison.
+     */
+    fun onRecoveryReachabilityChanged(
+        sessionId: String,
+        channelId: String,
+        remoteModuleId: String,
+        snapshot: EdgeReachabilitySnapshot,
+        signature: RecoveryCapabilitySignature,
+        capabilityBefore: RecoveryCapabilitySignature?,
+        trigger: RecoveryReevaluateTrigger
+    ) {
+        val key = ConferenceEdgeKey(sessionId, remoteModuleId)
+        val record = edges[key] ?: return
+        if (!record.edgeObligationOpen()) return
+        val controlPlane = record.controlPlaneStarted()
+        onLog(
+            "RECOVERY_REEVALUATE session=$sessionId edge=$remoteModuleId " +
+                "attempt=${record.recoveryAttemptId} trigger=$trigger " +
+                "capabilityBefore=${capabilityBefore?.formatCapabilityLabel() ?: "NONE"} " +
+                "capabilityAfter=${signature.formatCapabilityLabel()} " +
+                "controlPlaneStarted=$controlPlane"
+        )
+        runCompletionEvaluationStub(record, snapshot, signature, trigger)
+        notifyChanged(sessionId)
+    }
+
     fun isChannelCancelled(channelId: String): Boolean {
         val expiresAt = cancelledChannels[channelId] ?: return false
         if (clock() > expiresAt) {
@@ -295,14 +329,21 @@ class ConferenceEdgeRecoveryController(
             record.phase = EdgeRecoveryPhase.CONNECTED
             return
         }
+        // R28-E: media edge restored MUST NOT imply recovery edge completed before control-plane.
+        if (!record.controlPlaneStarted()) return
+        markRecovered(record)
+    }
+
+    private fun markRecovered(record: EdgeRecoveryRecord) {
+        val key = record.key
         cancelDebounce(key)
         cancelWatchdog(key)
         record.phase = EdgeRecoveryPhase.RECOVERED
         onLog(
-            "RECOVERY_EDGE_RECOVERED session=$sessionId remote=$remoteModuleId " +
+            "RECOVERY_EDGE_RECOVERED session=${key.sessionId} remote=${key.remoteModuleId} " +
                 "attempt=${record.recoveryAttemptId}"
         )
-        notifyChanged(sessionId)
+        notifyChanged(key.sessionId)
     }
 
     fun cancelSession(sessionId: String, reason: String) {
@@ -465,6 +506,15 @@ class ConferenceEdgeRecoveryController(
         val future = scheduler.schedule({
             val current = edges[key] ?: return@schedule
             if (current.phase.isActivelyRecovering()) {
+                onLog(
+                    "RECOVERY_FINAL_EVALUATION session=${key.sessionId} edge=${key.remoteModuleId} " +
+                        "attempt=${current.recoveryAttemptId} reason=ATTEMPT_TIMEOUT " +
+                        "controlPlaneStarted=${current.controlPlaneStarted()}"
+                )
+                onLog(
+                    "RECOVERY_DECISION session=${key.sessionId} edge=${key.remoteModuleId} " +
+                        "attempt=${current.recoveryAttemptId} decision=ATTEMPT_TIMEOUT approved=false"
+                )
                 current.phase = EdgeRecoveryPhase.FAILED_MEDIA_RECOVERY
                 onLog(
                     "FAILED_MEDIA_RECOVERY session=${key.sessionId} remote=${key.remoteModuleId} " +
@@ -597,5 +647,49 @@ class ConferenceEdgeRecoveryController(
                 "recoveryReason=$recoveryReason terminationReason=$terminationReason " +
                 "policy=$policy approved=$approved $attemptPart$rejectPart"
         )
+    }
+
+    /** P2-A evaluation stub — full decision tree deferred to P2-B (ADR-0022 R28-C). */
+    private fun runCompletionEvaluationStub(
+        record: EdgeRecoveryRecord,
+        snapshot: EdgeReachabilitySnapshot,
+        signature: RecoveryCapabilitySignature,
+        trigger: RecoveryReevaluateTrigger
+    ) {
+        if (record.controlPlaneStarted() && snapshot.canCompleteRecovery()) {
+            markRecovered(record)
+            onLog(
+                "RECOVERY_DECISION session=${record.key.sessionId} edge=${record.key.remoteModuleId} " +
+                    "attempt=${record.recoveryAttemptId} trigger=$trigger decision=RECOVERED approved=true"
+            )
+            return
+        }
+        signature.waitingReason?.let { reason ->
+            onLog(
+                "RECOVERY_WAITING session=${record.key.sessionId} edge=${record.key.remoteModuleId} " +
+                    "reason=$reason ${snapshot.formatProbeFields()}"
+            )
+        }
+        if (record.phase.isFailedMediaRecovery() && signature.permittedActions.isNotEmpty()) {
+            supersedeAttempt(record)
+            onLog(
+                "RECOVERY_DECISION session=${record.key.sessionId} edge=${record.key.remoteModuleId} " +
+                    "attempt=${record.recoveryAttemptId} trigger=$trigger decision=SUPERSEDED approved=true"
+            )
+            return
+        }
+        onLog(
+            "RECOVERY_DECISION session=${record.key.sessionId} edge=${record.key.remoteModuleId} " +
+                "attempt=${record.recoveryAttemptId} trigger=$trigger decision=EVALUATE_STUB approved=true"
+        )
+    }
+
+    private fun supersedeAttempt(record: EdgeRecoveryRecord) {
+        record.phase = EdgeRecoveryPhase.RECOVERY_PENDING
+        record.recoveryAttemptId = ++attemptSeq
+        record.iceRestartIssued = false
+        record.epochRefreshUsed = false
+        record.recoveryStartedAtMs = clock()
+        scheduleWatchdog(record)
     }
 }

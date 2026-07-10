@@ -715,6 +715,18 @@ class TalkbackCoordinatorIntegrationTest {
         nodeM01.runtime.simulateRemoteIceState("M02", "CONNECTED")
         assertTrue(
             nodeM01.waitForLogSince(m01LogMark, timeoutMs = 5_000L) {
+                it.contains("RECOVERY_REEVALUATE") &&
+                    it.contains("session=$sessionId") &&
+                    it.contains("edge=M02") &&
+                    it.contains("controlPlaneStarted=false")
+            }
+        )
+        val logsAfterReconnect = synchronized(nodeM01.logs) {
+            nodeM01.logs.drop(m01LogMark)
+        }
+        assertFalse(
+            "ICE reconnect before control-plane MUST NOT shortcut to RECOVERED (R28-E)",
+            logsAfterReconnect.any {
                 it.contains("RECOVERY_EDGE_RECOVERED") &&
                     it.contains("session=$sessionId") &&
                     it.contains("remote=M02")

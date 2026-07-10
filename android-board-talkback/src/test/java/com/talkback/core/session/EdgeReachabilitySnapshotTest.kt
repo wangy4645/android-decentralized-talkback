@@ -43,4 +43,48 @@ class EdgeReachabilitySnapshotTest {
         )
         assertTrue(snap.canCompleteRecovery())
     }
+
+    @Test
+    fun capability_participant_routeBlocked_thenConverged_isMaterial() {
+        val blocked = projectRecoveryCapabilitySignature(
+            EdgeReachabilitySnapshot(
+                linkReady = true,
+                peerDiscovered = true,
+                routeConverged = false,
+                authorityReachable = true
+            ),
+            initiatesReattach = true,
+            controlPlaneStarted = false
+        )
+        val converged = projectRecoveryCapabilitySignature(
+            EdgeReachabilitySnapshot(
+                linkReady = true,
+                peerDiscovered = true,
+                routeConverged = true,
+                authorityReachable = false
+            ),
+            initiatesReattach = true,
+            controlPlaneStarted = false
+        )
+        assertTrue(converged.isMaterialChangeFrom(blocked))
+        assertEquals("WAITING_FOR_ROUTE", blocked.formatCapabilityLabel())
+        assertEquals("DISPATCH_REATTACH", converged.formatCapabilityLabel())
+    }
+
+    @Test
+    fun capability_host_sameSnapshot_notMaterial() {
+        val snapshot = EdgeReachabilitySnapshot(
+            linkReady = true,
+            peerDiscovered = true,
+            routeConverged = true,
+            authorityReachable = true
+        )
+        val signature = projectRecoveryCapabilitySignature(
+            snapshot,
+            initiatesReattach = false,
+            controlPlaneStarted = false
+        )
+        assertFalse(signature.isMaterialChangeFrom(signature))
+        assertEquals(RecoveryWaitingReason.WAITING_FOR_INBOUND, signature.waitingReason)
+    }
 }

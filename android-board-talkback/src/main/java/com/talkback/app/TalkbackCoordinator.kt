@@ -64,13 +64,17 @@ import com.talkback.core.session.ChannelModeFsm
 import com.talkback.core.session.ChannelReadiness
 import com.talkback.core.session.ConferenceEdgeRecoveryController
 import com.talkback.core.session.ConferenceBootstrapDeferral
+import com.talkback.core.session.ConferenceEdgeKey
 import com.talkback.core.session.ConferenceHostEndpointResolver
 import com.talkback.core.session.ConferenceParticipantManager
 import com.talkback.core.session.EdgeReachabilitySnapshot
 import com.talkback.core.session.EdgeRecoveryEligibility
 import com.talkback.core.session.ReattachDispatchOutcome
+import com.talkback.core.session.RecoveryCapabilitySignature
 import com.talkback.core.session.RecoveryReason
+import com.talkback.core.session.RecoveryReevaluateTrigger
 import com.talkback.core.session.RecoverySource
+import com.talkback.core.session.projectRecoveryCapabilitySignature
 import com.talkback.core.session.ConferenceParticipantProjector
 import com.talkback.core.session.ConferenceRuntimeProjectionLogger
 import com.talkback.core.session.ConferencePresenceProjector
@@ -328,6 +332,8 @@ class TalkbackCoordinator(
     }
     private val remoteHealthByModule = ConcurrentHashMap<String, AnchorHealthSnapshot>()
     private val lastAuthorityReachableBySession = ConcurrentHashMap<String, Boolean>()
+    /** Per-edge last [RecoveryCapabilitySignature] for materiality detection (ADR-0022 R28-G). */
+    private val lastRecoveryCapabilityByEdge = ConcurrentHashMap<ConferenceEdgeKey, RecoveryCapabilitySignature>()
     /** Dedup key for [CONFERENCE_RUNTIME_DECISION] (Issue2 probe). */
     private val lastConferenceRuntimeDecisionBySession = ConcurrentHashMap<String, String>()
     /** Dedup key for [CONFERENCE_RUNTIME_MISSING] (Gate-R1-B). */
@@ -662,6 +668,7 @@ class TalkbackCoordinator(
         channelIds += channelModeByChannel.keys
         channelIds += sessions.values.mapNotNull { it.channelId }
         channelIds.forEach { onChannelLifecycleEvent(it, ChannelLifecycleEvent.PeersDiscovered) }
+        notifyConferenceRecoveryReachabilityOnLinkOrDiscovery(RecoveryReevaluateTrigger.PEER_DISCOVERED)
     }
 
     private fun maybeBootstrapGroupOnPeerDiscovery(channelId: String) {
@@ -2186,6 +2193,84 @@ class TalkbackCoordinator(
             hostIceState = hostIceState,
             writer = "emitConferenceRuntimeProjection",
             cause = if (authorityReachable) "host_ice_connected" else "host_ice_lost"
+        )
+        maybeNotifyRecoveryReachabilityChanged(
+            session,
+            hostModuleId,
+            if (authorityReachable) {
+                RecoveryReevaluateTrigger.AUTHORITY_REACHABLE
+            } else {
+                RecoveryReevaluateTrigger.AUTHORITY_LOST
+            }
+        )
+    }
+
+    private fun conferenceRecoveryRemoteModuleIds(session: TalkbackSession): Set<String> {
+        val remotes = linkedSetOf<String>()
+        remotes.addAll(conferenceMemberRemoteIds(session))
+        session.initiatorModuleId?.value?.let { remotes.add(it) }
+        return remotes
+    }
+
+    private fun notifyConferenceRecoveryReachabilityOnLinkOrDiscovery(trigger: RecoveryReevaluateTrigger) {
+        sessions.values
+            .filter { isConferenceSession(it) && it.accepted }
+            .forEach { session ->
+                conferenceRecoveryRemoteModuleIds(session).forEach { remoteModuleId ->
+                    maybeNotifyRecoveryReachabilityChanged(session, remoteModuleId, trigger)
+                }
+            }
+    }
+
+    private fun maybeNotifyRecoveryReachabilityForRemote(
+        remoteModuleId: String,
+        trigger: RecoveryReevaluateTrigger
+    ) {
+        sessions.values
+            .filter {
+                isConferenceSession(it) &&
+                    it.accepted &&
+                    remoteModuleId in conferenceRecoveryRemoteModuleIds(it)
+            }
+            .forEach { session ->
+                maybeNotifyRecoveryReachabilityChanged(session, remoteModuleId, trigger)
+            }
+    }
+
+    /**
+     * Coordinator-owned materiality comparator (ADR-0022 R28-G).
+     * Notifies recovery controller only when [RecoveryCapabilitySignature] changes.
+     */
+    private fun maybeNotifyRecoveryReachabilityChanged(
+        session: TalkbackSession,
+        remoteModuleId: String,
+        trigger: RecoveryReevaluateTrigger
+    ) {
+        val channelId = session.channelId ?: return
+        val initiatesReattach = !isConferenceHostSession(session) &&
+            remoteModuleId == session.initiatorModuleId?.value
+        val controlPlaneStarted = conferenceEdgeRecoveryController.isControlPlaneStarted(
+            session.id,
+            remoteModuleId
+        )
+        val snapshot = buildRecoveryEdgeReachabilitySnapshot(channelId, session, remoteModuleId)
+        val signature = projectRecoveryCapabilitySignature(
+            snapshot,
+            initiatesReattach,
+            controlPlaneStarted
+        )
+        val edgeKey = ConferenceEdgeKey(session.id, remoteModuleId)
+        val before = lastRecoveryCapabilityByEdge[edgeKey]
+        if (!signature.isMaterialChangeFrom(before)) return
+        lastRecoveryCapabilityByEdge[edgeKey] = signature
+        conferenceEdgeRecoveryController.onRecoveryReachabilityChanged(
+            sessionId = session.id,
+            channelId = channelId,
+            remoteModuleId = remoteModuleId,
+            snapshot = snapshot,
+            signature = signature,
+            capabilityBefore = before,
+            trigger = trigger
         )
     }
 
@@ -5085,6 +5170,7 @@ class TalkbackCoordinator(
                 cause = "local_hangup"
             )
             lastAuthorityReachableBySession.remove(sessionId)
+            lastRecoveryCapabilityByEdge.keys.removeIf { it.sessionId == sessionId }
             lastConferenceRuntimeDecisionBySession.remove(sessionId)
             lastConferenceRuntimeMissingByPeer.clear()
         }
@@ -6552,6 +6638,7 @@ class TalkbackCoordinator(
             if (IceConnectivity.isConnected(state)) {
                 // Gate-R1: ICE up must yield DECISION (session alive) or MISSING (session gone).
                 maybeLogConferenceRuntimeMissing(remoteModuleId, state)
+                val routeTrigger = RecoveryReevaluateTrigger.ROUTE_CONVERGED
                 sessions.values
                     .filter { it.type == SessionType.GROUP && it.channelId != null }
                     .forEach { session ->
@@ -6571,7 +6658,10 @@ class TalkbackCoordinator(
                     if (tracked) {
                         if (isConferenceSession(session)) {
                             conferenceParticipantManager.onMediaConnected(session.id, remoteModuleId)
-                            conferenceEdgeRecoveryController.onIceConnected(session.id, remoteModuleId)
+                            maybeNotifyRecoveryReachabilityChanged(session, remoteModuleId, routeTrigger)
+                            if (conferenceEdgeRecoveryController.isControlPlaneStarted(session.id, remoteModuleId)) {
+                                conferenceEdgeRecoveryController.onIceConnected(session.id, remoteModuleId)
+                            }
                         } else {
                             meshParticipant(session, remoteModuleId).apply {
                                 media = MediaState.CONNECTED
@@ -6664,6 +6754,10 @@ class TalkbackCoordinator(
                 tryRecoverStuckCheckingConferencePeer(remoteModuleId)
             }
             if (state == "FAILED" || state == "DISCONNECTED") {
+                maybeNotifyRecoveryReachabilityForRemote(
+                    remoteModuleId,
+                    RecoveryReevaluateTrigger.ROUTE_LOST
+                )
                 sessions.values
                     .filter { it.type == SessionType.GROUP && it.accepted }
                     .forEach { updateSessionReceivePlayback(it, "ice_$state") }
