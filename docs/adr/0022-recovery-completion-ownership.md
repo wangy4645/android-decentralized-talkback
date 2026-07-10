@@ -2,7 +2,7 @@
 
 ## Status
 
-**Draft** (2026-07-10) — frozen from `/grill-with-docs` on branch `ro-m2-p1-recovery-reattach` after S13-B soak (#73-B). Complements ADR-0021 (edge recovery lifecycle, R24–R26); extends completion ownership, reachability facts, and presence projection boundary.
+**Partial Accepted** (2026-07-10) — **Accepted:** R27′-A/B, R28-D/D1 (gate + `RECOVERY_WAITING`). **Draft:** R28-A/B/C completion re-evaluate (P2-A/B), full S13 completion. Frozen from `/grill-with-docs` on branch `ro-m2-p1-recovery-reattach`. Complements ADR-0021 (R24–R26).
 
 ## Summary
 
@@ -119,6 +119,27 @@ WAITING_FOR_ACCEPT
 ```
 
 Mapping from `ReachabilitySnapshot` (R28-D): e.g. `!routeConverged` → `WAITING_FOR_ROUTE`, not `WAITING_FOR_AUTHORITY`.
+
+### R28-E — Completion Re-evaluate Trigger (P2-A, Draft)
+
+When edge phase is **`RECOVERY_PENDING`** and **`EdgeReachabilitySnapshot` undergoes a material transition** (e.g. `routeConverged: false → true`), **Conference Edge Recovery Controller MUST re-evaluate** completion for that edge.
+
+Re-evaluate **MUST** emit exactly one Recovery Completion Decision (R28-C).
+
+**Frozen in P2-A:**
+
+```text
+reachability transition + RECOVERY_PENDING → MUST re-evaluate
+```
+
+**NOT frozen in P2-A (→ P2-B):**
+
+```text
+routeConverged → resend()
+ICE CONNECTED → auto dispatch RECOVERY_REATTACH
+```
+
+See `docs/audit/p2a-completion-re-evaluate-seam.md` for grill open questions (G1–G5).
 
 ### R28-D — Edge Reachability Facts (two-axis model)
 
@@ -243,16 +264,19 @@ R24 Strategy A (degraded residency) **remains v1 default**; R28 does not authori
 
 ## Soak gates (future)
 
-| Gate | Pass criterion |
-|------|----------------|
-| G-R28-D | WiFi loss: controller logs `WAITING_FOR_ROUTE` (or equivalent) **before** `RECOVERY_REATTACH_SENT` when `!routeConverged` |
-| G-R27′ | Meeting pill shows `joinedCount` / `connectedCount` / per-peer recovering consistent with host logs |
-| G-R28-C | No interval where edge is non-terminal and no completion decision for > debounce |
+| Gate | Pass criterion | Status |
+|------|----------------|--------|
+| G-R28-D | WiFi loss: `RECOVERY_WAITING` / `RECOVERY_REATTACH_DEFERRED` with `WAITING_FOR_ROUTE` **before** any `RECOVERY_REATTACH_SENT` when `!routeConverged` | **PASS** `logs-s13b-…-161257` |
+| G-R27′ | Meeting pill shows `joinedCount` / `connectedCount` / per-peer recovering consistent with host logs | PASS (prior soak) |
+| G-R28-C | No interval where edge is non-terminal and no completion decision for > debounce | FAIL → P2-A |
+| G-P2-A | Reachability 跃迁后 emit `RECOVERY_REEVALUATE` or new decision within debounce | Pending |
+| G-S13-E | `RECOVERY_EDGE_RECOVERED` or explicit protocol terminal after WiFi restore | Pending → P2-B |
 
 ## References
 
 - ADR-0020 — Conference Runtime Projection Contract
 - ADR-0021 — Conference Edge Recovery Lifecycle (R24–R26)
+- `docs/audit/p2a-completion-re-evaluate-seam.md`
 - `docs/audit/s13b-recovery-reattach-reachability.md`
 - `docs/audit/ro-m3-recovery-write-matrix.md`
 - Issue #73-B Recovery Reattach Reachability

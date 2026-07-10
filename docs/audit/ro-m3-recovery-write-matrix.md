@@ -64,6 +64,8 @@ Recovery Plane    →  Membership mutation            ❌ (R10)
 | **Rejoin Hints** | `lastRejoinableConferenceByChannel`、`pendingRejoinByChannel` | `saveConferenceRejoinMemory` / `clearConferenceRejoinState` | **间接** — `sendConferenceRejoinInternal` 写 pending；终止须 `clear` |
 | **Edge Recovery State** | per-edge FSM、attempt id、tombstone | `ConferenceEdgeRecoveryController` | **是** — 本 ADR 所有权 |
 | **Media / ICE** | PC、ICE restart、mesh engine | `MediaSessionManager` / coordinator media 路径 | **执行 only** — 由 controller 回调触发，不自行决策 |
+| **Reachability / Dispatch Gate** | `canDispatchRecoverySignal` 四维事实 | `EdgeReachabilitySnapshot` + `dispatchRecoveryReattachOutcome` | **间接** — gate 在 coordinator；controller 消费 `DEFERRED` → `RECOVERY_PENDING` |
+| **Completion Re-evaluate** | reachability 跃迁后再决策 | `ConferenceEdgeRecoveryController`（P2-A 目标） | **是** — 待 P2-A 落地 |
 | **Authority Reachability** | UI「能否连上 host」 | **投影派生**（`isPeerMediaConnected(host)`）— 非独立写域 | **否** — 禁止为修 UI 改 lifecycle |
 | **Runtime Projection** | phase、edgeRecovering、authorityReachable | `ConferenceRuntimeProjector` + `emitConferenceRuntimeProjection` | **否** — 只读 facts |
 
@@ -84,9 +86,9 @@ Recovery Plane    →  Membership mutation            ❌ (R10)
 | `cleanupUnhealthyConferenceSession` | — | — | 🟡 prune | — | — | — | **R26 v1**：defer via `canPruneConferenceParticipant`; post-terminal prune = R26 v2 |
 | `clearConferenceRejoinState` | — | — | — | 🟢 | — | — | T3：终止后须 clear，否则 zombie rejoin |
 | `sendConferenceRejoinIntentInternal` | — | — | — | 🟢 pendingRejoin | — | — | Conference rejoin intent；不读 Recovery |
-| `sendRecoveryReattachInternal` | — | — | — | 🟡 pendingRejoin | 🟢 drop if cancelled | — | Recovery reattach only |
+| `dispatchRecoveryReattachOutcome` | — | — | — | 🟡 pendingRejoin | 🟢 DEFERRED→PENDING / drop if cancelled | — | R28 gate；Recovery reattach only |
 | `handleConferenceRejoin` | — | — | 🟡 re-invite | — | 🟡 onReattachAccepted | 🟡 sendInvites | Host 接受 reattach |
-| `ConferenceEdgeRecoveryController.onRequestReattach` → 上项 | — | — | — | 🟡 | 🟢 | — | 控制面先于媒体 |
+| `ConferenceEdgeRecoveryController.onRequestReattach` → 上项 | — | — | — | 🟡 | 🟢 | — | 控制面；gate 后可能 DEFERRED |
 | `onIceRestart` → `attemptConferencePeerIceRestart` | — | — | — | — | 🟢 | 🟢 | 有界 ICE restart |
 | `joinMeeting` / `openMeetingScreen` | 🟡 可能触发新 mesh | 🟡 ensureChannelSession | — | 🟡 requestRejoin | 🟡 UI 触发 recovery | — | **T4**：UI 不应成为 recovery 主触发 |
 | `acceptGroupJoin` RECOVERY_REATTACH | — | — | 🟡 mark active | — | 🟡 onReattachAccepted | 🟡 ICE restart | 与 handleConferenceRejoin 双入口 |
@@ -165,6 +167,9 @@ adb logcat -d | rg "AUTHORITY_TIMELINE.*reachable=false"
 
 # Edge recovery（已有标签，无需新前缀）
 adb logcat -d | rg "RECOVERY_EDGE_|RECOVERY_REATTACH_|RECOVERY_EVENT_DROPPED"
+
+# R28 gate + completion waiting（ADR-0022 — 协议状态，非 debug）
+adb logcat -d | rg "RECOVERY_(WAITING|REATTACH_DEFERRED|REATTACH_SENT|REATTACH_INBOUND|EDGE_RECOVERED|FAILED_MEDIA_RECOVERY)"
 ```
 
 ### 4.3 T3 判定表
@@ -225,7 +230,16 @@ ICE_CONNECTED 后 5s 内必须二选一：
 | Post-terminal | **R26 v2 待决策** | `11:47:02` `Pruning unhealthy conference peer M01`（post-window，不属 Phase A fail） |
 | S13 闭环 | **FAIL** | 无 `RECOVERY_EDGE_RECOVERED`；participant 离线时 reattach 无法完成 — 与 R26 正交 |
 
-实现：`ConferenceAuditTimelineLog.kt` + `TalkbackCoordinator` 挂钩；`RECOVERY_DECISION` 在 `ConferenceEdgeRecoveryController`。
+#### Gate-R28-D soak 结论（`logs-s13b-reattach-reachability-20260710-161257`，M02 host，M01 WiFi）
+
+| 阶段 | 判定 | 说明 |
+|------|------|------|
+| R28 gate | **PASS** | M01：`RECOVERY_REATTACH_DEFERRED` + `WAITING_FOR_ROUTE` ×2；**零** `RECOVERY_REATTACH_SENT` while `routeConverged=false` |
+| 失败语义 | **已分类** | 从「错误动作（SENT 未达 host）」→「缺 completion continuation（DEFERRED 后无 re-evaluate）」 |
+| S13 闭环 | **仍 FAIL** | M01/M02 `FAILED_MEDIA_RECOVERY attempt_timeout`；M01 HELLO 恢复 ~16:11:14 **晚于** timeout — **P2-A** 范围 |
+| 两层状态 | **冻结** | R28-D ✅ · S13 completion ❌ → 见 `docs/audit/p2a-completion-re-evaluate-seam.md` |
+
+实现：`ConferenceAuditTimelineLog.kt` + `TalkbackCoordinator` 挂钩；`RECOVERY_DECISION` 在 `ConferenceEdgeRecoveryController`。R28：`EdgeReachabilitySnapshot` + `dispatchRecoveryReattachOutcome`（`baf393b`）。
 
 ---
 
@@ -236,6 +250,7 @@ ICE_CONNECTED 后 5s 内必须二选一：
 - **禁止 P0-A″**：`hostIce=FAILED` + debounce → 强制 `ACTIVE+degraded`（会掩盖 R25 false termination）
 - **R25A 已落地**：Recovery 解耦 `isChannelCancelled`；**不做** `clearChannelCancellation`（留 R25B）
 - **R26A 已落地**：Recovery window Membership guard；**R26 v2 / R27 冻结**
+- **R28 gate 已落地**：禁止 `routeConverged=false` 时 dispatch reattach；**禁止**用 `resend()` patch 替代 P2-A re-evaluate
 - **R25 根因未明前**：禁止再改 CONNECTING / ACTIVE 投影规则（CONNECTING 可能是正确后果）
 
 ---
@@ -248,9 +263,12 @@ ICE_CONNECTED 后 5s 内必须二选一：
 | **6** | **R24 Strategy A** | **已落地**（`53fe19f`）；recovery timeout → `ACTIVE+conferenceDegraded` |
 | **7** | **PR-R25A** — Recovery 解耦 channel tombstone | **已落地**；S17 PASS |
 | **8** | **PR-R26A** — Recovery ownership window guard | **已落地** `ab73ad8`；S18 PASS |
-| 9 | **R25B session-scoped CancellationToken** | tombstone key = `(channelId, sessionId, generation)` |
-| 10 | **WM-R6** 断言/门禁 | Connectivity loss 不 tombstone channel（Recovery 侧已解耦） |
-| 11 | **WM-R5** Guardrail | `FAILED_MEDIA_RECOVERY` 后无 lifecycle 越权 |
+| **9** | **R28 reachability gate** — `EdgeReachabilitySnapshot` + DEFERRED/WAITING | **已落地** `baf393b`；G-R28-D PASS |
+| 10 | **P2-A** — completion re-evaluate seam | 见 `docs/audit/p2a-completion-re-evaluate-seam.md` |
+| 11 | **P2-B** — re-evaluate 动作决策树 | S13-E / INBOUND |
+| 12 | **R25B session-scoped CancellationToken** | tombstone key = `(channelId, sessionId, generation)` |
+| 13 | **WM-R6** 断言/门禁 | Connectivity loss 不 tombstone channel（Recovery 侧已解耦） |
+| 14 | **WM-R5** Guardrail | `FAILED_MEDIA_RECOVERY` 后无 lifecycle 越权 |
 | — | **R26 v2** post-terminal roster semantics | **冻结** — 不在 #73 收尾 |
 | — | Host Link Bootstrap / R24-B | 冻结 |
 | — | Issue1 Host LIVE | 冻结 |
@@ -260,7 +278,8 @@ ICE_CONNECTED 后 5s 内必须二选一：
 
 ## 8. 参考文件
 
-- `docs/audit/s13b-recovery-reattach-reachability.md` — #73-B Phase 1：Reattach 信令可达性 + S13-B 矩阵
+- `docs/audit/s13b-recovery-reattach-reachability.md` — #73-B Phase 1：Reattach 信令可达性 + S13-B 矩阵 + G-R28-D
+- `docs/audit/p2a-completion-re-evaluate-seam.md` — P2-A re-evaluate seam（Draft）
 - `docs/audit/r25-false-conference-termination.md` — R25 写入链 + 升级矩阵
 - `android-board-talkback/.../ConferenceEdgeRecoveryController.kt`
 - `android-board-talkback/.../TalkbackCoordinator.kt`（`conferenceEdgeRecoveryController` lazy 块）

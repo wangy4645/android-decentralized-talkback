@@ -1,8 +1,9 @@
 # S13-B — Recovery Reattach Reachability（审计）
 
-**状态**：Frozen（2026-07-10）— #73-B Phase 1 调查规格  
-**Soak 基准**：`logs-gate-r1-r26a-20260710-114335` · session `0cfa4c0a` · M02 host · M01 WiFi off  
-**配套**：ADR-0021 S13/S18、Write Matrix §7 step 9+、`docs/audit/ro-m3-recovery-write-matrix.md`
+**状态**：Frozen + R28 增补（2026-07-10）— #73-B Phase 1 调查规格  
+**Soak 基准（R26A）**：`logs-gate-r1-r26a-20260710-114335` · session `0cfa4c0a`  
+**Soak 基准（R28）**：`logs-s13b-reattach-reachability-20260710-161257` · session `86bbbc2b`  
+**配套**：ADR-0021 S13/S18、ADR-0022 R28、Write Matrix §7、`p2a-completion-re-evaluate-seam.md`
 
 **本 audit 范围：** 仅 `RECOVERY_REATTACH` 信令链。  
 **显式不在范围：** `RECOVERY_EDGE_STARTED`、`RECOVERY_DECISION`、`FAILED_MEDIA_RECOVERY`、ICE restart、Bootstrap defer（后者见 H3）。
@@ -11,21 +12,33 @@
 
 ## 1. 结论（先读）
 
-**Recovery 生命周期已启动，但 Reattach 子协议未进入 host 接收阶段；失败发生在 Recovery Reattach Reachability 层。**
+**两层状态（2026-07-10 冻结）：**
 
-R26A soak 已证明 **Edge Recovery Controller 在跑**（`RECOVERY_EDGE_STARTED`、`RECOVERY_PRUNE_DEFERRED`、`FAILED_MEDIA_RECOVERY`）。  
-未证明的是 **`RECOVERY_REATTACH` 是否离开发送端并到达 host**。
+| 层 | 状态 |
+|----|------|
+| **R28-D** reachability gate | ✅ G-R28-D PASS |
+| **S13** completion 闭环 | ❌ 待 P2-A/B |
 
-Reattach 子协议矩阵钉在 **S13-B1 之前**：
+**R26A 结论（仍有效）：** Recovery 生命周期已启动，Reattach 子协议未进入 host 接收阶段。
 
-| 阶段 | 状态 |
-|------|------|
-| Edge recovery lifecycle（Controller） | ✅ 已启动 |
-| S13-A：Reattach 发送侧意图 | ✅ |
-| S13-B：host 收到 Reattach | ❌ |
-| S13-C：ICE restart（reattach 后继） | ❌ |
-| S13-D：host link recovered | ❌ |
-| S13-E：`RECOVERY_EDGE_RECOVERED` | ❌ |
+**R28 结论（新增）：** 失败语义已从 **错误动作** 变为 **缺 completion continuation**：
+
+```text
+旧（R26A / pre-R28）：routeConverged=false → SENT → host 无 INBOUND → timeout
+新（R28 gate）：      routeConverged=false → DEFERRED → WAITING_FOR_ROUTE → timeout（无 re-evaluate）
+```
+
+Reattach 子协议矩阵（session `86bbbc2b`，R28 soak）：
+
+| 阶段 | R26A | R28 soak |
+|------|------|----------|
+| Edge recovery lifecycle | ✅ | ✅ |
+| S13-A：Reattach 发送侧意图 | ✅ `requested` | ❌ 无 SENT（gate 阻止） |
+| **G-R28-D** | — | ✅ DEFERRED + WAITING_FOR_ROUTE |
+| S13-B：host 收到 Reattach | ❌ | ❌ |
+| S13-E：`RECOVERY_EDGE_RECOVERED` | ❌ | ❌ → `FAILED_MEDIA_RECOVERY` |
+
+**H1a-2 降级：** pre-R28 的「A3 有、B1 无」在本轮 **未复现**（零 SENT）。根因从 transport 未送达 → **gate 正确阻止 + 无 P2-A re-evaluate**。
 
 **冻结分层：**
 
@@ -36,8 +49,9 @@ Reattach 子协议矩阵钉在 **S13-B1 之前**：
   Terminal 投影    ← R24-A
 
 #73-B
-  Reattach Reachability   ← 卡在这里（本 audit）
-  Recovery Protocol       ← accept → ICE restart
+  Reattach Reachability Gate  ← R28 ✅（什么时候不能做）
+  Completion Re-evaluate      ← P2-A（什么时候必须重新决定）
+  Recovery Protocol           ← P2-B（决定做什么）
   Media Recovery
   Completion
 ```
@@ -93,7 +107,9 @@ Reattach 子协议矩阵钉在 **S13-B1 之前**：
 | **S13-B2** | `RECOVERY_REATTACH accepted` / `RECOVERY_REATTACH_ACCEPTED` | Host 接受 + controller notified | ❌ |
 | **S13-C** | ICE restart issued after accept | Controller → media | ❌ |
 | **S13-D** | Recovery edge ICE CONNECTED | 数据面 | ❌ |
-| **S13-E** | `RECOVERY_EDGE_RECOVERED` | Edge terminal success | ❌ |
+| **S13-E** | `RECOVERY_EDGE_RECOVERED` | Edge terminal success | ❌ | ❌ |
+| **G-R28-D1** | `RECOVERY_REATTACH_DEFERRED` + `WAITING_FOR_ROUTE` | Gate：route 未收敛不 dispatch | — | ✅ M01 |
+| **G-R28-D2** | `RECOVERY_REATTACH_SENT` while `routeConverged=false` | Gate 违反 | — | ❌（零条） |
 
 **判定规则：**
 
@@ -255,7 +271,13 @@ rg "Signal send failed|rejoin skipped|TRANSPORT_NOT_READY|INVITE_DISPATCH" M01.t
 rg "RECOVERY_EDGE_RECOVERED" *.txt
 ```
 
-### 8.2 Probe 落地后
+### 8.2 R28 gate + completion waiting
+
+```bash
+rg "RECOVERY_(WAITING|REATTACH_DEFERRED|REATTACH_SENT|REATTACH_INBOUND|EDGE_RECOVERED|FAILED_MEDIA_RECOVERY)" *.txt
+```
+
+### 8.3 Probe 落地后（legacy send chain）
 
 ```bash
 rg "RECOVERY_REATTACH_(ENQUEUED|SENT|SEND_FAILED|INBOUND)" *.txt
@@ -298,17 +320,42 @@ rg "RECOVERY_REATTACH_(ENQUEUED|SENT|SEND_FAILED|INBOUND)" *.txt
 | 步 | 内容 | 状态 |
 |----|------|------|
 | 1 | 本 audit 冻结 | **Done** |
-| 2 | Probe PR：`ENQUEUED` / `SENT` / `SEND_FAILED` / `INBOUND` + `peerReachable` / `transportReady` | **Done** |
-| 3 | 对照 soak（§9）+ 填矩阵 | 待做 |
-| 4 | 定 H1a-1 / H1a-2 / H1b → 行为 fix issue | 待矩阵 |
-| 5 | H3 协议评估 / H2 / S13-C+ | 后置 |
+| 2 | Probe PR | **Done** |
+| 3 | R26A soak + 矩阵 | **Done** |
+| 4 | R28 gate + G-R28-D soak | **Done** `baf393b` / `logs-…-161257` |
+| 5 | P2-A re-evaluate seam | **Draft** — `p2a-completion-re-evaluate-seam.md` |
+| 6 | P2-B 决策树 + S13-E soak | 待 P2-A |
+| 7 | H3 协议评估 / H2 / S13-C+ | 后置 |
 
 ---
 
 ## 12. 参考文件
 
 - `docs/adr/0021-conference-edge-recovery-lifecycle.md` — S13/S18、R26
-- `docs/audit/ro-m3-recovery-write-matrix.md` — Gate-R1-R26A
+- `docs/adr/0022-recovery-completion-ownership.md` — R28 gate、P2-A/B
+- `docs/audit/ro-m3-recovery-write-matrix.md` — Gate-R1-R26A、Gate-R28-D
+- `docs/audit/p2a-completion-re-evaluate-seam.md` — P2-A 规格
 - `docs/audit/r25-false-conference-termination.md` — 分层写法参考
-- `TalkbackCoordinator.kt` — `sendRecoveryReattachInternal`, `handleConferenceRejoin`, `sendSignal`
+- `TalkbackCoordinator.kt` — `dispatchRecoveryReattachOutcome`, `handleConferenceRejoin`
 - `ConferenceEdgeRecoveryController.kt` — `onRequestReattach`, `RECOVERY_REATTACH_*` markers
+- `EdgeReachabilitySnapshot.kt` — R28 gate facts
+
+---
+
+## 13. R28 soak 时间线（session `86bbbc2b`，`logs-s13b-…-161257`）
+
+```text
+16:10:40  M01：RECOVERY_EDGE_STARTED(M02) attempt=3 initiatesReattach=true
+16:10:40  M01：RECOVERY_REATTACH_DEFERRED reason=WAITING_FOR_ROUTE routeConverged=false
+16:10:47  M01：ICE_FAILED → attempt=5 → DEFERRED again
+16:10:55  M02：FAILED_MEDIA_RECOVERY(M01) attempt_timeout
+16:11:00  M01：FAILED_MEDIA_RECOVERY(M02) attempt_timeout
+16:11:14  M02：HELLO from M01 — WiFi 恢复，但无 re-evaluate
+16:12:22  M01：RECOVERY_EDGE_CANCELLED(M02) local_hangup
+```
+
+**判定：**
+
+- **G-R28-D PASS** — 全程无 `RECOVERY_REATTACH_SENT`
+- **S13-E FAIL** — WiFi 恢复晚于 attempt budget；缺 P2-A `onReachabilityChanged → re-evaluate`
+- **禁止下一步：** `routeConverged → resend()` patch（见 ADR-0022 R28-E）
