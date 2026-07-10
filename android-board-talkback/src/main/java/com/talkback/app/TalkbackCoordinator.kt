@@ -6913,11 +6913,25 @@ class TalkbackCoordinator(
         conferenceReconnectStartedAtBySession.putIfAbsent(session.id, System.currentTimeMillis())
     }
 
+    private fun deferConferenceParticipantPruneIfRecovering(
+        session: TalkbackSession,
+        moduleId: String
+    ): Boolean {
+        if (!conferenceEdgeRecoveryController.isEdgeRecovering(session.id, moduleId)) {
+            return false
+        }
+        log(
+            "[${session.traceId}] RECOVERY_PRUNE_DEFERRED session=${session.id} remote=$moduleId"
+        )
+        return true
+    }
+
     private fun scheduleParticipantPrune(
         session: TalkbackSession,
         moduleId: String,
         iceState: String
     ) {
+        if (deferConferenceParticipantPruneIfRecovering(session, moduleId)) return
         if (iceState == "FAILED") {
             cancelParticipantPrune(session.id, moduleId)
             log("[${session.traceId}] Conference ICE FAILED for $moduleId, pruning peer")
@@ -6951,6 +6965,9 @@ class TalkbackCoordinator(
                         log("[${current.traceId}] Conference peer $moduleId ICE recovered, keeping member")
                     }
                     else -> {
+                        if (deferConferenceParticipantPruneIfRecovering(current, moduleId)) {
+                            return@runOnCoordinator
+                        }
                         val ice = qosMonitor.snapshot(moduleId)?.iceState ?: "UNKNOWN"
                         log("[${current.traceId}] Conference peer $moduleId still $ice after grace, pruning")
                         removeConferenceParticipant(current, moduleId)
@@ -7953,6 +7970,7 @@ class TalkbackCoordinator(
         moduleId: String,
         now: Long
     ): Boolean {
+        if (conferenceEdgeRecoveryController.isEdgeRecovering(session.id, moduleId)) return false
         if (ModuleId(moduleId) in reachabilityView.snapshot(session.id).evicted) return false
         val participant = meshParticipant(session, moduleId)
         if (participant.invite != InviteState.ACCEPTED) return false

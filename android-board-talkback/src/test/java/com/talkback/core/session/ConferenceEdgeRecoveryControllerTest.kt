@@ -226,6 +226,53 @@ class ConferenceEdgeRecoveryControllerTest {
     }
 
     @Test
+    fun isEdgeRecovering_falseWhenNoRecovery() {
+        assertFalse(controller.isEdgeRecovering("sess-1", "M01"))
+    }
+
+    @Test
+    fun isEdgeRecovering_trueWhileActivelyRecovering() {
+        controller.onIceStateChanged(
+            sessionId = "sess-1",
+            channelId = "CH-1",
+            remoteModuleId = "M01",
+            iceState = "FAILED",
+            eligibility = eligible(),
+            initiatesReattach = true
+        )
+        assertTrue(controller.isEdgeRecovering("sess-1", "M01"))
+        assertFalse(controller.isEdgeRecovering("sess-1", "M02"))
+    }
+
+    @Test
+    fun isEdgeRecovering_falseAfterRecovered() {
+        controller.onIceStateChanged(
+            sessionId = "sess-1",
+            channelId = "CH-1",
+            remoteModuleId = "M01",
+            iceState = "FAILED",
+            eligibility = eligible(),
+            initiatesReattach = true
+        )
+        controller.onIceConnected("sess-1", "M01")
+        assertFalse(controller.isEdgeRecovering("sess-1", "M01"))
+    }
+
+    @Test
+    fun isEdgeRecovering_falseAfterAttemptTimeout() {
+        controller.onIceStateChanged(
+            sessionId = "sess-1",
+            channelId = "CH-1",
+            remoteModuleId = "M01",
+            iceState = "FAILED",
+            eligibility = eligible(),
+            initiatesReattach = true
+        )
+        Thread.sleep(350)
+        assertFalse(controller.isEdgeRecovering("sess-1", "M01"))
+    }
+
+    @Test
     fun attemptTimeout_exposesFailedMediaRecoveryFacts_notRecovering() {
         controller.onIceStateChanged(
             sessionId = "sess-1",

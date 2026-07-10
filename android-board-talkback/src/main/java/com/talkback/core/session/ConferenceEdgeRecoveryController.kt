@@ -53,6 +53,12 @@ class ConferenceEdgeRecoveryController(
 
     fun isAnyEdgeRecovering(sessionId: String): Boolean = factsForSession(sessionId).anyRecovering
 
+    /** True while edge (sessionId, remoteModuleId) is in an active recovery ownership window (R26). */
+    fun isEdgeRecovering(sessionId: String, remoteModuleId: String): Boolean {
+        val record = edges[ConferenceEdgeKey(sessionId, remoteModuleId)] ?: return false
+        return record.phase.isActivelyRecovering()
+    }
+
     fun isChannelCancelled(channelId: String): Boolean {
         val expiresAt = cancelledChannels[channelId] ?: return false
         if (clock() > expiresAt) {
