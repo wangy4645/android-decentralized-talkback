@@ -53,6 +53,7 @@ import com.talkback.core.ptt.SnapshotResult
 import com.talkback.core.ptt.PttEvent
 import com.talkback.core.ptt.PttState
 import com.talkback.core.session.AnchorAuthority
+import com.talkback.core.session.AuthorityMembershipMutationSource
 import com.talkback.core.session.AnchorElection
 import com.talkback.core.session.AnchorHealthSnapshot
 import com.talkback.core.session.AnchorRanking
@@ -69,6 +70,7 @@ import com.talkback.core.session.ConferenceHostEndpointResolver
 import com.talkback.core.session.ConferenceParticipantManager
 import com.talkback.core.session.EdgeReachabilitySnapshot
 import com.talkback.core.session.EdgeRecoveryEligibility
+import com.talkback.core.session.EdgeRecoveryFacts
 import com.talkback.core.session.ReattachDispatchOutcome
 import com.talkback.core.session.RecoveryCapabilitySignature
 import com.talkback.core.session.RecoveryReason
@@ -184,6 +186,8 @@ data class TalkbackCoordinatorConfig(
     val conferenceHostIceReconnectGraceMs: Long = 15_000L,
     /** Grace before host prunes a disconnected conference participant. */
     val conferenceParticipantPruneGraceMs: Long = 15_000L,
+    /** Per-edge recovery attempt watchdog budget (ADR-0022 R28-F). */
+    val edgeRecoveryAttemptBudgetMs: Long = 15_000L,
     /** UI timeout before showing reconnect-failed on a conference session. */
     val conferenceReconnectTimeoutMs: Long = 60_000L,
     /** When false, incoming Meeting (conference) invites are rejected until the user taps Join. */
@@ -309,7 +313,8 @@ class TalkbackCoordinator(
             },
             onRecoveryStateChanged = { sessionId ->
                 sessions[sessionId]?.let { emitConferenceRuntimeProjection(it) }
-            }
+            },
+            attemptBudgetMs = config.edgeRecoveryAttemptBudgetMs
         )
     }
     private val groupMeshReconciler = GroupMeshReconciler()
@@ -2054,7 +2059,8 @@ class TalkbackCoordinator(
                 sessionAccepted = session.accepted,
                 joinedParticipantCount = participantProjection?.joinedParticipantCount ?: 0,
                 connectedRemoteModuleIds = connectedMeshPeerIds(session),
-                recoveringRemoteModuleIds = edgeFacts.recoveringRemoteModuleIds
+                recoveringRemoteModuleIds = edgeFacts.recoveringRemoteModuleIds,
+                mediaUnavailableRemoteModuleIds = edgeFacts.mediaUnavailableRemoteModuleIds
             )
         )
     }
@@ -2601,6 +2607,10 @@ class TalkbackCoordinator(
         sessions.values
             .firstOrNull { it.type == SessionType.CONFERENCE && it.channelId == channelId && it.accepted }
             ?.let { cleanupUnhealthyConferenceSession(it) }
+    }
+
+    internal fun testEdgeRecoveryFacts(sessionId: String): EdgeRecoveryFacts = runOnCoordinatorSync {
+        conferenceEdgeRecoveryController.factsForSession(sessionId)
     }
 
     internal fun testConferenceMembershipEpoch(sessionId: String): Long = runOnCoordinatorSync {
@@ -3736,7 +3746,11 @@ class TalkbackCoordinator(
 
     private fun markConferenceParticipantLeft(session: TalkbackSession, moduleId: String) {
         if (moduleId == localModuleId.value) return
-        removeConferenceParticipant(session, moduleId)
+        removeConferenceParticipant(
+            session,
+            moduleId,
+            AuthorityMembershipMutationSource.AUTHORITY_GROUP_LEAVE
+        )
     }
 
     private fun localEndpointId(): EndpointId {
@@ -4993,7 +5007,11 @@ class TalkbackCoordinator(
         session.touch()
     }
 
-    private fun removeConferenceParticipant(session: TalkbackSession, moduleId: String) {
+    private fun removeConferenceParticipant(
+        session: TalkbackSession,
+        moduleId: String,
+        source: AuthorityMembershipMutationSource
+    ) {
         if (moduleId == localModuleId.value) return
         releaseFloorIfHolderUnavailable(session, moduleId)
         conferenceParticipantManager.applyPrune(session.id, moduleId)
@@ -5007,6 +5025,21 @@ class TalkbackCoordinator(
         }
         session.touch()
         resumeConferenceAudioAfterPeerLeft(session)
+        log(
+            "[${session.traceId}] Conference membership mutation remote=$moduleId source=$source " +
+                "remaining=${session.groupMembers.size}"
+        )
+    }
+
+    /**
+     * Participant-side media degradation (ADR-0023 R29-C). Records recovery facts only;
+     * MUST NOT mutate membership or terminate edge recovery obligation.
+     */
+    private fun recordParticipantMediaDegradation(session: TalkbackSession, moduleId: String) {
+        log(
+            "[${session.traceId}] RECOVERY_MEDIA_DEGRADED session=${session.id} remote=$moduleId"
+        )
+        emitConferenceRuntimeProjection(session)
     }
 
     /**
@@ -7172,7 +7205,11 @@ class TalkbackCoordinator(
         if (iceState == "FAILED") {
             cancelParticipantPrune(session.id, moduleId)
             log("[${session.traceId}] Conference ICE FAILED for $moduleId, pruning peer")
-            removeConferenceParticipant(session, moduleId)
+            removeConferenceParticipant(
+                session,
+                moduleId,
+                AuthorityMembershipMutationSource.AUTHORITY_PRUNE
+            )
             repairConferenceMeshAfterLeave(session)
             return
         }
@@ -7181,7 +7218,11 @@ class TalkbackCoordinator(
         if (graceMs <= 0L) {
             cancelParticipantPrune(session.id, moduleId)
             log("[${session.traceId}] Conference ICE DISCONNECTED for $moduleId, pruning peer")
-            removeConferenceParticipant(session, moduleId)
+            removeConferenceParticipant(
+                session,
+                moduleId,
+                AuthorityMembershipMutationSource.AUTHORITY_PRUNE
+            )
             repairConferenceMeshAfterLeave(session)
             return
         }
@@ -7207,7 +7248,11 @@ class TalkbackCoordinator(
                         }
                         val ice = qosMonitor.snapshot(moduleId)?.iceState ?: "UNKNOWN"
                         log("[${current.traceId}] Conference peer $moduleId still $ice after grace, pruning")
-                        removeConferenceParticipant(current, moduleId)
+                        removeConferenceParticipant(
+                            current,
+                            moduleId,
+                            AuthorityMembershipMutationSource.AUTHORITY_PRUNE
+                        )
                         repairConferenceMeshAfterLeave(current)
                     }
                 }
@@ -8191,9 +8236,19 @@ class TalkbackCoordinator(
             canPruneConferenceParticipant(session, moduleId, now)
         }
         if (deadRemotes.isEmpty()) return
+        if (!isConferenceHostSession(session)) {
+            deadRemotes.forEach { moduleId ->
+                recordParticipantMediaDegradation(session, moduleId)
+            }
+            return
+        }
         deadRemotes.forEach { moduleId ->
             log("[${session.traceId}] Pruning unhealthy conference peer $moduleId")
-            removeConferenceParticipant(session, moduleId)
+            removeConferenceParticipant(
+                session,
+                moduleId,
+                AuthorityMembershipMutationSource.AUTHORITY_PRUNE
+            )
         }
         repairConferenceMeshAfterLeave(session)
     }
