@@ -241,7 +241,9 @@ class ConferencePruneIntegrationTest {
     }
 
     @Test
-    fun conferenceR29_hostMayPruneUnhealthyPeer() {
+    fun conferenceR29E_hostDoesNotAuthorityPruneWhileObligationOpen() {
+        // G-R28-H1 / G-R29-E1: FAILED_MEDIA_RECOVERY keeps obligation OPEN;
+        // !isEdgeRecovering alone must not authorize AUTHORITY_PRUNE.
         val channelId = "CONF-R29-HOST-PRUNE"
         val context = RuntimeEnvironment.getApplication()
         val peers = TestTalkbackNode.allPeers(m01 to 50051, m02 to 50052, m03 to 50053)
@@ -295,12 +297,17 @@ class ConferencePruneIntegrationTest {
                     it.contains("FAILED_MEDIA_RECOVERY") && it.contains("remote=M03")
                 }
             )
+            assertTrue(host.runtime.testEdgeObligationOpen(sessionId!!, "M03"))
+            assertFalse(host.runtime.testEdgeObligationClosed(sessionId, "M03"))
+            assertFalse(host.runtime.testIsEdgeRecovering(sessionId, "M03"))
+
             host.runtime.testRunConferenceHealthCleanup(channelId)
 
-            assertTrue(host.hasLog { it.contains("Pruning unhealthy conference peer M03") })
-            assertTrue(host.hasLog { it.contains("source=AUTHORITY_PRUNE") })
+            assertFalse(host.hasLog { it.contains("Pruning unhealthy conference peer M03") })
+            assertFalse(host.hasLog { it.contains("source=AUTHORITY_PRUNE") })
             val after = host.runtime.sessionSnapshots().first { it.sessionId == sessionId }
-            assertFalse(after.memberKeys.any { it.startsWith("M03") })
+            assertTrue(after.memberKeys.any { it.startsWith("M03") })
+            assertTrue(host.runtime.testEdgeObligationOpen(sessionId, "M03"))
         } finally {
             participant.stop()
             host.stop()

@@ -393,6 +393,15 @@ class TalkbackRuntime(
     internal fun testEdgeRecoveryFacts(sessionId: String) =
         coordinator.testEdgeRecoveryFacts(sessionId)
 
+    internal fun testEdgeObligationOpen(sessionId: String, remoteModuleId: String): Boolean =
+        coordinator.testEdgeObligationOpen(sessionId, remoteModuleId)
+
+    internal fun testEdgeObligationClosed(sessionId: String, remoteModuleId: String): Boolean =
+        coordinator.testEdgeObligationClosed(sessionId, remoteModuleId)
+
+    internal fun testIsEdgeRecovering(sessionId: String, remoteModuleId: String): Boolean =
+        coordinator.testIsEdgeRecovering(sessionId, remoteModuleId)
+
     internal fun testConferenceMembershipEpoch(sessionId: String): Long =
         coordinator.testConferenceMembershipEpoch(sessionId)
 }

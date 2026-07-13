@@ -2613,6 +2613,21 @@ class TalkbackCoordinator(
         conferenceEdgeRecoveryController.factsForSession(sessionId)
     }
 
+    internal fun testEdgeObligationOpen(sessionId: String, remoteModuleId: String): Boolean =
+        runOnCoordinatorSync {
+            conferenceEdgeRecoveryController.edgeObligationOpen(sessionId, remoteModuleId)
+        }
+
+    internal fun testEdgeObligationClosed(sessionId: String, remoteModuleId: String): Boolean =
+        runOnCoordinatorSync {
+            conferenceEdgeRecoveryController.edgeObligationClosed(sessionId, remoteModuleId)
+        }
+
+    internal fun testIsEdgeRecovering(sessionId: String, remoteModuleId: String): Boolean =
+        runOnCoordinatorSync {
+            conferenceEdgeRecoveryController.isEdgeRecovering(sessionId, remoteModuleId)
+        }
+
     internal fun testConferenceMembershipEpoch(sessionId: String): Long = runOnCoordinatorSync {
         sessions[sessionId]?.rosterEpoch ?: 0L
     }
@@ -8229,19 +8244,18 @@ class TalkbackCoordinator(
         }
         val now = System.currentTimeMillis()
         val hostId = session.initiatorModuleId?.value
-        val deadRemotes = conferenceMemberRemoteIds(session).filter { moduleId ->
-            if (hostId != null && hostId != localModuleId.value && moduleId == hostId) {
-                return@filter false
-            }
-            canAuthorityPrune(session, moduleId, now)
-        }
-        if (deadRemotes.isEmpty()) return
         if (!isConferenceHostSession(session)) {
-            deadRemotes.forEach { moduleId ->
+            conferenceMemberRemoteIds(session).forEach { moduleId ->
+                if (hostId != null && hostId != localModuleId.value && moduleId == hostId) return@forEach
+                if (!isConferencePeerMediaUnhealthyForAdvisory(session, moduleId, now)) return@forEach
                 recordParticipantMediaDegradation(session, moduleId)
             }
             return
         }
+        val deadRemotes = conferenceMemberRemoteIds(session).filter { moduleId ->
+            canAuthorityPrune(session, moduleId)
+        }
+        if (deadRemotes.isEmpty()) return
         deadRemotes.forEach { moduleId ->
             log("[${session.traceId}] Pruning unhealthy conference peer $moduleId")
             removeConferenceParticipant(
@@ -8254,13 +8268,42 @@ class TalkbackCoordinator(
     }
 
     /**
-     * Host membership prune eligibility entry (ADR-0024 R29-E).
+     * Host membership prune eligibility (ADR-0024 R29-E / #75).
      *
-     * Prefactor (#74): named seam only - still implements today's soak policy
-     * (`!isEdgeRecovering` + media health / grace). Later slices flip this to consume
-     * obligation CLOSED / prune-eligible close reason / !pending decision.
+     * Consumes recovery obligation facts read-only. MUST NOT authorize prune from
+     * `!isEdgeRecovering`, ICE grace, HELLO silence, or `route=false`.
      */
     private fun canAuthorityPrune(
+        session: TalkbackSession,
+        moduleId: String
+    ): Boolean {
+        if (ModuleId(moduleId) in reachabilityView.snapshot(session.id).evicted) return false
+        val participant = meshParticipant(session, moduleId)
+        if (participant.invite != InviteState.ACCEPTED) return false
+        if (!conferenceParticipantWasEverConnected(session, moduleId)) return false
+        // Negative health guards only — never positive prune authority.
+        if (qosMonitor.isGroupConnected(moduleId)) return false
+        if (participant.media == MediaState.CONNECTED) return false
+
+        if (!conferenceEdgeRecoveryController.edgeObligationClosed(session.id, moduleId)) {
+            return false
+        }
+        val closeReason =
+            conferenceEdgeRecoveryController.obligationCloseReason(session.id, moduleId)
+                ?: return false
+        if (!closeReason.isPruneEligible()) return false
+        if (conferenceEdgeRecoveryController.hasPendingCompletionDecision(session.id, moduleId)) {
+            return false
+        }
+        return true
+    }
+
+    /**
+     * Participant advisory candidate (ADR-0023 R29-C). Media-health only; must not
+     * share host [canAuthorityPrune] obligation gate so RECOVERY_MEDIA_DEGRADED stays live
+     * while obligation remains OPEN after FAILED_MEDIA_RECOVERY.
+     */
+    private fun isConferencePeerMediaUnhealthyForAdvisory(
         session: TalkbackSession,
         moduleId: String,
         now: Long
