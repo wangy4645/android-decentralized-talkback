@@ -14,7 +14,9 @@ object ConferencePresenceProjector {
         /** ICE-direct connected remote module ids (connectivity fact). */
         val connectedRemoteModuleIds: Set<String>,
         /** Per-edge recovery facts from [ConferenceEdgeRecoveryController]. */
-        val recoveringRemoteModuleIds: Set<String> = emptySet()
+        val recoveringRemoteModuleIds: Set<String> = emptySet(),
+        /** Advisory media-health facts; MUST NOT affect [joinedCount]. */
+        val mediaUnavailableRemoteModuleIds: Set<String> = emptySet()
     )
 
     fun project(input: Input): ConferencePresenceProjection {
@@ -22,14 +24,16 @@ object ConferencePresenceProjector {
             return ConferencePresenceProjection(
                 joinedCount = 0,
                 connectedCount = 0,
-                recoveringPeers = emptySet()
+                recoveringPeers = emptySet(),
+                mediaUnavailablePeers = emptySet()
             )
         }
         val connectedCount = 1 + input.connectedRemoteModuleIds.size
         return ConferencePresenceProjection(
             joinedCount = input.joinedParticipantCount,
             connectedCount = connectedCount,
-            recoveringPeers = input.recoveringRemoteModuleIds.toSet()
+            recoveringPeers = input.recoveringRemoteModuleIds.toSet(),
+            mediaUnavailablePeers = input.mediaUnavailableRemoteModuleIds.toSet()
         )
     }
 }

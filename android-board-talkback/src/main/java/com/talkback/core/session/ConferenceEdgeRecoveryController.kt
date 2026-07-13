@@ -47,7 +47,8 @@ class ConferenceEdgeRecoveryController(
             recoveringRemoteModuleIds = recovering,
             anyRecovering = recovering.isNotEmpty(),
             failedRemoteModuleIds = failed,
-            anyFailedMediaRecovery = failed.isNotEmpty()
+            anyFailedMediaRecovery = failed.isNotEmpty(),
+            mediaUnavailableRemoteModuleIds = failed
         )
     }
 
@@ -433,35 +434,10 @@ class ConferenceEdgeRecoveryController(
                 "immediate=$immediate recoveryReason=$recoveryReason"
         )
         if (initiatesReattach) {
-            when (
-                val outcome = onRequestReattach(
-                    key.sessionId,
-                    channelId,
-                    key.remoteModuleId
-                )
-            ) {
-                ReattachDispatchOutcome.SENT -> {
-                    record.phase = EdgeRecoveryPhase.REATTACH_REQUESTED
-                    onLog(
-                        "RECOVERY_REATTACH_REQUESTED session=${key.sessionId} remote=${key.remoteModuleId} " +
-                            "attempt=${record.recoveryAttemptId}"
-                    )
-                }
-                ReattachDispatchOutcome.DEFERRED -> {
-                    record.phase = EdgeRecoveryPhase.RECOVERY_PENDING
-                }
-                ReattachDispatchOutcome.SESSION_CANCELLED -> {
-                    cancelEdge(key, "session_cancelled")
-                }
-                ReattachDispatchOutcome.PEER_UNREACHABLE,
-                ReattachDispatchOutcome.SEND_FAILED -> {
-                    record.phase = EdgeRecoveryPhase.FAILED_MEDIA_RECOVERY
-                    onLog(
-                        "FAILED_MEDIA_RECOVERY session=${key.sessionId} remote=${key.remoteModuleId} " +
-                            "reason=reattach_send_failed"
-                    )
-                }
-            }
+            applyReattachDispatchOutcome(
+                record = record,
+                outcome = onRequestReattach(key.sessionId, channelId, key.remoteModuleId)
+            )
         }
         scheduleWatchdog(record)
         notifyChanged(key.sessionId)
@@ -649,7 +625,7 @@ class ConferenceEdgeRecoveryController(
         )
     }
 
-    /** P2-A evaluation stub — full decision tree deferred to P2-B (ADR-0022 R28-C). */
+    /** P2-B re-evaluate completion evaluation (ADR-0022 R28-C/E). */
     private fun runCompletionEvaluationStub(
         record: EdgeRecoveryRecord,
         snapshot: EdgeReachabilitySnapshot,
@@ -664,24 +640,116 @@ class ConferenceEdgeRecoveryController(
             )
             return
         }
+        var superseded = false
+        if (record.phase.isFailedMediaRecovery() && signature.permittedActions.isNotEmpty()) {
+            supersedeAttempt(record)
+            superseded = true
+            onLog(
+                "RECOVERY_DECISION session=${record.key.sessionId} edge=${record.key.remoteModuleId} " +
+                    "attempt=${record.recoveryAttemptId} trigger=$trigger decision=SUPERSEDED approved=true"
+            )
+        }
         signature.waitingReason?.let { reason ->
             onLog(
                 "RECOVERY_WAITING session=${record.key.sessionId} edge=${record.key.remoteModuleId} " +
                     "reason=$reason ${snapshot.formatProbeFields()}"
             )
         }
-        if (record.phase.isFailedMediaRecovery() && signature.permittedActions.isNotEmpty()) {
-            supersedeAttempt(record)
+        if (RecoveryAction.DISPATCH_REATTACH in signature.permittedActions) {
+            when {
+                !record.initiatesReattach -> {
+                    onLog(
+                        "RECOVERY_DECISION session=${record.key.sessionId} edge=${record.key.remoteModuleId} " +
+                            "attempt=${record.recoveryAttemptId} trigger=$trigger " +
+                            "decision=WAIT_FOR_INBOUND approved=true"
+                    )
+                    notifyChanged(record.key.sessionId)
+                    return
+                }
+                record.controlPlaneStarted() -> {
+                    onLog(
+                        "RECOVERY_DECISION session=${record.key.sessionId} edge=${record.key.remoteModuleId} " +
+                            "attempt=${record.recoveryAttemptId} trigger=$trigger " +
+                            "decision=DISPATCH_REATTACH approved=false rejectReason=control_plane_started"
+                    )
+                    return
+                }
+                else -> {
+                    applyReattachDispatchOutcome(
+                        record = record,
+                        outcome = onRequestReattach(
+                            record.key.sessionId,
+                            record.channelId,
+                            record.key.remoteModuleId
+                        ),
+                        trigger = trigger
+                    )
+                    notifyChanged(record.key.sessionId)
+                    return
+                }
+            }
+        }
+        if (signature.permittedActions.isEmpty() && signature.waitingReason != null) {
             onLog(
                 "RECOVERY_DECISION session=${record.key.sessionId} edge=${record.key.remoteModuleId} " +
-                    "attempt=${record.recoveryAttemptId} trigger=$trigger decision=SUPERSEDED approved=true"
+                    "attempt=${record.recoveryAttemptId} trigger=$trigger " +
+                    "decision=WAIT_FOR_INBOUND approved=true"
             )
             return
         }
-        onLog(
-            "RECOVERY_DECISION session=${record.key.sessionId} edge=${record.key.remoteModuleId} " +
-                "attempt=${record.recoveryAttemptId} trigger=$trigger decision=EVALUATE_STUB approved=true"
-        )
+        if (!superseded) {
+            onLog(
+                "RECOVERY_DECISION session=${record.key.sessionId} edge=${record.key.remoteModuleId} " +
+                    "attempt=${record.recoveryAttemptId} trigger=$trigger decision=NO_ACTION approved=true"
+            )
+        }
+    }
+
+    private fun applyReattachDispatchOutcome(
+        record: EdgeRecoveryRecord,
+        outcome: ReattachDispatchOutcome,
+        trigger: RecoveryReevaluateTrigger? = null
+    ) {
+        val key = record.key
+        val triggerPart = trigger?.let { " trigger=$it" } ?: ""
+        when (outcome) {
+            ReattachDispatchOutcome.SENT -> {
+                record.phase = EdgeRecoveryPhase.REATTACH_REQUESTED
+                onLog(
+                    "RECOVERY_REATTACH_REQUESTED session=${key.sessionId} remote=${key.remoteModuleId} " +
+                        "attempt=${record.recoveryAttemptId}"
+                )
+                onLog(
+                    "RECOVERY_DECISION session=${key.sessionId} edge=${key.remoteModuleId} " +
+                        "attempt=${record.recoveryAttemptId}$triggerPart " +
+                        "decision=DISPATCH_REATTACH approved=true"
+                )
+            }
+            ReattachDispatchOutcome.DEFERRED -> {
+                record.phase = EdgeRecoveryPhase.RECOVERY_PENDING
+                onLog(
+                    "RECOVERY_DECISION session=${key.sessionId} edge=${key.remoteModuleId} " +
+                        "attempt=${record.recoveryAttemptId}$triggerPart " +
+                        "decision=DISPATCH_REATTACH approved=true outcome=DEFERRED"
+                )
+            }
+            ReattachDispatchOutcome.SESSION_CANCELLED -> {
+                cancelEdge(key, "session_cancelled")
+            }
+            ReattachDispatchOutcome.PEER_UNREACHABLE,
+            ReattachDispatchOutcome.SEND_FAILED -> {
+                record.phase = EdgeRecoveryPhase.FAILED_MEDIA_RECOVERY
+                onLog(
+                    "FAILED_MEDIA_RECOVERY session=${key.sessionId} remote=${key.remoteModuleId} " +
+                        "reason=reattach_send_failed"
+                )
+                onLog(
+                    "RECOVERY_DECISION session=${key.sessionId} edge=${key.remoteModuleId} " +
+                        "attempt=${record.recoveryAttemptId}$triggerPart " +
+                        "decision=DISPATCH_REATTACH approved=false"
+                )
+            }
+        }
     }
 
     private fun supersedeAttempt(record: EdgeRecoveryRecord) {

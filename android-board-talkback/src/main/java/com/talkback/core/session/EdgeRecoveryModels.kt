@@ -54,7 +54,11 @@ data class EdgeRecoveryFacts(
     val anyRecovering: Boolean = false,
     /** Remotes whose last attempt ended in FAILED_MEDIA_RECOVERY* (ADR-0021 R24-A). */
     val failedRemoteModuleIds: Set<String> = emptySet(),
-    val anyFailedMediaRecovery: Boolean = false
+    val anyFailedMediaRecovery: Boolean = false,
+    /**
+     * Media health advisory facts (ADR-0023 R29-C). MUST NOT participate in membership convergence.
+     */
+    val mediaUnavailableRemoteModuleIds: Set<String> = emptySet()
 )
 
 internal data class EdgeRecoveryRecord(
