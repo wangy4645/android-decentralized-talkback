@@ -519,6 +519,82 @@ class ConferenceEdgeRecoveryControllerTest {
     }
 
     @Test
+    fun failedMediaRecovery_routeRestored_reevaluateThenRecovered() {
+        // G-R29-3: FAILED_MEDIA_RECOVERY → route restore → REEVALUATE → RECOVERED;
+        // obligation stays OPEN across re-eval (edge not torn down early).
+        controller = buildController(
+            observationWindowMs = 10_000L,
+            attemptBudgetMs = 500L,
+            isIceConnected = { _, _ -> true }
+        )
+        controller.onIceStateChanged(
+            sessionId = "sess-1",
+            channelId = "CH-1",
+            remoteModuleId = "M01",
+            iceState = "FAILED",
+            eligibility = eligible(),
+            initiatesReattach = true
+        )
+        Thread.sleep(350)
+        assertTrue(controller.factsForSession("sess-1").anyFailedMediaRecovery)
+        assertTrue(controller.edgeObligationOpen("sess-1", "M01"))
+        assertFalse(controller.edgeObligationClosed("sess-1", "M01"))
+
+        val snapshot = EdgeReachabilitySnapshot(
+            linkReady = true,
+            peerDiscovered = true,
+            routeConverged = true,
+            authorityReachable = false
+        )
+        val before = RecoveryCapabilitySignature(
+            permittedActions = emptySet(),
+            waitingReason = RecoveryWaitingReason.WAITING_FOR_ROUTE
+        )
+        val after = projectRecoveryCapabilitySignature(
+            snapshot,
+            initiatesReattach = true,
+            controlPlaneStarted = false
+        )
+        controller.onRecoveryReachabilityChanged(
+            sessionId = "sess-1",
+            channelId = "CH-1",
+            remoteModuleId = "M01",
+            snapshot = snapshot,
+            signature = after,
+            capabilityBefore = before,
+            trigger = RecoveryReevaluateTrigger.ROUTE_CONVERGED
+        )
+        assertTrue(decisionLogs.any { it.contains("RECOVERY_REEVALUATE") })
+        assertTrue(controller.edgeObligationOpen("sess-1", "M01"))
+        assertFalse(
+            decisionLogs.any {
+                it.contains("RECOVERY_EDGE_CANCELLED") && it.contains("remote=M01")
+            }
+        )
+
+        controller.onRecoveryReattachAccepted(
+            "sess-1",
+            "M01",
+            RecoveryReason.NETWORK_RECOVERY,
+            RecoverySource.ICE_MONITOR
+        )
+        assertTrue(
+            decisionLogs.any {
+                it.contains("RECOVERY_EDGE_RECOVERED") && it.contains("remote=M01")
+            }
+        )
+        assertTrue(
+            decisionLogs.any {
+                it.contains("RECOVERY_DECISION") && it.contains("decision=RECOVERED")
+            }
+        )
+        assertEquals(ObligationCloseReason.RECOVERED, controller.obligationCloseReason("sess-1", "M01"))
+        assertTrue(controller.edgeObligationClosed("sess-1", "M01"))
+        assertFalse(controller.edgeObligationOpen("sess-1", "M01"))
+        assertFalse(controller.factsForSession("sess-1").anyFailedMediaRecovery)
+    }
+
+    @Test
     fun reevaluate_routeConverged_host_waitsForInbound() {
         controller.onIceStateChanged(
             sessionId = "sess-1",
