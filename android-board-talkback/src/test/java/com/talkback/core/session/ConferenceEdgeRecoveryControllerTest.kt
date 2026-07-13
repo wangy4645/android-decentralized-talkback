@@ -437,6 +437,8 @@ class ConferenceEdgeRecoveryControllerTest {
 
     @Test
     fun failedMediaRecovery_materialTransition_emitsReevaluate() {
+        // G-R28-H2: FAILED residency stays OPEN; material transition MUST re-evaluate and
+        // MAY SUPERSEDE into Attempt N+1 (new id, never revive the failed attempt id).
         controller.onIceStateChanged(
             sessionId = "sess-1",
             channelId = "CH-1",
@@ -447,6 +449,13 @@ class ConferenceEdgeRecoveryControllerTest {
         )
         Thread.sleep(350)
         assertTrue(controller.factsForSession("sess-1").anyFailedMediaRecovery)
+        assertTrue(controller.edgeObligationOpen("sess-1", "M01"))
+        assertFalse(controller.edgeObligationClosed("sess-1", "M01"))
+        val failedAttemptId = decisionLogs
+            .last { it.contains("FAILED_MEDIA_RECOVERY") && it.contains("remote=M01") }
+            .substringAfter("attempt=")
+            .substringBefore(' ')
+            .toLong()
 
         val snapshot = EdgeReachabilitySnapshot(
             linkReady = true,
@@ -463,6 +472,7 @@ class ConferenceEdgeRecoveryControllerTest {
             initiatesReattach = true,
             controlPlaneStarted = false
         )
+        val logMark = decisionLogs.size
         controller.onRecoveryReachabilityChanged(
             sessionId = "sess-1",
             channelId = "CH-1",
@@ -472,11 +482,38 @@ class ConferenceEdgeRecoveryControllerTest {
             capabilityBefore = before,
             trigger = RecoveryReevaluateTrigger.ROUTE_CONVERGED
         )
-        assertTrue(decisionLogs.any { it.contains("RECOVERY_REEVALUATE") })
+        val afterLogs = decisionLogs.drop(logMark)
+        assertTrue(afterLogs.any { it.contains("RECOVERY_REEVALUATE") })
+        assertTrue(controller.edgeObligationOpen("sess-1", "M01"))
+        assertFalse(controller.edgeObligationClosed("sess-1", "M01"))
         assertEquals(2, reattachCalls)
         assertTrue(
-            decisionLogs.any {
+            afterLogs.any {
                 it.contains("decision=SUPERSEDED") || it.contains("decision=DISPATCH_REATTACH")
+            }
+        )
+        val nextAttemptId = afterLogs
+            .last {
+                it.contains("decision=SUPERSEDED") ||
+                    it.contains("decision=DISPATCH_REATTACH") ||
+                    it.contains("RECOVERY_REATTACH_REQUESTED")
+            }
+            .substringAfter("attempt=")
+            .substringBefore(' ')
+            .toLong()
+        assertTrue(
+            "Attempt N+1 must use a new id, not revive failed attempt=$failedAttemptId",
+            nextAttemptId > failedAttemptId
+        )
+        assertFalse(
+            "failed attempt id must not become active again",
+            afterLogs.any {
+                it.contains("attempt=$failedAttemptId") &&
+                    (
+                        it.contains("RECOVERY_REATTACH_REQUESTED") ||
+                            it.contains("RECOVERY_EDGE_STARTED") ||
+                            it.contains("decision=DISPATCH_REATTACH")
+                        )
             }
         )
     }
