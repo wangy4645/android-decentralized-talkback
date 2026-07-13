@@ -80,6 +80,8 @@ import com.talkback.core.session.RecoverySource
 import com.talkback.core.session.projectRecoveryCapabilitySignature
 import com.talkback.core.session.ConferenceParticipantProjector
 import com.talkback.core.session.ConferenceRuntimeProjectionLogger
+import com.talkback.core.session.ConferenceNetworkIndicator
+import com.talkback.core.session.ConferenceNetworkIndicatorProjector
 import com.talkback.core.session.ConferencePresenceProjector
 import com.talkback.core.session.ConferencePresenceProjection
 import com.talkback.core.session.ConferenceRuntimeProjector
@@ -2381,15 +2383,11 @@ class TalkbackCoordinator(
         )
     }
 
-    fun networkQualityLabel(): String = runOnCoordinatorSync {
-        val states = qosMonitor.all()
-        when {
-            states.isEmpty() -> "N/A"
-            states.any { it.iceState == "FAILED" || it.iceState == "DISCONNECTED" } -> "Poor"
-            states.all { IceConnectivity.isConnected(it.iceState) } -> "Excellent"
-            else -> "Good"
-        }
+    fun conferenceNetworkIndicator(): ConferenceNetworkIndicator = runOnCoordinatorSync {
+        ConferenceNetworkIndicatorProjector.project(qosMonitor.all().map { it.iceState })
     }
+
+    fun networkQualityLabel(): String = conferenceNetworkIndicator().toQualityLabel()
 
     fun onlineModuleCount(): Int = mergeRemoteModuleViews().size
     fun qosSummary(): String = qosMonitor.formatSummary()

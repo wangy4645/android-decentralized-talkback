@@ -216,7 +216,11 @@ class TalkbackRuntime(
     fun channelMemberModuleIds(channelId: String): Set<String> =
         runCatching { coordinator.channelMemberModuleIds(channelId) }.getOrElse { emptySet() }
 
-    fun networkQualityLabel(): String = runCatching { coordinator.networkQualityLabel() }.getOrElse { "N/A" }
+    fun conferenceNetworkIndicator(): com.talkback.core.session.ConferenceNetworkIndicator =
+        runCatching { coordinator.conferenceNetworkIndicator() }
+            .getOrElse { com.talkback.core.session.ConferenceNetworkIndicator.UNKNOWN }
+
+    fun networkQualityLabel(): String = conferenceNetworkIndicator().toQualityLabel()
     fun onlineModuleCount(): Int = runCatching { coordinator.onlineModuleCount() }.getOrElse { 0 }
     fun qosSummary(): String = runCatching { coordinator.qosSummary() }.getOrElse { "" }
 

@@ -844,7 +844,7 @@ class TalkViewModel(
                 phase = unicast.callPhase,
                 localInitiated = unicast.localInitiated,
                 muted = unicast.muted,
-                networkLabel = callNetworkLabel(runtime.networkQualityLabel(), qos),
+                networkLabel = runtime.conferenceNetworkIndicator().toQualityLabel(),
                 rttMs = qos?.rttMs?.takeIf { it >= 0 },
                 packetLossPercent = qos?.packetLossPercent?.takeIf { it >= 0.0 }
             )
@@ -942,7 +942,7 @@ class TalkViewModel(
             floorPresentation = floorPresentation,
             localEndpointKey = localRawKey,
             talking = talking,
-            networkLabel = runtime.networkQualityLabel(),
+            networkLabel = runtime.conferenceNetworkIndicator().toQualityLabel(),
             sessionActive = session != null,
             pttActive = if (conferenceActive) {
                 conferenceMuted
@@ -977,7 +977,8 @@ class TalkViewModel(
                 awaitingAdditionalParticipants = session?.awaitingAdditionalParticipants == true,
                 runtimePhase = runtimePhase,
                 startedAtMs = meetingStartedAtMs,
-                networkLabel = meetingQos?.networkLabel ?: runtime.networkQualityLabel(),
+                networkLabel = meetingQos?.networkLabel
+                    ?: runtime.conferenceNetworkIndicator().toQualityLabel(),
                 rttMs = meetingQos?.rttMs,
                 packetLossPercent = meetingQos?.packetLossPercent,
                 autoGain = config.meetingAutoGain,
@@ -1146,16 +1147,6 @@ class TalkViewModel(
 
     private fun isLocalEndpointKey(key: String, localRawKey: String): Boolean =
         moduleIdFromKey(key).equals(moduleIdFromKey(localRawKey), ignoreCase = true)
-
-    private fun callNetworkLabel(globalLabel: String, qos: com.talkback.core.qos.QosSnapshot?): String {
-        if (qos?.iceState == "CONNECTED") return "Excellent"
-        return when (globalLabel) {
-            "Excellent" -> "Excellent"
-            "Good" -> "Good"
-            "Poor" -> "Poor"
-            else -> "N/A"
-        }
-    }
 
     fun teamDisplayName(): String = configStore.load().channelDisplayName
 
