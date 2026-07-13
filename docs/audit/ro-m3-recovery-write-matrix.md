@@ -15,7 +15,7 @@
 | **WM-R2** | Edge-scoped fact **must never** gate Conference-scoped decision |
 | **WM-R3** | Recovery Commands may consume Conference Facts；Conference Facts **must not** consume Recovery Commands |
 | **WM-R4** | **Membership Plane** emits `RejoinIntent` only；**Connectivity Plane** owns Recovery approval. Planes read facts; neither issues the other's commands (ADR-0021 R21) |
-| **WM-R5** | **`FAILED_MEDIA_RECOVERY` Guardrail（防护约束，非本轮根因）**：不得删除 `ConferenceSession`；不得触发 Lifecycle transition；不得改 Membership。只允许 `edge.state = FAILED*`。**本 soak：未违反**（R1-B = Host `MEETING_ENDED`）。见 ADR-0021 **R24** |
+| **WM-R5** | **`FAILED_MEDIA_RECOVERY` Guardrail**：不得删除 `ConferenceSession`；不得触发 Lifecycle transition；不得改 Membership。只允许 `edge.state = FAILED*`。~~本 soak：未违反~~ → **P2-B soak（`c46a2ba0`）证伪**：participant M01 在 `FAILED_MEDIA_RECOVERY(M03)` 后 post-terminal prune 改了 canonical roster。**已由 ADR-0023 (R29) 落地为强制边界**（participant + post-terminal）。见 ADR-0021 **R24**、ADR-0023 **R29-C** |
 | **WM-R6** | **False termination Guardrail（R25 P0）**：Connectivity facts（`NETWORK_LOSS` / `ICE_FAILED` / `TRANSPORT_LOST`）**不得**写入 `SESSION_CANCELLED`、`CONFERENCE_TERMINATED`、`channel_cancelled` / tombstone。只允许 `edge.state = RECOVERING` 或 `FAILED_MEDIA_RECOVERY*`。**R24A soak：tombstone 生命周期 bug** — 合法 `remote_hangup` tombstone 未在新 session clear，Recovery 误读。见 `docs/audit/r25-false-conference-termination.md` |
 
 ### 双平面（冻结 2026-07-09）
@@ -81,7 +81,7 @@ Recovery Plane    →  Membership mutation            ❌ (R10)
 | `acceptGroupInvite` | 🟢 参与方入会 | 🟢 绑定 host sessionId | 🟢 onInviteAccepted | — | — | 🟢 mesh | 参与方不得换 sessionId |
 | `hangupInternal` | 🟢 LOCAL 终止 | 🟢 remove session | 🟢 dispose | 🟢 clear rejoin | 🟢 cancelChannel/Session | 🟢 release media | 本地挂断权威 |
 | `releaseConferenceRuntimeAfterRemoteTermination` | 🟢 REMOTE 终止 | — | — | 🟢 clearRejoin | 🟢 cancelChannel | 🟡 条件 release channel | 须先于 recovery 完成 |
-| `removeConferenceParticipant` | — | — | 🟢 LEFT | — | 🟢 cancelEdge | — | member_left 应阻断 recovery；**R26**：ICE/health 路径在 `isEdgeRecovering` 窗口内禁止调用 |
+| `removeConferenceParticipant` | — | — | 🟢 LEFT | — | 🟢 cancelEdge | — | **R29**：改签名带 `AuthorityMembershipMutationSource`；四写点（roster/memberModules/floor/mesh）为原子事务；participant 的 `LOCAL_RECOVERY_FAILURE` 不得进入此 API。见 ADR-0023 R29-A/B |
 | `scheduleParticipantPrune` | — | — | 🟡 prune | — | — | — | **R26**：`RECOVERY_PRUNE_DEFERRED` while edge recovering |
 | `cleanupUnhealthyConferenceSession` | — | — | 🟡 prune | — | — | — | **R26 v1**：defer via `canPruneConferenceParticipant`; post-terminal prune = R26 v2 |
 | `clearConferenceRejoinState` | — | — | — | 🟢 | — | — | T3：终止后须 clear，否则 zombie rejoin |
@@ -135,6 +135,8 @@ RECOVERY_PRUNE_DEFERRED → recovery runs full attempt budget
 
 Post-terminal `cleanupUnhealthyConferenceSession` prune **after** `FAILED_MEDIA_RECOVERY` is
 **out of R26 v1 scope** (Membership survival semantics — R26 v2 / separate ADR).
+
+**R26 v2 已由 ADR-0023 (R29) 兑现（2026-07-13）**：P2-B soak（`c46a2ba0`）证明 participant M01 在 `FAILED_MEDIA_RECOVERY(M03)` 后走 post-terminal prune，改了 canonical roster + memberModules + floor + mesh（authority-only mutation transaction 越权）。R29 冻结：membership mutation 为 authority-owned 原子事务；`LOCAL_RECOVERY_FAILURE` 仅为 recovery fact，不得 mutate membership，也不得隐式终止 edge obligation（耦合 R28-F）。
 
 ---
 
@@ -269,7 +271,7 @@ ICE_CONNECTED 后 5s 内必须二选一：
 | 12 | **R25B session-scoped CancellationToken** | tombstone key = `(channelId, sessionId, generation)` |
 | 13 | **WM-R6** 断言/门禁 | Connectivity loss 不 tombstone channel（Recovery 侧已解耦） |
 | 14 | **WM-R5** Guardrail | `FAILED_MEDIA_RECOVERY` 后无 lifecycle 越权 |
-| — | **R26 v2** post-terminal roster semantics | **冻结** — 不在 #73 收尾 |
+| — | **R26 v2** post-terminal roster semantics | **由 ADR-0023 (R29) 兑现（2026-07-13）** — participant + post-terminal membership mutation boundary |
 | — | Host Link Bootstrap / R24-B | 冻结 |
 | — | Issue1 Host LIVE | 冻结 |
 | — | M02 `visible=3` vs host `visible=2` | **P2**（roster ∩ presence） |
