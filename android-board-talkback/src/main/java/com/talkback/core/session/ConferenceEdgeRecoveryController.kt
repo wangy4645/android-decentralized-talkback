@@ -14,6 +14,12 @@ class ConferenceEdgeRecoveryController(
     private val debounceMs: Long = 3_000L,
     private val iceRestartTimeoutMs: Long = 10_000L,
     private val attemptBudgetMs: Long = 15_000L,
+    /**
+     * Observation window after failed-media residency (ADR-0022 R28-H).
+     * `obligationDeadlineAt = attemptTerminalAt + observationWindow`. Must be meaningfully
+     * longer than the soak's ~4s premature prune; tests may inject a short window.
+     */
+    private val observationWindowMs: Long = 30_000L,
     private val tombstoneTtlMs: Long = 120_000L,
     private val clock: () -> Long = { System.currentTimeMillis() },
     private val scheduler: ScheduledExecutorService,
@@ -29,6 +35,7 @@ class ConferenceEdgeRecoveryController(
     private val edges = ConcurrentHashMap<ConferenceEdgeKey, EdgeRecoveryRecord>()
     private val debounceTimers = ConcurrentHashMap<ConferenceEdgeKey, ScheduledFuture<*>>()
     private val watchdogTimers = ConcurrentHashMap<ConferenceEdgeKey, ScheduledFuture<*>>()
+    private val deadlineTimers = ConcurrentHashMap<ConferenceEdgeKey, ScheduledFuture<*>>()
     private val cancelledSessions = ConcurrentHashMap<String, Long>()
     private val cancelledChannels = ConcurrentHashMap<String, Long>()
     private var attemptSeq = 0L
@@ -68,7 +75,7 @@ class ConferenceEdgeRecoveryController(
 
     /**
      * Recovery Edge Obligation OPEN (ADR-0022 R28-H).
-     * Prefactor (#74): phase-based open until exclusive close stamp; no deadline close yet.
+     * OPEN until exclusive close stamp (including [ObligationCloseReason.OBLIGATION_DEADLINE]).
      */
     fun edgeObligationOpen(sessionId: String, remoteModuleId: String): Boolean {
         val record = edges[ConferenceEdgeKey(sessionId, remoteModuleId)] ?: return false
@@ -92,9 +99,60 @@ class ConferenceEdgeRecoveryController(
 
     private fun closeObligation(record: EdgeRecoveryRecord, reason: ObligationCloseReason) {
         if (record.obligationClosedAtMs != null) return
+        cancelDeadline(record.key)
         record.obligationClosedAtMs = clock()
         record.obligationCloseReason = reason
         record.hasPendingCompletionDecision = false
+        onLog(
+            "RECOVERY_OBLIGATION_CLOSED session=${record.key.sessionId} " +
+                "remote=${record.key.remoteModuleId} reason=$reason"
+        )
+    }
+
+    /**
+     * Enter failed-media residency: attempt terminal, obligation stays OPEN, stamp deadline.
+     * Single writer of [EdgeRecoveryRecord.obligationDeadlineAtMs] (ADR-0022 R28-H.1 / #77).
+     */
+    private fun enterFailedMediaResidency(record: EdgeRecoveryRecord, reason: String) {
+        record.phase = EdgeRecoveryPhase.FAILED_MEDIA_RECOVERY
+        val terminalAt = clock()
+        record.obligationDeadlineAtMs = terminalAt + observationWindowMs
+        onLog(
+            "FAILED_MEDIA_RECOVERY session=${record.key.sessionId} remote=${record.key.remoteModuleId} " +
+                "reason=$reason deadlineAt=${record.obligationDeadlineAtMs}"
+        )
+        scheduleObligationDeadline(record)
+    }
+
+    private fun enterFailedRequiresUserAction(record: EdgeRecoveryRecord) {
+        record.phase = EdgeRecoveryPhase.FAILED_REQUIRES_USER_ACTION
+        val terminalAt = clock()
+        record.obligationDeadlineAtMs = terminalAt + observationWindowMs
+        scheduleObligationDeadline(record)
+    }
+
+    private fun scheduleObligationDeadline(record: EdgeRecoveryRecord) {
+        val key = record.key
+        cancelDeadline(key)
+        val deadlineAt = record.obligationDeadlineAtMs ?: return
+        val delayMs = (deadlineAt - clock()).coerceAtLeast(0L)
+        val future = scheduler.schedule({
+            val current = edges[key] ?: return@schedule
+            if (current.obligationClosedAtMs != null) return@schedule
+            // Wall-clock delay already encodes observationWindow; do not re-gate on [clock]
+            // so injected test clocks that do not advance still close on schedule.
+            if (current.obligationDeadlineAtMs == null) return@schedule
+            // Only close from failed-media residency. Active Attempt N+1 after SUPERSEDE
+            // must not be killed by a stale timer from the prior failed entry.
+            if (!current.phase.isFailedMediaRecovery()) return@schedule
+            closeObligation(current, ObligationCloseReason.OBLIGATION_DEADLINE)
+            notifyChanged(key.sessionId)
+        }, delayMs, TimeUnit.MILLISECONDS)
+        deadlineTimers[key] = future
+    }
+
+    private fun cancelDeadline(key: ConferenceEdgeKey) {
+        deadlineTimers.remove(key)?.cancel(false)
     }
 
     /**
@@ -345,7 +403,10 @@ class ConferenceEdgeRecoveryController(
                 EdgeRecoveryPhase.FAILED_IDENTITY_MISMATCH
             reason.contains("EPOCH", ignoreCase = true) ->
                 EdgeRecoveryPhase.FAILED_STALE_LINEAGE
-            else -> EdgeRecoveryPhase.FAILED_REQUIRES_USER_ACTION
+            else -> {
+                enterFailedRequiresUserAction(record)
+                EdgeRecoveryPhase.FAILED_REQUIRES_USER_ACTION
+            }
         }
         onLog(
             "RECOVERY_REATTACH_REJECTED session=$sessionId remote=$remoteModuleId " +
@@ -370,6 +431,7 @@ class ConferenceEdgeRecoveryController(
         val key = record.key
         cancelDebounce(key)
         cancelWatchdog(key)
+        cancelDeadline(key)
         record.phase = EdgeRecoveryPhase.RECOVERED
         closeObligation(record, ObligationCloseReason.RECOVERED)
         onLog(
@@ -402,6 +464,8 @@ class ConferenceEdgeRecoveryController(
         debounceTimers.clear()
         watchdogTimers.values.forEach { it.cancel(false) }
         watchdogTimers.clear()
+        deadlineTimers.values.forEach { it.cancel(false) }
+        deadlineTimers.clear()
         edges.clear()
         cancelledSessions.clear()
         cancelledChannels.clear()
@@ -497,11 +561,7 @@ class ConferenceEdgeRecoveryController(
         record.iceRestartIssued = true
         val restarted = onIceRestart(record.key.sessionId, record.key.remoteModuleId)
         if (!restarted) {
-            record.phase = EdgeRecoveryPhase.FAILED_MEDIA_RECOVERY
-            onLog(
-                "FAILED_MEDIA_RECOVERY session=${record.key.sessionId} remote=${record.key.remoteModuleId} " +
-                    "reason=ice_restart_failed"
-            )
+            enterFailedMediaResidency(record, reason = "ice_restart_failed")
         }
         scheduleWatchdog(record)
         notifyChanged(record.key.sessionId)
@@ -523,11 +583,7 @@ class ConferenceEdgeRecoveryController(
                     "RECOVERY_DECISION session=${key.sessionId} edge=${key.remoteModuleId} " +
                         "attempt=${current.recoveryAttemptId} decision=ATTEMPT_TIMEOUT approved=false"
                 )
-                current.phase = EdgeRecoveryPhase.FAILED_MEDIA_RECOVERY
-                onLog(
-                    "FAILED_MEDIA_RECOVERY session=${key.sessionId} remote=${key.remoteModuleId} " +
-                        "reason=attempt_timeout"
-                )
+                enterFailedMediaResidency(current, reason = "attempt_timeout")
                 notifyChanged(key.sessionId)
             }
         }, budgetMs, TimeUnit.MILLISECONDS)
@@ -537,6 +593,7 @@ class ConferenceEdgeRecoveryController(
     private fun cancelEdge(key: ConferenceEdgeKey, reason: String) {
         cancelDebounce(key)
         cancelWatchdog(key)
+        cancelDeadline(key)
         val record = edges[key] ?: return
         record.phase = EdgeRecoveryPhase.CANCELLED
         val closeReason = when {
@@ -795,11 +852,7 @@ class ConferenceEdgeRecoveryController(
             }
             ReattachDispatchOutcome.PEER_UNREACHABLE,
             ReattachDispatchOutcome.SEND_FAILED -> {
-                record.phase = EdgeRecoveryPhase.FAILED_MEDIA_RECOVERY
-                onLog(
-                    "FAILED_MEDIA_RECOVERY session=${key.sessionId} remote=${key.remoteModuleId} " +
-                        "reason=reattach_send_failed"
-                )
+                enterFailedMediaResidency(record, reason = "reattach_send_failed")
                 onLog(
                     "RECOVERY_DECISION session=${key.sessionId} edge=${key.remoteModuleId} " +
                         "attempt=${record.recoveryAttemptId}$triggerPart " +
@@ -810,6 +863,9 @@ class ConferenceEdgeRecoveryController(
     }
 
     private fun supersedeAttempt(record: EdgeRecoveryRecord) {
+        // Drop prior failed-residency deadline; next FAILED stamps a fresh one (R28-H.1).
+        cancelDeadline(record.key)
+        record.obligationDeadlineAtMs = null
         record.phase = EdgeRecoveryPhase.RECOVERY_PENDING
         record.recoveryAttemptId = ++attemptSeq
         record.iceRestartIssued = false

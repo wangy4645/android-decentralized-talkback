@@ -3,6 +3,7 @@ package com.talkback.core.session
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -23,23 +24,31 @@ class ConferenceEdgeRecoveryControllerTest {
         reattachCalls = 0
         iceRestartCalls = 0
         decisionLogs.clear()
-        controller = ConferenceEdgeRecoveryController(
-            debounceMs = 50L,
-            iceRestartTimeoutMs = 200L,
-            attemptBudgetMs = 500L,
-            clock = { nowMs },
-            scheduler = scheduler,
-            onLog = { message -> decisionLogs.add(message) },
-            onRequestReattach = { _, _, _ ->
-                reattachCalls++
-                ReattachDispatchOutcome.SENT
-            },
-            onIceRestart = { _, _ ->
-                iceRestartCalls++
-                true
-            }
-        )
+        controller = buildController(observationWindowMs = 10_000L)
     }
+
+    private fun buildController(
+        observationWindowMs: Long = 10_000L,
+        attemptBudgetMs: Long = 500L,
+        onRequestReattach: (String, String, String) -> ReattachDispatchOutcome = { _, _, _ ->
+            reattachCalls++
+            ReattachDispatchOutcome.SENT
+        },
+        onIceRestart: (String, String) -> Boolean = { _, _ ->
+            iceRestartCalls++
+            true
+        }
+    ) = ConferenceEdgeRecoveryController(
+        debounceMs = 50L,
+        iceRestartTimeoutMs = 200L,
+        attemptBudgetMs = attemptBudgetMs,
+        observationWindowMs = observationWindowMs,
+        clock = { nowMs },
+        scheduler = scheduler,
+        onLog = { message -> decisionLogs.add(message) },
+        onRequestReattach = onRequestReattach,
+        onIceRestart = onIceRestart
+    )
 
     @After
     fun tearDown() {
@@ -56,20 +65,10 @@ class ConferenceEdgeRecoveryControllerTest {
 
     @Test
     fun deferredReattach_keepsRecoveryPending() {
-        controller = ConferenceEdgeRecoveryController(
-            debounceMs = 50L,
-            iceRestartTimeoutMs = 200L,
-            attemptBudgetMs = 500L,
-            clock = { nowMs },
-            scheduler = scheduler,
-            onLog = { message -> decisionLogs.add(message) },
+        controller = buildController(
             onRequestReattach = { _, _, _ ->
                 reattachCalls++
                 ReattachDispatchOutcome.DEFERRED
-            },
-            onIceRestart = { _, _ ->
-                iceRestartCalls++
-                true
             }
         )
         controller.onIceStateChanged(
@@ -335,20 +334,10 @@ class ConferenceEdgeRecoveryControllerTest {
 
     @Test
     fun deferredReattach_iceConnected_blocked_emitsReevaluateOnCapabilityChange() {
-        controller = ConferenceEdgeRecoveryController(
-            debounceMs = 50L,
-            iceRestartTimeoutMs = 200L,
-            attemptBudgetMs = 500L,
-            clock = { nowMs },
-            scheduler = scheduler,
-            onLog = { message -> decisionLogs.add(message) },
+        controller = buildController(
             onRequestReattach = { _, _, _ ->
                 reattachCalls++
                 ReattachDispatchOutcome.DEFERRED
-            },
-            onIceRestart = { _, _ ->
-                iceRestartCalls++
-                true
             }
         )
         controller.onIceStateChanged(
@@ -513,9 +502,95 @@ class ConferenceEdgeRecoveryControllerTest {
         Thread.sleep(350)
         assertTrue(controller.edgeObligationOpen("sess-1", "M01"))
         assertFalse(controller.edgeObligationClosed("sess-1", "M01"))
-        assertEquals(null, controller.obligationDeadlineAt("sess-1", "M01"))
+        assertEquals(nowMs + 10_000L, controller.obligationDeadlineAt("sess-1", "M01"))
         assertEquals(null, controller.obligationCloseReason("sess-1", "M01"))
         assertFalse(controller.hasPendingCompletionDecision("sess-1", "M01"))
+    }
+
+    @Test
+    fun obligationDeadline_pastWindow_closesWithObligationDeadline() {
+        // G-R28-H3: controller-owned deadline closes obligation exclusively.
+        // Watchdog budget = min(120, 250) = 120ms; observation window = 150ms after FAILED.
+        controller = buildController(observationWindowMs = 150L, attemptBudgetMs = 120L)
+        controller.onIceStateChanged(
+            sessionId = "sess-1",
+            channelId = "CH-1",
+            remoteModuleId = "M01",
+            iceState = "FAILED",
+            eligibility = eligible(),
+            initiatesReattach = true
+        )
+        Thread.sleep(200)
+        assertTrue(controller.edgeObligationOpen("sess-1", "M01"))
+        assertFalse(controller.edgeObligationClosed("sess-1", "M01"))
+        assertEquals(nowMs + 150L, controller.obligationDeadlineAt("sess-1", "M01"))
+
+        Thread.sleep(200)
+        assertTrue(controller.edgeObligationClosed("sess-1", "M01"))
+        assertFalse(controller.edgeObligationOpen("sess-1", "M01"))
+        assertEquals(
+            ObligationCloseReason.OBLIGATION_DEADLINE,
+            controller.obligationCloseReason("sess-1", "M01")
+        )
+        assertTrue(ObligationCloseReason.OBLIGATION_DEADLINE.isPruneEligible())
+        assertFalse(controller.hasPendingCompletionDecision("sess-1", "M01"))
+    }
+
+    @Test
+    fun obligationCloseReason_nonDeadline_isNotPruneEligible() {
+        assertFalse(ObligationCloseReason.RECOVERED.isPruneEligible())
+        assertFalse(ObligationCloseReason.MEMBERSHIP_LEFT.isPruneEligible())
+        assertFalse(ObligationCloseReason.CONFERENCE_TERMINATED.isPruneEligible())
+    }
+
+    @Test
+    fun supersedeAfterFailed_cancelsPriorObligationDeadline() {
+        // Stale OBLIGATION_DEADLINE timer must not close while Attempt N+1 is active.
+        controller = buildController(observationWindowMs = 120L, attemptBudgetMs = 120L)
+        controller.onIceStateChanged(
+            sessionId = "sess-1",
+            channelId = "CH-1",
+            remoteModuleId = "M01",
+            iceState = "FAILED",
+            eligibility = eligible(),
+            initiatesReattach = true
+        )
+        Thread.sleep(200)
+        assertTrue(controller.edgeObligationOpen("sess-1", "M01"))
+        assertNotNull(controller.obligationDeadlineAt("sess-1", "M01"))
+
+        val snapshot = EdgeReachabilitySnapshot(
+            linkReady = true,
+            peerDiscovered = true,
+            routeConverged = true,
+            authorityReachable = false
+        )
+        val before = RecoveryCapabilitySignature(
+            permittedActions = emptySet(),
+            waitingReason = RecoveryWaitingReason.WAITING_FOR_ROUTE
+        )
+        val after = projectRecoveryCapabilitySignature(
+            snapshot,
+            initiatesReattach = true,
+            controlPlaneStarted = false
+        )
+        controller.onRecoveryReachabilityChanged(
+            sessionId = "sess-1",
+            channelId = "CH-1",
+            remoteModuleId = "M01",
+            snapshot = snapshot,
+            signature = after,
+            capabilityBefore = before,
+            trigger = RecoveryReevaluateTrigger.ROUTE_CONVERGED
+        )
+        assertEquals(null, controller.obligationDeadlineAt("sess-1", "M01"))
+        assertTrue(controller.edgeObligationOpen("sess-1", "M01"))
+        assertFalse(controller.edgeObligationClosed("sess-1", "M01"))
+
+        Thread.sleep(200)
+        assertTrue(controller.edgeObligationOpen("sess-1", "M01"))
+        assertFalse(controller.edgeObligationClosed("sess-1", "M01"))
+        assertEquals(null, controller.obligationCloseReason("sess-1", "M01"))
     }
 
     @Test

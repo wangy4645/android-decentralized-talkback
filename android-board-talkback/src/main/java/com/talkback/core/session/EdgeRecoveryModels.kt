@@ -100,9 +100,9 @@ internal data class EdgeRecoveryRecord(
     }
 
     /**
-     * Partial open predicate retained for P2-A / #74 prefactor:
-     * active attempt or failed-media residency. CLOSED stamp overrides.
-     * Full deadline-aware lifetime lands in later R28-H slices.
+     * Obligation open predicate (ADR-0022 R28-H):
+     * active attempt or failed-media residency until exclusive close stamp
+     * (including OBLIGATION_DEADLINE).
      */
     fun edgeObligationOpen(): Boolean {
         if (obligationClosedAtMs != null) return false

@@ -43,6 +43,11 @@ data class TalkbackRuntimeConfig(
     /** Grace before pruning unhealthy mesh ICE in conference health cleanup. */
     val meshNegotiationGraceMs: Long = 15_000L,
     val edgeRecoveryAttemptBudgetMs: Long = 15_000L,
+    /**
+     * Observation window after failed-media residency (ADR-0022 R28-H).
+     * Tests may inject a short window for G-R28-H3 / G-R29-E3.
+     */
+    val edgeRecoveryObservationWindowMs: Long = 30_000L,
     /** ADR-0004 interim; Phase 3 enforces auto FLOOR_RELEASE on acquire timeout. */
     val acquireReleaseTimeoutMs: Long = 500L
 )
@@ -398,6 +403,12 @@ class TalkbackRuntime(
 
     internal fun testEdgeObligationClosed(sessionId: String, remoteModuleId: String): Boolean =
         coordinator.testEdgeObligationClosed(sessionId, remoteModuleId)
+
+    internal fun testObligationCloseReason(sessionId: String, remoteModuleId: String) =
+        coordinator.testObligationCloseReason(sessionId, remoteModuleId)
+
+    internal fun testObligationDeadlineAt(sessionId: String, remoteModuleId: String): Long? =
+        coordinator.testObligationDeadlineAt(sessionId, remoteModuleId)
 
     internal fun testIsEdgeRecovering(sessionId: String, remoteModuleId: String): Boolean =
         coordinator.testIsEdgeRecovering(sessionId, remoteModuleId)

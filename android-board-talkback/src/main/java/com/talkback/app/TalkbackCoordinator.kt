@@ -71,6 +71,7 @@ import com.talkback.core.session.ConferenceParticipantManager
 import com.talkback.core.session.EdgeReachabilitySnapshot
 import com.talkback.core.session.EdgeRecoveryEligibility
 import com.talkback.core.session.EdgeRecoveryFacts
+import com.talkback.core.session.ObligationCloseReason
 import com.talkback.core.session.ReattachDispatchOutcome
 import com.talkback.core.session.RecoveryCapabilitySignature
 import com.talkback.core.session.RecoveryReason
@@ -188,6 +189,11 @@ data class TalkbackCoordinatorConfig(
     val conferenceParticipantPruneGraceMs: Long = 15_000L,
     /** Per-edge recovery attempt watchdog budget (ADR-0022 R28-F). */
     val edgeRecoveryAttemptBudgetMs: Long = 15_000L,
+    /**
+     * Observation window after failed-media residency before obligation deadline close
+     * (ADR-0022 R28-H). Must exceed soak premature-prune class (~4s); tests may shorten.
+     */
+    val edgeRecoveryObservationWindowMs: Long = 30_000L,
     /** UI timeout before showing reconnect-failed on a conference session. */
     val conferenceReconnectTimeoutMs: Long = 60_000L,
     /** When false, incoming Meeting (conference) invites are rejected until the user taps Join. */
@@ -314,7 +320,8 @@ class TalkbackCoordinator(
             onRecoveryStateChanged = { sessionId ->
                 sessions[sessionId]?.let { emitConferenceRuntimeProjection(it) }
             },
-            attemptBudgetMs = config.edgeRecoveryAttemptBudgetMs
+            attemptBudgetMs = config.edgeRecoveryAttemptBudgetMs,
+            observationWindowMs = config.edgeRecoveryObservationWindowMs
         )
     }
     private val groupMeshReconciler = GroupMeshReconciler()
@@ -2621,6 +2628,18 @@ class TalkbackCoordinator(
     internal fun testEdgeObligationClosed(sessionId: String, remoteModuleId: String): Boolean =
         runOnCoordinatorSync {
             conferenceEdgeRecoveryController.edgeObligationClosed(sessionId, remoteModuleId)
+        }
+
+    internal fun testObligationCloseReason(
+        sessionId: String,
+        remoteModuleId: String
+    ): ObligationCloseReason? = runOnCoordinatorSync {
+        conferenceEdgeRecoveryController.obligationCloseReason(sessionId, remoteModuleId)
+    }
+
+    internal fun testObligationDeadlineAt(sessionId: String, remoteModuleId: String): Long? =
+        runOnCoordinatorSync {
+            conferenceEdgeRecoveryController.obligationDeadlineAt(sessionId, remoteModuleId)
         }
 
     internal fun testIsEdgeRecovering(sessionId: String, remoteModuleId: String): Boolean =
@@ -8268,10 +8287,11 @@ class TalkbackCoordinator(
     }
 
     /**
-     * Host membership prune eligibility (ADR-0024 R29-E / #75).
+     * Host membership prune eligibility (ADR-0024 R29-E / #75+#77).
      *
      * Consumes recovery obligation facts read-only. MUST NOT authorize prune from
      * `!isEdgeRecovering`, ICE grace, HELLO silence, or `route=false`.
+     * MUST NOT recompute obligationDeadlineAt — controller is the single writer.
      */
     private fun canAuthorityPrune(
         session: TalkbackSession,
