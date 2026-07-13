@@ -40,6 +40,14 @@ data class TalkbackRuntimeConfig(
     val discoveryAnnounceIntervalMs: Long = 10_000L,
     val conferenceHostIceReconnectGraceMs: Long = 5_000L,
     val conferenceInviteRingTimeoutMs: Long = 20_000L,
+    /** Grace before pruning unhealthy mesh ICE in conference health cleanup. */
+    val meshNegotiationGraceMs: Long = 15_000L,
+    val edgeRecoveryAttemptBudgetMs: Long = 15_000L,
+    /**
+     * Observation window after failed-media residency (ADR-0022 R28-H).
+     * Tests may inject a short window for G-R28-H3 / G-R29-E3.
+     */
+    val edgeRecoveryObservationWindowMs: Long = 30_000L,
     /** ADR-0004 interim; Phase 3 enforces auto FLOOR_RELEASE on acquire timeout. */
     val acquireReleaseTimeoutMs: Long = 500L
 )
@@ -208,7 +216,11 @@ class TalkbackRuntime(
     fun channelMemberModuleIds(channelId: String): Set<String> =
         runCatching { coordinator.channelMemberModuleIds(channelId) }.getOrElse { emptySet() }
 
-    fun networkQualityLabel(): String = runCatching { coordinator.networkQualityLabel() }.getOrElse { "N/A" }
+    fun conferenceNetworkIndicator(): com.talkback.core.session.ConferenceNetworkIndicator =
+        runCatching { coordinator.conferenceNetworkIndicator() }
+            .getOrElse { com.talkback.core.session.ConferenceNetworkIndicator.UNKNOWN }
+
+    fun networkQualityLabel(): String = conferenceNetworkIndicator().toQualityLabel()
     fun onlineModuleCount(): Int = runCatching { coordinator.onlineModuleCount() }.getOrElse { 0 }
     fun qosSummary(): String = runCatching { coordinator.qosSummary() }.getOrElse { "" }
 
@@ -385,5 +397,30 @@ class TalkbackRuntime(
 
     internal fun testRunConferenceHealthCleanup(channelId: String) {
         coordinator.testRunConferenceHealthCleanup(channelId)
+    }
+
+    internal fun testEdgeRecoveryFacts(sessionId: String) =
+        coordinator.testEdgeRecoveryFacts(sessionId)
+
+    internal fun testEdgeObligationOpen(sessionId: String, remoteModuleId: String): Boolean =
+        coordinator.testEdgeObligationOpen(sessionId, remoteModuleId)
+
+    internal fun testEdgeObligationClosed(sessionId: String, remoteModuleId: String): Boolean =
+        coordinator.testEdgeObligationClosed(sessionId, remoteModuleId)
+
+    internal fun testObligationCloseReason(sessionId: String, remoteModuleId: String) =
+        coordinator.testObligationCloseReason(sessionId, remoteModuleId)
+
+    internal fun testObligationDeadlineAt(sessionId: String, remoteModuleId: String): Long? =
+        coordinator.testObligationDeadlineAt(sessionId, remoteModuleId)
+
+    internal fun testIsEdgeRecovering(sessionId: String, remoteModuleId: String): Boolean =
+        coordinator.testIsEdgeRecovering(sessionId, remoteModuleId)
+
+    internal fun testConferenceMembershipEpoch(sessionId: String): Long =
+        coordinator.testConferenceMembershipEpoch(sessionId)
+
+    internal fun testNotifyRemoteModuleRecovered(moduleId: String) {
+        coordinator.testNotifyRemoteModuleRecovered(moduleId)
     }
 }

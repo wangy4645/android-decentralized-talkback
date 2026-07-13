@@ -24,6 +24,8 @@ data class GroupSessionPayload(
     val memberHash: Int = 0,
     /** True when host pulls a prior member back (rejoin), not a first-time invite. */
     val rejoin: Boolean = false,
+    /** ADR-0021 D1: distinguishes mesh join from recovery reattach on GROUP_JOIN. */
+    val joinIntent: ConferenceJoinIntent = ConferenceJoinIntent.NORMAL_JOIN,
     /** Control-plane roster sync without media (RESYNC response). */
     val membershipSnapshot: MembershipSnapshot? = null
 ) {
@@ -61,6 +63,9 @@ data class GroupSessionPayload(
         if (rejoin) {
             json.put("rejoin", true)
         }
+        if (joinIntent != ConferenceJoinIntent.NORMAL_JOIN) {
+            json.put("joinIntent", joinIntent.encode())
+        }
         membershipSnapshot?.let { json.put("membershipSnapshot", it.encode()) }
         return json.toString()
     }
@@ -92,6 +97,9 @@ data class GroupSessionPayload(
                     rosterEpoch = json.optLong("rosterEpoch", 0L),
                     memberHash = json.optInt("memberHash", 0),
                     rejoin = json.optBoolean("rejoin", false),
+                    joinIntent = ConferenceJoinIntent.fromPayload(
+                        json.optString("joinIntent").takeIf { it.isNotBlank() }
+                    ),
                     membershipSnapshot = json.optJSONObject("membershipSnapshot")?.let {
                         MembershipSnapshot.decode(it)
                     }

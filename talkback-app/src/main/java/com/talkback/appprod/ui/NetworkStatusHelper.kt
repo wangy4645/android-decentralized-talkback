@@ -6,6 +6,7 @@ import android.net.NetworkCapabilities
 import android.os.Build
 import com.talkback.appprod.R
 import com.talkback.appprod.TalkbackApp
+import com.talkback.core.session.ConferenceNetworkIndicator
 
 object NetworkStatusHelper {
     data class Status(
@@ -18,20 +19,20 @@ object NetworkStatusHelper {
         val app = TalkbackApp.get(context)
         val runtime = app.runtimeManager.getRuntime()
         if (app.serviceRunning && runtime != null) {
-            return when (runtime.networkQualityLabel()) {
-                "Excellent" -> Status(
+            return when (runtime.conferenceNetworkIndicator()) {
+                ConferenceNetworkIndicator.EXCELLENT -> Status(
                     R.string.network_quality_excellent,
                     R.string.settings_network_detail_qos_excellent
                 )
-                "Good" -> Status(
+                ConferenceNetworkIndicator.GOOD -> Status(
                     R.string.network_quality_good,
                     R.string.settings_network_detail_qos_good
                 )
-                "Poor" -> Status(
+                ConferenceNetworkIndicator.DEGRADED -> Status(
                     R.string.network_quality_poor,
                     R.string.settings_network_detail_qos_poor
                 )
-                else -> Status(
+                ConferenceNetworkIndicator.UNKNOWN -> Status(
                     R.string.network_quality_na,
                     R.string.settings_network_detail_qos_na
                 )

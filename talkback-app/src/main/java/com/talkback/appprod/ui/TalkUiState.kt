@@ -51,6 +51,12 @@ data class MeetingUiState(
     val visibleParticipantCount: Int = 0,
     /** Primary meeting size label (ADR-0020 P2); excludes pending invitees. */
     val joinedParticipantCount: Int = 0,
+    /** Mesh-connected participants including local (ADR-0022 R27′). */
+    val connectedParticipantCount: Int = 0,
+    /** Remote peers with active edge recovery on this device (ADR-0022 R27′). */
+    val recoveringPeers: Set<String> = emptySet(),
+    /** View label from presence divergence: "3" or "2/3" (R27′-fix). */
+    val participantCountLabel: String = "0",
     val awaitingAdditionalParticipants: Boolean = false,
     /** Conference runtime phase from [TalkbackSessionSnapshot.conferenceRuntimeState] (RO-M2 PR-3). */
     val runtimePhase: ConferenceRuntimePhase? = null,

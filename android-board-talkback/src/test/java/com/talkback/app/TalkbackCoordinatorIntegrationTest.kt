@@ -540,17 +540,253 @@ class TalkbackCoordinatorIntegrationTest {
 
         assertNull(nodeM02.runtime.rejoinableConference(channelId))
         val m02LogMark = synchronized(nodeM02.logs) { nodeM02.logs.size }
-        nodeM02.runtime.sendConferenceRejoin(
+        val sent = nodeM02.runtime.sendConferenceRejoin(
             channelId,
             EndpointAddress(m01, EndpointId("E01")),
             sessionId
         )
         Thread.sleep(1_500L)
+        assertFalse(sent)
         assertTrue(nodeM02.runtime.conferenceSessions().isEmpty())
         assertTrue(
             nodeM02.waitForLogSince(m02LogMark, timeoutMs = 5_000L) {
-                it.contains("Conference terminated remotely reason=MEETING_ENDED") ||
-                    (it.contains("CONFERENCE_TERMINATED ch=$channelId") && it.contains("clearRejoinState=true"))
+                it.contains("Conference rejoin skipped")
+            }
+        )
+    }
+
+    @Test
+    fun conference_s17_staleChannelTombstone_mustNotBlockRecovery() {
+        val channelId = "CONF-S17-TOMBSTONE"
+        val priorSessionId = nodeM03.runtime.requireConferenceCall(
+            nodeM03.localEndpoint,
+            listOf(EndpointAddress(m01, EndpointId("E01"))),
+            channelId
+        )
+        assertTrue(nodeM01.waitForLog { it.contains("Conference invite accepted") || it.contains("invite accepted") })
+        Thread.sleep(3_500L)
+        nodeM03.runtime.hangup(priorSessionId)
+        Thread.sleep(1_500L)
+        assertTrue(
+            nodeM01.waitForLog(timeoutMs = 5_000L) {
+                it.contains("CONFERENCE_TERMINATED ch=$channelId") && it.contains("clearRejoinState=true")
+            }
+        )
+
+        nodeM02.runtime.requireConferenceCall(
+            nodeM02.localEndpoint,
+            listOf(EndpointAddress(m01, EndpointId("E01"))),
+            channelId
+        )
+        assertTrue(nodeM01.waitForLog { it.contains("Conference invite accepted") || it.contains("invite accepted") })
+        Thread.sleep(500L)
+        nodeM01.runtime.simulateRemoteIceState("M02", "CONNECTED")
+        Thread.sleep(300L)
+
+        val m01LogMark = synchronized(nodeM01.logs) { nodeM01.logs.size }
+        nodeM01.runtime.simulateRemoteIceState("M02", "DISCONNECTED")
+        Thread.sleep(4_000L)
+        assertTrue(
+            nodeM01.waitForLogSince(m01LogMark, timeoutMs = 5_000L) {
+                (it.contains("RECOVERY_DECISION") && it.contains("approved=true")) ||
+                    (it.contains("Conference host ICE DISCONNECTED") &&
+                        it.contains("edge recovery active for M02")) ||
+                    it.contains("RECOVERY_EDGE_STARTED")
+            }
+        )
+        assertFalse(
+            nodeM01.waitForLogSince(m01LogMark, timeoutMs = 1_000L) {
+                it.contains("trigger=SESSION_CANCELLED") &&
+                    it.contains("rejectReason=session_cancelled")
+            }
+        )
+        assertFalse(
+            nodeM01.waitForLogSince(m01LogMark, timeoutMs = 1_000L) {
+                it.contains("RECOVERY_EVENT_DROPPED") &&
+                    (it.contains("reason=session_cancelled") || it.contains("reason=channel_cancelled"))
+            }
+        )
+        assertEquals(1, nodeM01.runtime.activeSessionIds().size)
+    }
+
+    @Test
+    fun conference_s18_recoveryWindow_preservesMembershipState() {
+        val channelId = "CONF-S18-R26"
+        nodeM01.runtime.setAutoAcceptConferenceInvites(true)
+        nodeM03.runtime.setAutoAcceptConferenceInvites(true)
+        val sessionId = nodeM02.runtime.requireConferenceCall(
+            nodeM02.localEndpoint,
+            listOf(
+                EndpointAddress(m01, EndpointId("E01")),
+                EndpointAddress(m03, EndpointId("E01"))
+            ),
+            channelId
+        )
+        assertTrue(nodeM01.waitForLog { it.contains("Conference invite accepted") || it.contains("invite accepted") })
+        assertTrue(nodeM03.waitForLog { it.contains("Conference invite accepted") || it.contains("invite accepted") })
+        connectConferenceHostIce(nodeM02, nodeM01, nodeM03, hostModuleId = "M02")
+        nodeM01.runtime.simulateRemoteIceState("M02", "CONNECTED")
+        nodeM03.runtime.simulateRemoteIceState("M02", "CONNECTED")
+        Thread.sleep(500L)
+
+        val baselineEpoch = nodeM02.runtime.testConferenceMembershipEpoch(sessionId)
+        val baseline = nodeM02.runtime.sessionSnapshots().first { it.sessionId == sessionId }
+        val baselineMemberKeys = baseline.memberKeys.toSet()
+        assertTrue(baselineMemberKeys.any { it.startsWith("M01") })
+
+        nodeM02.runtime.simulateRemoteIceState("M01", "DISCONNECTED")
+        val recoveringDeadline = System.currentTimeMillis() + 8_000L
+        var recovering = false
+        while (System.currentTimeMillis() < recoveringDeadline) {
+            val snap = nodeM02.runtime.sessionSnapshots().first { it.sessionId == sessionId }
+            if (snap.conferenceRuntimeState?.edgeRecovering == true) {
+                recovering = true
+                break
+            }
+            Thread.sleep(200L)
+        }
+        assertTrue("host should observe edgeRecovering for M01", recovering)
+
+        fun assertMembershipPreserved(label: String) {
+            val snap = nodeM02.runtime.sessionSnapshots().first { it.sessionId == sessionId }
+            assertEquals("$label: membershipEpoch", baselineEpoch, nodeM02.runtime.testConferenceMembershipEpoch(sessionId))
+            assertEquals("$label: roster size", baselineMemberKeys.size, snap.memberKeys.size)
+            assertEquals("$label: roster keys", baselineMemberKeys, snap.memberKeys.toSet())
+            assertTrue("$label: roster must still contain M01", snap.memberKeys.any { it.startsWith("M01") })
+        }
+
+        assertMembershipPreserved("during recovery")
+        nodeM02.runtime.testRunConferenceHealthCleanup(channelId)
+        assertMembershipPreserved("after health cleanup during recovery")
+
+        nodeM02.runtime.simulateRemoteIceState("M01", "FAILED")
+        assertTrue(
+            nodeM02.runtime.sessionSnapshots().first { it.sessionId == sessionId }
+                .conferenceRuntimeState?.edgeRecovering == true
+        )
+        assertMembershipPreserved("after ICE FAILED while recovering")
+        nodeM02.runtime.testRunConferenceHealthCleanup(channelId)
+        assertMembershipPreserved("after health cleanup on FAILED while recovering")
+    }
+
+    @Test
+    fun conference_s13b_recoveryReattachProbeMarkers() {
+        val channelId = "CONF-S13B-PROBE"
+        nodeM01.runtime.setAutoAcceptConferenceInvites(true)
+        val sessionId = nodeM02.runtime.requireConferenceCall(
+            nodeM02.localEndpoint,
+            listOf(EndpointAddress(m01, EndpointId("E01"))),
+            channelId
+        )
+        assertTrue(nodeM01.waitForLog { it.contains("Conference invite accepted") || it.contains("invite accepted") })
+        connectConferenceHostIce(nodeM02, nodeM01, hostModuleId = "M02")
+        nodeM01.runtime.simulateRemoteIceState("M02", "CONNECTED")
+        Thread.sleep(500L)
+
+        val m01LogMark = synchronized(nodeM01.logs) { nodeM01.logs.size }
+        nodeM01.runtime.simulateRemoteIceState("M02", "DISCONNECTED")
+        assertTrue(
+            nodeM01.waitForLogSince(m01LogMark, timeoutMs = 8_000L) {
+                it.contains("RECOVERY_REATTACH_DEFERRED") &&
+                    it.contains("session=$sessionId") &&
+                    it.contains("ch=$channelId") &&
+                    it.contains("reason=WAITING_FOR_ROUTE") &&
+                    it.contains("routeConverged=false")
+            }
+        )
+        assertTrue(
+            nodeM01.waitForLogSince(m01LogMark, timeoutMs = 3_000L) {
+                it.contains("RECOVERY_WAITING") &&
+                    it.contains("session=$sessionId") &&
+                    it.contains("reason=WAITING_FOR_ROUTE") &&
+                    it.contains("routeConverged=false")
+            }
+        )
+        val logsDuringDisconnect = synchronized(nodeM01.logs) {
+            nodeM01.logs.drop(m01LogMark)
+        }
+        assertFalse(
+            "reattach must not send while route is not converged (R28-D1)",
+            logsDuringDisconnect.any {
+                it.contains("RECOVERY_REATTACH_SENT") && it.contains("to=M02")
+            }
+        )
+
+        nodeM01.runtime.simulateRemoteIceState("M02", "CONNECTED")
+        assertTrue(
+            nodeM01.waitForLogSince(m01LogMark, timeoutMs = 5_000L) {
+                it.contains("RECOVERY_REEVALUATE") &&
+                    it.contains("session=$sessionId") &&
+                    it.contains("edge=M02") &&
+                    it.contains("controlPlaneStarted=false")
+            }
+        )
+        val logsAfterReconnect = synchronized(nodeM01.logs) {
+            nodeM01.logs.drop(m01LogMark)
+        }
+        assertFalse(
+            "ICE reconnect before control-plane MUST NOT shortcut to RECOVERED (R28-E)",
+            logsAfterReconnect.any {
+                it.contains("RECOVERY_EDGE_RECOVERED") &&
+                    it.contains("session=$sessionId") &&
+                    it.contains("remote=M02")
+            }
+        )
+    }
+
+    @Test
+    fun conference_channelTombstone_doesNotBlockRejoinHintWhenNewHostAlive() {
+        val channelId = "CONF-TOMBSTONE-REJOIN"
+        val priorSessionId = nodeM03.runtime.requireConferenceCall(
+            nodeM03.localEndpoint,
+            listOf(EndpointAddress(m01, EndpointId("E01"))),
+            channelId
+        )
+        assertTrue(nodeM01.waitForLog { it.contains("Conference invite accepted") || it.contains("invite accepted") })
+        Thread.sleep(3_500L)
+        nodeM03.runtime.hangup(priorSessionId)
+        Thread.sleep(1_500L)
+
+        val hostSessionId = nodeM02.runtime.requireConferenceCall(
+            nodeM02.localEndpoint,
+            listOf(
+                EndpointAddress(m01, EndpointId("E01")),
+                EndpointAddress(m03, EndpointId("E01"))
+            ),
+            channelId
+        )
+        assertTrue(nodeM01.waitForLog { it.contains("Conference invite accepted") || it.contains("invite accepted") })
+        Thread.sleep(3_500L)
+
+        val m01SessionId = nodeM01.runtime.activeSessionIds().single()
+        val m01LogMark = synchronized(nodeM01.logs) { nodeM01.logs.size }
+        nodeM01.runtime.leaveConference(m01SessionId)
+        Thread.sleep(1_500L)
+
+        val hint = nodeM01.runtime.rejoinableConference(channelId)
+        assertNotNull("M01 should save rejoin hint despite prior channel tombstone", hint)
+        assertEquals(hostSessionId, hint?.hostSessionId)
+        assertFalse(
+            nodeM01.waitForLogSince(m01LogMark, timeoutMs = 1_000L) {
+                it.contains("Conference rejoin memory skipped") && it.contains("channel_cancelled")
+            }
+        )
+        assertTrue(
+            nodeM01.waitForLogSince(m01LogMark, timeoutMs = 3_000L) {
+                it.contains("Conference rejoin memory saved ch=$channelId")
+            }
+        )
+
+        val m01SendMark = synchronized(nodeM01.logs) { nodeM01.logs.size }
+        val sent = nodeM01.runtime.sendConferenceRejoin(
+            channelId,
+            EndpointAddress(m02, EndpointId("E02")),
+            hostSessionId
+        )
+        assertTrue(sent)
+        assertFalse(
+            nodeM01.waitForLogSince(m01SendMark, timeoutMs = 1_000L) {
+                it.contains("RECOVERY_EVENT_DROPPED") && it.contains("channel_cancelled")
             }
         )
     }
@@ -698,7 +934,8 @@ class TalkbackCoordinatorIntegrationTest {
             assertTrue(
                 "round $round: host should pull in M03",
                 nodeM01.waitForLogSince(m01LogMark, timeoutMs = 8_000L) {
-                    it.contains("Conference rejoin pull-in M03 sent=1")
+                    it.contains("JOIN_RESTORE_STARTED remote=M03") ||
+                        it.contains("Conference rejoin pull-in M03 sent=1")
                 }
             )
             val rejoinedDeadline = System.currentTimeMillis() + 8_000L
@@ -814,7 +1051,12 @@ class TalkbackCoordinatorIntegrationTest {
                 sessionId
             )
         )
-        assertTrue(nodeM01.waitForLog { it.contains("Conference rejoin pull-in M02 sent=1") })
+        assertTrue(
+            nodeM01.waitForLog {
+                it.contains("JOIN_RESTORE_STARTED remote=M02") ||
+                    it.contains("Conference rejoin pull-in M02 sent=1")
+            }
+        )
         assertFalse(
             synchronized(nodeM02.logs) {
                 nodeM02.logs.drop(m02LogMark).any { it.contains("Conference invite pending") }
@@ -1123,7 +1365,8 @@ class TalkbackCoordinatorIntegrationTest {
             Thread.sleep(200L)
             assertTrue(
                 nodeParticipant.hasLog {
-                    it.contains("Conference host ICE DISCONNECTED (participant waiting for recovery)")
+                    it.contains("Conference host ICE DISCONNECTED") &&
+                        it.contains("edge recovery active for M01")
                 }
             )
             assertEquals(1, nodeParticipant.runtime.activeSessionIds().size)
@@ -1139,7 +1382,9 @@ class TalkbackCoordinatorIntegrationTest {
     }
 
     @Test
-    fun conferenceHostIceDisconnectBeyondGrace_endsSession() {
+    fun conferenceHostIceDisconnectBeyondGrace_keepsSessionUnderEdgeRecovery() {
+        // Participant host-link loss is owned by EdgeRecovery (ADR-0021), not host ICE hangup grace.
+        // Session must remain; R24-A later projects ACTIVE+degraded if the attempt fails.
         val peers = TestTalkbackNode.allPeers(m01 to 50031, m02 to 50032)
         val context = RuntimeEnvironment.getApplication()
         val nodeHost = TestTalkbackNode(
@@ -1177,7 +1422,8 @@ class TalkbackCoordinatorIntegrationTest {
             Thread.sleep(1_000L)
             assertTrue(
                 nodeParticipant.hasLog {
-                    it.contains("Conference host ICE DISCONNECTED (participant waiting for recovery)")
+                    it.contains("Conference host ICE DISCONNECTED") &&
+                        it.contains("edge recovery active for M01")
                 }
             )
             assertEquals(1, nodeParticipant.runtime.activeSessionIds().size)

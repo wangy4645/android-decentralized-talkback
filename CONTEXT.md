@@ -136,6 +136,98 @@ _Avoid_: 用 ICE/remoteMediaCount 推导未建立, 把恢复中当重新建会
 已存在 Conference Session 内的媒体连接恢复过程；可影响 UI 投影为 Reconnecting，但不属于 Conference Lifecycle。会议可在一个或多个媒体路径 recovering/failed 时保持 Established。
 _Avoid_: Conference Lifecycle RECOVERING, 用恢复流程驱动会议重新开始
 
+**Conference Connectivity Edge Recovery**:
+Conference Connectivity Recovery 的最小恢复粒度：`(conferenceSessionId, remoteModuleId)` 标识的一条本端到远端 Module 的媒体连接边。某条 edge recovering/failed 不改变 Conference Lifecycle Established；UI 与指标可将多条 edge 聚合为参与者级 Reconnecting 或会议级 Degraded 投影。
+_Avoid_: 一个 peer 断网导致整场 Conference recovering, 用 channelId 或 sessionId 作为唯一恢复状态键
+
+**Recovery Edge**:
+一条 Conference connectivity edge 在 recovery 域中的身份与义务单元，键为 `(sessionId, remoteModuleId)`。可经历多轮 **Recovery Attempt**；其 completion 义务与单次 attempt 的 terminal 正交。见 ADR-0022 R28。
+_Avoid_: 把 attempt_timeout 当作 edge 结束, RecoveryAttempt（未区分 edge 时）
+
+**Recovery Attempt**:
+Recovery Edge 上的一轮有界 recovery 执行，由 `attemptId` 标识并隶属于该 edge。Attempt terminal 含 `RECOVERED`、`CANCELLED`、`ATTEMPT_TIMEOUT`、`SUPERSEDED`；**`ATTEMPT_TIMEOUT` 终止 attempt，不终止 edge 义务**。
+_Avoid_: 把 timeout 当作 membership prune, 无 attempt 代数的 retry
+
+**Recovery Completion Obligation**:
+Recovery Edge 在 non-terminal 期间必须有人负责 **re-evaluate completion** 的契约义务。Edge terminal 仅当：`RECOVERED`、Membership 提交 `LEFT(remoteModuleId)`、或 Conference lifecycle `TERMINATED`。与 R26 membership 窗口兼容；不等同于「再发一次 reattach」的实现动作。
+_Avoid_: timeout 即系统撒手, participant 发过一次即完成
+
+**Recovery Completion Owner**:
+Recovery Edge 上 completion 义务的**逻辑唯一 owner**；由本端 **Conference Edge Recovery Controller** 维护，**不属于**某个 Module。全网 exactly-one 指 edge 域内单一义务，非「M01 或 M02 谁当 owner」。
+_Avoid_: initiatesReattach 侧即 lifetime owner, participant/host 二元 owner
+
+**Preferred Recovery Initiator**:
+Recovery Edge 上 **优先** 由哪一侧发起 reattach 的 role 提示；由 `initiatesReattach` 表达（participant→host 边通常为 participant）。决定 preferred action，**不**决定 completion ownership，**不**在 primary 离线时终止义务。
+_Avoid_: initiatesReattach == owner, fallback evaluator（module 级）
+
+**Recovery Action Authority**:
+Module 在 Recovery Edge 上**允许执行**的动作集合，由 role 与 reachability 约束。Controller re-evaluate 时 **MAY** 仅 invoke 当前可达侧具备 authority 的动作。v1 最小集：preferred initiator 可 dispatch reattach；authority 可 accept/reject 与 bounded media recovery；双方均不可 mutate membership。见 ADR-0022 R28-C。
+_Avoid_: 把 capability 当作 ownership, host 发 participant reattach, 写死为 ICE restart 唯一媒体动作
+
+**Recovery Completion Decision**:
+Recovery Edge Controller 在 re-evaluate 时必须产出的**显式决策**，四选一：role-allowed completion action、`WAITING(reason)`、`SUPERSEDED(nextAttemptId)`、`CANCELLED(reason)`。允许等待，**禁止无决策等待**（soak vacuum：SENT 后对端无任何 decision）。
+_Avoid_: passive wait, 每次 re-evaluate 必须发包
+
+**Media Edge Restored**:
+本端到远端 Module 的 transport / ICE 连接重新可用；属于 **Connectivity 事实**。不等于 recovery 完成。ICE CONNECTED 是 Media Edge Restored 的常见表现，但 recovery controller **不得**将其直接当作 edge terminal。见 ADR-0022 R28-E。
+_Avoid_: ICE CONNECTED == RECOVERED, 把 media 恢复当 control-plane 完成
+
+**Recovery Edge Completed**:
+Recovery Controller **显式宣布** recovery edge terminal（如 `RECOVERED`、Membership `LEFT`、Conference `TERMINATED`）。属于 **recovery 域决策**，不是 connectivity 事实。见 ADR-0022 R28-E。
+_Avoid_: 用 ICE 连通推断 recovery 完成
+
+**Attempt Terminal**:
+当前 **Recovery Attempt** 的结束；含 `RECOVERED`、`FAILED_MEDIA_RECOVERY`、`CANCELLED`、`SUPERSEDED`（含 `ATTEMPT_TIMEOUT` 路径）。**不**终止 **Edge Obligation**。见 ADR-0022 R28-F。
+_Avoid_: attempt_timeout == edge 结束
+
+**Edge Obligation**:
+Recovery Edge 上 completion owner 在 edge non-terminal 期间持续 **re-evaluate** 的义务；单次 Attempt Terminal **不**自动解除。Edge terminal 仅：`RECOVERED`、Membership `LEFT(remoteModuleId)`、Conference lifecycle `TERMINATED`。与 **Recovery Completion Obligation** 同义；R28-F 强调与 attempt 生命周期正交。
+_Avoid_: FAILED_MEDIA_RECOVERY 后撒手, 删 edge record 即无义务
+
+**Superseded Attempt**:
+Material capability 变化后，controller **显式废弃**当前 attempt 并 **MAY** 开启新 attempt（新 watchdog budget）。非每次 material transition 都必须 SUPERSEDE。见 ADR-0022 R28-F。
+_Avoid_: reachability 变化 == 必须新 attempt, 隐式 retry
+
+**Recovery Capability Signature**:
+`EdgeReachabilitySnapshot` 在 recovery 域的投影：当前 **permitted recovery actions** 集合 + `waitingReason`。Material transition ⇔ signature 变化（非任意网络事件）。由 **Coordinator** 检测；Controller 消费。见 ADR-0022 R28-G。
+_Avoid_: 裸 bool 向量 diff, HELLO 即 re-evaluate, authorityReachable 直接等于可 COMPLETE
+
+**Recovery Control-plane Started**:
+当前 attempt 已越过 control-plane 边界（如 reattach 已请求/已接受、ICE restart 进行中）。此状态下 ICE 恢复 **MAY** 在 completion evaluation 中直接 yield `RECOVERED`；与 `RECOVERY_PENDING` 且未发 reattach 的路径不同。实现字段 `controlPlaneStarted`；见 ADR-0022 R28-E。
+_Avoid_: 用 phase 枚举代替 control-plane 边界
+
+**Edge Reachability Snapshot**:
+Recovery Edge 上、本端对远端 Module 的**只读聚合事实**，由 Conference Edge Recovery Controller 从各域 fact 组装，**不拥有、不回写**下层。四维正交：`linkReady`（Connectivity）、`peerDiscovered`（Discovery）、`routeConverged`（Signaling/Mesh）、`authorityReachable`（Conference Runtime）。Recovery 决策 **MUST NOT** 依赖 `peerReachable` / `transportReady` 等单 bool 塌缩。见 ADR-0022 R28-D。
+_Avoid_: 线性 reachability 枚举当唯一 gate, transportReady 代替 routeConverged
+
+**Recovery Signal Dispatch Gate**:
+发起 recovery 信令（如 reattach）的前置条件：`linkReady ∧ peerDiscovered ∧ routeConverged`。Soak #73-B 卡在 `routeConverged=false` 而非 authority 层。
+_Avoid_: channelReadiness==READY 当作可发 reattach
+
+**Recovery Completion Gate**:
+Recovery 协议完成向的前置条件：Recovery Signal Dispatch Gate **且** `authorityReachable`。
+_Avoid_: authorityReachable 隐含 routeConverged
+
+**Conference Presence Projection**:
+会议在场读模型：本端可见的 **joined / connected / recovering** 人数与 peer 集合，由 `ConferencePresenceProjector` 从 Membership roster、`EdgeRecoveryFacts`、`ConnectedPeers` 等只读事实产出。UI **MUST** 只消费此投影（及 Runtime 投影的 phase），**MUST NOT** 读 `ReachabilitySnapshot` 或在 ViewModel 内重建 presence。见 ADR-0022 R27′。
+_Avoid_: memberKeys.size 当 joinedCount, ICE/transport 推断 recovering, 扩 ConferenceRuntimeProjector 塞 presence 字段
+
+**Conference Presence Projector**:
+与 `ConferenceRuntimeProjector` 并列的专用投影器：消费同一批只读 facts，输出 `ConferencePresenceProjection(joinedCount, connectedCount, recoveringPeers: Set<ModuleId>)`。职责为 **presence**（谁在场、谁连通、谁 recovering），非 lifecycle phase 或 authority。见 ADR-0022 R27′-B。
+_Avoid_: 把 joinedCount 挂进 RuntimeProjection DTO, ViewModel filter roster
+
+**Conference Edge Recovery Controller**:
+每条 Conference connectivity edge 的 recovery 决策与状态机唯一 owner。负责 eligibility、RECOVERY_REATTACH 编排、bounded ICE restart 策略、termination 取消与 EdgeRecoveryFacts 产出；不直接操作 PeerConnection，不修改 Membership。见 ADR-0021。
+_Avoid_: InviteHandler 顺手恢复, ICE 回调直接 recreate PC, Conference 级 recovery 状态机
+
+**Edge Recovery Fact**:
+`ConferenceEdgeRecoveryController` 产出的只读 recovery 事实（edge 状态、attempt、reject reason 等）。`ConferenceRuntimeProjector` 与 `ConferencePresenceProjector` 的 recovery 输入；不得从 ICE/connectedCount 反推。
+_Avoid_: UI 根据 transport 猜 Reconnecting, Projection 读 ICE 回调
+
+**Recovery Admission**:
+`RECOVERY_REATTACH` 控制面准入协议：校验 lineage 后允许已有 JOINED 成员恢复 edge binding；不改变 Membership。由 #72 实现；#73 补自动触发与 FSM。
+_Avoid_: 把 RECOVERY_REATTACH 当作 NORMAL_JOIN, admission 完成即 recovery 完成
+
 **Conference Authority Reachability**:
 本端与 Conference lifecycle authority 之间是否存在可维持会议语义的有效关系；不是任意 peer media 连通。Participant ACTIVE 依赖 authority reachability，v1 可由 Host media connected 近似实现。
 _Avoid_: connectedRemoteMediaCount, 任意 peer ICE CONNECTED

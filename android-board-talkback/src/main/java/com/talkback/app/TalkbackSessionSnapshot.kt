@@ -2,6 +2,7 @@ package com.talkback.app
 
 import com.talkback.core.ptt.PttState
 import com.talkback.core.session.ConferenceParticipantViewState
+import com.talkback.core.session.ConferencePresenceProjection
 import com.talkback.core.session.ConferenceRuntimeState
 import com.talkback.core.session.MemberView
 import com.talkback.core.session.SessionType
@@ -35,6 +36,11 @@ data class TalkbackSessionSnapshot(
      * Meeting UI must consume this in PR-3; null for non-CONFERENCE sessions.
      */
     val conferenceRuntimeState: ConferenceRuntimeState? = null,
+    /**
+     * Canonical Conference presence projection (ADR-0022 R27′).
+     * Meeting UI MUST use joined/connected/recovering from here — not roster size or ICE.
+     */
+    val conferencePresenceProjection: ConferencePresenceProjection? = null,
     /** ICE-direct mesh peer count; diagnostics only — must not drive Conference UI. */
     val meshConnectedPeerCount: Int = 0,
     /**

@@ -111,6 +111,8 @@
     <string name="meeting_title">Meeting</string>
     <string name="meeting_channel_title">%1$s - Meeting</string>
     <string name="meeting_participants">%1$d Participants</string>
+    <string name="meeting_participants_presence">%1$s Participants</string>
+    <string name="online_count_presence">%1$s online</string>
     <string name="meeting_tap_to_join">Tap to Join</string>
     <string name="meeting_tap_to_view">Tap to View</string>
     <string name="meeting_in_progress">Meeting in progress</string>

@@ -24,6 +24,9 @@ internal class TestTalkbackNode(
     autoReDialOnModuleRecovery: Boolean = true,
     conferenceHostIceReconnectGraceMs: Long = 5_000L,
     conferenceInviteRingTimeoutMs: Long = 20_000L,
+    meshNegotiationGraceMs: Long = 15_000L,
+    edgeRecoveryAttemptBudgetMs: Long = 15_000L,
+    edgeRecoveryObservationWindowMs: Long = 30_000L,
     acquireReleaseTimeoutMs: Long = 500L
 ) {
     val logs = mutableListOf<String>()
@@ -43,6 +46,9 @@ internal class TestTalkbackNode(
             maxGroupModules = 8,
             conferenceHostIceReconnectGraceMs = conferenceHostIceReconnectGraceMs,
             conferenceInviteRingTimeoutMs = conferenceInviteRingTimeoutMs,
+            meshNegotiationGraceMs = meshNegotiationGraceMs,
+            edgeRecoveryAttemptBudgetMs = edgeRecoveryAttemptBudgetMs,
+            edgeRecoveryObservationWindowMs = edgeRecoveryObservationWindowMs,
             acquireReleaseTimeoutMs = acquireReleaseTimeoutMs
         ),
         mode = AudioEngineMode.STUB,

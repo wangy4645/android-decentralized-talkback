@@ -14,10 +14,23 @@ class ConferenceRejoinPayloadTest {
     fun encodeDecode_roundTrip() {
         val original = ConferenceRejoinPayload(
             channelId = "CH-01",
-            hostSessionId = "session-abc"
+            hostSessionId = "session-abc",
+            membershipEpoch = 2L,
+            endpointId = "E01",
+            intent = ConferenceJoinIntent.RECOVERY_REATTACH
         )
         val decoded = ConferenceRejoinPayload.decode(original.encode())
         assertNotNull(decoded)
         assertEquals(original, decoded)
+    }
+
+    @Test
+    fun decode_legacyPayload_defaultsToRecoveryIntent() {
+        val legacy = """{"channelId":"CH-01","hostSessionId":"session-abc"}"""
+        val decoded = ConferenceRejoinPayload.decode(legacy)
+        assertNotNull(decoded)
+        assertEquals(0L, decoded!!.membershipEpoch)
+        assertEquals("", decoded.endpointId)
+        assertEquals(ConferenceJoinIntent.RECOVERY_REATTACH, decoded.intent)
     }
 }

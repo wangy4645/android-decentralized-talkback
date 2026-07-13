@@ -844,7 +844,7 @@ class TalkViewModel(
                 phase = unicast.callPhase,
                 localInitiated = unicast.localInitiated,
                 muted = unicast.muted,
-                networkLabel = callNetworkLabel(runtime.networkQualityLabel(), qos),
+                networkLabel = runtime.conferenceNetworkIndicator().toQualityLabel(),
                 rttMs = qos?.rttMs?.takeIf { it >= 0 },
                 packetLossPercent = qos?.packetLossPercent?.takeIf { it >= 0.0 }
             )
@@ -901,12 +901,29 @@ class TalkViewModel(
             manager.isConferenceReconnectFailed(config)
 
         if (conferenceRuntimeActive) {
-            val visible = session?.visibleParticipantCount ?: 0
+            val presence = session?.conferencePresenceProjection
+            val connected = presence?.connectedCount ?: session?.visibleParticipantCount ?: 0
+            val joined = presence?.joinedCount ?: session?.joinedParticipantCount ?: 0
+            val recovering = presence?.recoveringPeers?.joinToString(",") ?: ""
             val awaiting = session?.awaitingAdditionalParticipants == true
+            val display = MeetingPresenceDisplay.participantCountLabel(connected, joined)
             TalkbackLog.i(
-                "Meeting pill: visible=$visible roster=${session?.memberKeys?.size ?: 0} awaiting=$awaiting phase=$runtimePhase"
+                "Meeting pill: display=$display connected=$connected joined=$joined recovering=[$recovering] awaiting=$awaiting phase=$runtimePhase"
             )
         }
+
+        val conferencePresence = session?.conferencePresenceProjection
+        val meetingConnectedCount = conferencePresence?.connectedCount
+            ?: session?.visibleParticipantCount
+            ?: 0
+        val meetingJoinedCount = conferencePresence?.joinedCount
+            ?: session?.joinedParticipantCount
+            ?: 0
+        val meetingRecoveringPeers = conferencePresence?.recoveringPeers ?: emptySet()
+        val meetingParticipantLabel = MeetingPresenceDisplay.participantCountLabel(
+            connectedCount = meetingConnectedCount,
+            joinedCount = meetingJoinedCount
+        )
 
         return TalkUiState(
             serviceRunning = true,
@@ -916,7 +933,7 @@ class TalkViewModel(
             channelTitle = config.channelTitle(),
             channelSubtitle = if (taskName.isNotBlank()) taskName else config.channelDisplayName,
             onlineCount = if (conferenceActive) {
-                session?.visibleParticipantCount ?: 1
+                meetingConnectedCount.coerceAtLeast(1)
             } else {
                 endpoints.count { it.status != EndpointStatus.OFFLINE }
             },
@@ -925,7 +942,7 @@ class TalkViewModel(
             floorPresentation = floorPresentation,
             localEndpointKey = localRawKey,
             talking = talking,
-            networkLabel = runtime.networkQualityLabel(),
+            networkLabel = runtime.conferenceNetworkIndicator().toQualityLabel(),
             sessionActive = session != null,
             pttActive = if (conferenceActive) {
                 conferenceMuted
@@ -953,11 +970,15 @@ class TalkViewModel(
                 sessionId = session?.sessionId?.takeIf { conferenceActive },
                 memberKeys = session?.memberKeys.orEmpty(),
                 visibleParticipantCount = session?.visibleParticipantCount ?: 0,
-                joinedParticipantCount = session?.joinedParticipantCount ?: 0,
+                joinedParticipantCount = meetingJoinedCount,
+                connectedParticipantCount = meetingConnectedCount,
+                recoveringPeers = meetingRecoveringPeers,
+                participantCountLabel = meetingParticipantLabel,
                 awaitingAdditionalParticipants = session?.awaitingAdditionalParticipants == true,
                 runtimePhase = runtimePhase,
                 startedAtMs = meetingStartedAtMs,
-                networkLabel = meetingQos?.networkLabel ?: runtime.networkQualityLabel(),
+                networkLabel = meetingQos?.networkLabel
+                    ?: runtime.conferenceNetworkIndicator().toQualityLabel(),
                 rttMs = meetingQos?.rttMs,
                 packetLossPercent = meetingQos?.packetLossPercent,
                 autoGain = config.meetingAutoGain,
@@ -1126,16 +1147,6 @@ class TalkViewModel(
 
     private fun isLocalEndpointKey(key: String, localRawKey: String): Boolean =
         moduleIdFromKey(key).equals(moduleIdFromKey(localRawKey), ignoreCase = true)
-
-    private fun callNetworkLabel(globalLabel: String, qos: com.talkback.core.qos.QosSnapshot?): String {
-        if (qos?.iceState == "CONNECTED") return "Excellent"
-        return when (globalLabel) {
-            "Excellent" -> "Excellent"
-            "Good" -> "Good"
-            "Poor" -> "Poor"
-            else -> "N/A"
-        }
-    }
 
     fun teamDisplayName(): String = configStore.load().channelDisplayName
 

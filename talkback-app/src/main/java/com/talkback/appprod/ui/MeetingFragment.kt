@@ -222,9 +222,8 @@ class MeetingFragment : Fragment() {
         view.findViewById<View>(R.id.btnMeetingLeaveTop).isVisible = live
         view.findViewById<TextView>(R.id.txtMeetingParticipantCount).isVisible = live
         if (live) {
-            val inMeetingCount = state.meeting.joinedParticipantCount
             view.findViewById<TextView>(R.id.txtMeetingParticipantCount).text =
-                getString(R.string.meeting_participants, inMeetingCount)
+                getString(R.string.meeting_participants_presence, state.meeting.participantCountLabel)
         }
 
         bindStatusPill(view.findViewById(R.id.txtMeetingStatusPill), connecting, recovering, live, muted, state)

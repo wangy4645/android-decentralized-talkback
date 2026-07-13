@@ -6,5 +6,6 @@ data class RejoinableConferenceSnapshot(
     val channelId: String,
     val hostModuleId: String,
     val hostKey: String,
-    val leftAtMs: Long
+    val leftAtMs: Long,
+    val membershipEpoch: Long = 0L
 )
