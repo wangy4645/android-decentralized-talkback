@@ -8233,7 +8233,7 @@ class TalkbackCoordinator(
             if (hostId != null && hostId != localModuleId.value && moduleId == hostId) {
                 return@filter false
             }
-            canPruneConferenceParticipant(session, moduleId, now)
+            canAuthorityPrune(session, moduleId, now)
         }
         if (deadRemotes.isEmpty()) return
         if (!isConferenceHostSession(session)) {
@@ -8254,10 +8254,13 @@ class TalkbackCoordinator(
     }
 
     /**
-     * Conference prune invariant: invite==ACCEPTED, was connected in this session, and media long-failed.
-     * Never prune invitees who have not completed a mesh link in this session (stale module ICE ignored).
+     * Host membership prune eligibility entry (ADR-0024 R29-E).
+     *
+     * Prefactor (#74): named seam only - still implements today's soak policy
+     * (`!isEdgeRecovering` + media health / grace). Later slices flip this to consume
+     * obligation CLOSED / prune-eligible close reason / !pending decision.
      */
-    private fun canPruneConferenceParticipant(
+    private fun canAuthorityPrune(
         session: TalkbackSession,
         moduleId: String,
         now: Long

@@ -397,6 +397,12 @@ class ConferenceEdgeRecoveryControllerTest {
             }
         )
         assertFalse(decisionLogs.any { it.contains("RECOVERY_EDGE_RECOVERED") })
+        assertEquals(2, reattachCalls)
+        assertTrue(
+            decisionLogs.any {
+                it.contains("decision=DISPATCH_REATTACH") && it.contains("trigger=ROUTE_CONVERGED")
+            }
+        )
     }
 
     @Test
@@ -437,10 +443,95 @@ class ConferenceEdgeRecoveryControllerTest {
             trigger = RecoveryReevaluateTrigger.ROUTE_CONVERGED
         )
         assertTrue(decisionLogs.any { it.contains("RECOVERY_REEVALUATE") })
+        assertEquals(2, reattachCalls)
         assertTrue(
             decisionLogs.any {
-                it.contains("decision=SUPERSEDED") || it.contains("decision=EVALUATE_STUB")
+                it.contains("decision=SUPERSEDED") || it.contains("decision=DISPATCH_REATTACH")
             }
         )
+    }
+
+    @Test
+    fun reevaluate_routeConverged_host_waitsForInbound() {
+        controller.onIceStateChanged(
+            sessionId = "sess-1",
+            channelId = "CH-1",
+            remoteModuleId = "M01",
+            iceState = "FAILED",
+            eligibility = eligible(),
+            initiatesReattach = false
+        )
+        val snapshot = EdgeReachabilitySnapshot(
+            linkReady = true,
+            peerDiscovered = true,
+            routeConverged = true,
+            authorityReachable = false
+        )
+        val before = RecoveryCapabilitySignature(
+            permittedActions = emptySet(),
+            waitingReason = RecoveryWaitingReason.WAITING_FOR_ROUTE
+        )
+        val after = projectRecoveryCapabilitySignature(
+            snapshot,
+            initiatesReattach = false,
+            controlPlaneStarted = false
+        )
+        controller.onRecoveryReachabilityChanged(
+            sessionId = "sess-1",
+            channelId = "CH-1",
+            remoteModuleId = "M01",
+            snapshot = snapshot,
+            signature = after,
+            capabilityBefore = before,
+            trigger = RecoveryReevaluateTrigger.ROUTE_CONVERGED
+        )
+        assertEquals(0, reattachCalls)
+        assertTrue(decisionLogs.any { it.contains("decision=WAIT_FOR_INBOUND") })
+    }
+
+    @Test
+    fun obligationFacts_absentEdge_areClosedDefaults() {
+        assertFalse(controller.edgeObligationOpen("sess-1", "M01"))
+        assertFalse(controller.edgeObligationClosed("sess-1", "M01"))
+        assertEquals(null, controller.obligationDeadlineAt("sess-1", "M01"))
+        assertEquals(null, controller.obligationCloseReason("sess-1", "M01"))
+        assertFalse(controller.hasPendingCompletionDecision("sess-1", "M01"))
+    }
+
+    @Test
+    fun obligationFacts_stayOpenAfterFailedMediaRecovery() {
+        controller.onIceStateChanged(
+            sessionId = "sess-1",
+            channelId = "CH-1",
+            remoteModuleId = "M01",
+            iceState = "FAILED",
+            eligibility = eligible(),
+            initiatesReattach = true
+        )
+        assertTrue(controller.edgeObligationOpen("sess-1", "M01"))
+        assertFalse(controller.edgeObligationClosed("sess-1", "M01"))
+        Thread.sleep(350)
+        assertTrue(controller.edgeObligationOpen("sess-1", "M01"))
+        assertFalse(controller.edgeObligationClosed("sess-1", "M01"))
+        assertEquals(null, controller.obligationDeadlineAt("sess-1", "M01"))
+        assertEquals(null, controller.obligationCloseReason("sess-1", "M01"))
+        assertFalse(controller.hasPendingCompletionDecision("sess-1", "M01"))
+    }
+
+    @Test
+    fun obligationFacts_closeOnRecovered() {
+        controller.onIceStateChanged(
+            sessionId = "sess-1",
+            channelId = "CH-1",
+            remoteModuleId = "M01",
+            iceState = "FAILED",
+            eligibility = eligible(),
+            initiatesReattach = true
+        )
+        controller.onIceConnected("sess-1", "M01")
+        assertFalse(controller.edgeObligationOpen("sess-1", "M01"))
+        assertTrue(controller.edgeObligationClosed("sess-1", "M01"))
+        assertEquals(ObligationCloseReason.RECOVERED, controller.obligationCloseReason("sess-1", "M01"))
+        assertFalse(controller.hasPendingCompletionDecision("sess-1", "M01"))
     }
 }

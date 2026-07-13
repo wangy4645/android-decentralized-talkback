@@ -67,6 +67,37 @@ class ConferenceEdgeRecoveryController(
     }
 
     /**
+     * Recovery Edge Obligation OPEN (ADR-0022 R28-H).
+     * Prefactor (#74): phase-based open until exclusive close stamp; no deadline close yet.
+     */
+    fun edgeObligationOpen(sessionId: String, remoteModuleId: String): Boolean {
+        val record = edges[ConferenceEdgeKey(sessionId, remoteModuleId)] ?: return false
+        return record.edgeObligationOpen()
+    }
+
+    /** True after controller stamped an exclusive close reason (ADR-0022 R28-H). */
+    fun edgeObligationClosed(sessionId: String, remoteModuleId: String): Boolean {
+        val record = edges[ConferenceEdgeKey(sessionId, remoteModuleId)] ?: return false
+        return record.obligationClosedAtMs != null
+    }
+
+    fun obligationDeadlineAt(sessionId: String, remoteModuleId: String): Long? =
+        edges[ConferenceEdgeKey(sessionId, remoteModuleId)]?.obligationDeadlineAtMs
+
+    fun obligationCloseReason(sessionId: String, remoteModuleId: String): ObligationCloseReason? =
+        edges[ConferenceEdgeKey(sessionId, remoteModuleId)]?.obligationCloseReason
+
+    fun hasPendingCompletionDecision(sessionId: String, remoteModuleId: String): Boolean =
+        edges[ConferenceEdgeKey(sessionId, remoteModuleId)]?.hasPendingCompletionDecision ?: false
+
+    private fun closeObligation(record: EdgeRecoveryRecord, reason: ObligationCloseReason) {
+        if (record.obligationClosedAtMs != null) return
+        record.obligationClosedAtMs = clock()
+        record.obligationCloseReason = reason
+        record.hasPendingCompletionDecision = false
+    }
+
+    /**
      * Capability materiality notification from Coordinator (ADR-0022 R28-G).
      * Fact writers MUST NOT call this — only [TalkbackCoordinator] after signature comparison.
      */
@@ -340,6 +371,7 @@ class ConferenceEdgeRecoveryController(
         cancelDebounce(key)
         cancelWatchdog(key)
         record.phase = EdgeRecoveryPhase.RECOVERED
+        closeObligation(record, ObligationCloseReason.RECOVERED)
         onLog(
             "RECOVERY_EDGE_RECOVERED session=${key.sessionId} remote=${key.remoteModuleId} " +
                 "attempt=${record.recoveryAttemptId}"
@@ -507,6 +539,14 @@ class ConferenceEdgeRecoveryController(
         cancelWatchdog(key)
         val record = edges[key] ?: return
         record.phase = EdgeRecoveryPhase.CANCELLED
+        val closeReason = when {
+            reason.contains("session_cancelled", ignoreCase = true) ||
+                reason.contains("conference", ignoreCase = true) ||
+                reason.contains("terminated", ignoreCase = true) ->
+                ObligationCloseReason.CONFERENCE_TERMINATED
+            else -> ObligationCloseReason.MEMBERSHIP_LEFT
+        }
+        closeObligation(record, closeReason)
         onLog(
             "RECOVERY_EDGE_CANCELLED session=${key.sessionId} remote=${key.remoteModuleId} " +
                 "reason=$reason"
@@ -532,19 +572,36 @@ class ConferenceEdgeRecoveryController(
         val now = clock()
         val existing = edges[key]
         val record = if (existing == null || newAttempt) {
+            // While OPEN, preserve obligation facts across attempts. After CLOSED, a later
+            // recovery cycle starts a new obligation (not a reopen of the closed one).
+            val preserveOpen = existing != null && existing.obligationClosedAtMs == null
             EdgeRecoveryRecord(
                 key = key,
                 phase = phase,
                 channelId = channelId,
                 recoveryAttemptId = ++attemptSeq,
                 recoveryStartedAtMs = now,
-                initiatesReattach = initiatesReattach
+                initiatesReattach = initiatesReattach,
+                obligationOpenedAtMs = if (preserveOpen) {
+                    existing!!.obligationOpenedAtMs ?: now
+                } else {
+                    now
+                },
+                obligationDeadlineAtMs = if (preserveOpen) existing!!.obligationDeadlineAtMs else null,
+                obligationClosedAtMs = null,
+                obligationCloseReason = null,
+                hasPendingCompletionDecision = if (preserveOpen) {
+                    existing!!.hasPendingCompletionDecision
+                } else {
+                    false
+                }
             ).also { edges[key] = it }
         } else {
             existing.apply {
                 this.phase = phase
                 if (channelId.isNotBlank()) this.channelId = channelId
                 this.initiatesReattach = initiatesReattach
+                if (obligationOpenedAtMs == null) obligationOpenedAtMs = now
             }
         }
         return record

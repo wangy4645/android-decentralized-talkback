@@ -61,6 +61,20 @@ data class EdgeRecoveryFacts(
     val mediaUnavailableRemoteModuleIds: Set<String> = emptySet()
 )
 
+/**
+ * Exclusive close set for Recovery Edge Obligation (ADR-0022 R28-H).
+ * v1 prune-eligible set is owned by ADR-0024 R29-E ([isPruneEligible]).
+ */
+enum class ObligationCloseReason {
+    RECOVERED,
+    MEMBERSHIP_LEFT,
+    CONFERENCE_TERMINATED,
+    OBLIGATION_DEADLINE;
+
+    /** ADR-0024 R29-E: v1 prune-eligible reasons only. */
+    fun isPruneEligible(): Boolean = this == OBLIGATION_DEADLINE
+}
+
 internal data class EdgeRecoveryRecord(
     val key: ConferenceEdgeKey,
     var phase: EdgeRecoveryPhase,
@@ -69,7 +83,13 @@ internal data class EdgeRecoveryRecord(
     var recoveryStartedAtMs: Long,
     var epochRefreshUsed: Boolean = false,
     var iceRestartIssued: Boolean = false,
-    var initiatesReattach: Boolean = false
+    var initiatesReattach: Boolean = false,
+    /** Single-writer obligation facts (ADR-0022 R28-H.1). */
+    var obligationOpenedAtMs: Long? = null,
+    var obligationDeadlineAtMs: Long? = null,
+    var obligationClosedAtMs: Long? = null,
+    var obligationCloseReason: ObligationCloseReason? = null,
+    var hasPendingCompletionDecision: Boolean = false
 ) {
     /** True once attempt crossed the control-plane boundary (ADR-0022 R28-E). */
     fun controlPlaneStarted(): Boolean = when (phase) {
@@ -79,8 +99,15 @@ internal data class EdgeRecoveryRecord(
         else -> false
     }
 
-    fun edgeObligationOpen(): Boolean =
-        phase.isActivelyRecovering() || phase.isFailedMediaRecovery()
+    /**
+     * Partial open predicate retained for P2-A / #74 prefactor:
+     * active attempt or failed-media residency. CLOSED stamp overrides.
+     * Full deadline-aware lifetime lands in later R28-H slices.
+     */
+    fun edgeObligationOpen(): Boolean {
+        if (obligationClosedAtMs != null) return false
+        return phase.isActivelyRecovering() || phase.isFailedMediaRecovery()
+    }
 }
 
 /**
