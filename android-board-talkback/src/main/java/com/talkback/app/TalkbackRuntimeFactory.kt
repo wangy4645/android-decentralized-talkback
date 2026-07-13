@@ -105,6 +105,8 @@ object TalkbackRuntimeFactory {
             discoveryAnnounceIntervalMs = config.discoveryAnnounceIntervalMs,
             conferenceHostIceReconnectGraceMs = config.conferenceHostIceReconnectGraceMs,
             conferenceInviteRingTimeoutMs = config.conferenceInviteRingTimeoutMs,
+            meshNegotiationGraceMs = config.meshNegotiationGraceMs,
+            edgeRecoveryAttemptBudgetMs = config.edgeRecoveryAttemptBudgetMs,
             acquireReleaseTimeoutMs = config.acquireReleaseTimeoutMs
         )
         lateinit var coordinator: TalkbackCoordinator
