@@ -30,6 +30,11 @@ class ConferenceEdgeRecoveryController(
         remoteModuleId: String
     ) -> ReattachDispatchOutcome,
     private val onIceRestart: (sessionId: String, remoteModuleId: String) -> Boolean,
+    /**
+     * Probe current ICE connectedness after ACCEPTED / ICE restart (#83).
+     * Coordinator wires qosMonitor; tests inject to cover already-CONNECTED soak gap.
+     */
+    private val isIceConnected: (sessionId: String, remoteModuleId: String) -> Boolean = { _, _ -> false },
     private val onRecoveryStateChanged: (sessionId: String) -> Unit = {}
 ) {
     private val edges = ConcurrentHashMap<ConferenceEdgeKey, EdgeRecoveryRecord>()
@@ -232,6 +237,7 @@ class ConferenceEdgeRecoveryController(
         if (iceState != "DISCONNECTED" && iceState != "FAILED") return
 
         val record = edges[key]
+        record?.mediaRestored = false
         if (record?.phase == EdgeRecoveryPhase.FAILED_MEDIA_RECOVERY ||
             record?.phase == EdgeRecoveryPhase.FAILED_REQUIRES_USER_ACTION ||
             record?.phase == EdgeRecoveryPhase.FAILED_IDENTITY_MISMATCH ||
@@ -369,6 +375,12 @@ class ConferenceEdgeRecoveryController(
                 "attempt=${record.recoveryAttemptId} recoveryReason=$recoveryReason source=$source"
         )
         issueBoundedIceRestart(record, recoveryReason)
+        // Soak gap (#83): ICE may already be CONNECTED with no fresh CONNECTED event.
+        // Probe and feed the media fact into completion evaluation — never shortcut RECOVERED.
+        if (isIceConnected(sessionId, remoteModuleId)) {
+            record.mediaRestored = true
+            runIceRestorationCompletionEvaluation(record)
+        }
         notifyChanged(sessionId)
     }
 
@@ -432,13 +444,59 @@ class ConferenceEdgeRecoveryController(
     fun onIceConnected(sessionId: String, remoteModuleId: String) {
         val key = ConferenceEdgeKey(sessionId, remoteModuleId)
         val record = edges[key] ?: return
-        if (!record.phase.isActivelyRecovering() && record.phase != EdgeRecoveryPhase.RECOVERED) {
+        // No open recovery obligation: idle CONNECTED bookkeeping only.
+        if (!record.edgeObligationOpen() && record.phase != EdgeRecoveryPhase.RECOVERED) {
             record.phase = EdgeRecoveryPhase.CONNECTED
             return
         }
-        // R28-E: media edge restored MUST NOT imply recovery edge completed before control-plane.
-        if (!record.controlPlaneStarted()) return
+        // ADR-0022 R28-E: record media fact, then completion evaluation — never direct RECOVERED.
+        record.mediaRestored = true
+        runIceRestorationCompletionEvaluation(record)
+    }
+
+    /**
+     * ICE restoration → completion evaluation (ADR-0022 R28-E / #83).
+     * With [EdgeRecoveryRecord.controlPlaneStarted], ICE CONNECTED MAY yield RECOVERED.
+     */
+    private fun runIceRestorationCompletionEvaluation(record: EdgeRecoveryRecord) {
+        val key = record.key
+        val controlPlane = record.controlPlaneStarted()
+        onLog(
+            "RECOVERY_REEVALUATE session=${key.sessionId} edge=${key.remoteModuleId} " +
+                "attempt=${record.recoveryAttemptId} trigger=${RecoveryReevaluateTrigger.ICE_RESTORED} " +
+                "controlPlaneStarted=$controlPlane mediaRestored=${record.mediaRestored}"
+        )
+        if (!record.mediaRestored) {
+            onLog(
+                "RECOVERY_DECISION session=${key.sessionId} edge=${key.remoteModuleId} " +
+                    "attempt=${record.recoveryAttemptId} trigger=${RecoveryReevaluateTrigger.ICE_RESTORED} " +
+                    "decision=NO_ACTION approved=true"
+            )
+            return
+        }
+        // R28-E: before control-plane, keep the fact; do not complete the edge.
+        if (!controlPlane) {
+            onLog(
+                "RECOVERY_DECISION session=${key.sessionId} edge=${key.remoteModuleId} " +
+                    "attempt=${record.recoveryAttemptId} trigger=${RecoveryReevaluateTrigger.ICE_RESTORED} " +
+                    "decision=WAITING approved=true rejectReason=control_plane_not_started"
+            )
+            return
+        }
+        if (!record.phase.isActivelyRecovering()) {
+            onLog(
+                "RECOVERY_DECISION session=${key.sessionId} edge=${key.remoteModuleId} " +
+                    "attempt=${record.recoveryAttemptId} trigger=${RecoveryReevaluateTrigger.ICE_RESTORED} " +
+                    "decision=NO_ACTION approved=true"
+            )
+            return
+        }
         markRecovered(record)
+        onLog(
+            "RECOVERY_DECISION session=${key.sessionId} edge=${key.remoteModuleId} " +
+                "attempt=${record.recoveryAttemptId} trigger=${RecoveryReevaluateTrigger.ICE_RESTORED} " +
+                "decision=RECOVERED approved=true"
+        )
     }
 
     private fun markRecovered(record: EdgeRecoveryRecord) {
@@ -575,7 +633,13 @@ class ConferenceEdgeRecoveryController(
         record.iceRestartIssued = true
         val restarted = onIceRestart(record.key.sessionId, record.key.remoteModuleId)
         if (!restarted) {
-            enterFailedMediaResidency(record, reason = "ice_restart_failed")
+            // Restart API may fail while ICE is already CONNECTED (#83 soak). Keep the
+            // attempt active so completion evaluation can still observe mediaRestored.
+            if (isIceConnected(record.key.sessionId, record.key.remoteModuleId)) {
+                record.mediaRestored = true
+            } else {
+                enterFailedMediaResidency(record, reason = "ice_restart_failed")
+            }
         }
         scheduleWatchdog(record)
         notifyChanged(record.key.sessionId)
@@ -894,6 +958,7 @@ class ConferenceEdgeRecoveryController(
         record.phase = EdgeRecoveryPhase.RECOVERY_PENDING
         record.recoveryAttemptId = ++attemptSeq
         record.iceRestartIssued = false
+        record.mediaRestored = false
         record.epochRefreshUsed = false
         record.recoveryStartedAtMs = clock()
         if (scheduleNewWatchdog) {

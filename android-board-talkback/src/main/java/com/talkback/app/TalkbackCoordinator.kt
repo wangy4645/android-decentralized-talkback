@@ -321,6 +321,9 @@ class TalkbackCoordinator(
                 }
                 restarted
             },
+            isIceConnected = { _, remoteModuleId ->
+                qosMonitor.isGroupConnected(remoteModuleId)
+            },
             onRecoveryStateChanged = { sessionId ->
                 sessions[sessionId]?.let { emitConferenceRuntimeProjection(it) }
             },
@@ -6818,9 +6821,9 @@ class TalkbackCoordinator(
                         if (isConferenceSession(session)) {
                             conferenceParticipantManager.onMediaConnected(session.id, remoteModuleId)
                             maybeNotifyRecoveryReachabilityChanged(session, remoteModuleId, routeTrigger)
-                            if (conferenceEdgeRecoveryController.isControlPlaneStarted(session.id, remoteModuleId)) {
-                                conferenceEdgeRecoveryController.onIceConnected(session.id, remoteModuleId)
-                            }
+                            // #83 / ADR-0022: ICE restoration always feeds completion evaluation.
+                            // Controller records the fact; only evaluation may emit RECOVERED.
+                            conferenceEdgeRecoveryController.onIceConnected(session.id, remoteModuleId)
                         } else {
                             meshParticipant(session, remoteModuleId).apply {
                                 media = MediaState.CONNECTED

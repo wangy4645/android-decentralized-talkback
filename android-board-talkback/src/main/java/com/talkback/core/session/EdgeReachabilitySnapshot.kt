@@ -87,7 +87,9 @@ enum class RecoveryReevaluateTrigger {
     PEER_DISCOVERED,
     PEER_LOST,
     AUTHORITY_REACHABLE,
-    AUTHORITY_LOST
+    AUTHORITY_LOST,
+    /** ICE CONNECTED / equivalent media restoration (ADR-0022 R28-E / #83). */
+    ICE_RESTORED
 }
 
 /**

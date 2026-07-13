@@ -37,7 +37,8 @@ class ConferenceEdgeRecoveryControllerTest {
         onIceRestart: (String, String) -> Boolean = { _, _ ->
             iceRestartCalls++
             true
-        }
+        },
+        isIceConnected: (String, String) -> Boolean = { _, _ -> false }
     ) = ConferenceEdgeRecoveryController(
         debounceMs = 50L,
         iceRestartTimeoutMs = 200L,
@@ -47,7 +48,8 @@ class ConferenceEdgeRecoveryControllerTest {
         scheduler = scheduler,
         onLog = { message -> decisionLogs.add(message) },
         onRequestReattach = onRequestReattach,
-        onIceRestart = onIceRestart
+        onIceRestart = onIceRestart,
+        isIceConnected = isIceConnected
     )
 
     @After
@@ -608,6 +610,169 @@ class ConferenceEdgeRecoveryControllerTest {
         assertTrue(controller.edgeObligationClosed("sess-1", "M01"))
         assertEquals(ObligationCloseReason.RECOVERED, controller.obligationCloseReason("sess-1", "M01"))
         assertFalse(controller.hasPendingCompletionDecision("sess-1", "M01"))
+    }
+
+    @Test
+    fun accepted_thenIceConnected_withinBudget_emitsRecovered() {
+        // #83 Test A: ACCEPTED → ICE CONNECTED → RECOVERED (via completion evaluation).
+        controller = buildController(attemptBudgetMs = 500L)
+        controller.onIceStateChanged(
+            sessionId = "sess-1",
+            channelId = "CH-1",
+            remoteModuleId = "M01",
+            iceState = "FAILED",
+            eligibility = eligible(),
+            initiatesReattach = true
+        )
+        controller.onRecoveryReattachAccepted(
+            "sess-1",
+            "M01",
+            RecoveryReason.HOST_REATTACH,
+            RecoverySource.ICE_MONITOR
+        )
+        val acceptedAttempt = decisionLogs
+            .last { it.contains("RECOVERY_REATTACH_ACCEPTED") && it.contains("remote=M01") }
+            .substringAfter("attempt=")
+            .substringBefore(' ')
+            .toLong()
+        assertEquals(1, iceRestartCalls)
+        assertTrue(controller.isControlPlaneStarted("sess-1", "M01"))
+
+        controller.onIceConnected("sess-1", "M01")
+
+        assertTrue(
+            decisionLogs.any {
+                it.contains("RECOVERY_EDGE_RECOVERED") && it.contains("attempt=$acceptedAttempt")
+            }
+        )
+        assertTrue(
+            decisionLogs.any {
+                it.contains("RECOVERY_DECISION") &&
+                    it.contains("decision=RECOVERED") &&
+                    it.contains("attempt=$acceptedAttempt")
+            }
+        )
+        assertFalse(controller.factsForSession("sess-1").anyFailedMediaRecovery)
+        assertFalse(controller.isEdgeRecovering("sess-1", "M01"))
+        assertEquals(ObligationCloseReason.RECOVERED, controller.obligationCloseReason("sess-1", "M01"))
+        assertFalse(
+            decisionLogs.any {
+                it.contains("FAILED_MEDIA_RECOVERY") && it.contains("attempt=$acceptedAttempt")
+            }
+        )
+    }
+
+    @Test
+    fun accepted_whenIceAlreadyConnected_recoversWithoutNewIceEvent() {
+        // Soak gap: ICE already CONNECTED at ACCEPTED → must feed completion evaluation.
+        var iceConnected = true
+        controller = buildController(
+            attemptBudgetMs = 500L,
+            isIceConnected = { _, _ -> iceConnected }
+        )
+        controller.onIceStateChanged(
+            sessionId = "sess-1",
+            channelId = "CH-1",
+            remoteModuleId = "M03",
+            iceState = "FAILED",
+            eligibility = eligible(),
+            initiatesReattach = false
+        )
+        controller.onRecoveryReattachAccepted(
+            "sess-1",
+            "M03",
+            RecoveryReason.NETWORK_RECOVERY,
+            RecoverySource.ICE_MONITOR
+        )
+        assertEquals(1, iceRestartCalls)
+        assertTrue(decisionLogs.any { it.contains("RECOVERY_EDGE_RECOVERED") })
+        assertTrue(
+            decisionLogs.any {
+                it.contains("RECOVERY_DECISION") && it.contains("decision=RECOVERED")
+            }
+        )
+        assertFalse(controller.factsForSession("sess-1").anyFailedMediaRecovery)
+        iceConnected = false
+    }
+
+    @Test
+    fun accepted_iceRestartApiFailsButIceConnected_stillRecovers() {
+        // Restart call may fail while media is already up — still complete via evaluation.
+        controller = buildController(
+            attemptBudgetMs = 500L,
+            onIceRestart = { _, _ ->
+                iceRestartCalls++
+                false
+            },
+            isIceConnected = { _, _ -> true }
+        )
+        controller.onIceStateChanged(
+            sessionId = "sess-1",
+            channelId = "CH-1",
+            remoteModuleId = "M04",
+            iceState = "FAILED",
+            eligibility = eligible(),
+            initiatesReattach = false
+        )
+        controller.onRecoveryReattachAccepted(
+            "sess-1",
+            "M04",
+            RecoveryReason.NETWORK_RECOVERY,
+            RecoverySource.ICE_MONITOR
+        )
+        assertEquals(1, iceRestartCalls)
+        assertTrue(decisionLogs.any { it.contains("RECOVERY_EDGE_RECOVERED") })
+        assertFalse(controller.factsForSession("sess-1").anyFailedMediaRecovery)
+        assertFalse(
+            decisionLogs.any {
+                it.contains("FAILED_MEDIA_RECOVERY") && it.contains("ice_restart_failed")
+            }
+        )
+    }
+
+    @Test
+    fun accepted_iceNeverRecovers_stillAttemptTimeout() {
+        // #83 Test B: ACCEPTED then ICE never recovers → ATTEMPT_TIMEOUT preserved.
+        controller = buildController(attemptBudgetMs = 120L)
+        controller.onIceStateChanged(
+            sessionId = "sess-1",
+            channelId = "CH-1",
+            remoteModuleId = "M02",
+            iceState = "FAILED",
+            eligibility = eligible(),
+            initiatesReattach = false
+        )
+        controller.onRecoveryReattachAccepted(
+            "sess-1",
+            "M02",
+            RecoveryReason.NETWORK_RECOVERY,
+            RecoverySource.ICE_MONITOR
+        )
+        val acceptedAttempt = decisionLogs
+            .last { it.contains("RECOVERY_REATTACH_ACCEPTED") }
+            .substringAfter("attempt=")
+            .substringBefore(' ')
+            .toLong()
+        assertEquals(1, iceRestartCalls)
+        assertTrue(controller.isEdgeRecovering("sess-1", "M02"))
+
+        Thread.sleep(200)
+        assertTrue(
+            decisionLogs.any {
+                it.contains("RECOVERY_FINAL_EVALUATION") &&
+                    it.contains("reason=ATTEMPT_TIMEOUT") &&
+                    it.contains("attempt=$acceptedAttempt")
+            }
+        )
+        assertTrue(
+            decisionLogs.any {
+                it.contains("FAILED_MEDIA_RECOVERY") &&
+                    it.contains("attempt=$acceptedAttempt") &&
+                    it.contains("attempt_timeout")
+            }
+        )
+        assertFalse(decisionLogs.any { it.contains("RECOVERY_EDGE_RECOVERED") })
+        assertTrue(controller.factsForSession("sess-1").anyFailedMediaRecovery)
     }
 
     @Test

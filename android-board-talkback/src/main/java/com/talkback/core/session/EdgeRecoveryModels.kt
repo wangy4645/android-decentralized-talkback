@@ -83,6 +83,8 @@ internal data class EdgeRecoveryRecord(
     var recoveryStartedAtMs: Long,
     var epochRefreshUsed: Boolean = false,
     var iceRestartIssued: Boolean = false,
+    /** Media-plane ICE restored fact for current attempt (ADR-0022 R28-E). */
+    var mediaRestored: Boolean = false,
     var initiatesReattach: Boolean = false,
     /** Single-writer obligation facts (ADR-0022 R28-H.1). */
     var obligationOpenedAtMs: Long? = null,
