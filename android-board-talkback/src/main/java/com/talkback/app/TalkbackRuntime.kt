@@ -419,4 +419,8 @@ class TalkbackRuntime(
 
     internal fun testConferenceMembershipEpoch(sessionId: String): Long =
         coordinator.testConferenceMembershipEpoch(sessionId)
+
+    internal fun testNotifyRemoteModuleRecovered(moduleId: String) {
+        coordinator.testNotifyRemoteModuleRecovered(moduleId)
+    }
 }

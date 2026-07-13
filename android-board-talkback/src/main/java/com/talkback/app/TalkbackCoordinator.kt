@@ -84,6 +84,8 @@ import com.talkback.core.session.ConferenceNetworkIndicator
 import com.talkback.core.session.ConferenceNetworkIndicatorProjector
 import com.talkback.core.session.ConferencePresenceProjector
 import com.talkback.core.session.ConferencePresenceProjection
+import com.talkback.core.session.ConferenceMembershipLifecycle
+import com.talkback.core.session.ConferenceRejoinEligibility
 import com.talkback.core.session.ConferenceRuntimeProjector
 import com.talkback.core.session.ConferenceRuntimeState
 import com.talkback.core.session.ConferenceSnapshot
@@ -2647,6 +2649,11 @@ class TalkbackCoordinator(
 
     internal fun testConferenceMembershipEpoch(sessionId: String): Long = runOnCoordinatorSync {
         sessions[sessionId]?.rosterEpoch ?: 0L
+    }
+
+    /** Test seam for #82 / R29-F: exercise host recovery reinvite gate without waiting for HELLO stale. */
+    internal fun testNotifyRemoteModuleRecovered(moduleId: String) = runOnCoordinatorSync {
+        onRemoteModuleRecovered(moduleId)
     }
 
     fun remoteModuleStates(): List<RemoteModuleState> = mergeRemoteModuleViews()
@@ -8270,11 +8277,8 @@ class TalkbackCoordinator(
                 it.accepted &&
                 it.initiatorModuleId == localModuleId
         } ?: return false
-        if (moduleId in conferenceMemberRemoteIds(hostConference) &&
-            qosMonitor.isGroupConnected(moduleId)
-        ) {
-            return false
-        }
+        // R29-F (#82): eligibility from membership lifecycle only — never media/QoS.
+        if (!isConferenceRejoinEligible(hostConference, moduleId)) return false
         val remoteState = mergeRemoteModuleViews().firstOrNull { it.presence.moduleId.value == moduleId }
         if (!isModuleReachable(moduleId, remoteState)) return false
         val endpointId = resolvePrimaryEndpointId(moduleId, remoteState) ?: return false
@@ -8285,6 +8289,43 @@ class TalkbackCoordinator(
             log("[${hostConference.traceId}] Host re-invited $moduleId on recovery sent=$sent")
         }
         return sent > 0
+    }
+
+    /**
+     * R29-F (#82): who may be rejoin-invited.
+     * Consumes membership lifecycle only — MUST NOT read ICE / mesh / QoS / recovery facts.
+     * JOINED ∧ obligationOpen ⇒ NOT rejoin eligible.
+     */
+    private fun isConferenceRejoinEligible(session: TalkbackSession, moduleId: String): Boolean {
+        val lifecycle = resolveConferenceMembershipLifecycle(session, moduleId) ?: return false
+        return ConferenceRejoinEligibility.isEligible(lifecycle)
+    }
+
+    /**
+     * Resolve membership lifecycle from roster / left set / invite commitment only.
+     * [ConferenceMembershipLifecycle.REJOIN_REQUIRED] is reserved and not produced here (#82).
+     * [ConferenceMembershipLifecycle.PRUNED] shares the left-member set with LEFT today;
+     * both are rejoin-eligible and need not be distinguished for this gate.
+     */
+    private fun resolveConferenceMembershipLifecycle(
+        session: TalkbackSession,
+        moduleId: String
+    ): ConferenceMembershipLifecycle? {
+        if (!isConferenceSession(session)) return null
+        val leftKeys = conferenceParticipantManager.leftMemberEndpoints(session.id)?.keys
+            ?: session.leftMemberEndpoints.keys
+        if (moduleId in leftKeys) {
+            return ConferenceMembershipLifecycle.LEFT
+        }
+        if (moduleId !in conferenceMemberRemoteIds(session)) return null
+        return when (conferenceParticipantManager.participant(session.id, moduleId).invite) {
+            InviteState.ACCEPTED -> ConferenceMembershipLifecycle.JOINED
+            InviteState.INVITING,
+            InviteState.RINGING,
+            InviteState.NONE,
+            InviteState.DECLINED,
+            InviteState.EXPIRED -> ConferenceMembershipLifecycle.INVITED
+        }
     }
 
     private fun maybeTriggerAnchorHandover(session: TalkbackSession) {
