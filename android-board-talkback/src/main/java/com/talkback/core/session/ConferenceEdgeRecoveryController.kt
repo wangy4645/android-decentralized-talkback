@@ -231,6 +231,8 @@ class ConferenceEdgeRecoveryController(
         }
         val key = ConferenceEdgeKey(sessionId, remoteModuleId)
         if (IceConnectivity.isConnected(iceState)) {
+            // Always drop debounce suspicion on CONNECTED (R28-H.2); onIceConnected decides HEALTHY vs evaluation.
+            cancelDebounce(key)
             onIceConnected(sessionId, remoteModuleId)
             return
         }
@@ -444,6 +446,13 @@ class ConferenceEdgeRecoveryController(
     fun onIceConnected(sessionId: String, remoteModuleId: String) {
         val key = ConferenceEdgeKey(sessionId, remoteModuleId)
         val record = edges[key] ?: return
+        cancelDebounce(key)
+        // R28-H.2: debouncing is suspicion only — reconnect clears HEALTHY, never starts recovery / RECOVERED.
+        if (record.phase == EdgeRecoveryPhase.DISCONNECTED_DEBOUNCING) {
+            clearDebouncingSuspicion(record)
+            notifyChanged(sessionId)
+            return
+        }
         // No open recovery obligation: idle CONNECTED bookkeeping only.
         if (!record.edgeObligationOpen() && record.phase != EdgeRecoveryPhase.RECOVERED) {
             record.phase = EdgeRecoveryPhase.CONNECTED
@@ -452,6 +461,29 @@ class ConferenceEdgeRecoveryController(
         // ADR-0022 R28-E: record media fact, then completion evaluation — never direct RECOVERED.
         record.mediaRestored = true
         runIceRestorationCompletionEvaluation(record)
+    }
+
+    /**
+     * R28-H.2: ICE reconnects while still [EdgeRecoveryPhase.DISCONNECTED_DEBOUNCING].
+     * Clear suspicion → HEALTHY. MUST NOT beginRecovery / REATTACH / RECOVERED.
+     */
+    private fun clearDebouncingSuspicion(record: EdgeRecoveryRecord) {
+        val key = record.key
+        cancelDebounce(key)
+        cancelWatchdog(key)
+        cancelDeadline(key)
+        record.phase = EdgeRecoveryPhase.CONNECTED
+        record.mediaRestored = false
+        record.iceRestartIssued = false
+        record.obligationOpenedAtMs = null
+        record.obligationDeadlineAtMs = null
+        record.obligationClosedAtMs = null
+        record.obligationCloseReason = null
+        record.hasPendingCompletionDecision = false
+        onLog(
+            "RECOVERY_DEBOUNCE_CLEARED session=${key.sessionId} remote=${key.remoteModuleId} " +
+                "reason=ice_reconnected_before_attempt"
+        )
     }
 
     /**

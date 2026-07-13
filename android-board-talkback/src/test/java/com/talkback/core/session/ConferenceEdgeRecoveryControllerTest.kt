@@ -113,6 +113,45 @@ class ConferenceEdgeRecoveryControllerTest {
     }
 
     @Test
+    fun r28h2_reconnectDuringDebounce_clearsSuspicionWithoutRecovery() {
+        // R28-H.2: DISCONNECTED_DEBOUNCING + ICE CONNECTED → HEALTHY, not RECOVERED / attempt.
+        controller.onIceStateChanged(
+            sessionId = "sess-1",
+            channelId = "CH-1",
+            remoteModuleId = "M02",
+            iceState = "DISCONNECTED",
+            eligibility = eligible(),
+            initiatesReattach = true
+        )
+        assertTrue(controller.isEdgeRecovering("sess-1", "M02"))
+        assertEquals(0, reattachCalls)
+        assertEquals(0, iceRestartCalls)
+
+        controller.onIceStateChanged(
+            sessionId = "sess-1",
+            channelId = "CH-1",
+            remoteModuleId = "M02",
+            iceState = "CONNECTED",
+            eligibility = eligible(),
+            initiatesReattach = true
+        )
+        nowMs = 200L
+        Thread.sleep(120L)
+
+        assertFalse(
+            "debounce reconnect must clear recovering projection",
+            controller.factsForSession("sess-1").anyRecovering
+        )
+        assertFalse(controller.isEdgeRecovering("sess-1", "M02"))
+        assertFalse(controller.edgeObligationOpen("sess-1", "M02"))
+        assertEquals(0, reattachCalls)
+        assertEquals(0, iceRestartCalls)
+        assertFalse(decisionLogs.any { it.contains("RECOVERY_EDGE_STARTED") })
+        assertFalse(decisionLogs.any { it.contains("RECOVERY_REATTACH") })
+        assertFalse(decisionLogs.any { it.contains("RECOVERY_EDGE_RECOVERED") })
+    }
+
+    @Test
     fun hostWaitsForInboundReattach_withoutSending() {
         controller.onIceStateChanged(
             sessionId = "sess-1",
