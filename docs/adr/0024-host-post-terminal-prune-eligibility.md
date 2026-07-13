@@ -166,7 +166,6 @@ even when prune timing is correct. Wire form **MAY** reuse existing leave broadc
 
 - Redefining R28-H close set or observation window semantics
 - Expanding `isPruneEligible()` beyond `OBLIGATION_DEADLINE` in this ADR
-- P1 supersede (`REATTACH_ACCEPTED` → cancel old watchdog)
 - Presence / host pill media-health UX
 - Choosing concrete `observationWindow` duration (Recovery config; soak suggests ≫ 4s)
 
@@ -174,10 +173,10 @@ even when prune timing is correct. Wire form **MAY** reuse existing leave broadc
 
 - **Positive:** Host prune no longer races WiFi restore; Recovery and Membership stay decoupled; roster broadcast is part of the prune transaction.
 - **Negative:** Unhealthy members remain JOINED until controller closes with a prune-eligible reason — intentional; presence must show degradation (R29-C).
-- **Requires implementation order:**
+- **Implementation order (landed):**
   1. R28-H API (`edgeObligation*`, `obligationCloseReason`, `hasPendingCompletionDecision`)
   2. ADR-0024 prune gate (`canAuthorityPrune`)
-  3. P1 supersede / watchdog
+  3. P1 supersede / watchdog (`REATTACH_ACCEPTED` → cancel old watchdog) — **PASS** via #79 / ADR-0023 G-R29-P1
 
 ## Soak gates
 

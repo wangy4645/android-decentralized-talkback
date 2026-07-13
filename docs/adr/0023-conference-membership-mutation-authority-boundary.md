@@ -167,8 +167,8 @@ Per R28-A the edge obligation is terminated only by `RECOVERED`, Membership `LEF
 ## Priority / sequencing (frozen)
 
 ```text
-P0  R29  (this ADR)          — participant timeout ≠ roster/floor/mesh mutation
-P1  supersede / watchdog     — REATTACH_ACCEPTED must supersede; old watchdog must not kill a live edge
+P0  R29  (this ADR)          — PASS (G-R29-1 / G-R29-2 / G-R29-3)
+P1  supersede / watchdog     — PASS (#79): REATTACH_ACCEPTED supersedes; old watchdog cannot fail live edge
 P2  Presence / Pill          — do not touch until P0 + P1 land
 ```
 
@@ -179,6 +179,7 @@ P2  Presence / Pill          — do not touch until P0 + P1 land
 | G-R29-1 | participant `timeout(remote)`: `roster` and `memberModules` unchanged; mesh preserved; `edgeRecoveryFailed=true`; **recovery record preserved** (route restore → `RECOVERY_REEVALUATE` still possible); **no** `member_left` on non-authority | **PASS** IT `conferenceR29_participantHealthCleanup_doesNotMutateMembership` + `conferenceR29_participantPreservesEdgeObligationDuringRecovery`. Evidence: participant health cleanup keeps roster; no `member_left` cancel; failed-media fact + `RECOVERY_MEDIA_DEGRADED`; edge preserved so later `RECOVERY_REEVALUATE` remains possible |
 | G-R29-2 | only host prune → all three nodes converge `roster=2` via `GROUP_LEAVE`/roster broadcast | **PASS** IT `conferenceR29E_hostMayAuthorityPruneAfterObligationDeadline` + `conferenceR29E4_authorityPruneConvergesJoinedCountAndRosterEpoch`. Evidence: only host `AUTHORITY_PRUNE` mutates membership; after prune commit, host and participant converge equal joined count and same roster epoch via leave/roster propagation |
 | G-R29-3 | `FAILED_MEDIA_RECOVERY` → route restored → `RECOVERY_REEVALUATE` → `RECOVERED` (edge not torn down early) | **PASS** UT `failedMediaRecovery_routeRestored_reevaluateThenRecovered` + IT `conferenceR28H2_materialReevalKeepsObligationOpenWithoutPrune` / `conferenceR29_participantPreservesEdgeObligationDuringRecovery`. Evidence: route restore re-evaluates while obligation stays OPEN (no early cancel); ACCEPTED + media-up completes with `closeReason=RECOVERED` |
+| G-R29-P1 | `REATTACH_ACCEPTED` supersedes prior attempt; old attempt watchdog must not emit `FAILED_MEDIA_RECOVERY` for superseded id; new attempt owns its watchdog budget | **PASS** UT `reattachAccepted_supersedesAttempt_oldWatchdogDoesNotFailSupersededAttempt` + `reattachAccepted_afterFailedResidency_supersedesAndStartsNewAttempt` (+ `supersedeAfterFailed_cancelsPriorObligationDeadline`). Evidence: ACCEPTED stamps `SUPERSEDED` with new attempt id; cancelled prior watchdog; new budget may fail only as the accepted attempt |
 
 ## Test plan (by invariant, not by module)
 
@@ -189,7 +190,7 @@ P2  Presence / Pill          — do not touch until P0 + P1 land
 ## Non-goals / open questions
 
 - **Host migration / authority unreachable:** when the authority itself is unreachable, **no node** prunes — freeze membership until authority restored or host migration completes. Not implemented in P0.
-- **P1 supersede/watchdog** is a separate follow-up.
+- **P1 supersede/watchdog** — landed (`e957e4f` / #79); gated as G-R29-P1 above.
 - **Presence / host pill** (P2/P3) remains deferred.
 
 ## References
