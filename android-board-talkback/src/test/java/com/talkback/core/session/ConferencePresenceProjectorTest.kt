@@ -22,6 +22,21 @@ class ConferencePresenceProjectorTest {
     }
 
     @Test
+    fun presence_mediaUnavailable_doesNotAffectJoinedCount() {
+        val out = ConferencePresenceProjector.project(
+            ConferencePresenceProjector.Input(
+                sessionAccepted = true,
+                joinedParticipantCount = 3,
+                connectedRemoteModuleIds = setOf("M02"),
+                recoveringRemoteModuleIds = emptySet(),
+                mediaUnavailableRemoteModuleIds = setOf("M03")
+            )
+        )
+        assertEquals(3, out.joinedCount)
+        assertEquals(setOf("M03"), out.mediaUnavailablePeers)
+    }
+
+    @Test
     fun presence_s13bSoak_joined3_connected2_m01Recovering() {
         val out = ConferencePresenceProjector.project(
             ConferencePresenceProjector.Input(

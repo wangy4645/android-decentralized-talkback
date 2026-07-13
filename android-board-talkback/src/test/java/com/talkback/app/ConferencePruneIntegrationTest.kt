@@ -153,4 +153,228 @@ class ConferencePruneIntegrationTest {
         assertEquals(2, restored.memberViews.size)
         assertTrue(restored.memberKeys.any { it.startsWith("M03") })
     }
+
+    @Test
+    fun conferenceR29_participantHealthCleanup_doesNotMutateMembership() {
+        val channelId = "CONF-R29-PARTICIPANT"
+        val context = RuntimeEnvironment.getApplication()
+        val peers = TestTalkbackNode.allPeers(m01 to 50051, m02 to 50052, m03 to 50053)
+        val host = TestTalkbackNode(
+            context, m02, 50052, hub, peers,
+            meshNegotiationGraceMs = 0L,
+            edgeRecoveryAttemptBudgetMs = 500L
+        )
+        val participant = TestTalkbackNode(
+            context, m01, 50051, hub, peers,
+            meshNegotiationGraceMs = 0L,
+            edgeRecoveryAttemptBudgetMs = 500L
+        )
+        val peer = TestTalkbackNode(
+            context, m03, 50053, hub, peers,
+            meshNegotiationGraceMs = 0L,
+            edgeRecoveryAttemptBudgetMs = 500L
+        )
+        host.start()
+        participant.start()
+        peer.start()
+        Thread.sleep(300L)
+        try {
+            host.runtime.setAutoAcceptConferenceInvites(true)
+            peer.runtime.setAutoAcceptConferenceInvites(true)
+            participant.runtime.setAutoAcceptConferenceInvites(true)
+            val sessionId = host.runtime.conferenceCall(
+                host.localEndpoint,
+                listOf(
+                    EndpointAddress(m01, EndpointId("E01")),
+                    EndpointAddress(m03, EndpointId("E01"))
+                ),
+                channelId
+            )
+            assertNotNull(sessionId)
+            assertTrue(participant.waitForLog { it.contains("invite accepted") })
+            assertTrue(peer.waitForLog { it.contains("invite accepted") })
+            connectConferenceHostIce(host, participant, peer, hostModuleId = "M02")
+            participant.runtime.simulateRemoteIceState("M03", "CONNECTED")
+            peer.runtime.simulateRemoteIceState("M01", "CONNECTED")
+            Thread.sleep(500L)
+            listOf(host, participant, peer).forEach {
+                it.runtime.testSeedAuthorityDigestForChannel(channelId)
+            }
+
+            val baselineDeadline = System.currentTimeMillis() + 8_000L
+            var baseline = participant.runtime.sessionSnapshots().first { it.sessionId == sessionId }
+            while (System.currentTimeMillis() < baselineDeadline) {
+                baseline = participant.runtime.sessionSnapshots().first { it.sessionId == sessionId }
+                if (baseline.memberKeys.any { it.startsWith("M03") }) break
+                Thread.sleep(100L)
+            }
+            val baselineKeys = baseline.memberKeys.toSet()
+            assertTrue(baselineKeys.any { it.startsWith("M03") })
+
+            val degradeMark = synchronized(participant.logs) { participant.logs.size }
+            participant.runtime.simulateRemoteIceState("M03", "DISCONNECTED")
+            assertTrue(
+                participant.waitForLogSince(degradeMark, timeoutMs = 8_000L) {
+                    it.contains("FAILED_MEDIA_RECOVERY") && it.contains("remote=M03")
+                }
+            )
+            participant.runtime.testRunConferenceHealthCleanup(channelId)
+
+            val after = participant.runtime.sessionSnapshots().first { it.sessionId == sessionId }
+            assertEquals(baselineKeys, after.memberKeys.toSet())
+            assertFalse(participant.hasLog { it.contains("Pruning unhealthy conference peer M03") })
+            assertFalse(
+                participant.hasLog {
+                    it.contains("RECOVERY_EDGE_CANCELLED") && it.contains("remote=M03") && it.contains("member_left")
+                }
+            )
+            assertTrue(
+                participant.hasLog { it.contains("RECOVERY_MEDIA_DEGRADED") && it.contains("remote=M03") }
+            )
+            val facts = participant.runtime.testEdgeRecoveryFacts(sessionId!!)
+            assertTrue(facts.failedRemoteModuleIds.contains("M03"))
+        } finally {
+            participant.stop()
+            host.stop()
+            peer.stop()
+        }
+    }
+
+    @Test
+    fun conferenceR29_hostMayPruneUnhealthyPeer() {
+        val channelId = "CONF-R29-HOST-PRUNE"
+        val context = RuntimeEnvironment.getApplication()
+        val peers = TestTalkbackNode.allPeers(m01 to 50051, m02 to 50052, m03 to 50053)
+        val host = TestTalkbackNode(
+            context, m02, 50052, hub, peers,
+            meshNegotiationGraceMs = 0L,
+            edgeRecoveryAttemptBudgetMs = 500L
+        )
+        val participant = TestTalkbackNode(
+            context, m01, 50051, hub, peers,
+            meshNegotiationGraceMs = 0L,
+            edgeRecoveryAttemptBudgetMs = 500L
+        )
+        val peer = TestTalkbackNode(
+            context, m03, 50053, hub, peers,
+            meshNegotiationGraceMs = 0L,
+            edgeRecoveryAttemptBudgetMs = 500L
+        )
+        host.start()
+        participant.start()
+        peer.start()
+        Thread.sleep(300L)
+        try {
+            host.runtime.setAutoAcceptConferenceInvites(true)
+            participant.runtime.setAutoAcceptConferenceInvites(true)
+            peer.runtime.setAutoAcceptConferenceInvites(true)
+            val sessionId = host.runtime.conferenceCall(
+                host.localEndpoint,
+                listOf(
+                    EndpointAddress(m01, EndpointId("E01")),
+                    EndpointAddress(m03, EndpointId("E01"))
+                ),
+                channelId
+            )
+            assertNotNull(sessionId)
+            assertTrue(participant.waitForLog { it.contains("invite accepted") })
+            assertTrue(peer.waitForLog { it.contains("invite accepted") })
+            connectConferenceHostIce(host, participant, peer, hostModuleId = "M02")
+            participant.runtime.simulateRemoteIceState("M03", "CONNECTED")
+            peer.runtime.simulateRemoteIceState("M01", "CONNECTED")
+            host.runtime.simulateRemoteIceState("M03", "CONNECTED")
+            Thread.sleep(500L)
+
+            val baseline = host.runtime.sessionSnapshots().first { it.sessionId == sessionId }
+            assertTrue(baseline.memberKeys.any { it.startsWith("M03") })
+
+            val pruneMark = synchronized(host.logs) { host.logs.size }
+            host.runtime.simulateRemoteIceState("M03", "DISCONNECTED")
+            assertTrue(
+                host.waitForLogSince(pruneMark, timeoutMs = 8_000L) {
+                    it.contains("FAILED_MEDIA_RECOVERY") && it.contains("remote=M03")
+                }
+            )
+            host.runtime.testRunConferenceHealthCleanup(channelId)
+
+            assertTrue(host.hasLog { it.contains("Pruning unhealthy conference peer M03") })
+            assertTrue(host.hasLog { it.contains("source=AUTHORITY_PRUNE") })
+            val after = host.runtime.sessionSnapshots().first { it.sessionId == sessionId }
+            assertFalse(after.memberKeys.any { it.startsWith("M03") })
+        } finally {
+            participant.stop()
+            host.stop()
+            peer.stop()
+        }
+    }
+
+    @Test
+    fun conferenceR29_participantPreservesEdgeObligationDuringRecovery() {
+        val channelId = "CONF-R29-EDGE-OBLIGATION"
+        val context = RuntimeEnvironment.getApplication()
+        val peers = TestTalkbackNode.allPeers(m01 to 50051, m02 to 50052, m03 to 50053)
+        val host = TestTalkbackNode(
+            context, m02, 50052, hub, peers,
+            meshNegotiationGraceMs = 0L,
+            edgeRecoveryAttemptBudgetMs = 500L
+        )
+        val participant = TestTalkbackNode(
+            context, m01, 50051, hub, peers,
+            meshNegotiationGraceMs = 0L,
+            edgeRecoveryAttemptBudgetMs = 500L
+        )
+        val peer = TestTalkbackNode(
+            context, m03, 50053, hub, peers,
+            meshNegotiationGraceMs = 0L,
+            edgeRecoveryAttemptBudgetMs = 500L
+        )
+        host.start()
+        participant.start()
+        peer.start()
+        Thread.sleep(300L)
+        try {
+            host.runtime.setAutoAcceptConferenceInvites(true)
+            peer.runtime.setAutoAcceptConferenceInvites(true)
+            participant.runtime.setAutoAcceptConferenceInvites(true)
+            val sessionId = host.runtime.conferenceCall(
+                host.localEndpoint,
+                listOf(
+                    EndpointAddress(m01, EndpointId("E01")),
+                    EndpointAddress(m03, EndpointId("E01"))
+                ),
+                channelId
+            )
+            assertNotNull(sessionId)
+            assertTrue(participant.waitForLog { it.contains("invite accepted") })
+            assertTrue(peer.waitForLog { it.contains("invite accepted") })
+            connectConferenceHostIce(host, participant, peer, hostModuleId = "M02")
+            participant.runtime.simulateRemoteIceState("M03", "CONNECTED")
+            peer.runtime.simulateRemoteIceState("M01", "CONNECTED")
+            Thread.sleep(300L)
+
+            val logMark = synchronized(participant.logs) { participant.logs.size }
+            participant.runtime.simulateRemoteIceState("M03", "DISCONNECTED")
+            assertTrue(
+                participant.waitForLogSince(logMark, timeoutMs = 8_000L) {
+                    it.contains("RECOVERY_EDGE_STARTED") && it.contains("remote=M03")
+                }
+            )
+            participant.runtime.testRunConferenceHealthCleanup(channelId)
+            assertFalse(
+                participant.hasLog {
+                    it.contains("RECOVERY_EDGE_CANCELLED") && it.contains("remote=M03") && it.contains("member_left")
+                }
+            )
+            participant.runtime.simulateRemoteIceState("M03", "CONNECTED")
+            assertTrue(
+                participant.waitForLogSince(logMark, timeoutMs = 8_000L) {
+                    it.contains("RECOVERY_REEVALUATE") && it.contains("edge=M03")
+                }
+            )
+        } finally {
+            participant.stop()
+            host.stop()
+            peer.stop()
+        }
+    }
 }
