@@ -176,9 +176,9 @@ P2  Presence / Pill          — do not touch until P0 + P1 land
 
 | Gate | Pass criterion | Status |
 |------|----------------|--------|
-| G-R29-1 | participant `timeout(remote)`: `roster` and `memberModules` unchanged; mesh preserved; `edgeRecoveryFailed=true`; **recovery record preserved** (route restore → `RECOVERY_REEVALUATE` still possible); **no** `member_left` on non-authority | Pending |
-| G-R29-2 | only host prune → all three nodes converge `roster=2` via `GROUP_LEAVE`/roster broadcast | Pending |
-| G-R29-3 | `FAILED_MEDIA_RECOVERY` → route restored → `RECOVERY_REEVALUATE` → `RECOVERED` (edge not torn down early) | Pending |
+| G-R29-1 | participant `timeout(remote)`: `roster` and `memberModules` unchanged; mesh preserved; `edgeRecoveryFailed=true`; **recovery record preserved** (route restore → `RECOVERY_REEVALUATE` still possible); **no** `member_left` on non-authority | **PASS** IT `conferenceR29_participantHealthCleanup_doesNotMutateMembership` + `conferenceR29_participantPreservesEdgeObligationDuringRecovery`. Evidence: participant health cleanup keeps roster; no `member_left` cancel; failed-media fact + `RECOVERY_MEDIA_DEGRADED`; edge preserved so later `RECOVERY_REEVALUATE` remains possible |
+| G-R29-2 | only host prune → all three nodes converge `roster=2` via `GROUP_LEAVE`/roster broadcast | **PASS** IT `conferenceR29E_hostMayAuthorityPruneAfterObligationDeadline` + `conferenceR29E4_authorityPruneConvergesJoinedCountAndRosterEpoch`. Evidence: only host `AUTHORITY_PRUNE` mutates membership; after prune commit, host and participant converge equal joined count and same roster epoch via leave/roster propagation |
+| G-R29-3 | `FAILED_MEDIA_RECOVERY` → route restored → `RECOVERY_REEVALUATE` → `RECOVERED` (edge not torn down early) | Pending — IT proves `FAILED_MEDIA_RECOVERY` → route restore → `RECOVERY_REEVALUATE` without early tear-down (`conferenceR28H2_materialReevalKeepsObligationOpenWithoutPrune` / `conferenceR29_participantPreservesEdgeObligationDuringRecovery`); full `RECOVERED` close after that path not yet gated |
 
 ## Test plan (by invariant, not by module)
 
