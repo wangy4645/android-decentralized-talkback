@@ -609,4 +609,113 @@ class ConferenceEdgeRecoveryControllerTest {
         assertEquals(ObligationCloseReason.RECOVERED, controller.obligationCloseReason("sess-1", "M01"))
         assertFalse(controller.hasPendingCompletionDecision("sess-1", "M01"))
     }
+
+    @Test
+    fun reattachAccepted_supersedesAttempt_oldWatchdogDoesNotFailSupersededAttempt() {
+        // #79: ACCEPTED must SUPERSEDE + cancel old attempt watchdog.
+        // budget=min(120, 200+50)=120ms. Accept mid-budget so old timer would fire first.
+        controller = buildController(attemptBudgetMs = 120L)
+        controller.onIceStateChanged(
+            sessionId = "sess-1",
+            channelId = "CH-1",
+            remoteModuleId = "M01",
+            iceState = "FAILED",
+            eligibility = eligible(),
+            initiatesReattach = true
+        )
+        val startedAttempt = decisionLogs
+            .first { it.contains("RECOVERY_EDGE_STARTED") && it.contains("remote=M01") }
+            .substringAfter("attempt=")
+            .substringBefore(' ')
+            .toLong()
+
+        Thread.sleep(70)
+        controller.onRecoveryReattachAccepted(
+            "sess-1",
+            "M01",
+            RecoveryReason.HOST_REATTACH,
+            RecoverySource.ICE_MONITOR
+        )
+
+        assertTrue(
+            decisionLogs.any {
+                it.contains("decision=SUPERSEDED") && it.contains("priorAttempt=$startedAttempt")
+            }
+        )
+        val acceptedAttempt = decisionLogs
+            .last { it.contains("RECOVERY_REATTACH_ACCEPTED") && it.contains("remote=M01") }
+            .substringAfter("attempt=")
+            .substringBefore(' ')
+            .toLong()
+        assertTrue(
+            "ACCEPTED must own a new attempt id (was $startedAttempt, got $acceptedAttempt)",
+            acceptedAttempt > startedAttempt
+        )
+        assertEquals(1, iceRestartCalls)
+        assertTrue(controller.isEdgeRecovering("sess-1", "M01"))
+
+        // Past when the superseded attempt's watchdog would have fired.
+        Thread.sleep(80)
+        assertFalse(
+            "old attempt watchdog must not emit FAILED for superseded attempt=$startedAttempt",
+            decisionLogs.any {
+                it.contains("FAILED_MEDIA_RECOVERY") && it.contains("attempt=$startedAttempt")
+            }
+        )
+        assertTrue(controller.isEdgeRecovering("sess-1", "M01"))
+        assertFalse(controller.factsForSession("sess-1").anyFailedMediaRecovery)
+
+        // New attempt's own budget may still expire later — with new attempt id only.
+        Thread.sleep(120)
+        assertFalse(
+            decisionLogs.any {
+                it.contains("FAILED_MEDIA_RECOVERY") && it.contains("attempt=$startedAttempt")
+            }
+        )
+        assertTrue(
+            "new attempt owns its watchdog budget and may fail as attempt=$acceptedAttempt",
+            decisionLogs.any {
+                it.contains("FAILED_MEDIA_RECOVERY") && it.contains("attempt=$acceptedAttempt")
+            }
+        )
+    }
+
+    @Test
+    fun reattachAccepted_afterFailedResidency_supersedesAndStartsNewAttempt() {
+        // Soak fddec479: FAILED then ACCEPTED must not keep attempt=N.
+        controller = buildController(attemptBudgetMs = 120L)
+        controller.onIceStateChanged(
+            sessionId = "sess-1",
+            channelId = "CH-1",
+            remoteModuleId = "M02",
+            iceState = "FAILED",
+            eligibility = eligible(),
+            initiatesReattach = false
+        )
+        Thread.sleep(200)
+        assertTrue(controller.factsForSession("sess-1").anyFailedMediaRecovery)
+        val failedAttempt = decisionLogs
+            .last { it.contains("FAILED_MEDIA_RECOVERY") && it.contains("remote=M02") }
+            .substringAfter("attempt=")
+            .substringBefore(' ')
+            .toLong()
+
+        decisionLogs.clear()
+        controller.onRecoveryReattachAccepted(
+            "sess-1",
+            "M02",
+            RecoveryReason.NETWORK_RECOVERY,
+            RecoverySource.ICE_MONITOR
+        )
+        assertTrue(decisionLogs.any { it.contains("decision=SUPERSEDED") })
+        val acceptedAttempt = decisionLogs
+            .last { it.contains("RECOVERY_REATTACH_ACCEPTED") }
+            .substringAfter("attempt=")
+            .substringBefore(' ')
+            .toLong()
+        assertTrue(acceptedAttempt > failedAttempt)
+        assertEquals(1, iceRestartCalls)
+        assertTrue(controller.isEdgeRecovering("sess-1", "M02"))
+        assertFalse(controller.factsForSession("sess-1").anyFailedMediaRecovery)
+    }
 }

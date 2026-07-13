@@ -119,7 +119,7 @@ class ConferenceEdgeRecoveryController(
         record.obligationDeadlineAtMs = terminalAt + observationWindowMs
         onLog(
             "FAILED_MEDIA_RECOVERY session=${record.key.sessionId} remote=${record.key.remoteModuleId} " +
-                "reason=$reason deadlineAt=${record.obligationDeadlineAtMs}"
+                "attempt=${record.recoveryAttemptId} reason=$reason deadlineAt=${record.obligationDeadlineAtMs}"
         )
         scheduleObligationDeadline(record)
     }
@@ -307,9 +307,11 @@ class ConferenceEdgeRecoveryController(
         }
         val key = ConferenceEdgeKey(sessionId, remoteModuleId)
         val existing = edges[key]
+        // Duplicate only while this attempt is already accepted / ICE-restarting.
+        // After FAILED residency, a later ACCEPTED must SUPERSEDE (#79 soak fddec479).
         if (existing?.phase == EdgeRecoveryPhase.REATTACH_ACCEPTED ||
             existing?.phase == EdgeRecoveryPhase.ICE_RESTARTING ||
-            existing?.iceRestartIssued == true
+            (existing?.iceRestartIssued == true && existing.phase.isActivelyRecovering())
         ) {
             logRecoveryDecision(
                 sessionId = sessionId,
@@ -338,6 +340,18 @@ class ConferenceEdgeRecoveryController(
             return
         }
         cancelDebounce(key)
+        // #79 / ADR-0022 P1: ACCEPTED supersedes the prior attempt and cancels its watchdog.
+        // New attempt owns a fresh budget starting at ICE-restarting / accepted lifecycle.
+        if (existing != null) {
+            val priorAttempt = record.recoveryAttemptId
+            supersedeAttempt(record, scheduleNewWatchdog = false)
+            onLog(
+                "RECOVERY_DECISION session=$sessionId edge=$remoteModuleId " +
+                    "attempt=${record.recoveryAttemptId} priorAttempt=$priorAttempt " +
+                    "trigger=${RecoveryDecisionTrigger.REATTACH_ACCEPTED} " +
+                    "decision=SUPERSEDED approved=true"
+            )
+        }
         record.phase = EdgeRecoveryPhase.REATTACH_ACCEPTED
         logRecoveryDecision(
             sessionId = sessionId,
@@ -569,23 +583,29 @@ class ConferenceEdgeRecoveryController(
 
     private fun scheduleWatchdog(record: EdgeRecoveryRecord) {
         val key = record.key
+        val attemptId = record.recoveryAttemptId
         cancelWatchdog(key)
         val budgetMs = minOf(attemptBudgetMs, iceRestartTimeoutMs + debounceMs)
         val future = scheduler.schedule({
             val current = edges[key] ?: return@schedule
-            if (current.phase.isActivelyRecovering()) {
-                onLog(
-                    "RECOVERY_FINAL_EVALUATION session=${key.sessionId} edge=${key.remoteModuleId} " +
-                        "attempt=${current.recoveryAttemptId} reason=ATTEMPT_TIMEOUT " +
-                        "controlPlaneStarted=${current.controlPlaneStarted()}"
-                )
-                onLog(
-                    "RECOVERY_DECISION session=${key.sessionId} edge=${key.remoteModuleId} " +
-                        "attempt=${current.recoveryAttemptId} decision=ATTEMPT_TIMEOUT approved=false"
-                )
-                enterFailedMediaResidency(current, reason = "attempt_timeout")
-                notifyChanged(key.sessionId)
-            }
+            // Attempt-scoped: a superseded attempt's timer must not fail the live attempt (#79).
+            if (current.recoveryAttemptId != attemptId) return@schedule
+            if (!current.phase.isActivelyRecovering()) return@schedule
+            onLog(
+                "RECOVERY_FINAL_EVALUATION session=${key.sessionId} edge=${key.remoteModuleId} " +
+                    "attempt=${current.recoveryAttemptId} reason=ATTEMPT_TIMEOUT " +
+                    "controlPlaneStarted=${current.controlPlaneStarted()}"
+            )
+            onLog(
+                "RECOVERY_DECISION session=${key.sessionId} edge=${key.remoteModuleId} " +
+                    "attempt=${current.recoveryAttemptId} decision=ATTEMPT_TIMEOUT approved=false"
+            )
+            // Re-check after logging: ACCEPTED may have SUPERSEDED mid-callback (TOCTOU).
+            val still = edges[key] ?: return@schedule
+            if (still.recoveryAttemptId != attemptId) return@schedule
+            if (!still.phase.isActivelyRecovering()) return@schedule
+            enterFailedMediaResidency(still, reason = "attempt_timeout")
+            notifyChanged(key.sessionId)
         }, budgetMs, TimeUnit.MILLISECONDS)
         watchdogTimers[key] = future
     }
@@ -862,15 +882,22 @@ class ConferenceEdgeRecoveryController(
         }
     }
 
-    private fun supersedeAttempt(record: EdgeRecoveryRecord) {
+    private fun supersedeAttempt(
+        record: EdgeRecoveryRecord,
+        scheduleNewWatchdog: Boolean = true
+    ) {
         // Drop prior failed-residency deadline; next FAILED stamps a fresh one (R28-H.1).
+        // Also cancel the superseded attempt's watchdog so it cannot emit FAILED (#79).
         cancelDeadline(record.key)
+        cancelWatchdog(record.key)
         record.obligationDeadlineAtMs = null
         record.phase = EdgeRecoveryPhase.RECOVERY_PENDING
         record.recoveryAttemptId = ++attemptSeq
         record.iceRestartIssued = false
         record.epochRefreshUsed = false
         record.recoveryStartedAtMs = clock()
-        scheduleWatchdog(record)
+        if (scheduleNewWatchdog) {
+            scheduleWatchdog(record)
+        }
     }
 }
