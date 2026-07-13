@@ -317,6 +317,107 @@ class ConferencePruneIntegrationTest {
     }
 
     @Test
+    fun conferenceR28H2_materialReevalKeepsObligationOpenWithoutPrune() {
+        // G-R28-H2 / G-R29-E2: inside observation window, material transition MUST
+        // RECOVERY_REEVALUATE; obligation stays OPEN; host MUST NOT AUTHORITY_PRUNE.
+        val channelId = "CONF-R28-H2-REEVAL"
+        val context = RuntimeEnvironment.getApplication()
+        val peers = TestTalkbackNode.allPeers(m01 to 50051, m02 to 50052, m03 to 50053)
+        val host = TestTalkbackNode(
+            context, m02, 50052, hub, peers,
+            meshNegotiationGraceMs = 0L,
+            edgeRecoveryAttemptBudgetMs = 500L
+        )
+        val participant = TestTalkbackNode(
+            context, m01, 50051, hub, peers,
+            meshNegotiationGraceMs = 0L,
+            edgeRecoveryAttemptBudgetMs = 500L
+        )
+        val peer = TestTalkbackNode(
+            context, m03, 50053, hub, peers,
+            meshNegotiationGraceMs = 0L,
+            edgeRecoveryAttemptBudgetMs = 500L
+        )
+        host.start()
+        participant.start()
+        peer.start()
+        Thread.sleep(300L)
+        try {
+            host.runtime.setAutoAcceptConferenceInvites(true)
+            participant.runtime.setAutoAcceptConferenceInvites(true)
+            peer.runtime.setAutoAcceptConferenceInvites(true)
+            val sessionId = host.runtime.conferenceCall(
+                host.localEndpoint,
+                listOf(
+                    EndpointAddress(m01, EndpointId("E01")),
+                    EndpointAddress(m03, EndpointId("E01"))
+                ),
+                channelId
+            )
+            assertNotNull(sessionId)
+            assertTrue(participant.waitForLog { it.contains("invite accepted") })
+            assertTrue(peer.waitForLog { it.contains("invite accepted") })
+            connectConferenceHostIce(host, participant, peer, hostModuleId = "M02")
+            participant.runtime.simulateRemoteIceState("M03", "CONNECTED")
+            peer.runtime.simulateRemoteIceState("M01", "CONNECTED")
+            host.runtime.simulateRemoteIceState("M03", "CONNECTED")
+            Thread.sleep(500L)
+
+            val failMark = synchronized(host.logs) { host.logs.size }
+            host.runtime.simulateRemoteIceState("M03", "DISCONNECTED")
+            assertTrue(
+                host.waitForLogSince(failMark, timeoutMs = 8_000L) {
+                    it.contains("FAILED_MEDIA_RECOVERY") && it.contains("remote=M03")
+                }
+            )
+            assertTrue(host.runtime.testEdgeObligationOpen(sessionId!!, "M03"))
+            val failedAttemptId = synchronized(host.logs) {
+                host.logs.drop(failMark)
+                    .last { it.contains("FAILED_MEDIA_RECOVERY") && it.contains("remote=M03") }
+                    .substringAfter("attempt=")
+                    .substringBefore(' ')
+                    .toLong()
+            }
+
+            val reevalMark = synchronized(host.logs) { host.logs.size }
+            host.runtime.simulateRemoteIceState("M03", "CONNECTED")
+            assertTrue(
+                host.waitForLogSince(reevalMark, timeoutMs = 5_000L) {
+                    it.contains("RECOVERY_REEVALUATE") &&
+                        it.contains("edge=M03") &&
+                        it.contains("trigger=ROUTE_CONVERGED")
+                }
+            )
+            assertTrue(host.runtime.testEdgeObligationOpen(sessionId, "M03"))
+            assertFalse(host.runtime.testEdgeObligationClosed(sessionId, "M03"))
+
+            host.runtime.testRunConferenceHealthCleanup(channelId)
+            assertFalse(host.hasLog { it.contains("Pruning unhealthy conference peer M03") })
+            assertFalse(host.hasLog { it.contains("source=AUTHORITY_PRUNE") })
+            assertTrue(host.runtime.testEdgeObligationOpen(sessionId, "M03"))
+
+            val afterReeval = synchronized(host.logs) { host.logs.drop(reevalMark) }
+            assertFalse(
+                "failed attempt id must not become active again",
+                afterReeval.any {
+                    it.contains("attempt=$failedAttemptId") &&
+                        (
+                            it.contains("RECOVERY_REATTACH_REQUESTED") ||
+                                it.contains("RECOVERY_EDGE_STARTED") ||
+                                it.contains("decision=DISPATCH_REATTACH")
+                            )
+                }
+            )
+            val after = host.runtime.sessionSnapshots().first { it.sessionId == sessionId }
+            assertTrue(after.memberKeys.any { it.startsWith("M03") })
+        } finally {
+            participant.stop()
+            host.stop()
+            peer.stop()
+        }
+    }
+
+    @Test
     fun conferenceR29E_hostMayAuthorityPruneAfterObligationDeadline() {
         // G-R28-H3 / G-R29-E3: past controller deadline → CLOSED(OBLIGATION_DEADLINE)
         // → canAuthorityPrune may become true; non-deadline reasons stay off this path.
