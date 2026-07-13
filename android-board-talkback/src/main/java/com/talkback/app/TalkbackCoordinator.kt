@@ -4969,13 +4969,22 @@ class TalkbackCoordinator(
             }
             return
         }
-        // Do not apply the leaver's member roster — it is often incomplete (e.g. mesh still
-        // negotiating) and can drop remaining participants from the meeting.
+        // Authority prune leave carries the post-commit rosterEpoch (G-R29-E4).
+        // Do not apply the leaver's member list — it can be incomplete mid-mesh.
+        val payload = GroupSessionPayload.decode(signal.payload)
+        if (payload != null && payload.rosterEpoch > 0L && payload.rosterEpoch >= session.rosterEpoch) {
+            session.rosterEpoch = payload.rosterEpoch
+            if (payload.rosterEpochMs > 0L) {
+                session.rosterEpochMs = payload.rosterEpochMs
+            }
+        }
         markConferenceParticipantLeft(session, leavingModuleId)
+        emitConferenceRuntimeProjection(session)
         repairConferenceMeshAfterLeave(session)
         log(
             "[${session.traceId}] Conference peer left: $leavingModuleId " +
-                "remaining=${session.groupMembers.size} connected=${countConnectedRemotes(session)}"
+                "remaining=${session.groupMembers.size} connected=${countConnectedRemotes(session)} " +
+                "rosterEpoch=${session.rosterEpoch}"
         )
     }
 
@@ -5042,6 +5051,84 @@ class TalkbackCoordinator(
     }
 
     private fun removeConferenceParticipant(
+        session: TalkbackSession,
+        moduleId: String,
+        source: AuthorityMembershipMutationSource
+    ) {
+        if (source == AuthorityMembershipMutationSource.AUTHORITY_PRUNE) {
+            commitAuthorityPrune(session, moduleId)
+            return
+        }
+        applyConferenceMembershipLeaveLocal(session, moduleId, source)
+    }
+
+    /**
+     * ADR-0024 R29-E.3 authority prune transaction. Partial execution forbidden.
+     *
+     * 1. mutate canonical roster (+ bump rosterEpoch)
+     * 2. mutate memberModules
+     * 3. emit GROUP_LEAVE / roster broadcast
+     * 4. publish projection update
+     * 5. release media bindings (floor / cancelEdge / releaseMeshPeer)
+     */
+    private fun commitAuthorityPrune(session: TalkbackSession, moduleId: String) {
+        if (moduleId == localModuleId.value) return
+        val prunedEndpoint = meshRoster(session).firstOrNull { it.moduleId.value == moduleId }
+            ?: return
+        val broadcastTargets = targetsForSession(session)
+            .filter { it.second.moduleId.value != moduleId }
+        if (conferenceParticipantManager.applyPrune(session.id, moduleId) == null) {
+            return
+        }
+        bumpRosterEpoch(session, "authority_prune")
+        session.memberModules.remove(ModuleId(moduleId))
+
+        broadcastAuthorityPruneLeave(session, prunedEndpoint, broadcastTargets)
+        emitConferenceRuntimeProjection(session)
+
+        releaseFloorIfHolderUnavailable(session, moduleId)
+        conferenceEdgeRecoveryController.cancelEdge(session.id, moduleId, "member_left")
+        releaseMeshPeer(session, moduleId)
+        if (session.remote?.moduleId?.value == moduleId) {
+            val nextRemote = meshRoster(session).firstOrNull { it.moduleId != localModuleId }
+            session.remote = nextRemote
+            session.remotePeer = nextRemote?.moduleId?.value?.let { session.remotePeersByModule[it] }
+        }
+        session.touch()
+        resumeConferenceAudioAfterPeerLeft(session)
+        log(
+            "[${session.traceId}] Conference membership mutation remote=$moduleId " +
+                "source=${AuthorityMembershipMutationSource.AUTHORITY_PRUNE} " +
+                "remaining=${session.groupMembers.size} rosterEpoch=${session.rosterEpoch}"
+        )
+    }
+
+    private fun broadcastAuthorityPruneLeave(
+        session: TalkbackSession,
+        pruned: EndpointAddress,
+        targets: List<Pair<PeerTarget, EndpointAddress>>
+    ) {
+        val leavePayload = groupPayloadBase(session).copy(sdp = "").encode()
+        targets.forEach { (peer, remote) ->
+            sendSignal(
+                peer,
+                buildSignedEnvelope(
+                    SignalType.GROUP_LEAVE,
+                    pruned,
+                    remote,
+                    session.id,
+                    leavePayload
+                )
+            )
+        }
+        log(
+            "[${session.traceId}] AUTHORITY_PRUNE broadcast leave remote=${pruned.moduleId.value} " +
+                "targets=${targets.size} rosterEpoch=${session.rosterEpoch}"
+        )
+    }
+
+    /** Local apply of an authoritative leave (received GROUP_LEAVE / peer-left path). */
+    private fun applyConferenceMembershipLeaveLocal(
         session: TalkbackSession,
         moduleId: String,
         source: AuthorityMembershipMutationSource
@@ -7238,26 +7325,14 @@ class TalkbackCoordinator(
         if (deferConferenceParticipantPruneIfRecovering(session, moduleId)) return
         if (iceState == "FAILED") {
             cancelParticipantPrune(session.id, moduleId)
-            log("[${session.traceId}] Conference ICE FAILED for $moduleId, pruning peer")
-            removeConferenceParticipant(
-                session,
-                moduleId,
-                AuthorityMembershipMutationSource.AUTHORITY_PRUNE
-            )
-            repairConferenceMeshAfterLeave(session)
+            tryAuthorityPruneFromIce(session, moduleId, iceState)
             return
         }
         if (iceState != "DISCONNECTED") return
         val graceMs = config.conferenceParticipantPruneGraceMs
         if (graceMs <= 0L) {
             cancelParticipantPrune(session.id, moduleId)
-            log("[${session.traceId}] Conference ICE DISCONNECTED for $moduleId, pruning peer")
-            removeConferenceParticipant(
-                session,
-                moduleId,
-                AuthorityMembershipMutationSource.AUTHORITY_PRUNE
-            )
-            repairConferenceMeshAfterLeave(session)
+            tryAuthorityPruneFromIce(session, moduleId, iceState)
             return
         }
         val bySession = pendingParticipantPruneBySession.getOrPut(session.id) { ConcurrentHashMap() }
@@ -7281,18 +7356,37 @@ class TalkbackCoordinator(
                             return@runOnCoordinator
                         }
                         val ice = qosMonitor.snapshot(moduleId)?.iceState ?: "UNKNOWN"
-                        log("[${current.traceId}] Conference peer $moduleId still $ice after grace, pruning")
-                        removeConferenceParticipant(
-                            current,
-                            moduleId,
-                            AuthorityMembershipMutationSource.AUTHORITY_PRUNE
-                        )
-                        repairConferenceMeshAfterLeave(current)
+                        tryAuthorityPruneFromIce(current, moduleId, ice)
                     }
                 }
             }
         }, graceMs, TimeUnit.MILLISECONDS)
         bySession[moduleId] = future
+    }
+
+    /**
+     * ICE path may observe peer loss early; prune still requires [canAuthorityPrune]
+     * (ADR-0024 R29-E). ICE alone must not authorize AUTHORITY_PRUNE.
+     */
+    private fun tryAuthorityPruneFromIce(
+        session: TalkbackSession,
+        moduleId: String,
+        iceState: String
+    ) {
+        if (!canAuthorityPrune(session, moduleId)) {
+            log(
+                "[${session.traceId}] Conference ICE $iceState for $moduleId, " +
+                    "AUTHORITY_PRUNE deferred until obligation prune-eligible"
+            )
+            return
+        }
+        log("[${session.traceId}] Conference ICE $iceState for $moduleId, pruning peer")
+        removeConferenceParticipant(
+            session,
+            moduleId,
+            AuthorityMembershipMutationSource.AUTHORITY_PRUNE
+        )
+        repairConferenceMeshAfterLeave(session)
     }
 
     private fun handleParticipantHostLinkLoss(session: TalkbackSession, iceState: String) {

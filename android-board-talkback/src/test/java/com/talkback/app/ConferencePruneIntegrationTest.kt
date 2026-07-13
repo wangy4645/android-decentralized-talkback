@@ -412,6 +412,131 @@ class ConferencePruneIntegrationTest {
     }
 
     @Test
+    fun conferenceR29E4_authorityPruneConvergesJoinedCountAndRosterEpoch() {
+        // G-R29-E4 / R29-E.3: after AUTHORITY_PRUNE commits and propagates,
+        // host.joinedCount == participant.joinedCount AND same rosterEpoch.
+        // Count-equal with divergent roster version = FAIL (host=2 / participant=3 false-pass).
+        val channelId = "CONF-R29-E4-CONVERGE"
+        val context = RuntimeEnvironment.getApplication()
+        val peers = TestTalkbackNode.allPeers(m01 to 50051, m02 to 50052, m03 to 50053)
+        val host = TestTalkbackNode(
+            context, m02, 50052, hub, peers,
+            meshNegotiationGraceMs = 0L,
+            edgeRecoveryAttemptBudgetMs = 500L,
+            edgeRecoveryObservationWindowMs = 200L
+        )
+        val participant = TestTalkbackNode(
+            context, m01, 50051, hub, peers,
+            meshNegotiationGraceMs = 0L,
+            edgeRecoveryAttemptBudgetMs = 500L,
+            edgeRecoveryObservationWindowMs = 200L
+        )
+        val peer = TestTalkbackNode(
+            context, m03, 50053, hub, peers,
+            meshNegotiationGraceMs = 0L,
+            edgeRecoveryAttemptBudgetMs = 500L,
+            edgeRecoveryObservationWindowMs = 200L
+        )
+        host.start()
+        participant.start()
+        peer.start()
+        Thread.sleep(300L)
+        try {
+            host.runtime.setAutoAcceptConferenceInvites(true)
+            participant.runtime.setAutoAcceptConferenceInvites(true)
+            peer.runtime.setAutoAcceptConferenceInvites(true)
+            val sessionId = host.runtime.conferenceCall(
+                host.localEndpoint,
+                listOf(
+                    EndpointAddress(m01, EndpointId("E01")),
+                    EndpointAddress(m03, EndpointId("E01"))
+                ),
+                channelId
+            )
+            assertNotNull(sessionId)
+            assertTrue(participant.waitForLog { it.contains("invite accepted") })
+            assertTrue(peer.waitForLog { it.contains("invite accepted") })
+            connectConferenceHostIce(host, participant, peer, hostModuleId = "M02")
+            participant.runtime.simulateRemoteIceState("M03", "CONNECTED")
+            peer.runtime.simulateRemoteIceState("M01", "CONNECTED")
+            host.runtime.simulateRemoteIceState("M03", "CONNECTED")
+            Thread.sleep(500L)
+
+            val failMark = synchronized(host.logs) { host.logs.size }
+            val participantMark = synchronized(participant.logs) { participant.logs.size }
+            host.runtime.simulateRemoteIceState("M03", "DISCONNECTED")
+            assertTrue(
+                host.waitForLogSince(failMark, timeoutMs = 8_000L) {
+                    it.contains("FAILED_MEDIA_RECOVERY") && it.contains("remote=M03")
+                }
+            )
+            assertTrue(
+                host.waitForLogSince(failMark, timeoutMs = 5_000L) {
+                    it.contains("RECOVERY_OBLIGATION_CLOSED") &&
+                        it.contains("remote=M03") &&
+                        it.contains("reason=OBLIGATION_DEADLINE")
+                }
+            )
+
+            host.runtime.testRunConferenceHealthCleanup(channelId)
+            assertTrue(host.hasLog { it.contains("source=AUTHORITY_PRUNE") })
+
+            assertTrue(
+                participant.waitForLogSince(participantMark, timeoutMs = 5_000L) {
+                    it.contains("Conference peer left: M03") ||
+                        it.contains("source=AUTHORITY_GROUP_LEAVE") && it.contains("remote=M03")
+                }
+            )
+
+            val convergeDeadline = System.currentTimeMillis() + 5_000L
+            var hostSnap = host.runtime.sessionSnapshots().first { it.sessionId == sessionId }
+            var participantSnap =
+                participant.runtime.sessionSnapshots().first { it.sessionId == sessionId }
+            var hostEpoch = host.runtime.testConferenceMembershipEpoch(sessionId!!)
+            var participantEpoch = participant.runtime.testConferenceMembershipEpoch(sessionId)
+            while (System.currentTimeMillis() < convergeDeadline) {
+                hostSnap = host.runtime.sessionSnapshots().first { it.sessionId == sessionId }
+                participantSnap =
+                    participant.runtime.sessionSnapshots().first { it.sessionId == sessionId }
+                hostEpoch = host.runtime.testConferenceMembershipEpoch(sessionId)
+                participantEpoch = participant.runtime.testConferenceMembershipEpoch(sessionId)
+                val hostJoined = hostSnap.conferencePresenceProjection?.joinedCount
+                    ?: hostSnap.joinedParticipantCount
+                val participantJoined = participantSnap.conferencePresenceProjection?.joinedCount
+                    ?: participantSnap.joinedParticipantCount
+                if (
+                    !hostSnap.memberKeys.any { it.startsWith("M03") } &&
+                    !participantSnap.memberKeys.any { it.startsWith("M03") } &&
+                    hostJoined == participantJoined &&
+                    hostEpoch > 0L &&
+                    hostEpoch == participantEpoch
+                ) {
+                    break
+                }
+                Thread.sleep(100L)
+            }
+
+            val hostJoined = hostSnap.conferencePresenceProjection?.joinedCount
+                ?: hostSnap.joinedParticipantCount
+            val participantJoined = participantSnap.conferencePresenceProjection?.joinedCount
+                ?: participantSnap.joinedParticipantCount
+            assertFalse(hostSnap.memberKeys.any { it.startsWith("M03") })
+            assertFalse(participantSnap.memberKeys.any { it.startsWith("M03") })
+            assertEquals(hostJoined, participantJoined)
+            assertTrue("rosterEpoch must advance on authority prune", hostEpoch > 0L)
+            assertEquals(
+                "G-R29-E4: count-equal with divergent roster version is FAIL",
+                hostEpoch,
+                participantEpoch
+            )
+        } finally {
+            participant.stop()
+            host.stop()
+            peer.stop()
+        }
+    }
+
+    @Test
     fun conferenceR29_participantPreservesEdgeObligationDuringRecovery() {
         val channelId = "CONF-R29-EDGE-OBLIGATION"
         val context = RuntimeEnvironment.getApplication()
