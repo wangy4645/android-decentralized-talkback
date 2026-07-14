@@ -179,7 +179,7 @@ class TalkFragment : Fragment() {
         view.findViewById<TextView>(R.id.txtChannelSubtitle).text = buildChannelSubtitle(state)
         view.findViewById<TextView>(R.id.txtOnlineCount).text =
             if (state.conferenceMode && state.conferenceActive) {
-                getString(R.string.online_count_presence, state.meeting.participantCountLabel)
+                state.meeting.participantCountLabel
             } else {
                 getString(R.string.online_count_compact, state.onlineCount)
             }
@@ -349,7 +349,7 @@ class TalkFragment : Fragment() {
 
         if (state.conferenceMode) {
             txtPttLabel.text = getString(R.string.meeting_title)
-            txtPttHint.text = getString(R.string.meeting_participants_presence, state.meeting.participantCountLabel) + "\n" +
+            txtPttHint.text = state.meeting.participantCountLabel + "\n" +
                 if (state.meeting.runtimePhase == ConferenceRuntimePhase.ACTIVE) {
                     getString(R.string.meeting_tap_to_view)
                 } else if (state.conferenceReconnectFailed) {

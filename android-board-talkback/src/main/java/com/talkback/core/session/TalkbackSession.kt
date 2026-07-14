@@ -56,6 +56,11 @@ class TalkbackSession(
     var unicastPhase: UnicastCallPhase? = null
     var localInitiated: Boolean = false
     var muted: Boolean = false
+    /**
+     * Conference transmit was force-stopped by the ADR-0022 barrier while [muted] was false.
+     * Cleared on unblock resume, explicit mute, or session end.
+     */
+    var conferenceTransmitSuspendedByBarrier: Boolean = false
     /** SDP from CALL_INVITE, kept until manual accept. */
     var pendingRemoteOfferSdp: String? = null
     /** Wait for ICE CONNECTED before opening the mic. */

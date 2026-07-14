@@ -134,8 +134,12 @@ class TalkbackRuntime(
         coordinator.hangup(sessionId)
     }
 
-    fun leaveConference(sessionId: String) {
-        coordinator.leaveConference(sessionId)
+    fun leaveConference(
+        sessionId: String,
+        reason: String = "UNSPECIFIED",
+        caller: String = "UNKNOWN"
+    ) {
+        coordinator.leaveConference(sessionId, reason, caller)
     }
 
     fun clearConferencePttCooldown(channelId: String) {
@@ -319,6 +323,9 @@ class TalkbackRuntime(
 
     internal fun testIsSessionCapturing(sessionId: String): Boolean =
         coordinator.testIsSessionCapturing(sessionId)
+
+    internal fun testCanPublishConferenceAudio(sessionId: String): Boolean =
+        coordinator.testCanPublishConferenceAudio(sessionId)
 
     internal fun testResolverLocalKey(sessionId: String): String? =
         coordinator.testResolverLocalKey(sessionId)

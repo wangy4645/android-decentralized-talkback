@@ -20,6 +20,8 @@ enum class EndpointStatus {
     INVITING,
     /** ICE/media negotiation in progress. */
     CONNECTING,
+    /** Conference peer media lost; edge recovery in progress (ADR-0025 R30-F). */
+    RECONNECTING,
     /** Invite timed out or was not answered. */
     EXPIRED
 }
@@ -55,8 +57,10 @@ data class MeetingUiState(
     val connectedParticipantCount: Int = 0,
     /** Remote peers with active edge recovery on this device (ADR-0022 R27′). */
     val recoveringPeers: Set<String> = emptySet(),
-    /** View label from presence divergence: "3" or "2/3" (R27′-fix). */
-    val participantCountLabel: String = "0",
+    /** Primary meeting header label from joinedCount only (ADR-0025 R30-F). */
+    val participantCountLabel: String = "0 Participants",
+    /** Optional weak hint e.g. "1 connecting..." — never connected/joined fraction. */
+    val connectingParticipantHint: String? = null,
     val awaitingAdditionalParticipants: Boolean = false,
     /** Conference runtime phase from [TalkbackSessionSnapshot.conferenceRuntimeState] (RO-M2 PR-3). */
     val runtimePhase: ConferenceRuntimePhase? = null,

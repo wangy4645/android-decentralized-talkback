@@ -998,6 +998,59 @@ class ConferenceEdgeRecoveryControllerTest {
     }
 
     @Test
+    fun failedMediaRecovery_iceCheckingResurrection_supersedesWithoutIceRestart() {
+        controller.onIceStateChanged(
+            sessionId = "sess-1",
+            channelId = "CH-1",
+            remoteModuleId = "M02",
+            iceState = "DISCONNECTED",
+            eligibility = eligible(),
+            initiatesReattach = false
+        )
+        Thread.sleep(600)
+        assertTrue(controller.factsForSession("sess-1").anyFailedMediaRecovery)
+        val failedAttemptId = decisionLogs
+            .last { it.contains("FAILED_MEDIA_RECOVERY") && it.contains("remote=M02") }
+            .substringAfter("attempt=")
+            .substringBefore(' ')
+            .toLong()
+        iceRestartCalls = 0
+        decisionLogs.clear()
+
+        val snapshot = EdgeReachabilitySnapshot(
+            linkReady = true,
+            peerDiscovered = true,
+            routeConverged = false,
+            authorityReachable = true
+        )
+        val signature = projectRecoveryCapabilitySignature(
+            snapshot,
+            initiatesReattach = false,
+            controlPlaneStarted = false
+        )
+        controller.onRecoveryReachabilityChanged(
+            sessionId = "sess-1",
+            channelId = "CH-1",
+            remoteModuleId = "M02",
+            snapshot = snapshot,
+            signature = signature,
+            capabilityBefore = signature,
+            trigger = RecoveryReevaluateTrigger.ICE_CHECKING
+        )
+        assertTrue(decisionLogs.any { it.contains("RECOVERY_REEVALUATE") && it.contains("ICE_CHECKING") })
+        assertTrue(decisionLogs.any { it.contains("decision=SUPERSEDED") && it.contains("edge=M02") })
+        val newAttemptId = decisionLogs
+            .last { it.contains("decision=SUPERSEDED") && it.contains("edge=M02") }
+            .substringAfter("attempt=")
+            .substringBefore(' ')
+            .toLong()
+        assertTrue(newAttemptId > failedAttemptId)
+        assertEquals(0, iceRestartCalls)
+        assertTrue(controller.edgeObligationOpen("sess-1", "M02"))
+        assertFalse(controller.factsForSession("sess-1").anyFailedMediaRecovery)
+    }
+
+    @Test
     fun reattachAccepted_afterFailedResidency_supersedesAndStartsNewAttempt() {
         // Soak fddec479: FAILED then ACCEPTED must not keep attempt=N.
         controller = buildController(attemptBudgetMs = 120L)

@@ -223,7 +223,7 @@ class MeetingFragment : Fragment() {
         view.findViewById<TextView>(R.id.txtMeetingParticipantCount).isVisible = live
         if (live) {
             view.findViewById<TextView>(R.id.txtMeetingParticipantCount).text =
-                getString(R.string.meeting_participants_presence, state.meeting.participantCountLabel)
+                state.meeting.participantCountLabel
         }
 
         bindStatusPill(view.findViewById(R.id.txtMeetingStatusPill), connecting, recovering, live, muted, state)
@@ -410,12 +410,29 @@ class MeetingFragment : Fragment() {
             val frame = chip.findViewById<View>(R.id.frameChipAvatar)
             val label = chip.findViewById<TextView>(R.id.txtChipLabel)
             label.text = item.displayLabel
+            label.maxLines = 1
             val isSpeaking = item.status == EndpointStatus.SPEAKING
+            val isReconnecting = item.status == EndpointStatus.RECONNECTING
+            val isConnecting = item.status == EndpointStatus.CONNECTING
             when {
                 isSpeaking -> {
                     frame.setBackgroundResource(R.drawable.bg_meeting_chip_speaking)
                     chip.alpha = 1f
                     label.setTextColor(primary)
+                }
+                isReconnecting -> {
+                    frame.setBackgroundResource(R.drawable.bg_meeting_chip_reconnecting)
+                    chip.alpha = 0.55f
+                    label.setTextColor(secondary)
+                    label.text = "${item.displayLabel}\n${ctx.getString(R.string.status_reconnecting)}"
+                    label.maxLines = 2
+                }
+                isConnecting -> {
+                    frame.setBackgroundResource(R.drawable.bg_meeting_chip_connecting)
+                    chip.alpha = 0.7f
+                    label.setTextColor(primary)
+                    label.text = "${item.displayLabel}\n${ctx.getString(R.string.status_joining)}"
+                    label.maxLines = 2
                 }
                 item.isLocal -> {
                     frame.setBackgroundResource(R.drawable.bg_meeting_chip_local)

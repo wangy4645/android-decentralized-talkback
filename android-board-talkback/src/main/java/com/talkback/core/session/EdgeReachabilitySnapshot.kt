@@ -89,7 +89,9 @@ enum class RecoveryReevaluateTrigger {
     AUTHORITY_REACHABLE,
     AUTHORITY_LOST,
     /** ICE CONNECTED / equivalent media restoration (ADR-0022 R28-E / #83). */
-    ICE_RESTORED
+    ICE_RESTORED,
+    /** ICE CHECKING — early resurrection signal while obligation OPEN (ADR-0022). */
+    ICE_CHECKING
 }
 
 /**

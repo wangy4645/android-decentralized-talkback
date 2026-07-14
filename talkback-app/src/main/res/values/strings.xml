@@ -40,6 +40,8 @@
     <string name="status_offline">Offline</string>
     <string name="status_inviting">Inviting…</string>
     <string name="status_connecting">Connecting…</string>
+    <string name="status_joining">Joining…</string>
+    <string name="status_reconnecting">Reconnecting…</string>
     <string name="status_expired">No answer</string>
     <string name="action_broadcast">Broadcast</string>
     <string name="action_monitor">Monitor</string>

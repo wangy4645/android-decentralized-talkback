@@ -102,6 +102,58 @@ class ConferenceEdgeRecoveryController(
     fun hasPendingCompletionDecision(sessionId: String, remoteModuleId: String): Boolean =
         edges[ConferenceEdgeKey(sessionId, remoteModuleId)]?.hasPendingCompletionDecision ?: false
 
+    /** Forensics snapshot for lifecycle trace (observe only). */
+    fun pendingForensics(sessionId: String): List<String> {
+        val actions = mutableListOf<String>()
+        debounceTimers.keys.filter { it.sessionId == sessionId }.forEach { key ->
+            actions.add("DEBOUNCE:${key.remoteModuleId}")
+        }
+        watchdogTimers.keys.filter { it.sessionId == sessionId }.forEach { key ->
+            actions.add("WATCHDOG:${key.remoteModuleId}")
+        }
+        deadlineTimers.keys.filter { it.sessionId == sessionId }.forEach { key ->
+            actions.add("DEADLINE:${key.remoteModuleId}")
+        }
+        edges.values.filter { it.key.sessionId == sessionId }.forEach { record ->
+            if (record.hasPendingCompletionDecision) {
+                actions.add("PENDING_COMPLETION:${record.key.remoteModuleId}")
+            }
+            if (record.edgeObligationOpen()) {
+                actions.add("OBLIGATION_OPEN:${record.key.remoteModuleId}")
+            }
+        }
+        if (cancelledSessions.containsKey(sessionId)) {
+            actions.add("SESSION_CANCELLED")
+        }
+        return actions
+    }
+
+    fun edgePhaseSummary(sessionId: String): String =
+        edges.values
+            .filter { it.key.sessionId == sessionId }
+            .joinToString(";") { record ->
+                "${record.key.remoteModuleId}:${record.phase}@a${record.recoveryAttemptId}"
+            }
+
+    private fun logPhaseTransition(
+        record: EdgeRecoveryRecord,
+        oldPhase: EdgeRecoveryPhase?,
+        newPhase: EdgeRecoveryPhase,
+        trigger: String
+    ) {
+        if (oldPhase == newPhase) return
+        ConferenceMemberDecisionTrace.recoveryTransition(
+            sessionId = record.key.sessionId,
+            remoteModuleId = record.key.remoteModuleId,
+            oldPhase = oldPhase,
+            newPhase = newPhase,
+            trigger = trigger,
+            attempt = record.recoveryAttemptId,
+            obligationOpen = record.edgeObligationOpen(),
+            pendingCompletion = record.hasPendingCompletionDecision
+        )
+    }
+
     private fun closeObligation(record: EdgeRecoveryRecord, reason: ObligationCloseReason) {
         if (record.obligationClosedAtMs != null) return
         cancelDeadline(record.key)
@@ -119,7 +171,9 @@ class ConferenceEdgeRecoveryController(
      * Single writer of [EdgeRecoveryRecord.obligationDeadlineAtMs] (ADR-0022 R28-H.1 / #77).
      */
     private fun enterFailedMediaResidency(record: EdgeRecoveryRecord, reason: String) {
+        val oldPhase = record.phase
         record.phase = EdgeRecoveryPhase.FAILED_MEDIA_RECOVERY
+        logPhaseTransition(record, oldPhase, record.phase, "FAILED_MEDIA:$reason")
         val terminalAt = clock()
         record.obligationDeadlineAtMs = terminalAt + observationWindowMs
         onLog(
@@ -285,7 +339,8 @@ class ConferenceEdgeRecoveryController(
             key,
             channelId,
             EdgeRecoveryPhase.DISCONNECTED_DEBOUNCING,
-            initiatesReattach = initiatesReattach
+            initiatesReattach = initiatesReattach,
+            attemptOpenTrigger = RecoveryDecisionTrigger.ICE_DISCONNECTED.name
         )
     }
 
@@ -339,7 +394,8 @@ class ConferenceEdgeRecoveryController(
                 key,
                 channelId = "",
                 phase = EdgeRecoveryPhase.REATTACH_ACCEPTED,
-                initiatesReattach = false
+                initiatesReattach = false,
+                attemptOpenTrigger = RecoveryDecisionTrigger.REATTACH_ACCEPTED.name
             )
             edges[key]!!
         }
@@ -352,7 +408,11 @@ class ConferenceEdgeRecoveryController(
         // New attempt owns a fresh budget starting at ICE-restarting / accepted lifecycle.
         if (existing != null) {
             val priorAttempt = record.recoveryAttemptId
-            supersedeAttempt(record, scheduleNewWatchdog = false)
+            supersedeAttempt(
+                record,
+                trigger = "REATTACH_INBOUND",
+                scheduleNewWatchdog = false
+            )
             onLog(
                 "RECOVERY_DECISION session=$sessionId edge=$remoteModuleId " +
                     "attempt=${record.recoveryAttemptId} priorAttempt=$priorAttempt " +
@@ -361,6 +421,7 @@ class ConferenceEdgeRecoveryController(
             )
         }
         record.phase = EdgeRecoveryPhase.REATTACH_ACCEPTED
+        logPhaseTransition(record, existing?.phase, record.phase, "REATTACH_ACCEPTED")
         logRecoveryDecision(
             sessionId = sessionId,
             edge = remoteModuleId,
@@ -507,12 +568,9 @@ class ConferenceEdgeRecoveryController(
             return
         }
         // R28-E: before control-plane, keep the fact; do not complete the edge.
+        // WAITING is not terminal — schedule control-plane continuation (ADR-0022).
         if (!controlPlane) {
-            onLog(
-                "RECOVERY_DECISION session=${key.sessionId} edge=${key.remoteModuleId} " +
-                    "attempt=${record.recoveryAttemptId} trigger=${RecoveryReevaluateTrigger.ICE_RESTORED} " +
-                    "decision=WAITING approved=true rejectReason=control_plane_not_started"
-            )
+            continueControlPlaneRecoveryAfterMediaRestored(record)
             return
         }
         if (!record.phase.isActivelyRecovering()) {
@@ -531,12 +589,54 @@ class ConferenceEdgeRecoveryController(
         )
     }
 
+    /**
+     * Media path is restored but the attempt has not crossed the control-plane boundary.
+     * MUST schedule a next action — never leave obligation OPEN with no owner (soak ea6466f1).
+     */
+    private fun continueControlPlaneRecoveryAfterMediaRestored(record: EdgeRecoveryRecord) {
+        val key = record.key
+        onLog(
+            "RECOVERY_CONTROL_PLANE_REQUIRED session=${key.sessionId} remote=${key.remoteModuleId} " +
+                "attempt=${record.recoveryAttemptId} trigger=${RecoveryReevaluateTrigger.ICE_RESTORED} " +
+                "initiatesReattach=${record.initiatesReattach}"
+        )
+        if (record.initiatesReattach) {
+            onLog(
+                "RECOVERY_DECISION session=${key.sessionId} edge=${key.remoteModuleId} " +
+                    "attempt=${record.recoveryAttemptId} trigger=${RecoveryReevaluateTrigger.ICE_RESTORED} " +
+                    "decision=WAIT_FOR_CONTROL_PLANE approved=true"
+            )
+            // Route / inbound handlers own reattach dispatch — do not duplicate here.
+            scheduleWatchdog(record)
+            notifyChanged(key.sessionId)
+            return
+        }
+        // ICE_RESTART_ONLY participant edge: do not flap transport when ICE is already CONNECTED.
+        if (isIceConnected(key.sessionId, key.remoteModuleId) && record.mediaRestored) {
+            record.phase = EdgeRecoveryPhase.ICE_RESTARTING
+            onLog(
+                "RECOVERY_CONTROL_PLANE_BOUNDARY session=${key.sessionId} remote=${key.remoteModuleId} " +
+                    "attempt=${record.recoveryAttemptId} reason=media_path_active_without_restart"
+            )
+            runIceRestorationCompletionEvaluation(record)
+            return
+        }
+        onLog(
+            "RECOVERY_DECISION session=${key.sessionId} edge=${key.remoteModuleId} " +
+                "attempt=${record.recoveryAttemptId} trigger=${RecoveryReevaluateTrigger.ICE_RESTORED} " +
+                "decision=WAIT_FOR_CONTROL_PLANE approved=true"
+        )
+        issueBoundedIceRestart(record, RecoveryReason.ICE_DISCONNECTED)
+    }
+
     private fun markRecovered(record: EdgeRecoveryRecord) {
         val key = record.key
         cancelDebounce(key)
         cancelWatchdog(key)
         cancelDeadline(key)
+        val oldPhase = record.phase
         record.phase = EdgeRecoveryPhase.RECOVERED
+        logPhaseTransition(record, oldPhase, record.phase, "EDGE_RECOVERED")
         closeObligation(record, ObligationCloseReason.RECOVERED)
         onLog(
             "RECOVERY_EDGE_RECOVERED session=${key.sessionId} remote=${key.remoteModuleId} " +
@@ -609,7 +709,8 @@ class ConferenceEdgeRecoveryController(
             channelId,
             if (initiatesReattach) EdgeRecoveryPhase.RECOVERY_PENDING else EdgeRecoveryPhase.RECOVERY_PENDING,
             initiatesReattach = initiatesReattach,
-            newAttempt = true
+            newAttempt = true,
+            attemptOpenTrigger = trigger.name
         )
         val policy = if (initiatesReattach) {
             RecoveryDecisionPolicy.REATTACH_THEN_ICE_RESTART
@@ -740,11 +841,16 @@ class ConferenceEdgeRecoveryController(
         channelId: String,
         phase: EdgeRecoveryPhase,
         initiatesReattach: Boolean,
-        newAttempt: Boolean = false
+        newAttempt: Boolean = false,
+        attemptOpenTrigger: String? = null
     ): EdgeRecoveryRecord {
         val now = clock()
         val existing = edges[key]
         val record = if (existing == null || newAttempt) {
+            val previousAttempt = existing?.recoveryAttemptId
+            val previousPhase = existing?.phase
+            val previousObligationOpen = existing?.obligationClosedAtMs == null &&
+                existing?.obligationOpenedAtMs != null
             // While OPEN, preserve obligation facts across attempts. After CLOSED, a later
             // recovery cycle starts a new obligation (not a reopen of the closed one).
             val preserveOpen = existing != null && existing.obligationClosedAtMs == null
@@ -768,10 +874,34 @@ class ConferenceEdgeRecoveryController(
                 } else {
                     false
                 }
-            ).also { edges[key] = it }
+            ).also { created ->
+                edges[key] = created
+                val trigger = attemptOpenTrigger
+                    ?: if (newAttempt) "NEW_ATTEMPT" else "UPSERT"
+                val pathway = when {
+                    newAttempt -> "BEGIN_RECOVERY"
+                    existing == null -> "UPSERT_EDGE"
+                    else -> "NEW_ATTEMPT"
+                }
+                ConferenceMemberDecisionTrace.recoveryAttemptOpened(
+                    sessionId = key.sessionId,
+                    remoteModuleId = key.remoteModuleId,
+                    newAttempt = created.recoveryAttemptId,
+                    previousAttempt = previousAttempt,
+                    previousPhase = previousPhase,
+                    obligationOpen = previousObligationOpen,
+                    trigger = trigger,
+                    pathway = pathway
+                )
+                logPhaseTransition(created, existing?.phase, created.phase, if (newAttempt) "NEW_ATTEMPT" else "UPSERT")
+            }
         } else {
             existing.apply {
+                val oldPhase = this.phase
                 this.phase = phase
+                if (oldPhase != phase) {
+                    logPhaseTransition(this, oldPhase, phase, "UPSERT")
+                }
                 if (channelId.isNotBlank()) this.channelId = channelId
                 this.initiatesReattach = initiatesReattach
                 if (obligationOpenedAtMs == null) obligationOpenedAtMs = now
@@ -870,9 +1000,19 @@ class ConferenceEdgeRecoveryController(
             )
             return
         }
+        if (record.phase.isFailedMediaRecovery() && hasResurrectionEvidence(snapshot, trigger)) {
+            val priorAttempt = record.recoveryAttemptId
+            supersedeAttempt(record, trigger = trigger.name)
+            onLog(
+                "RECOVERY_DECISION session=${record.key.sessionId} edge=${record.key.remoteModuleId} " +
+                    "attempt=${record.recoveryAttemptId} priorAttempt=$priorAttempt " +
+                    "trigger=$trigger decision=SUPERSEDED approved=true"
+            )
+            return
+        }
         var superseded = false
         if (record.phase.isFailedMediaRecovery() && signature.permittedActions.isNotEmpty()) {
-            supersedeAttempt(record)
+            supersedeAttempt(record, trigger = trigger.name)
             superseded = true
             onLog(
                 "RECOVERY_DECISION session=${record.key.sessionId} edge=${record.key.remoteModuleId} " +
@@ -935,6 +1075,22 @@ class ConferenceEdgeRecoveryController(
         }
     }
 
+    /**
+     * FAILED is not terminal while obligation OPEN (ADR-0022).
+     * CHECKING / discovery are early resurrection signals — CONNECTED is not required.
+     */
+    private fun hasResurrectionEvidence(
+        snapshot: EdgeReachabilitySnapshot,
+        trigger: RecoveryReevaluateTrigger
+    ): Boolean {
+        if (!snapshot.linkReady || !snapshot.peerDiscovered) return false
+        return when (trigger) {
+            RecoveryReevaluateTrigger.ICE_CHECKING,
+            RecoveryReevaluateTrigger.PEER_DISCOVERED -> true
+            else -> false
+        }
+    }
+
     private fun applyReattachDispatchOutcome(
         record: EdgeRecoveryRecord,
         outcome: ReattachDispatchOutcome,
@@ -980,8 +1136,13 @@ class ConferenceEdgeRecoveryController(
 
     private fun supersedeAttempt(
         record: EdgeRecoveryRecord,
+        trigger: String,
         scheduleNewWatchdog: Boolean = true
     ) {
+        val previousAttempt = record.recoveryAttemptId
+        val previousPhase = record.phase
+        val previousObligationOpen = record.obligationClosedAtMs == null &&
+            record.obligationOpenedAtMs != null
         // Drop prior failed-residency deadline; next FAILED stamps a fresh one (R28-H.1).
         // Also cancel the superseded attempt's watchdog so it cannot emit FAILED (#79).
         cancelDeadline(record.key)
@@ -993,6 +1154,16 @@ class ConferenceEdgeRecoveryController(
         record.mediaRestored = false
         record.epochRefreshUsed = false
         record.recoveryStartedAtMs = clock()
+        ConferenceMemberDecisionTrace.recoveryAttemptOpened(
+            sessionId = record.key.sessionId,
+            remoteModuleId = record.key.remoteModuleId,
+            newAttempt = record.recoveryAttemptId,
+            previousAttempt = previousAttempt,
+            previousPhase = previousPhase,
+            obligationOpen = previousObligationOpen,
+            trigger = trigger,
+            pathway = "SUPERSEDE"
+        )
         if (scheduleNewWatchdog) {
             scheduleWatchdog(record)
         }
