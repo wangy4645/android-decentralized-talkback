@@ -321,6 +321,10 @@ class TalkbackRuntime(
 
     internal fun testInvariantF1BreakCount(): Int = coordinator.testInvariantF1BreakCount()
 
+    /** Test-only: local authority belief for [channelId], not resolved system authority. */
+    internal fun testAuthorityBeliefModuleId(channelId: String): String? =
+        runCatching { coordinator.testAuthorityBeliefModuleId(channelId) }.getOrNull()
+
     internal fun testIsSessionCapturing(sessionId: String): Boolean =
         coordinator.testIsSessionCapturing(sessionId)
 

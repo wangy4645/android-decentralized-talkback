@@ -2499,6 +2499,12 @@ class TalkbackCoordinator(
 
     internal fun testInvariantF1BreakCount(): Int = runOnCoordinatorSync { invariantF1BreakCount }
 
+    /** Test-only: local authority belief for [channelId], not resolved system authority. */
+    internal fun testAuthorityBeliefModuleId(channelId: String): String? = runOnCoordinatorSync {
+        val session = bestSessionForChannel(channelId) ?: return@runOnCoordinatorSync null
+        session.floorAuthorityModuleId?.value ?: session.initiatorModuleId?.value
+    }
+
     internal fun testIsSessionCapturing(sessionId: String): Boolean = runOnCoordinatorSync {
         val session = sessions[sessionId] ?: return@runOnCoordinatorSync false
         sessionMediaEngines(session).any { it.isCapturing() }
