@@ -135,6 +135,27 @@ class ConferenceEdgeRecoveryController(
                 "${record.key.remoteModuleId}:${record.phase}@a${record.recoveryAttemptId}"
             }
 
+    private fun formatRecoveryAttemptOpenedLog(
+        sessionId: String,
+        remoteModuleId: String,
+        attemptId: Long,
+        initiator: String,
+        policy: String,
+        startedAt: Long,
+        supersededFromAttempt: Long?,
+        reason: String,
+        previousAttempt: Long?,
+        previousPhase: EdgeRecoveryPhase?,
+        obligationOpen: Boolean,
+        pathway: String
+    ): String =
+        "RECOVERY_ATTEMPT_OPENED session=$sessionId remote=$remoteModuleId " +
+            "attemptId=$attemptId initiator=$initiator policy=$policy startedAt=$startedAt " +
+            "supersededFromAttempt=${supersededFromAttempt ?: "NONE"} reason=$reason " +
+            "newAttempt=$attemptId previousAttempt=${previousAttempt ?: "NONE"} " +
+            "previousPhase=${previousPhase ?: "NONE"} previousObligationOpen=$obligationOpen " +
+            "pathway=$pathway"
+
     private fun logPhaseTransition(
         record: EdgeRecoveryRecord,
         oldPhase: EdgeRecoveryPhase?,
@@ -142,15 +163,11 @@ class ConferenceEdgeRecoveryController(
         trigger: String
     ) {
         if (oldPhase == newPhase) return
-        ConferenceMemberDecisionTrace.recoveryTransition(
-            sessionId = record.key.sessionId,
-            remoteModuleId = record.key.remoteModuleId,
-            oldPhase = oldPhase,
-            newPhase = newPhase,
-            trigger = trigger,
-            attempt = record.recoveryAttemptId,
-            obligationOpen = record.edgeObligationOpen(),
-            pendingCompletion = record.hasPendingCompletionDecision
+        onLog(
+            "RECOVERY_TRANSITION session=${record.key.sessionId} remote=${record.key.remoteModuleId} " +
+                "old=${oldPhase ?: "NONE"} new=$newPhase trigger=$trigger attempt=${record.recoveryAttemptId} " +
+                "obligationOpen=${record.edgeObligationOpen()} " +
+                "pendingCompletion=${record.hasPendingCompletionDecision}"
         )
     }
 
@@ -638,9 +655,10 @@ class ConferenceEdgeRecoveryController(
         record.phase = EdgeRecoveryPhase.RECOVERED
         logPhaseTransition(record, oldPhase, record.phase, "EDGE_RECOVERED")
         closeObligation(record, ObligationCloseReason.RECOVERED)
+        val durationMs = clock() - record.recoveryStartedAtMs
         onLog(
             "RECOVERY_EDGE_RECOVERED session=${key.sessionId} remote=${key.remoteModuleId} " +
-                "attempt=${record.recoveryAttemptId}"
+                "attempt=${record.recoveryAttemptId} durationMs=$durationMs"
         )
         notifyChanged(key.sessionId)
     }
@@ -828,6 +846,16 @@ class ConferenceEdgeRecoveryController(
         edges.remove(key)
     }
 
+    private fun resolveRecoveryInitiator(initiatesReattach: Boolean): String =
+        if (initiatesReattach) "PARTICIPANT" else "AUTHORITY"
+
+    private fun resolveRecoveryPolicy(initiatesReattach: Boolean): String =
+        if (initiatesReattach) {
+            RecoveryDecisionPolicy.REATTACH_THEN_ICE_RESTART.name
+        } else {
+            RecoveryDecisionPolicy.ICE_RESTART_ONLY.name
+        }
+
     private fun cancelDebounce(key: ConferenceEdgeKey) {
         debounceTimers.remove(key)?.cancel(false)
     }
@@ -883,15 +911,21 @@ class ConferenceEdgeRecoveryController(
                     existing == null -> "UPSERT_EDGE"
                     else -> "NEW_ATTEMPT"
                 }
-                ConferenceMemberDecisionTrace.recoveryAttemptOpened(
-                    sessionId = key.sessionId,
-                    remoteModuleId = key.remoteModuleId,
-                    newAttempt = created.recoveryAttemptId,
-                    previousAttempt = previousAttempt,
-                    previousPhase = previousPhase,
-                    obligationOpen = previousObligationOpen,
-                    trigger = trigger,
-                    pathway = pathway
+                onLog(
+                    formatRecoveryAttemptOpenedLog(
+                        sessionId = key.sessionId,
+                        remoteModuleId = key.remoteModuleId,
+                        attemptId = created.recoveryAttemptId,
+                        initiator = resolveRecoveryInitiator(initiatesReattach),
+                        policy = resolveRecoveryPolicy(initiatesReattach),
+                        startedAt = created.recoveryStartedAtMs,
+                        supersededFromAttempt = null,
+                        reason = trigger,
+                        previousAttempt = previousAttempt,
+                        previousPhase = previousPhase,
+                        obligationOpen = previousObligationOpen,
+                        pathway = pathway
+                    )
                 )
                 logPhaseTransition(created, existing?.phase, created.phase, if (newAttempt) "NEW_ATTEMPT" else "UPSERT")
             }
@@ -1154,15 +1188,21 @@ class ConferenceEdgeRecoveryController(
         record.mediaRestored = false
         record.epochRefreshUsed = false
         record.recoveryStartedAtMs = clock()
-        ConferenceMemberDecisionTrace.recoveryAttemptOpened(
-            sessionId = record.key.sessionId,
-            remoteModuleId = record.key.remoteModuleId,
-            newAttempt = record.recoveryAttemptId,
-            previousAttempt = previousAttempt,
-            previousPhase = previousPhase,
-            obligationOpen = previousObligationOpen,
-            trigger = trigger,
-            pathway = "SUPERSEDE"
+        onLog(
+            formatRecoveryAttemptOpenedLog(
+                sessionId = record.key.sessionId,
+                remoteModuleId = record.key.remoteModuleId,
+                attemptId = record.recoveryAttemptId,
+                initiator = resolveRecoveryInitiator(record.initiatesReattach),
+                policy = resolveRecoveryPolicy(record.initiatesReattach),
+                startedAt = record.recoveryStartedAtMs,
+                supersededFromAttempt = previousAttempt,
+                reason = trigger,
+                previousAttempt = previousAttempt,
+                previousPhase = previousPhase,
+                obligationOpen = previousObligationOpen,
+                pathway = "SUPERSEDE"
+            )
         )
         if (scheduleNewWatchdog) {
             scheduleWatchdog(record)
