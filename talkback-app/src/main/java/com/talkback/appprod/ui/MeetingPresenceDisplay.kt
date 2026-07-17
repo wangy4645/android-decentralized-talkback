@@ -1,11 +1,14 @@
 package com.talkback.appprod.ui
 
+import com.talkback.core.session.ConferenceMembershipLifecycle
 import com.talkback.core.session.ConferenceParticipantDisplayState
 import com.talkback.core.session.ConferencePresenceProjection
+import com.talkback.appprod.ui.LocalReachability.ParticipantPresenceState
+import com.talkback.appprod.ui.LocalReachability.toMembershipState
 
 /**
- * View-only presence display rules (ADR-0025 R30-F / R30-I).
- * Header uses roster membership; hints and avatars use user-perceived availability only.
+ * View-only presence display rules (ADR-0025 R30-F / R30-I → ADR-0028 R30-J).
+ * Header uses roster membership; hints and avatars use [LocalReachability] only.
  */
 object MeetingPresenceDisplay {
 
@@ -18,14 +21,10 @@ object MeetingPresenceDisplay {
         CAPTURE_BLOCKED
     }
 
-    /**
-     * Single source for header hint and avatar badge (R30-I).
-     * Conference receive readiness comes from participant projection display state,
-     * not GROUP floor playback gate (`remotePlaybackEnabledForModule` is NO_FLOOR_OWNER in meeting).
-     */
     data class ParticipantPresentationFacts(
         val moduleId: String,
         val isLocal: Boolean,
+        val membership: ConferenceMembershipLifecycle = ConferenceMembershipLifecycle.JOINED,
         val displayState: ConferenceParticipantDisplayState,
         val everConnected: Boolean,
         val isRecoveringPeer: Boolean,
@@ -38,14 +37,34 @@ object MeetingPresenceDisplay {
         val moduleId: String,
         val isLocal: Boolean,
         val endpointStatus: EndpointStatus,
-        val availabilityKind: ParticipantAvailabilityKind
+        val availabilityKind: ParticipantAvailabilityKind,
+        val reachability: LocalReachability.Result
     )
 
-    internal fun receiveReady(facts: ParticipantPresentationFacts): Boolean =
-        ParticipantDisplayStateMapper.playbackReady(facts.toDisplayMapperInput())
+    /**
+     * Phase 4 single replacement site: swap stub for [ReceivePathLivenessProvider.receivePathLive].
+     */
+    internal fun receivePathLiveStub(facts: ParticipantPresentationFacts): Boolean {
+        // TODO(R30-J): replace playbackReady stub with media-layer receivePathLive
+        return ParticipantDisplayStateMapper.playbackReady(facts.toDisplayMapperInput())
+    }
+
+    internal fun resolveLocalReachability(facts: ParticipantPresentationFacts): LocalReachability.Result {
+        if (facts.isLocal) {
+            return LocalReachability.Result(ParticipantPresenceState.ONLINE)
+        }
+        return LocalReachability.resolve(
+            membership = facts.membership.toMembershipState(),
+            receivePathLive = receivePathLiveStub(facts),
+            recovering = facts.isRecoveringPeer,
+            mediaUnavailable = facts.mediaUnavailablePeer,
+            everConnected = facts.everConnected
+        )
+    }
 
     private fun ParticipantPresentationFacts.toDisplayMapperInput() =
         ParticipantDisplayStateMapper.Input(
+            membership = membership,
             displayState = displayState,
             everConnected = everConnected,
             mediaUnavailable = mediaUnavailablePeer,
@@ -56,7 +75,7 @@ object MeetingPresenceDisplay {
     fun resolveParticipantPresentation(
         facts: ParticipantPresentationFacts
     ): ParticipantPresentationState {
-        val playbackReady = receiveReady(facts)
+        val reachability = resolveLocalReachability(facts)
         if (facts.isLocal) {
             val status = if (facts.speaking) EndpointStatus.SPEAKING else EndpointStatus.ONLINE
             val kind = if (facts.captureBlocked) {
@@ -64,69 +83,96 @@ object MeetingPresenceDisplay {
             } else {
                 ParticipantAvailabilityKind.NONE
             }
-            return ParticipantPresentationState(facts.moduleId, isLocal = true, status, kind)
+            return ParticipantPresentationState(facts.moduleId, isLocal = true, status, kind, reachability)
         }
-        if (facts.speaking && playbackReady) {
+        val receivePathLive = reachability.state == ParticipantPresenceState.ONLINE
+        if (facts.speaking && receivePathLive) {
             return ParticipantPresentationState(
                 facts.moduleId,
                 isLocal = false,
                 EndpointStatus.SPEAKING,
-                ParticipantAvailabilityKind.NONE
+                ParticipantAvailabilityKind.NONE,
+                reachability
             )
         }
-        return when (ParticipantDisplayStateMapper.map(facts.toDisplayMapperInput())) {
-            ParticipantDisplayStateMapper.ParticipantDisplayState.LEFT ->
+        return when (reachability.state) {
+            ParticipantPresenceState.LEFT,
+            ParticipantPresenceState.OFFLINE ->
                 ParticipantPresentationState(
                     facts.moduleId,
                     isLocal = false,
                     EndpointStatus.OFFLINE,
-                    ParticipantAvailabilityKind.NONE
+                    ParticipantAvailabilityKind.NONE,
+                    reachability
                 )
-            ParticipantDisplayStateMapper.ParticipantDisplayState.RECONNECTING ->
+            ParticipantPresenceState.RECONNECTING ->
                 ParticipantPresentationState(
                     facts.moduleId,
                     isLocal = false,
                     EndpointStatus.RECONNECTING,
-                    ParticipantAvailabilityKind.RECONNECTING
+                    ParticipantAvailabilityKind.RECONNECTING,
+                    reachability
                 )
-            ParticipantDisplayStateMapper.ParticipantDisplayState.JOINING ->
+            ParticipantPresenceState.JOINING ->
                 ParticipantPresentationState(
                     facts.moduleId,
                     isLocal = false,
                     EndpointStatus.CONNECTING,
-                    ParticipantAvailabilityKind.JOINING
+                    ParticipantAvailabilityKind.JOINING,
+                    reachability
                 )
-            ParticipantDisplayStateMapper.ParticipantDisplayState.ONLINE ->
+            ParticipantPresenceState.ONLINE ->
                 ParticipantPresentationState(
                     facts.moduleId,
                     isLocal = false,
                     if (facts.speaking) EndpointStatus.SPEAKING else EndpointStatus.ONLINE,
-                    ParticipantAvailabilityKind.NONE
+                    ParticipantAvailabilityKind.NONE,
+                    reachability
                 )
+        }
+    }
+
+    internal fun availabilityKindFromReachability(
+        reachability: LocalReachability.Result
+    ): ParticipantAvailabilityKind =
+        when (reachability.state) {
+            ParticipantPresenceState.JOINING -> ParticipantAvailabilityKind.JOINING
+            ParticipantPresenceState.RECONNECTING -> ParticipantAvailabilityKind.RECONNECTING
+            else -> ParticipantAvailabilityKind.NONE
+        }
+
+    internal fun aggregateHintFromReachabilities(
+        reachabilities: List<Pair<String, LocalReachability.Result>>,
+        localCaptureBlocked: Boolean
+    ): String? {
+        if (localCaptureBlocked) {
+            return "Microphone unavailable"
+        }
+        val joining = reachabilities.filter { (_, r) ->
+            r.state == ParticipantPresenceState.JOINING
+        }
+        val reconnecting = reachabilities.filter { (_, r) ->
+            r.state == ParticipantPresenceState.RECONNECTING
+        }
+        return when {
+            joining.size == 1 -> "${joining.single().first} joining..."
+            joining.size > 1 -> "${joining.size} joining..."
+            reconnecting.size == 1 -> "${reconnecting.single().first} reconnecting..."
+            reconnecting.size > 1 -> "${reconnecting.size} reconnecting..."
+            else -> null
         }
     }
 
     fun aggregateAvailabilityHint(
         states: List<ParticipantPresentationState>,
         localCaptureBlocked: Boolean
-    ): String? {
-        if (localCaptureBlocked) {
-            return "Microphone unavailable"
-        }
-        val joining = states.filter {
-            !it.isLocal && it.availabilityKind == ParticipantAvailabilityKind.JOINING
-        }
-        val reconnecting = states.filter {
-            !it.isLocal && it.availabilityKind == ParticipantAvailabilityKind.RECONNECTING
-        }
-        return when {
-            joining.size == 1 -> "${joining.single().moduleId} joining..."
-            joining.size > 1 -> "${joining.size} joining..."
-            reconnecting.size == 1 -> "${reconnecting.single().moduleId} reconnecting..."
-            reconnecting.size > 1 -> "${reconnecting.size} reconnecting..."
-            else -> null
-        }
-    }
+    ): String? =
+        aggregateHintFromReachabilities(
+            reachabilities = states
+                .filterNot { it.isLocal }
+                .map { it.moduleId to it.reachability },
+            localCaptureBlocked = localCaptureBlocked
+        )
 
     fun renderConferencePresence(
         presence: ConferencePresenceProjection,

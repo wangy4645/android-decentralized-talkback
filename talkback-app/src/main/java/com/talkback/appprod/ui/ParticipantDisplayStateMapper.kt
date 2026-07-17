@@ -2,12 +2,13 @@ package com.talkback.appprod.ui
 
 import com.talkback.core.session.ConferenceMembershipLifecycle
 import com.talkback.core.session.ConferenceParticipantDisplayState
+import com.talkback.appprod.ui.LocalReachability.ParticipantPresenceState
+import com.talkback.appprod.ui.LocalReachability.toMembershipState
 
 /**
- * Presentation-only mapper (ADR-0025 R30-I).
+ * Presentation-only mapper (ADR-0025 R30-I → ADR-0028 R30-J thin glue).
  *
- * Recovery facts are diagnostic input only; they MUST NOT drive user-visible state unless
- * media availability is affected.
+ * Avatar/hint state is owned by [LocalReachability.resolve]; this mapper delegates.
  */
 object ParticipantDisplayStateMapper {
 
@@ -23,7 +24,7 @@ object ParticipantDisplayStateMapper {
         val displayState: ConferenceParticipantDisplayState,
         val everConnected: Boolean,
         val mediaUnavailable: Boolean,
-        /** Diagnostic only — not used for avatar/hint mapping when playback is ready. */
+        /** Diagnostic only — consumed inside [LocalReachability.resolve] when path not live. */
         val recovering: Boolean = false,
         val isLocal: Boolean = false
     )
@@ -37,17 +38,23 @@ object ParticipantDisplayStateMapper {
 
     fun map(input: Input): ParticipantDisplayState {
         if (input.isLocal) return ParticipantDisplayState.ONLINE
-        if (input.membership != ConferenceMembershipLifecycle.JOINED &&
-            input.membership != ConferenceMembershipLifecycle.INVITED
-        ) {
-            return ParticipantDisplayState.LEFT
-        }
-        if (playbackReady(input)) {
-            return ParticipantDisplayState.ONLINE
-        }
-        if (input.mediaUnavailable || input.everConnected) {
-            return ParticipantDisplayState.RECONNECTING
-        }
-        return ParticipantDisplayState.JOINING
+        // TODO(R30-J): replace playbackReady stub with media-layer receivePathLive
+        val receivePathLive = playbackReady(input)
+        return LocalReachability.resolve(
+            membership = input.membership.toMembershipState(),
+            receivePathLive = receivePathLive,
+            recovering = input.recovering,
+            mediaUnavailable = input.mediaUnavailable,
+            everConnected = input.everConnected
+        ).state.toDisplayState()
     }
+
+    private fun ParticipantPresenceState.toDisplayState(): ParticipantDisplayState =
+        when (this) {
+            ParticipantPresenceState.ONLINE -> ParticipantDisplayState.ONLINE
+            ParticipantPresenceState.RECONNECTING -> ParticipantDisplayState.RECONNECTING
+            ParticipantPresenceState.JOINING -> ParticipantDisplayState.JOINING
+            ParticipantPresenceState.LEFT,
+            ParticipantPresenceState.OFFLINE -> ParticipantDisplayState.LEFT
+        }
 }
