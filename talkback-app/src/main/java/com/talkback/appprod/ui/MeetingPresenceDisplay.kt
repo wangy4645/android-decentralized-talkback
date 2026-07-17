@@ -12,6 +12,9 @@ import com.talkback.appprod.ui.LocalReachability.toMembershipState
  */
 object MeetingPresenceDisplay {
 
+    @Volatile
+    var receivePathLivenessProvider: ReceivePathLivenessProvider = NoOpReceivePathLivenessProvider
+
     fun participantCountLabel(joinedCount: Int): String = "$joinedCount Participants"
 
     enum class ParticipantAvailabilityKind {
@@ -22,6 +25,7 @@ object MeetingPresenceDisplay {
     }
 
     data class ParticipantPresentationFacts(
+        val sessionId: String,
         val moduleId: String,
         val isLocal: Boolean,
         val membership: ConferenceMembershipLifecycle = ConferenceMembershipLifecycle.JOINED,
@@ -41,36 +45,22 @@ object MeetingPresenceDisplay {
         val reachability: LocalReachability.Result
     )
 
-    /**
-     * Phase 4 single replacement site: swap stub for [ReceivePathLivenessProvider.receivePathLive].
-     */
-    internal fun receivePathLiveStub(facts: ParticipantPresentationFacts): Boolean {
-        // TODO(R30-J): replace playbackReady stub with media-layer receivePathLive
-        return ParticipantDisplayStateMapper.playbackReady(facts.toDisplayMapperInput())
-    }
-
     internal fun resolveLocalReachability(facts: ParticipantPresentationFacts): LocalReachability.Result {
         if (facts.isLocal) {
             return LocalReachability.Result(ParticipantPresenceState.ONLINE)
         }
         return LocalReachability.resolve(
             membership = facts.membership.toMembershipState(),
-            receivePathLive = receivePathLiveStub(facts),
+            receivePathLive = receivePathLivenessProvider.receivePathLive(
+                facts.sessionId,
+                facts.moduleId
+            ),
             recovering = facts.isRecoveringPeer,
             mediaUnavailable = facts.mediaUnavailablePeer,
             everConnected = facts.everConnected
         )
     }
 
-    private fun ParticipantPresentationFacts.toDisplayMapperInput() =
-        ParticipantDisplayStateMapper.Input(
-            membership = membership,
-            displayState = displayState,
-            everConnected = everConnected,
-            mediaUnavailable = mediaUnavailablePeer,
-            recovering = isRecoveringPeer,
-            isLocal = isLocal
-        )
 
     fun resolveParticipantPresentation(
         facts: ParticipantPresentationFacts

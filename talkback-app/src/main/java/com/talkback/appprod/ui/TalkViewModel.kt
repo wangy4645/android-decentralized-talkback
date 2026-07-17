@@ -78,6 +78,8 @@ class TalkViewModel(
     val toastMessageRes: SharedFlow<Int> = _toastMessageRes.asSharedFlow()
 
     init {
+        MeetingPresenceDisplay.receivePathLivenessProvider =
+            RuntimeReceivePathLivenessProvider { manager.getRuntime() }
         taskProfileManager.ensureInitialized()
         val config = configStore.load()
         if (config.isConferenceMode()) {
@@ -1056,6 +1058,7 @@ class TalkViewModel(
                         ?: participant.key
                     addItem(
                         conferenceVisibleEndpointItem(
+                            session?.sessionId.orEmpty(),
                             displayKey,
                             participant,
                             speakingModuleId,
@@ -1200,6 +1203,7 @@ class TalkViewModel(
         val states = session.visibleParticipants.map { participant ->
             MeetingPresenceDisplay.resolveParticipantPresentation(
                 participantPresentationFacts(
+                    session.sessionId,
                     participant,
                     speakingModuleId,
                     participant.moduleId in recoveringPeers,
@@ -1213,6 +1217,7 @@ class TalkViewModel(
     }
 
     private fun participantPresentationFacts(
+        sessionId: String,
         viewState: com.talkback.core.session.ConferenceParticipantViewState,
         speakingModuleId: String?,
         isRecoveringPeer: Boolean,
@@ -1224,6 +1229,7 @@ class TalkViewModel(
         val speaking = speakingModuleId != null &&
             speakingModuleId.equals(moduleId, ignoreCase = true)
         return MeetingPresenceDisplay.ParticipantPresentationFacts(
+            sessionId = sessionId,
             moduleId = moduleId,
             isLocal = viewState.isLocal,
             displayState = viewState.displayState,
@@ -1236,6 +1242,7 @@ class TalkViewModel(
     }
 
     private fun conferenceVisibleEndpointItem(
+        sessionId: String,
         key: String,
         viewState: com.talkback.core.session.ConferenceParticipantViewState,
         speakingModuleId: String?,
@@ -1246,6 +1253,7 @@ class TalkViewModel(
     ): EndpointUiItem {
         val presentation = MeetingPresenceDisplay.resolveParticipantPresentation(
             participantPresentationFacts(
+                sessionId,
                 viewState,
                 speakingModuleId,
                 isRecoveringPeer,

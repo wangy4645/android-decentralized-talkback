@@ -2,7 +2,7 @@ package com.talkback.appprod.ui
 
 /**
  * Media-layer fact: this node is receiving decodable audio from [remoteModuleId].
- * Phase 4 wires the real observer; Phase 1–3 use [NoOpReceivePathLivenessProvider] or playbackReady stub.
+ * Production wiring: [RuntimeReceivePathLivenessProvider] + [ReceivePathLivenessObserver].
  */
 interface ReceivePathLivenessProvider {
     fun receivePathLive(
@@ -11,7 +11,7 @@ interface ReceivePathLivenessProvider {
     ): Boolean
 }
 
-/** Phase 1–3 placeholder until media receive-path observer is wired (Phase 4). */
+/** Test / fallback when runtime is not wired. */
 object NoOpReceivePathLivenessProvider : ReceivePathLivenessProvider {
     override fun receivePathLive(sessionId: String, remoteModuleId: String): Boolean = false
 }

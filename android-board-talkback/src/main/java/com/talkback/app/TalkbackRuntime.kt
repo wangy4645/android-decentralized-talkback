@@ -224,6 +224,9 @@ class TalkbackRuntime(
         runCatching { coordinator.conferenceNetworkIndicator() }
             .getOrElse { com.talkback.core.session.ConferenceNetworkIndicator.UNKNOWN }
 
+    fun receivePathLive(sessionId: String, remoteModuleId: String): Boolean =
+        runCatching { coordinator.receivePathLive(sessionId, remoteModuleId) }.getOrElse { false }
+
     fun networkQualityLabel(): String = conferenceNetworkIndicator().toQualityLabel()
     fun onlineModuleCount(): Int = runCatching { coordinator.onlineModuleCount() }.getOrElse { 0 }
     fun qosSummary(): String = runCatching { coordinator.qosSummary() }.getOrElse { "" }

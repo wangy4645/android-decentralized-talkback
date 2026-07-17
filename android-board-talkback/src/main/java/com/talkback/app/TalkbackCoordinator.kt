@@ -157,6 +157,7 @@ import com.talkback.governance.transition.PolicyConfigurationException
 import com.talkback.governance.transition.TransitionPolicy
 import com.talkback.governance.transition.TransitionTrigger
 import com.talkback.core.webrtc.ConferenceAudioBus
+import com.talkback.core.webrtc.ReceivePathLivenessObserver
 import com.talkback.core.webrtc.MediaBearerScope
 import com.talkback.core.webrtc.SessionMediaRegistry
 import com.talkback.core.webrtc.ProgramAudioBus
@@ -290,8 +291,14 @@ class TalkbackCoordinator(
     private val moduleMixer: ModuleAudioMixer = ModuleAudioMixer(),
     private val onLog: ((String) -> Unit)? = null
 ) {
+    private val receivePathLivenessObserver = ReceivePathLivenessObserver()
     private val programAudioBus = ProgramAudioBus(mediaRegistry::getGroup)
-    private val conferenceAudioBus = ConferenceAudioBus(mediaRegistry::getGroup)
+    private val conferenceAudioBus = ConferenceAudioBus(
+        mediaRegistry::getGroup,
+        onInboundPcm = { sessionId, sourceModuleId ->
+            receivePathLivenessObserver.onInboundPcm(sessionId, sourceModuleId)
+        }
+    )
     private val conferenceRecoveryController: ConferenceRecoveryController by lazy {
         ConferenceRecoveryController(
             sessionManager = mediaRegistry.sessionManager,
@@ -2458,6 +2465,10 @@ class TalkbackCoordinator(
 
     fun conferenceNetworkIndicator(): ConferenceNetworkIndicator = runOnCoordinatorSync {
         ConferenceNetworkIndicatorProjector.project(qosMonitor.all().map { it.iceState })
+    }
+
+    fun receivePathLive(sessionId: String, remoteModuleId: String): Boolean = runOnCoordinatorSync {
+        receivePathLivenessObserver.receivePathLive(sessionId, remoteModuleId)
     }
 
     fun networkQualityLabel(): String = conferenceNetworkIndicator().toQualityLabel()
@@ -5542,6 +5553,7 @@ class TalkbackCoordinator(
         stopSessionCapture(session)
         programAudioBus.clear(session.id)
         conferenceAudioBus.clear(session.id)
+        receivePathLivenessObserver.clearSession(session.id)
         if (isConferenceSession(session)) {
             val recoveryModules = linkedSetOf<String>()
             recoveryModules.addAll(meshMediaModuleIds(session))
@@ -6689,6 +6701,9 @@ class TalkbackCoordinator(
     private fun syncConferenceRelay(session: TalkbackSession) {
         if (session.type != SessionType.CONFERENCE) return
         conferenceAudioBus.updateParticipants(session, localModuleId)
+        receivePathLivenessObserver.syncMeshSession(session, localModuleId) { remoteModuleId ->
+            meshEngineForSession(session, remoteModuleId)
+        }
     }
 
     private fun releaseFloorIfHolderUnavailable(session: TalkbackSession, moduleId: String) {
@@ -7875,6 +7890,7 @@ class TalkbackCoordinator(
         session.backupAnchorModuleId = electAnchorRoles(remainingForBackup)?.primary
         programAudioBus.clear(session.id)
         conferenceAudioBus.clear(session.id)
+        receivePathLivenessObserver.clearSession(session.id)
         if (session.floor.owner()?.moduleId == current) {
             session.floor.owner()?.let { session.floor.release(it) }
             session.ptt.onEvent(PttEvent.Release)
@@ -8383,6 +8399,7 @@ class TalkbackCoordinator(
         if (session.anchorModuleId == localModuleId) {
             programAudioBus.clear(session.id)
             conferenceAudioBus.clear(session.id)
+            receivePathLivenessObserver.clearSession(session.id)
         }
         session.anchorModuleId = winnerPrimary
         session.backupAnchorModuleId = null

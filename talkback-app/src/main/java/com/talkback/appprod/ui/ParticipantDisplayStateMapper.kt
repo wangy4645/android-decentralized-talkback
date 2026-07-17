@@ -26,23 +26,15 @@ object ParticipantDisplayStateMapper {
         val mediaUnavailable: Boolean,
         /** Diagnostic only — consumed inside [LocalReachability.resolve] when path not live. */
         val recovering: Boolean = false,
-        val isLocal: Boolean = false
+        val isLocal: Boolean = false,
+        val receivePathLive: Boolean = false
     )
-
-    fun playbackReady(input: Input): Boolean {
-        if (input.isLocal) return true
-        if (input.mediaUnavailable) return false
-        return input.displayState == ConferenceParticipantDisplayState.VISIBLE_CONNECTED ||
-            input.displayState == ConferenceParticipantDisplayState.VISIBLE_LOCAL
-    }
 
     fun map(input: Input): ParticipantDisplayState {
         if (input.isLocal) return ParticipantDisplayState.ONLINE
-        // TODO(R30-J): replace playbackReady stub with media-layer receivePathLive
-        val receivePathLive = playbackReady(input)
         return LocalReachability.resolve(
             membership = input.membership.toMembershipState(),
-            receivePathLive = receivePathLive,
+            receivePathLive = input.receivePathLive,
             recovering = input.recovering,
             mediaUnavailable = input.mediaUnavailable,
             everConnected = input.everConnected

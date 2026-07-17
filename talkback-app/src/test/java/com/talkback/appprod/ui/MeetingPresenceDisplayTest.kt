@@ -2,12 +2,24 @@ package com.talkback.appprod.ui
 
 import com.talkback.core.session.ConferenceParticipantDisplayState
 import com.talkback.core.session.ConferencePresenceProjection
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Before
 import org.junit.Test
 
 class MeetingPresenceDisplayTest {
+
+    @Before
+    fun setUp() {
+        MeetingPresenceDisplay.receivePathLivenessProvider = testProvider()
+    }
+
+    @After
+    fun tearDown() {
+        MeetingPresenceDisplay.receivePathLivenessProvider = NoOpReceivePathLivenessProvider
+    }
 
     @Test
     fun header_usesJoinedCount_only() {
@@ -30,6 +42,10 @@ class MeetingPresenceDisplayTest {
 
     @Test
     fun r30i_firstJoinWithoutReceive_showsJoiningHint() {
+        MeetingPresenceDisplay.receivePathLivenessProvider = object : ReceivePathLivenessProvider {
+            override fun receivePathLive(sessionId: String, remoteModuleId: String): Boolean =
+                remoteModuleId in setOf("M01", "M02")
+        }
         val ui = MeetingPresenceDisplay.renderConferencePresence(
             presence = ConferencePresenceProjection(joinedCount = 3, connectedCount = 2),
             participantFacts = listOf(
@@ -58,6 +74,10 @@ class MeetingPresenceDisplayTest {
 
     @Test
     fun r30i_reconnectingAfterLoss_showsReconnectingHint() {
+        MeetingPresenceDisplay.receivePathLivenessProvider = object : ReceivePathLivenessProvider {
+            override fun receivePathLive(sessionId: String, remoteModuleId: String): Boolean =
+                remoteModuleId in setOf("M01", "M02")
+        }
         val ui = MeetingPresenceDisplay.renderConferencePresence(
             presence = ConferencePresenceProjection(
                 joinedCount = 3,
@@ -103,6 +123,10 @@ class MeetingPresenceDisplayTest {
 
     @Test
     fun r30i_recoveringWithPlaybackUnavailable_showsReconnectingHint() {
+        MeetingPresenceDisplay.receivePathLivenessProvider = object : ReceivePathLivenessProvider {
+            override fun receivePathLive(sessionId: String, remoteModuleId: String): Boolean =
+                remoteModuleId != "M01"
+        }
         val ui = MeetingPresenceDisplay.renderConferencePresence(
             presence = ConferencePresenceProjection(
                 joinedCount = 3,
@@ -126,6 +150,10 @@ class MeetingPresenceDisplayTest {
 
     @Test
     fun r30i_playbackUnavailableWithoutRecoveringFlag_showsReconnectingHint() {
+        MeetingPresenceDisplay.receivePathLivenessProvider = object : ReceivePathLivenessProvider {
+            override fun receivePathLive(sessionId: String, remoteModuleId: String): Boolean =
+                remoteModuleId != "M01"
+        }
         val ui = MeetingPresenceDisplay.renderConferencePresence(
             presence = ConferencePresenceProjection(joinedCount = 3, connectedCount = 2),
             participantFacts = listOf(
@@ -145,6 +173,10 @@ class MeetingPresenceDisplayTest {
 
     @Test
     fun r30i_neverUsesConnectedFractionInHeader() {
+        MeetingPresenceDisplay.receivePathLivenessProvider = object : ReceivePathLivenessProvider {
+            override fun receivePathLive(sessionId: String, remoteModuleId: String): Boolean =
+                remoteModuleId == "M01"
+        }
         val ui = MeetingPresenceDisplay.renderConferencePresence(
             presence = ConferencePresenceProjection(joinedCount = 3, connectedCount = 1),
             participantFacts = listOf(
@@ -156,6 +188,11 @@ class MeetingPresenceDisplayTest {
         assertFalse(ui.headerLabel.contains("/"))
     }
 
+    private fun testProvider(): ReceivePathLivenessProvider = object : ReceivePathLivenessProvider {
+        override fun receivePathLive(sessionId: String, remoteModuleId: String): Boolean =
+            remoteModuleId in setOf("M01", "M02", "M03")
+    }
+
     private fun remote(
         moduleId: String,
         displayState: ConferenceParticipantDisplayState,
@@ -163,6 +200,7 @@ class MeetingPresenceDisplayTest {
         isRecoveringPeer: Boolean = false,
         mediaUnavailablePeer: Boolean = false
     ) = MeetingPresenceDisplay.ParticipantPresentationFacts(
+        sessionId = "sess-test",
         moduleId = moduleId,
         isLocal = false,
         displayState = displayState,

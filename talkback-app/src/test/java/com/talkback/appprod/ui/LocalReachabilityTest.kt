@@ -6,10 +6,25 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.After
+import org.junit.Before
 import org.junit.Test
 import java.lang.reflect.Modifier
 
 class LocalReachabilityTest {
+
+    @Before
+    fun setUp() {
+        MeetingPresenceDisplay.receivePathLivenessProvider = object : ReceivePathLivenessProvider {
+            override fun receivePathLive(sessionId: String, remoteModuleId: String): Boolean =
+                remoteModuleId != "M01"
+        }
+    }
+
+    @After
+    fun tearDown() {
+        MeetingPresenceDisplay.receivePathLivenessProvider = NoOpReceivePathLivenessProvider
+    }
 
     @Test
     fun r30_j_1_receivePathLiveTrueWhileRecovering_notReconnecting_hintNull() {
@@ -53,6 +68,7 @@ class LocalReachabilityTest {
 
         val presentation = MeetingPresenceDisplay.resolveParticipantPresentation(
             remoteFacts(
+                sessionId = "sess-test",
                 moduleId = "M01",
                 displayState = ConferenceParticipantDisplayState.VISIBLE_RECONNECTING,
                 everConnected = true,
@@ -127,12 +143,14 @@ class LocalReachabilityTest {
         ).also { require(moduleId.isNotBlank()) }
 
     private fun remoteFacts(
+        sessionId: String = "sess-test",
         moduleId: String,
         displayState: ConferenceParticipantDisplayState,
         everConnected: Boolean,
         isRecoveringPeer: Boolean = false,
         mediaUnavailablePeer: Boolean = false
     ) = MeetingPresenceDisplay.ParticipantPresentationFacts(
+        sessionId = sessionId,
         moduleId = moduleId,
         isLocal = false,
         membership = ConferenceMembershipLifecycle.JOINED,
