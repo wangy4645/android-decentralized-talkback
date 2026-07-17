@@ -113,6 +113,13 @@ data class TalkUiState(
     val channelReadiness: ChannelReadiness = ChannelReadiness.NO_SERVICE,
     /** True when peers are known but this device waits for the elected mesh host to invite. */
     val channelAwaitingHost: Boolean = false,
+    /** User tab selection (navigation only). */
+    val userSelectedTab: UserSelectedTab = UserSelectedTab.PTT,
+    /** @see EffectiveInteractionMode — runtime capability projection (read-only). */
+    val effectiveInteractionMode: EffectiveInteractionMode = EffectiveInteractionMode.GROUP_PTT,
+    /** @see PrimaryInteractionAction — derived primary button action for this frame. */
+    val primaryInteractionAction: PrimaryInteractionAction = PrimaryInteractionAction.PTT_HOLD,
+    /** True when [userSelectedTab] is MEETING (tab chrome / meeting page context). */
     val conferenceMode: Boolean = false,
     val conferenceActive: Boolean = false,
     val conferenceEndReason: ConferenceEndReason = ConferenceEndReason.NONE,
@@ -128,5 +135,18 @@ data class TalkUiState(
     val sessionMemberKeys: List<String> = emptyList(),
     val endpoints: List<EndpointUiItem>,
     val call: CallUiState = CallUiState(),
-    val meeting: MeetingUiState = MeetingUiState()
+    val meeting: MeetingUiState = MeetingUiState(),
+    /** Unified conference lifecycle / media / membership display projection. */
+    val conferenceDisplay: ConferenceDisplayState = ConferenceDisplayState(
+        phase = ConferenceDisplayPhase.INACTIVE,
+        live = false,
+        showConnectingPanel = false,
+        showLivePanel = false,
+        membershipHintVisible = false,
+        timerEligible = false,
+        statusPill = ConferenceStatusPillKind.INACTIVE,
+        inProgress = false,
+        mediaConnecting = false,
+        recovering = false
+    )
 )

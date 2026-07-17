@@ -22,7 +22,6 @@ import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.talkback.appprod.R
 import com.talkback.core.session.ChannelReadiness
-import com.talkback.core.session.ConferenceRuntimePhase
 import kotlinx.coroutines.launch
 
 class TalkFragment : Fragment() {
@@ -85,14 +84,14 @@ class TalkFragment : Fragment() {
 
         view.findViewById<View>(R.id.channelOnlineArea).setOnClickListener {
             lifecycleScope.launch {
-                val state = viewModel.uiState.value
-                if (state.conferenceMode) {
-                    if (state.conferenceActive) {
-                        openMeetingScreen()
+                when (viewModel.uiState.value.primaryInteractionAction) {
+                    PrimaryInteractionAction.OPEN_MEETING_CONTROL -> openMeetingScreen()
+                    PrimaryInteractionAction.JOIN_MEETING -> openMeetingScreen()
+                    PrimaryInteractionAction.PTT_HOLD -> {
+                        viewModel.initiateGroupCall()
+                        viewModel.refresh()
                     }
-                } else {
-                    viewModel.initiateGroupCall()
-                    viewModel.refresh()
+                    PrimaryInteractionAction.DISABLED -> Unit
                 }
             }
         }
@@ -192,18 +191,15 @@ class TalkFragment : Fragment() {
         if (state.conferenceMode) {
             floorOwnerLabel.text = getString(R.string.meeting_status_label)
             talkingLabel.text = getString(R.string.meeting_participants_label)
-            view.findViewById<TextView>(R.id.txtFloorOwner).text = when {
-                state.conferenceMuted -> getString(R.string.conference_status_muted)
-                state.meeting.runtimePhase == ConferenceRuntimePhase.ACTIVE ->
-                    getString(R.string.meeting_in_progress)
-                state.conferenceReconnectFailed -> getString(R.string.meeting_reconnect_failed)
-                state.conferenceReconnecting ||
-                    state.meeting.runtimePhase == ConferenceRuntimePhase.RECOVERING ->
-                    getString(R.string.meeting_reconnecting)
-                state.conferenceActive ||
-                    state.meeting.runtimePhase == ConferenceRuntimePhase.CONNECTING ->
-                    getString(R.string.conference_status_connecting)
-                else -> "--"
+            val display = state.conferenceDisplay
+            view.findViewById<TextView>(R.id.txtFloorOwner).text = when (display.statusPill) {
+                ConferenceStatusPillKind.MUTED -> getString(R.string.conference_status_muted)
+                ConferenceStatusPillKind.LIVE,
+                ConferenceStatusPillKind.POOR_NETWORK -> getString(R.string.meeting_in_progress)
+                ConferenceStatusPillKind.RECONNECT_FAILED -> getString(R.string.meeting_reconnect_failed)
+                ConferenceStatusPillKind.RECOVERING -> getString(R.string.meeting_reconnecting)
+                ConferenceStatusPillKind.CONNECTING -> getString(R.string.conference_status_connecting)
+                ConferenceStatusPillKind.INACTIVE -> "--"
             }
             view.findViewById<TextView>(R.id.txtTalking).text = state.meeting.participantCountLabel
             imgFloorIndicator.isVisible = false
@@ -264,21 +260,15 @@ class TalkFragment : Fragment() {
         val txtTalkHint = view.findViewById<TextView>(R.id.txtTalkHint)
         val pendingInvite = state.incomingMeetingInvite != null
         val rejoinableMeeting = state.rejoinableMeeting != null
+        val display = state.conferenceDisplay
         txtTalkHint.visibility = when {
             !state.serviceRunning -> View.GONE
             state.conferenceMode && !state.conferenceActive && !rejoinableMeeting -> View.GONE
             pendingInvite -> View.VISIBLE
             rejoinableMeeting -> View.VISIBLE
-            state.conferenceActive &&
-                state.meeting.runtimePhase == ConferenceRuntimePhase.ACTIVE &&
-                state.meeting.awaitingAdditionalParticipants -> View.VISIBLE
-            state.conferenceActive &&
-                (
-                    state.meeting.runtimePhase == ConferenceRuntimePhase.CONNECTING ||
-                        state.meeting.runtimePhase == ConferenceRuntimePhase.RECOVERING ||
-                        state.meeting.runtimePhase == ConferenceRuntimePhase.IDLE ||
-                        state.meeting.runtimePhase == null
-                    ) -> View.VISIBLE
+            display.membershipHintVisible -> View.VISIBLE
+            state.conferenceActive && display.mediaConnecting -> View.VISIBLE
+            state.conferenceActive && display.recovering -> View.VISIBLE
             state.channelReadiness == ChannelReadiness.DISCOVERING -> View.VISIBLE
             state.channelReadiness == ChannelReadiness.AWAITING_PRIMARY ||
             (state.channelReadiness == ChannelReadiness.DIRECTORY_SYNC && state.channelAwaitingHost) -> View.VISIBLE
@@ -292,21 +282,14 @@ class TalkFragment : Fragment() {
         txtTalkHint.text = when {
             pendingInvite -> getString(R.string.meeting_invite_pending)
             rejoinableMeeting -> getString(R.string.meeting_rejoin_hint)
-            state.conferenceActive &&
-                state.meeting.runtimePhase == ConferenceRuntimePhase.ACTIVE &&
-                state.meeting.awaitingAdditionalParticipants ->
-                getString(R.string.meeting_status_waiting)
-            state.conferenceActive &&
-                state.meeting.runtimePhase == ConferenceRuntimePhase.RECOVERING -> when {
-                state.conferenceReconnectFailed -> getString(R.string.meeting_reconnect_failed)
+            display.membershipHintVisible ->
+                display.membershipHint ?: getString(R.string.conference_status_connecting)
+            state.conferenceActive && display.recovering -> when (display.statusPill) {
+                ConferenceStatusPillKind.RECONNECT_FAILED -> getString(R.string.meeting_reconnect_failed)
                 else -> getString(R.string.meeting_reconnecting)
             }
-            state.conferenceActive &&
-                (
-                    state.meeting.runtimePhase == ConferenceRuntimePhase.CONNECTING ||
-                        state.meeting.runtimePhase == ConferenceRuntimePhase.IDLE ||
-                        state.meeting.runtimePhase == null
-                    ) -> getString(R.string.conference_status_connecting)
+            state.conferenceActive && display.mediaConnecting ->
+                getString(R.string.conference_status_connecting)
             state.channelReadiness == ChannelReadiness.DISCOVERING ->
                 getString(R.string.channel_discovering)
             state.channelReadiness == ChannelReadiness.AWAITING_PRIMARY ||
@@ -347,44 +330,51 @@ class TalkFragment : Fragment() {
         }
         lastPttTransmitActive = state.pttActive
 
-        if (state.conferenceMode) {
-            txtPttLabel.text = getString(R.string.meeting_title)
-            txtPttHint.text = state.meeting.participantCountLabel + "\n" +
-                if (state.meeting.runtimePhase == ConferenceRuntimePhase.ACTIVE) {
-                    getString(R.string.meeting_tap_to_view)
-                } else if (state.conferenceReconnectFailed) {
-                    getString(R.string.meeting_reconnect_failed)
-                } else if (
-                    state.conferenceReconnecting ||
-                        state.meeting.runtimePhase == ConferenceRuntimePhase.RECOVERING ||
-                        state.conferenceRejoinInProgress
-                ) {
-                    getString(R.string.meeting_reconnecting)
-                } else if (state.rejoinableMeeting != null) {
-                    getString(R.string.meeting_tap_to_join)
-                } else {
-                    getString(R.string.meeting_tap_to_join)
-                }
-            btnPttRef.setBackgroundResource(
-                if (state.meeting.runtimePhase == ConferenceRuntimePhase.ACTIVE) {
-                    R.drawable.bg_ptt_button_active
-                } else {
-                    R.drawable.bg_ptt_button
-                }
-            )
-        } else {
-            txtPttLabel.text = getString(R.string.ptt_label)
-            if (!pttLocked) {
-                txtPttHint.text = getString(R.string.ptt_hold_hint_lines)
-            }
-            btnPttRef.setBackgroundResource(
-                if (state.pttActive || pttHeld) R.drawable.bg_ptt_button_active else R.drawable.bg_ptt_button
-            )
+        val buttonPresentation = TalkButtonPresentationResolver.resolve(
+            tab = state.userSelectedTab,
+            context = buildTalkButtonContext(state)
+        )
+        txtPttLabel.text = buttonPresentation.label
+        if (!pttLocked) {
+            txtPttHint.text = buttonPresentation.hint.orEmpty()
         }
+        btnPttRef.isEnabled = buttonPresentation.enabled
+        btnPttRef.alpha = if (buttonPresentation.visualState == TalkButtonVisualState.DISABLED) 0.6f else 1f
+        btnPttRef.setBackgroundResource(
+            when (buttonPresentation.visualState) {
+                TalkButtonVisualState.ACTIVE -> R.drawable.bg_ptt_button_active
+                TalkButtonVisualState.DEFAULT,
+                TalkButtonVisualState.DISABLED -> R.drawable.bg_ptt_button
+            }
+        )
         val localRipple = !state.conferenceMode && state.localTransmitting
         layoutPttRadarRings.isVisible = !localRipple
         pttRippleAnimator?.setActive(localRipple)
     }
+
+    private fun buildTalkButtonContext(state: TalkUiState): TalkButtonContext =
+        TalkButtonContext(
+            participantCountLabel = state.meeting.participantCountLabel,
+            meetingLive = state.conferenceDisplay.live,
+            runtimePhase = state.meeting.runtimePhase,
+            conferenceReconnectFailed = state.conferenceReconnectFailed,
+            conferenceReconnecting = state.conferenceReconnecting,
+            conferenceRejoinInProgress = state.conferenceRejoinInProgress,
+            hasRejoinableMeeting = state.rejoinableMeeting != null,
+            pttActive = state.pttActive,
+            pttHeld = pttHeld,
+            labels = buildTalkButtonLabels()
+        )
+
+    private fun buildTalkButtonLabels() = TalkButtonPresentationLabels(
+        meetingTitle = getString(R.string.meeting_title),
+        pttLabel = getString(R.string.ptt_label),
+        defaultPttHint = getString(R.string.ptt_hold_hint_lines),
+        tapToJoin = getString(R.string.meeting_tap_to_join),
+        tapToView = getString(R.string.meeting_tap_to_view),
+        reconnectFailed = getString(R.string.meeting_reconnect_failed),
+        reconnecting = getString(R.string.meeting_reconnecting)
+    )
 
     private fun bindModeToggle(view: View, meetingMode: Boolean) {
         val btnPtt = view.findViewById<TextView>(R.id.btnModePtt)
@@ -406,9 +396,11 @@ class TalkFragment : Fragment() {
 
     private fun bindPttInteraction(meetingMode: Boolean) {
         if (meetingMode) {
+            btnPttRef.isEnabled = true
             btnPttRef.setOnTouchListener(null)
             btnPttRef.setOnClickListener { openMeetingScreen() }
         } else {
+            btnPttRef.isEnabled = true
             btnPttRef.setOnClickListener(null)
             btnPttRef.setOnTouchListener { _, event ->
                 if (pttLocked) {
