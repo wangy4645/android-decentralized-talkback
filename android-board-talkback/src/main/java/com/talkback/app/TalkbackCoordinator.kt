@@ -67,6 +67,7 @@ import com.talkback.core.session.ConferenceEdgeRecoveryController
 import com.talkback.core.session.ConferenceBootstrapDeferral
 import com.talkback.core.session.ConferenceEdgeKey
 import com.talkback.core.session.ConferenceHostEndpointResolver
+import com.talkback.core.session.ConferenceIceConnectedSideEffects
 import com.talkback.core.session.ConferenceBarrierDiagnostics
 import com.talkback.core.session.ConferenceMediaTransmitGate
 import com.talkback.core.session.ConferenceParticipantManager
@@ -6902,8 +6903,12 @@ class TalkbackCoordinator(
         )
     }
 
-    private fun syncConferenceRelay(session: TalkbackSession) {
+    private fun syncConferenceRelay(session: TalkbackSession, reason: String) {
         if (session.type != SessionType.CONFERENCE) return
+        log(
+            "${sessionTag(session)} receive-path sync reason=$reason " +
+                "topology=${session.mediaTopology.name} accepted=${session.accepted}"
+        )
         conferenceAudioBus.updateParticipants(session, localModuleId)
         receivePathLivenessObserver.syncMeshSession(session, localModuleId) { remoteModuleId ->
             meshEngineForSession(session, remoteModuleId)
@@ -7165,6 +7170,13 @@ class TalkbackCoordinator(
             log(
                 "remoteTrackAttached session=${session.id} ice=$ice playback=$playback peer=$remoteModuleId"
             )
+            if (session.type == SessionType.CONFERENCE && session.accepted) {
+                runOnCoordinator {
+                    val live = sessions[session.id] ?: return@runOnCoordinator
+                    if (!live.accepted || live.type != SessionType.CONFERENCE) return@runOnCoordinator
+                    syncConferenceRelay(live, "remote_track_attached")
+                }
+            }
         }
         engine.setOnLocalIceCandidate { candidate ->
             runOnCoordinator {
@@ -7374,14 +7386,17 @@ class TalkbackCoordinator(
                         updateSessionReceivePlayback(it, "ice_$state")
                         tryEnsureConferenceDuplex(it)
                     }
-                sessions.values
-                    .filter {
-                        it.mediaTopology == GroupMediaTopology.ANCHOR &&
-                            it.accepted &&
-                            (it.type == SessionType.GROUP || it.type == SessionType.CONFERENCE)
-                    }
+                // Receive-path observers are required for all accepted conference sessions.
+                // MESH conferences do not participate in backup-standby maintenance,
+                // so this bootstrap path is intentionally separate.
+                ConferenceIceConnectedSideEffects
+                    .sessionsForReceivePathBootstrap(sessions.values)
                     .forEach { session ->
-                        syncConferenceRelay(session)
+                        syncConferenceRelay(session, "ice_connected")
+                    }
+                ConferenceIceConnectedSideEffects
+                    .sessionsForBackupStandbyMaintenance(sessions.values)
+                    .forEach { session ->
                         maintainBackupStandby(session)
                     }
             }
@@ -8147,7 +8162,7 @@ class TalkbackCoordinator(
             completeGroupMesh(session)
             drainPendingGroupJoins(session.id)
             scheduleGroupMeshRetries(session.id)
-            syncConferenceRelay(session)
+            syncConferenceRelay(session, "anchor_failover_host")
         } else {
             val hadStandby = session.backupStandbyPeers.contains(next.value) &&
                 qosMonitor.isGroupConnected(next.value)
@@ -8161,7 +8176,7 @@ class TalkbackCoordinator(
         session.channelId?.let { reconcileGroupMeshInternal(it) }
         maintainBackupStandby(session)
         updateSessionReceivePlayback(session, "anchor_failover")
-        syncConferenceRelay(session)
+        syncConferenceRelay(session, "anchor_failover")
         scheduleReconcile("anchor_failover")
     }
 
@@ -8661,7 +8676,7 @@ class TalkbackCoordinator(
         }
         maintainBackupStandby(session)
         updateSessionReceivePlayback(session, "split_brain_recovery")
-        syncConferenceRelay(session)
+        syncConferenceRelay(session, "split_brain_recovery")
     }
 
     private fun maintainBackupStandby(session: TalkbackSession) {
@@ -8751,7 +8766,7 @@ class TalkbackCoordinator(
                     completeGroupMesh(session)
                     maintainBackupStandby(session)
                     tryEnsureConferenceDuplex(session)
-                    syncConferenceRelay(session)
+                    syncConferenceRelay(session, "foreground_resume")
                 }
                 SessionDispositionTransitions.markActive(session)
             }

@@ -11,10 +11,28 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-class ReceivePathMeshTapTest {
+/**
+ * Phase 4 regression: mesh conference audio can be audible (WebRTC default playback)
+ * while [receivePathLive] stays false if mesh PCM taps were never installed.
+ */
+class MeshConferenceReceivePathRegressionTest {
 
     @Test
-    fun g_r30_j_mesh_bootstrap_iceConnectedPath_attachesInboundPcmTap() {
+    fun meshFirstJoin_withoutSyncMeshSession_receivePathNotLive() {
+        val observer = ReceivePathLivenessObserver(clock = { 0L })
+        val session = meshConferenceSession(
+            sessionId = "conf-mesh",
+            localId = "M01",
+            remoteModuleIds = listOf("M02", "M03")
+        )
+
+        // ICE may be connected, but coordinator never called syncMeshSession on mesh first join.
+        assertFalse(observer.receivePathLive(session.id, "M02"))
+        assertFalse(observer.receivePathLive(session.id, "M03"))
+    }
+
+    @Test
+    fun g_r30_j_regression_meshObserverAttached_firstPcm_notReconnecting() {
         var now = 0L
         val observer = ReceivePathLivenessObserver(
             debounceMs = 500L,
@@ -38,13 +56,11 @@ class ReceivePathMeshTapTest {
 
         repeat(6) { step ->
             now = step * 100L
+            m02Engine.simulateInboundPcm()
             m03Engine.simulateInboundPcm()
         }
-        assertTrue(observer.receivePathLive("conf-mesh", "M03"))
-
-        now = 1_200L
-        assertFalse(observer.receivePathLive("conf-mesh", "M03"))
-        assertFalse(observer.receivePathLive("conf-mesh", "M02"))
+        assertTrue(observer.receivePathLive(session.id, "M02"))
+        assertTrue(observer.receivePathLive(session.id, "M03"))
     }
 
     private fun meshConferenceSession(

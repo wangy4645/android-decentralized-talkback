@@ -90,6 +90,27 @@ class LocalReachabilityTest {
     }
 
     @Test
+    fun g_r30_j_regression_receivePathLiveTrueWhileEverConnected_notReconnecting() {
+        val reachability = LocalReachability.resolve(
+            membership = LocalReachability.MembershipState.JOINED,
+            receivePathLive = true,
+            recovering = false,
+            mediaUnavailable = false,
+            everConnected = true
+        )
+        assertEquals(LocalReachability.ParticipantPresenceState.ONLINE, reachability.state)
+
+        val hint = MeetingPresenceDisplay.aggregateHintFromReachabilities(
+            reachabilities = listOf(
+                "M02" to reachability,
+                "M03" to online("M03")
+            ),
+            localCaptureBlocked = false
+        )
+        assertNull(hint)
+    }
+
+    @Test
     fun r30_j_out_asymmetricMeshAllowed_noCrossDeviceAssertion() {
         val m01OnM03 = LocalReachability.resolve(
             membership = LocalReachability.MembershipState.JOINED,
