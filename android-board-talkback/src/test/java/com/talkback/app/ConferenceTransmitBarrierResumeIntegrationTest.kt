@@ -102,7 +102,8 @@ class ConferenceTransmitBarrierResumeIntegrationTest {
         host.runtime.simulateRemoteIceState("M03", "DISCONNECTED")
         assertTrue(
             host.waitForLogSince(blockMark, timeoutMs = 8_000L) {
-                it.contains("FAILED_MEDIA_RECOVERY") && it.contains("remote=M03")
+                (it.contains("FAILED_MEDIA_RECOVERY") || it.contains("EXPLICIT_RECOVERY_ABORT")) &&
+                    it.contains("remote=M03")
             }
         )
         assertEventually(

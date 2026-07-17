@@ -86,6 +86,8 @@ enum class RecoveryReevaluateTrigger {
     LINK_LOST,
     PEER_DISCOVERED,
     PEER_LOST,
+    /** HELLO / module rediscovery (ADR-0022 Appendix C-3.2 C-13). */
+    REMOTE_MODULE_RECOVERED,
     AUTHORITY_REACHABLE,
     AUTHORITY_LOST,
     /** ICE CONNECTED / equivalent media restoration (ADR-0022 R28-E / #83). */

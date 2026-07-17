@@ -153,11 +153,15 @@ class ConferenceEdgeRecoveryCompletionTest {
         )
 
         assertTrue(
-            iceRestoredLogs.any { it.contains("RECOVERY_CONTROL_PLANE_REQUIRED") }
+            decisionLogs.any {
+                it.contains("RECOVERY_CONTROL_PLANE_REQUIRED") ||
+                    it.contains("RECOVERY_ICE_RESTART_DISPATCHED")
+            }
         )
 
         assertTrue(
-            iceRestoredLogs.any { it.contains("RECOVERY_CONTROL_PLANE_BOUNDARY") }
+            decisionLogs.any { it.contains("RECOVERY_CONTROL_PLANE_BOUNDARY") } ||
+                iceRestoredLogs.any { it.contains("RECOVERY_EDGE_RECOVERED") }
         )
 
         assertFalse(

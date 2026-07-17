@@ -2,7 +2,7 @@
 
 ## Status
 
-**Partial Accepted** (2026-07-10; **R28-H / R28-H.1 Accepted 2026-07-13**; **R28-H.2 Accepted 2026-07-13**; **R28-I Accepted 2026-07-14**) — **Accepted:** R27′-A/B, R28-D/D1 (gate), **R28-E/F/G** (P2-A completion re-evaluate seam, frozen `/grill-with-docs` 2026-07-10), **R28-H / R28-H.1** (Recovery Edge Obligation Lifetime + deadline / pending-decision single writer; soak `647484ef`), **R28-H.2** (DISCONNECTED_DEBOUNCING reconnect clears suspicion without starting recovery), **R28-I** (WAITING ownership; soak `ea6466f1` M03→M02 participant edge). **Accepted companion:** ADR-0024 R29-E (host prune eligibility consumes R28-H; does not redefine obligation). **Draft:** P2-B re-evaluate action decision tree, full S13 completion. Complements ADR-0021 (R24–R26) and ADR-0023 (R29).
+**Partial Accepted** (2026-07-10; **R28-H / R28-H.1 Accepted 2026-07-13**; **R28-H.2 Accepted 2026-07-13**; **R28-I Accepted 2026-07-14**; **Appendix C Accepted 2026-07-16**; **Appendix C-2 Accepted 2026-07-16**; **Appendix C-3.1 Accepted 2026-07-16**; **Appendix C-3.2 Accepted 2026-07-16**) — **Accepted:** R27′-A/B, R28-D/D1 (gate), **R28-E/F/G** (P2-A completion re-evaluate seam, frozen `/grill-with-docs` 2026-07-10), **R28-H / R28-H.1** (Recovery Edge Obligation Lifetime + deadline / pending-decision single writer; soak `647484ef`), **R28-H.2** (DISCONNECTED_DEBOUNCING reconnect clears suspicion without starting recovery), **R28-I** (WAITING ownership; soak `ea6466f1` M03→M02 participant edge), **Appendix C** (Recovery Attempt Media Action Ownership; causal trace soak `103003` / `125859`), **Appendix C-2** (Deferred Media Action Ownership; soak `112433` **PASS**), **Appendix C-3.1** (Supersede Admission Closure; soak `114047` **PASS**), **Appendix C-3.2** (Recovery Fact Consumption; soak `120053` **PASS**). **Accepted companion:** ADR-0024 R29-E (host prune eligibility consumes R28-H; does not redefine obligation). **Draft:** P2-B re-evaluate action decision tree, full S13 completion. Complements ADR-0021 (R24–R26) and ADR-0023 (R29).
 
 ## Summary
 
@@ -17,6 +17,9 @@ This ADR freezes:
 5. **Presence projection boundary** (UI reads `ConferencePresenceProjection`, never `ReachabilitySnapshot`)
 6. **Recovery Edge Obligation Lifetime** (R28-H: OPEN/CLOSED exclusive close set + observation window; attempt terminal ≠ obligation CLOSED)
 7. **WAITING ownership** (R28-I: every WAITING state must name a next-action owner)
+8. **Recovery Attempt Media Action Ownership** (Appendix C: attempt MUST resolve media action before silent `FAILED_MEDIA_RECOVERY`)
+9. **Deferred Media Action Ownership** (Appendix C-2: `DEFERRED` retains owner; soak `112433` **PASS** — Accepted 2026-07-16)
+10. **Recovery Fact Reconciliation** (Appendix C-3: C-3.1 supersede admission **PASS** soak `114047`; C-3.2 fact consumption **PASS** soak `120053`)
 
 ```text
 ReachabilitySnapshot  →  Recovery Controller  →  EdgeRecoveryFacts
@@ -671,6 +674,1011 @@ R24 Strategy A (degraded residency) **remains v1 default**; R28 does not authori
 
 **Observability:** `CONFERENCE_BARRIER_SNAPSHOT` logs `policy=EDGE_SCOPED`, `canPublish`, peer recovery telemetry (`recovering`, `obligationOpen`, `failed`) — peer fields are diagnostic only.
 
+## P0-a — GROUP transition readiness observation (2026-07-15)
+
+**Problem (revised):** `MEETING_END` governance transition exists, but terminal predicate is **local** (`membershipReconciled` + `transmitMissingPeers` empty). It does not model receive-capability attach or cross-node session identity convergence. Post-meeting PTT failures with healthy floor control are therefore a **transition/readiness false-positive** class, not PTT/Floor bugs.
+
+**Instrumentation (observation only — no gate/mesh/floor/playback behavior changes):**
+
+| Marker | Purpose |
+|--------|---------|
+| `MEETING_END_BEGIN` | Transition start + session identity at teardown |
+| `GROUP_TRANSITION_READINESS_SNAPSHOT` | Local readiness + identity + bootstrap state |
+| `BOOTSTRAP_ATTEMPT` | Bootstrap churn counter (`waitingForPrimary`, `attemptId`) |
+| `TRANSITION_TERMINAL_READY` | Local transition terminal timing |
+
+**Key fields:** `sessionTraceId`, `localSessionId`, `initiatorModuleId`, `anchorModuleId`, `floorAuthorityModuleId`, `resolvedBootstrapPrimaryModuleId`, `orphanBelief` (belief only — not ground truth).
+
+**Receive sampling:** only when `floorAuthorityModuleId != null` and a remote floor holder exists; records `HOLDER_AUDIO_UNREACHABLE`, not idle `NO_FLOOR_OWNER`.
+
+**Soak:** `scripts/soak-p0a-group-transition.ps1` — host end → PTT at t+0/5/10/15s; Layer 1 reports `transitionDurationMs`, `bootstrapAttemptCount`, `orphanBeliefDurationMs`. Layer 2 (`correlateBySessionTraceId`) deferred until device data.
+
+**Open questions for P0-a data:**
+
+1. Does `terminalReady=true` coincide with `orphanBelief=true` on participants?
+2. How many `BOOTSTRAP_ATTEMPT` per `MEETING_END`?
+
+## Appendix C — Recovery Attempt Media Action Ownership (frozen 2026-07-16)
+
+**Also cited as:** ADR-0022-C — Recovery Attempt Closure Contract.
+
+### Problem statement (revised)
+
+P2-A (R28-E/F/G) froze **completion re-evaluate** after attempt terminal or material capability change. Causal trace soak (`MEDIA RECOVERY CAUSAL TRACE`, stamp `20260716-103003` / `20260715-125859`) proved a **prior** gap:
+
+```text
+Recovery ownership          Media action ownership       Signaling / ICE        Completion
+        |                            |                        |                    |
+RECOVERY_EDGE_STARTED                  X                        ?                    ?
+        |                            |                        |                    |
+   (implicit wait)              no dispatch              passive ICE?          timeout → FAILED
+```
+
+**Appendix C freezes the media-action layer.** It does **not** redefine P2-A completion re-evaluate, membership (ADR-0023), floor, playback, GROUP bootstrap (P2-0), or UI projection (R27′).
+
+### Layer model
+
+```text
+1. Recovery attempt opened     — RECOVERY_EDGE_STARTED / RECOVERY_ATTEMPT_OPENED
+2. Media action ownership      — Appendix C (this section)
+3. Signaling + ICE transport   — MEDIA_SIGNAL_* / MEDIA_ICE_* / ICE state
+4. Completion evaluation       — P2-A / R28-E/F/G
+5. Edge obligation closure     — R28-H
+```
+
+An attempt that reaches layer 4 without resolving layer 2 is **architecturally incomplete**, regardless of whether ICE later moves on its own.
+
+### C-1 — Recovery attempt MUST bind a media action owner
+
+After `RECOVERY_EDGE_STARTED` (or equivalent `beginRecovery` terminal for the attempt), the controller **MUST** within the attempt budget assign exactly one of:
+
+| Outcome | Evidence marker (v1) | Meaning |
+|---------|----------------------|---------|
+| **A. Host media restart** | `RECOVERY_ICE_RESTART_DISPATCHED` | Host owns `createOffer(iceRestart=true)` for this `(session, remote, attempt)` |
+| **B. Reattach handoff** | `RECOVERY_HANDOFF_TO_REATTACH` | Attempt explicitly delegates to inbound reattach / `REATTACH_ACCEPTED` path |
+| **C. Explicit abort** | `EXPLICIT_RECOVERY_ABORT(reason=…)` | Attempt ends with stated reason; no silent expiry |
+
+**Forbidden:**
+
+```text
+RECOVERY_EDGE_STARTED
+        → (no A/B/C)
+        → ATTEMPT_TIMEOUT
+        → FAILED_MEDIA_RECOVERY
+```
+
+This pattern **MUST NOT** occur without an intervening media-action decision. Observation of transport (ICE CHECKING, passive candidate) is **not** a media action assignment.
+
+**Rationale (soak `125859`, M02 host, M03 WiFi):** attempt=2 had `RECOVERY_EDGE_STARTED`, never `RECOVERY_ICE_RESTART_DISPATCHED`, then `FAILED_MEDIA_RECOVERY`. Causal chain broke at layer 2.
+
+#### C-1.1 — Media action owner priority (no competing owners)
+
+`EDGE_STARTED` **MUST NOT** leave two media-action paths racing on the same attempt.
+
+**Priority (highest wins; lower paths MUST defer or supersede):**
+
+| Priority | Rule |
+|----------|------|
+| 1 | **Existing valid media action owner continues** — once `RECOVERY_MEDIA_OWNER_ASSIGNED` is emitted for attempt *N*, no second owner on *N* |
+| 2 | **Explicit handoff supersedes passive attempt** — `RECOVERY_HANDOFF_TO_REATTACH` / inbound `REATTACH_ACCEPTED` **MAY** supersede attempt *N* → *N+1*; attempt *N* MUST NOT also dispatch restart |
+| 3 | **Abort only when no valid owner exists** — `EXPLICIT_RECOVERY_ABORT` only after deadline without A or B |
+
+**Forbidden race:**
+
+```text
+attempt=2  EDGE_STARTED
+    +  host ICE_RESTART_DISPATCHED
+    +  participant REATTACH_INBOUND (same attempt, no supersede)
+```
+
+**Normative assignment marker:**
+
+```text
+RECOVERY_MEDIA_OWNER_ASSIGNED
+    session=…
+    remote=…
+    attempt=N
+    owner=HOST_RESTART | PARTICIPANT_REATTACH | ABORTED
+    recoveryOwnerModuleId=<local module that owns recovery decision>
+    mediaActionOwnerModuleId=<module that will execute signaling restart>
+    parentAttempt=<optional, when owner follows handoff>
+```
+
+Examples:
+
+```text
+RECOVERY_MEDIA_OWNER_ASSIGNED owner=HOST_RESTART attempt=2 recoveryOwnerModuleId=M02 mediaActionOwnerModuleId=M02
+
+RECOVERY_MEDIA_OWNER_ASSIGNED owner=PARTICIPANT_REATTACH attempt=3 parentAttempt=2
+    recoveryOwnerModuleId=M02 mediaActionOwnerModuleId=M03 supersededByModule=M03
+```
+
+`RECOVERY_ICE_RESTART_DISPATCHED` and `RECOVERY_HANDOFF_TO_REATTACH` **imply** `RECOVERY_MEDIA_OWNER_ASSIGNED` but **MUST** remain separate markers for causal trace.
+
+### C-2 — `ICE_RESTART_ONLY` MUST mean recovery authority owns restart dispatch
+
+Policy `ICE_RESTART_ONLY` **MUST NOT** be implemented as passive observation of the remote peer's transport recovery.
+
+**Terminology (do not conflate):**
+
+| Field | Meaning |
+|-------|---------|
+| `conferenceHostModuleId` | Conference lifecycle / invite authority |
+| `recoveryOwnerModuleId` | Module whose edge controller owns the **recovery attempt** decision on **this device** |
+| `mediaActionOwnerModuleId` | Module that **executes** signaling restart (may differ after handoff) |
+
+```text
+ICE_RESTART_ONLY  :=  recovery authority on this device MUST assign media action owner (C-1)
+                      and dispatch restart (A) OR explicit handoff (B)
+                      within attempt budget
+```
+
+**MUST NOT** alias `recoveryOwnerModuleId` to `conferenceHostModuleId`. GROUP / unicast recovery **MUST** use the same ownership fields without conference-host coupling.
+
+If the recovery authority only watches ICE/candidate facts without assigning owner, the mode is **passive observation** — not recovery ownership.
+
+**Rationale (soak `103003`):** attempt=2 received `MEDIA_SIGNAL_CANDIDATE_RECEIVED` and ICE CONNECTED while host never dispatched restart. Participant transport recovered **without** host media action closure on attempt=2.
+
+### C-3 — Participant reattach is fallback, not primary closure
+
+Successful soak path (`103003`):
+
+```text
+attempt=2  EDGE_STARTED, no dispatch
+      →  M03 RECOVERY_REATTACH_INBOUND
+      →  SUPERSEDE attempt=3
+      →  RECOVERY_ICE_RESTART_DISPATCHED (attempt=3)
+      →  RECOVERY_EDGE_RECOVERED
+```
+
+This path **MAY** recover the conference but **MUST NOT** be the only closure mechanism for host-owned attempts.
+
+| WiFi timing | Risk if reattach is primary |
+|-------------|----------------------------|
+| Fast | Participant reattach masks missing host dispatch |
+| Slow | No reattach inbound before timeout → `FAILED_MEDIA_RECOVERY` while membership stays JOINED |
+
+**Normative:** Primary owner for host `ICE_RESTART_ONLY` is **A** (dispatch). **B** (reattach handoff) is permitted when dispatch preconditions fail, but **MUST** be explicit (`RECOVERY_HANDOFF_TO_REATTACH`), not accidental via timeout silence.
+
+### C-4 — Attempt supersede MUST name reason and causal relation
+
+When attempt *N* is abandoned for attempt *N+1*, logs **MUST** include:
+
+```text
+RECOVERY_ATTEMPT_SUPERSEDED
+    session=…
+    sessionTraceId=…
+    remote=…
+    oldAttempt=N
+    newAttempt=N+1
+    reason=<PARTICIPANT_REATTACH | MATERIAL_CAPABILITY | PEER_DISCOVERED | …>
+    supersededByModule=<module that triggered supersede, if remote>
+    parentAttempt=N
+    parentSessionTraceId=<session trace at supersede time>
+```
+
+**Causal question answered:** why may attempt *N+1* legally cover attempt *N*?
+
+Forbidden ambiguity:
+
+```text
+attempt=2 FAILED_MEDIA_RECOVERY
+attempt=3 RECOVERED
+```
+
+without supersede record linking `oldAttempt`, `reason`, and `supersededByModule`.
+
+v1 supersede reasons observed in soak:
+
+| reason | Trigger |
+|--------|---------|
+| `PARTICIPANT_REATTACH` | `RECOVERY_REATTACH_INBOUND` / `REATTACH_ACCEPTED` |
+| `PEER_DISCOVERED` | Discovery / HELLO material transition (R28-H2) |
+| `MATERIAL_CAPABILITY` | `RecoveryCapabilitySignature` change |
+
+### C-5 — Acceptance: causal invariants, not UI
+
+**PASS** (successful edge recovery) requires, for the recovering attempt lineage:
+
+```text
+RECOVERY_EDGE_STARTED
+    → MEDIA_ACTION_OWNER_ASSIGNED     (A or B from C-1)
+    → (signaling + ICE — MEDIA_SIGNAL_* / ICE CONNECTED)
+    → RECOVERY_EDGE_RECOVERED
+```
+
+`MEDIA_ACTION_OWNER_ASSIGNED` evidence (any one):
+
+- `RECOVERY_MEDIA_OWNER_ASSIGNED` with `owner=HOST_RESTART` and matching `attempt=`
+- `RECOVERY_MEDIA_OWNER_ASSIGNED` with `owner=PARTICIPANT_REATTACH`, `parentAttempt=`, and supersede record
+- `EXPLICIT_RECOVERY_ABORT` with reason (replaces silent `FAILED_MEDIA_RECOVERY` when no owner assigned)
+
+**FAIL** (Appendix C violation):
+
+```text
+RECOVERY_EDGE_STARTED
+    + FAILED_MEDIA_RECOVERY
+    + no RECOVERY_ICE_RESTART_DISPATCHED
+    + no RECOVERY_HANDOFF_TO_REATTACH
+    + no EXPLICIT_RECOVERY_ABORT
+```
+
+for the same `(session, remote, attempt)`.
+
+UI (`connected=3`, pill hints) is **diagnostic only**; gates **MUST** use causal trace + recovery markers.
+
+### Observability contract (v1)
+
+Correlation keys (see `MediaRecoveryCausalTrace`):
+
+```text
+session, sessionTraceId, scope, remote, attempt,
+conferenceGeneration, pcGeneration, transportGeneration
+```
+
+Minimum chain for host edge audit:
+
+```text
+RECOVERY_EDGE_STARTED attempt=N
+    → RECOVERY_ICE_RESTART_DISPATCHED attempt=N   (or HANDOFF)
+    → MEDIA_SIGNAL_OFFER_SENT attempt=N
+    → MEDIA_ICE_CANDIDATE_* attempt=N
+    → RECOVERY_EDGE_RECOVERED attempt=N′          (N′ may supersede N)
+```
+
+### Relationship to P2-A / P2-B
+
+| Topic | Owner |
+|-------|-------|
+| Media action ownership (this Appendix) | **Appendix C** — implement before relying on completion fixes |
+| Completion re-evaluate after material change | P2-A (R28-E/F/G) — layer 4 |
+| Action decision tree (`DISPATCH_REATTACH`, `WAIT_FOR_INBOUND`, …) | P2-B — draft |
+| Post-terminal `FAILED` + late transport | P2-A grace / completion window — **downstream** of C-1; does not excuse missing dispatch at `EDGE_STARTED` |
+
+### Out of scope (explicit)
+
+- Floor routing, playback, membership mutation (ADR-0023), P2-0 canonical lineage, UI projection rules.
+
+### Freeze sentence
+
+> **A recovery attempt is not a recovery completion candidate until its media action ownership is resolved. An attempt that observes transport changes without owning or delegating a media recovery action MUST NOT silently expire into `FAILED_MEDIA_RECOVERY`.**
+
+### Soak gates (Appendix C)
+
+| Gate | Pass criterion | Status |
+|------|----------------|--------|
+| G-C-1 | **Forbidden:** `RECOVERY_EDGE_STARTED` + deadline expired + **no** `RECOVERY_MEDIA_OWNER_ASSIGNED` (must be `EXPLICIT_RECOVERY_ABORT`, not silent `FAILED_MEDIA_RECOVERY`) | **FAIL** `125859`; partial **PASS** `103003` (handoff on attempt=3) |
+| G-C-2 | **Required:** `EDGE_STARTED` → `MEDIA_ACTION_OWNER_ASSIGNED` → signaling/ICE → `EDGE_RECOVERED` | **PASS** `103003` |
+| G-C-3 | **Handoff allowed:** attempt=N → participant reattach → `SUPERSEDE(reason)` → attempt=N+1 → `MEDIA_ACTION_OWNER_ASSIGNED` | **PASS** `103003` |
+| G-C-4 | Causal trace: `attempt` threads recovery → dispatch → signaling | **PASS** (instrumentation 2026-07-16) |
+
+### Implementation sequence (non-normative; frozen order)
+
+1. **Patch 1 — C-1 contract:** `EDGE_STARTED` → `MEDIA_ACTION_PENDING`; deadline without owner → `EXPLICIT_RECOVERY_ABORT(NO_MEDIA_ACTION_OWNER)`, not silent `FAILED_MEDIA_RECOVERY`.
+2. **Patch 2 — Restart dispatch:** `ICE_RESTART_ONLY` path assigns `owner=HOST_RESTART` and emits `RECOVERY_ICE_RESTART_DISPATCHED` (fixes `125859` class).
+3. **Patch 3 — Explicit handoff:** participant reattach remains; becomes `RECOVERY_HANDOFF_TO_REATTACH` + supersede, not implicit rescue.
+
+**Explicitly deferred:** longer timeout, blind retry, membership/floor/playback/UI changes.
+
+### Patch design — C-1 vs existing FSM (non-normative)
+
+**Do not duplicate the recovery FSM.** Insert a **media-action sub-state** on the existing attempt, not a parallel controller.
+
+#### Existing `EdgeRecoveryPhase` (today)
+
+```text
+DISCONNECTED_DEBOUNCING → RECOVERY_PENDING → [REATTACH_* | ICE_RESTARTING] → RECOVERED
+                                              ↘ FAILED_MEDIA_RECOVERY (watchdog)
+```
+
+**Gap (code):** `beginRecovery(initiatesReattach=false)` sets `RECOVERY_PENDING`, schedules watchdog, **never** calls `issueBoundedIceRestart`. Restart only from `REATTACH_ACCEPTED` or `continueControlPlaneRecoveryAfterMediaRestored` (ICE_RESTORED path).
+
+#### Proposed insertion (Appendix C)
+
+Add **logical** sub-state on `EdgeRecoveryRecord` (not necessarily new `EdgeRecoveryPhase` enum value in v1):
+
+```text
+mediaActionOwner: UNASSIGNED | PENDING | HOST_RESTART | HANDOFF_REATTACH | ABORTED
+```
+
+| Existing phase | New sub-state | Trigger |
+|----------------|---------------|---------|
+| `RECOVERY_PENDING` | `UNASSIGNED` → `PENDING` | `RECOVERY_EDGE_STARTED` |
+| `RECOVERY_PENDING` | `PENDING` → `HOST_RESTART` | `issueBoundedIceRestart` success → `RECOVERY_MEDIA_OWNER_ASSIGNED` |
+| `RECOVERY_PENDING` | `PENDING` → `HANDOFF_REATTACH` | `RECOVERY_HANDOFF_TO_REATTACH` / inbound reattach |
+| `RECOVERY_PENDING` | `PENDING` → `ABORTED` | watchdog, no owner → `EXPLICIT_RECOVERY_ABORT` |
+| `ICE_RESTARTING` | `HOST_RESTART` | already dispatched |
+| `REATTACH_ACCEPTED` | `HOST_RESTART` or `HANDOFF` | per C-1.1 priority |
+
+**Patch 2 minimal hook:** end of `beginRecovery`, when `policy=ICE_RESTART_ONLY` and `routeConverged` (or immediate), call `assignMediaActionOwner(HOST_RESTART)` → `issueBoundedIceRestart` — **single writer**, no race with reattach (reattach triggers supersede per C-1.1 #2).
+
+```mermaid
+stateDiagram-v2
+    direction LR
+    [*] --> RECOVERY_PENDING: EDGE_STARTED
+    RECOVERY_PENDING --> HOST_RESTART: OWNER_ASSIGNED_HOST_RESTART
+    RECOVERY_PENDING --> HANDOFF: HANDOFF_TO_REATTACH
+    RECOVERY_PENDING --> ABORTED: EXPLICIT_ABORT
+    HOST_RESTART --> ICE_RESTARTING: ICE_RESTART_DISPATCHED
+    HANDOFF --> REATTACH_ACCEPTED: REATTACH_INBOUND
+    ICE_RESTARTING --> RECOVERED: EDGE_RECOVERED
+    ABORTED --> [*]
+```
+
+#### FSM对照（插入点）
+
+| 现有代码路径 | 现状 | Appendix C 改法 |
+|-------------|------|----------------|
+| `beginRecovery(ICE_RESTART_ONLY)` | watchdog only | + assign owner + `issueBoundedIceRestart` |
+| `beginRecovery(REATTACH)` | `onRequestReattach` | + `HANDOFF` or `HOST_RESTART` after accept |
+| `issueBoundedIceRestart` | reattach / ICE_RESTORED only | also from `beginRecovery` |
+| watchdog `ATTEMPT_TIMEOUT` | → `FAILED_MEDIA_RECOVERY` | if `mediaActionOwner==UNASSIGNED` → `EXPLICIT_ABORT` |
+| `onRecoveryReattachAccepted` | supersede + restart | + `RECOVERY_ATTEMPT_SUPERSEDED` causal fields |
+
+## Appendix C-2 — Deferred Media Action Ownership Preservation (frozen 2026-07-16)
+
+**Also cited as:** ADR-0022-C2 — Deferred Media Action Ownership.
+
+**Extends:** Appendix C (C-1..C-5). **Does not replace** Appendix C section "C-2" (`ICE_RESTART_ONLY` dispatch semantics).
+
+### Problem statement
+
+Evidence pass soak (`MEDIA RECOVERY CAUSAL TRACE`, stamp `20260716-105748`, session `e408b98f`, M03 WiFi flap) proved Appendix C Patch 1/2 fixed **missing owner at dispatch** but exposed a **second, independent** gap:
+
+```text
+RECOVERY_EDGE_STARTED
+    → DISPATCH_REATTACH (decision approved)
+    → outcome=DEFERRED (transport prerequisite unmet)
+    → ATTEMPT_TIMEOUT
+    → EXPLICIT_RECOVERY_ABORT(reason=NO_MEDIA_ACTION_OWNER)
+```
+
+If `DISPATCH_REATTACH` was chosen, an action owner **was selected**. Classifying the terminal as `NO_MEDIA_ACTION_OWNER` is a **lifecycle contradiction** — not evidence that recovery was impossible.
+
+Separately, the same soak showed **deferred wakeup not wired** (host-edge M03→M02: `Remote module recovered: M02` at 10:59:04 without `RECOVERY_REEVALUATE edge=M02`). That is **out of scope for this appendix** — see future **Appendix C-3** (Deferred Action Wakeup Binding).
+
+**Freeze sentence (C-2 scope only):**
+
+> **C-2 corrects ownership classification across DEFERRED transport states. It does not promise recovery.**
+
+### Governance chain (Appendix C family)
+
+```text
+C-1   (Appendix C)   — attempt MUST resolve media action owner before silent expiry
+C-2   (this section) — deferred action MUST retain ownership; DEFERRED ≠ UNASSIGNED
+C-3   (future)       — deferred action MUST have declared wakeup + re-evaluate binding
+C-4   (R28-E/F/G)    — completion re-evaluate after material capability change
+C-5   (R28-H)        — edge obligation lifetime / projection
+```
+
+Patch 2.5 implements **C-6..C-8** (this appendix). Patch 3+ implements **Appendix C-3** — not retry semantics.
+
+### Layer model (unchanged; C-2 insertion point)
+
+```text
+1. Recovery attempt opened
+2. Media action ownership      — Appendix C + C-2 (owner + disposition)
+3. Signaling + ICE transport
+4. Completion evaluation       — R28-G (downstream; MUST NOT substitute for C-2)
+5. Edge obligation closure     — R28-H
+```
+
+C-2 operates entirely in layer 2. It **MUST NOT** duplicate `EdgeRecoveryPhase` or introduce a parallel recovery FSM (per Appendix C patch design).
+
+### C-6 — Deferred ownership preservation
+
+After `RECOVERY_EDGE_STARTED`, once media action ownership is **assigned**, it **MUST** remain valid through a `DEFERRED` disposition until one of:
+
+```text
+completion       — action executed and edge recovers
+supersede        — attempt N → N+1 with causal record (Appendix C C-4)
+explicit abort   — stated terminal reason (not misclassified absence)
+```
+
+**Forbidden:**
+
+```text
+DISPATCH_REATTACH approved
+    → outcome=DEFERRED
+    → (ownership released or never recorded)
+    → NO_MEDIA_ACTION_OWNER
+```
+
+**Normative:**
+
+```text
+DEFERRED is a dispatch outcome, not absence of ownership.
+DEFERRED MUST NOT be equivalent to UNASSIGNED.
+```
+
+**Rationale (soak `105748`, M03→M02 attempt=3/5):** `RECOVERY_REATTACH_DEFERRED reason=WAITING_FOR_ROUTE` preceded `EXPLICIT_RECOVERY_ABORT(NO_MEDIA_ACTION_OWNER)`. The action was chosen; only transport blocked execution.
+
+### C-7 — Deferred action MUST declare wakeup dependency
+
+Every `DEFERRED` disposition **MUST** record which external fact, when it becomes true, **would** permit re-evaluation of the blocked action. This appendix **declares and logs** the binding only — it does **not** require the coordinator to act on it (Appendix C-3).
+
+**Forbidden:**
+
+```text
+DEFERRED with no wakeupBinding
+    → silent wait until watchdog
+```
+
+That pattern is a zombie-attempt source (same class of bug as pre-C-1 silent expiry).
+
+#### Ownership record (logical model)
+
+Do **not** overload `EdgeRecoveryPhase`. Add orthogonal fields on `EdgeRecoveryRecord` (or equivalent):
+
+```kotlin
+MediaActionOwnership(
+    owner: MediaActionOwner,              // NONE | HOST | PARTICIPANT
+    disposition: MediaActionDisposition,  // closed enum — see below
+    deferredReason: DeferredReason?,     // when disposition == DEFERRED
+    wakeupBinding: WakeupBinding?,       // declared dependency; C-3 wires re-evaluate
+)
+```
+
+```kotlin
+enum class MediaActionOwner { NONE, HOST, PARTICIPANT }
+
+/** Closed enum — MUST NOT add SENT / DISPATCHING / COMPLETED (those live in EdgeRecoveryPhase). */
+enum class MediaActionDisposition { UNASSIGNED, ACTIVE, DEFERRED, ABORTED }
+
+enum class DeferredReason {
+    ROUTE_NOT_READY,
+    AUTHORITY_NOT_READY,
+    MEDIA_NOT_READY,
+}
+
+data class WakeupBinding(
+    sourceType: WakeupSourceType,
+    sourceKey: String,   // scoped identity, e.g. edge(session,remote) or module(M02)
+)
+
+enum class WakeupSourceType {
+    ROUTE_CONVERGED,
+    PEER_DISCOVERED,
+    AUTHORITY_REACHABLE,
+}
+```
+
+**Wakeup binding granularity (required):** `wakeupBinding` **MUST** name both `sourceType` and `sourceKey`. Wildcard bindings are **forbidden**.
+
+| Valid | Invalid |
+|-------|---------|
+| `{ sourceType: ROUTE_CONVERGED, sourceKey: edge(M03→M02) }` | `{ sourceType: RECOVERY_EVENT }` |
+| `{ sourceType: PEER_DISCOVERED, sourceKey: module(M02) }` | `{ sourceType: ANY_RECOVERY_EVENT }` |
+
+C-3 matches **external fact → binding.sourceType + sourceKey → `RECOVERY_REEVALUATE`**. Without scoped keys, C-3 reintroduces silent wait.
+
+**Legal `(owner, disposition)` combinations:**
+
+| owner | disposition | Valid? |
+|-------|-------------|--------|
+| `NONE` | `UNASSIGNED` | Yes — pre-assignment |
+| `NONE` | `ACTIVE` | **No** |
+| `HOST` / `PARTICIPANT` | `ACTIVE` | Yes — dispatch in flight or completed |
+| `HOST` / `PARTICIPANT` | `DEFERRED` | Yes — prerequisite unmet |
+| `NONE` | `ABORTED` | Yes — explicit terminal without prior owner |
+| `HOST` / `PARTICIPANT` | `ABORTED` | Yes — explicit abort after assignment |
+
+**Orthogonal to `EdgeRecoveryPhase` (examples):**
+
+```text
+owner=HOST, disposition=DEFERRED, phase=RECOVERY_PENDING   (WAITING_FOR_ROUTE)
+owner=HOST, disposition=ACTIVE,  phase=ICE_RESTARTING
+owner=HOST, disposition=ACTIVE,  phase=RECOVERED
+```
+
+Ownership **MUST NOT** encode phase progress (`SENT`, `DISPATCHING`, `COMPLETED`).
+
+#### Observability (v1)
+
+When disposition becomes `DEFERRED`, emit:
+
+```text
+RECOVERY_MEDIA_ACTION_DEFERRED
+    session=…
+    remote=…
+    attempt=N
+    owner=HOST | PARTICIPANT
+    disposition=DEFERRED
+    deferredReason=ROUTE_NOT_READY | AUTHORITY_NOT_READY | MEDIA_NOT_READY
+    wakeupBinding=<sourceType>/<sourceKey>    e.g. ROUTE_CONVERGED/edge(session,M02)
+```
+
+Existing `RECOVERY_REATTACH_DEFERRED` / `RECOVERY_MEDIA_ACTION_DEFERRED` (pre-C-2) **SHOULD** converge on this shape in Patch 2.5.
+
+### C-8 — Timeout classification: owner absent vs owner blocked
+
+Watchdog expiry **MUST** distinguish:
+
+| Classification | Meaning | v1 abort reason |
+|----------------|---------|-----------------|
+| **OWNER_ABSENT** | No media action owner was assigned before deadline | `NO_MEDIA_ACTION_OWNER` (C-1) |
+| **OWNER_BLOCKED** | Owner assigned; action remained `DEFERRED` through deadline | `OWNER_BLOCKED` (**not** `NO_MEDIA_ACTION_OWNER`) |
+
+**`OWNER_BLOCKED` is not failed recovery completion.** It means:
+
+> Owner is determined, but the owner’s media action has not yet satisfied its dispatch prerequisite.
+
+Do **not** read `FAILED_MEDIA_RECOVERY` + `OWNER_BLOCKED` as “recovery failed because the action failed”. C-2 covers only `OWNER_ABSENT` vs `OWNER_BLOCKED`. **`ACTION_FAILED`** (action executed but failed) is **out of scope** for C-2 — a future classification if needed.
+
+| Classification | Meaning |
+|----------------|---------|
+| `OWNER_ABSENT` | No one owns this recovery action |
+| `OWNER_BLOCKED` | Owner exists; execution prerequisite unmet |
+| `ACTION_FAILED` | *(not C-2)* Action ran and failed |
+
+**Forbidden:**
+
+```text
+owner=PARTICIPANT, disposition=DEFERRED, wakeupBinding=ROUTE_CONVERGED
+    → ATTEMPT_TIMEOUT
+    → reason=NO_MEDIA_ACTION_OWNER
+```
+
+**Normative terminal pattern (owner blocked):**
+
+```text
+RECOVERY_MEDIA_OWNER_ASSIGNED owner=PARTICIPANT
+    → RECOVERY_MEDIA_ACTION_DEFERRED … wakeupBinding=ROUTE_CONVERGED
+    → ATTEMPT_TIMEOUT
+    → EXPLICIT_RECOVERY_ABORT(reason=OWNER_BLOCKED)   // or ACTION_BLOCKED
+    → FAILED_MEDIA_RECOVERY                           // obligation layer unchanged
+```
+
+Obligation phase `FAILED_MEDIA_RECOVERY` **MAY** remain (per C-1 freeze: C-layer abort ≠ obligation rename). C-8 fixes **abort reason semantics**, not obligation closure.
+
+**Semantic correction (non–no-op):** Patch 2.5 **changes failure classification** by preserving ownership across `DEFERRED`. It does **not** guarantee the edge recovers.
+
+### Evidence pass summary (soak `105748`, non-normative)
+
+| Edge | DEFERRED reason | Wakeup observed during attempt? | Outcome |
+|------|-----------------|----------------------------------|---------|
+| M03→M02 (host) | `ROUTE_NOT_READY` | No `ROUTE_CONVERGED`; `HELLO`/recovered at 10:59:04 **without** `RECOVERY_REEVALUATE` | `NO_MEDIA_ACTION_OWNER` (misclassified) |
+| M03→M01 (peer) | `MEDIA_NOT_READY` | `PEER_DISCOVERED` → supersede; `ROUTE_CONVERGED` via ICE | `RECOVERED` |
+
+Conclusion: **C-2 is necessary but not sufficient.** C-3 must answer whether `HELLO` / `Remote module recovered` **SHOULD** awaken host-edge deferred reattach, and whether `routeConverged` **over-couples** to host media path.
+
+### Relationship to Appendix C / P2-A
+
+| Topic | Owner |
+|-------|-------|
+| Owner must exist before silent expiry | Appendix C **C-1** |
+| Owner survives `DEFERRED` | **C-6** (this appendix) |
+| Wakeup dependency declared | **C-7** (this appendix) |
+| Wakeup triggers re-evaluate | **Appendix C-3** (future) — not retry scheduler |
+| Capability / route projection | R28-G — **MUST NOT** be modified by C-2 |
+| `routeConverged` vs `authorityReachable` vs media | **Separate ADR question** — potential deadlock if conflated; C-3 + reachability audit |
+
+### Out of scope (explicit)
+
+- `routeConverged` / `authorityReachable` projection changes
+- Deferred wakeup **implementation** (re-evaluate hooks, supersede from `FAILED` after late HELLO)
+- Retry scheduler, blind resend, watchdog extension
+- UI projection (`RECOVERY_FAILED` vs `RECOVERY_DEFERRED` — R27′)
+- Membership mutation (ADR-0023)
+- Floor, playback, GROUP bootstrap
+
+### Soak gates — C-2 correctness only (Appendix C-2)
+
+Patch 2.5 soak validates **ownership semantics**, not recovery success.
+
+**PASS** — for every attempt that entered `DEFERRED`:
+
+```text
+owner != UNASSIGNED (and != NONE)
+disposition == DEFERRED
+deferredReason present
+wakeupBinding present (sourceType + sourceKey)
+timeout classification: OWNER_BLOCKED ≠ OWNER_ABSENT (no NO_MEDIA_ACTION_OWNER on deferred attempts)
+```
+
+**NOT required for C-2 PASS:**
+
+```text
+RECOVERED == true
+connectedParticipants restored
+UI pill cleared
+```
+
+G-C2-4 (M03→M02 `RECOVERED` after WiFi flap) remains **deferred to Appendix C-3**.
+
+| Gate | Pass criterion |
+|------|----------------|
+| G-C2-1 | `outcome=DEFERRED` → `RECOVERY_MEDIA_OWNER_ASSIGNED` + `RECOVERY_MEDIA_ACTION_DEFERRED` with `owner`, `deferredReason`, `wakeupBinding` |
+| G-C2-2 | **Forbidden:** `DEFERRED` attempt → `NO_MEDIA_ACTION_OWNER` |
+| G-C2-3 | **Required:** `DEFERRED` attempt timeout → `EXPLICIT_RECOVERY_ABORT(reason=OWNER_BLOCKED)` |
+| G-C2-4 | M03→M02 `RECOVERED` after flap — **C-3 only**; not a C-2 gate |
+
+### Soak validation (frozen 2026-07-16)
+
+Soak `20260716-112433`, session `59c4eda9`, M02 host / M03 WiFi flap (Patch 2.5):
+
+| Gate | Result | Evidence |
+|------|--------|----------|
+| G-C2-1 | **PASS** | M03→M02 attempt=3/5: `PARTICIPANT_REATTACH` + `DEFERRED(ROUTE_NOT_READY)` + `wakeupBinding=ROUTE_CONVERGED/edge(...)` |
+| G-C2-2 | **PASS** | No `NO_MEDIA_ACTION_OWNER` on DEFERRED attempts 3/5 |
+| G-C2-3 | **PASS** | `EXPLICIT_RECOVERY_ABORT reason=OWNER_BLOCKED` on attempts 3/5 |
+| G-C2-4 | **N/A** (C-3) | M03→M02 not `RECOVERED`; expected |
+
+**C-2 status: PASS.** Fixes ownership classification across `DEFERRED`; does **not** promise recovery.
+
+**Known C-3 precursor (fixed by C-3.1):** M03→M02 attempt=7 in soak `112433` — `PEER_DISCOVERED` supersede without `EDGE_STARTED` / ownership → `NO_MEDIA_ACTION_OWNER`. Closed by Appendix C-3.1 soak `114047`.
+
+### Implementation sequence (non-normative)
+
+1. **Patch 2.5 — C-6..C-8:** `MediaActionOwnership` fields; defer preserves owner; new abort classification; `RECOVERY_MEDIA_ACTION_DEFERRED` enriched. **Done.**
+2. **Soak `20260716-112433`:** G-C2-1..3 **PASS**.
+3. **Patch 3.1 — C-3.1 supersede admission:** **Done.** Soak `20260716-114047` **PASS**.
+4. **Patch 3.2 — C-3.2 fact consumption:** **Done.** Soak `20260716-120053` **PASS**.
+
+### Open question (for C-3 / reachability ADR; not C-2)
+
+When host-edge ICE is `FAILED` but control path resumes (`HELLO`, `Remote module recovered`):
+
+```text
+routeConverged depends on authorityReachable depends on host media?
+```
+
+If yes, reattach may remain `DEFERRED` until media recovers — while media recovery may require route — a **projection deadlock**. C-2 **documents** the binding; resolving the gate logic is **C-3 + reachability**, not ownership lifecycle.
+
+**C-2 intentionally preserves the current reachability predicate.** Whether route convergence should depend on host media ICE is **deferred to Appendix C-3**. C-2 **MUST NOT** be used to justify changing `routeConverged` / `authorityReachable` in the same patch.
+
+## Appendix C-3 — Recovery Fact Reconciliation (2026-07-16)
+
+**Also cited as:** ADR-0022-C3 — Recovery Fact Reconciliation.
+
+**Extends:** Appendix C / C-2. **Not** a retry scheduler or watchdog extension.
+
+### Appendix C status (governance chain)
+
+```text
+C-1    Media action ownership existence        PASS
+C-2    Deferred ownership persistence          PASS
+C-3.1  Supersede admission                     PASS
+C-3.2  Recovery fact consumption               PASS
+C-4    Completion re-evaluation                PENDING
+C-5    Obligation projection                   FUTURE
+```
+
+### Problem statement
+
+C-2 soak (`20260716-112433`) proved ownership semantics are correct but exposed the next gap:
+
+```text
+external recovery fact exists
+        +
+attempt waiting (DEFERRED or FAILED residency)
+        X
+recovery lifecycle does not consume the fact
+```
+
+Two mirror failures (now split across C-3.1 / C-3.2):
+
+| Layer | Bug | Fixed by |
+|-------|-----|----------|
+| C-2 | `DEFERRED` releases owner → `NO_MEDIA_ACTION_OWNER` | C-2 **PASS** |
+| C-3.1 | Supersede creates attempt without ownership lifecycle | C-3.1 **PASS** |
+| C-3.2 | Fact arrives but `wakeupBinding` not consumed → no re-evaluate | C-3.2 **PASS** |
+
+**Freeze sentence (C-3 scope):**
+
+> **C-3 binds external recovery facts to attempt lifecycle reconciliation. It is not retry.**
+
+### C-9 — External fact must trigger re-evaluation
+
+When a recovery-relevant external fact matches an edge with an **open obligation** and a reconcilable attempt (active, `DEFERRED`, or failed residency eligible for supersede), the system **MUST** emit:
+
+```text
+RECOVERY_REEVALUATE(session, edge, attempt, trigger=<FACT>)
+```
+
+Recovery-relevant facts (v1):
+
+```text
+PEER_DISCOVERED
+REMOTE_MODULE_RECOVERED   (HELLO / rediscovery)
+ROUTE_CONVERGED
+AUTHORITY_REACHABLE
+```
+
+**Forbidden:**
+
+```text
+fact observed
++
+attempt waiting (DEFERRED or FAILED residency)
++
+(no RECOVERY_REEVALUATE)
+```
+
+That pattern is a silent zombie — the same class of bug C-1 eliminated for watchdog expiry.
+
+**Note:** C-9 declares the binding obligation. **C-3.2** implements dispatch from fact writers to re-evaluate. C-2 already records `wakeupBinding` on `DEFERRED` attempts for traceability.
+
+### C-10 — Supersede must create valid ownership context
+
+When attempt *N+1* supersedes attempt *N*, the new attempt **MUST** enter ownership lifecycle via exactly one of:
+
+```text
+A. RECOVERY_EDGE_STARTED  →  ownership assignment path (C-1)
+B. explicit inherited ownership  →  logged handoff from prior attempt
+```
+
+**Forbidden:**
+
+```text
+RECOVERY_ATTEMPT_SUPERSEDED
+    → new attempt in RECOVERY_PENDING
+    → (no EDGE_STARTED, no owner)
+    → NO_MEDIA_ACTION_OWNER
+```
+
+**Rationale (soak `112433`, M03→M02 attempt=7):** `PEER_DISCOVERED` supersede from `FAILED_MEDIA_RECOVERY` without ownership assignment. **Closed by C-3.1** soak `114047`.
+
+**Semantic freeze:** Supersede is **not** a shortcut that bypasses recovery lifecycle. It is a **lawful entry** into `EDGE_STARTED` + ownership assignment.
+
+### C-11 — Failed residency is not terminal for external recovery facts
+
+`FAILED_MEDIA_RECOVERY` with obligation **OPEN** (R28-H) **MUST NOT** be treated as “recovery is over” when a matching external fact arrives.
+
+```text
+FAILED_MEDIA_RECOVERY + obligation OPEN + PEER_DISCOVERED
+    → SUPERSEDE (C-11) → new attempt with valid ownership (C-10)
+    → MAY → RECOVERED
+```
+
+Without C-11, C-2 correctly leaves attempts at `OWNER_BLOCKED` with no lawful resurrection path — facts exist but lifecycle cannot advance.
+
+**Distinction from R29:** R29 governs **membership** mutation authority. C-11 governs **recovery attempt** reconciliation only.
+
+## Appendix C-3.1 — Supersede Admission Closure (Accepted 2026-07-16)
+
+**Status: PASS**
+
+### Invariant
+
+A superseded recovery attempt **MUST** enter the recovery lifecycle through a valid `RECOVERY_EDGE_STARTED` pathway and **MUST** acquire media action ownership before timeout classification.
+
+Implements **C-10** (and enables **C-11** resurrection without ownership vacuum).
+
+### Evidence — before vs after
+
+**Before C-3.1** (soak `112433`, session `59c4eda9`, M03→M02):
+
+```text
+FAILED attempt
+    |
+    PEER_DISCOVERED
+    |
+    SUPERSEDE
+    |
+    NO_MEDIA_ACTION_OWNER
+```
+
+**After C-3.1** (soak `114047`, session `122be247`, M03→M02):
+
+```text
+FAILED(OWNER_BLOCKED)
+    |
+    PEER_DISCOVERED
+    |
+    SUPERSEDE
+    |
+    EDGE_STARTED(pathway=SUPERSEDE)
+    |
+    PARTICIPANT_REATTACH
+    |
+    DEFERRED(ROUTE_NOT_READY)
+    |
+    OWNER_BLOCKED
+```
+
+### Soak validation (frozen 2026-07-16)
+
+Soak `20260716-114047`, session `122be247`, M02 host / M03 WiFi flap (Patch 3.1):
+
+| Gate | Result | Evidence |
+|------|--------|----------|
+| G-C3.1-1 | **PASS** | M03→M02 attempt=7: `RECOVERY_EDGE_STARTED pathway=SUPERSEDE` after `PEER_DISCOVERED` supersede from attempt=5 `FAILED` |
+| G-C3.1-2 | **PASS** | `RECOVERY_MEDIA_OWNER_ASSIGNED owner=PARTICIPANT_REATTACH` + `DEFERRED(ROUTE_NOT_READY)` on attempt=7 |
+| G-C3.1-3 | **PASS** | Zero `NO_MEDIA_ACTION_OWNER` in session; attempt=7 timeout → `OWNER_BLOCKED` |
+
+**NOT required for C-3.1 PASS:**
+
+```text
+RECOVERED == true
+connectedParticipants == 3
+M03→M02 media restored
+```
+
+M03→M02 remained `connected=2` after attempt=7 `OWNER_BLOCKED` — **expected**; that is **C-3.2** (fact consumption), not supersede admission.
+
+### Layer boundary (do not expand C-3.1)
+
+| Layer | C-3.1 soak |
+|-------|------------|
+| ownership | **PASS** |
+| supersede admission | **PASS** |
+| action responsibility | **PASS** |
+| wakeup / fact consumption | **not in scope** |
+
+C-3.1 answers: *“Does the new attempt have an owner?”* — not *“When should it act again?”*
+
+### Out of scope (C-3.1)
+
+- `RECOVERY_REEVALUATE` wiring for `HELLO` / `ROUTE_CONVERGED` (C-3.2)
+- Watchdog timeout extension
+- `routeConverged` projection changes
+- UI / `connected=` projection
+
+## Appendix C-3.2 — Recovery Fact Consumption (Accepted 2026-07-16)
+
+**Status: PASS**
+
+**Extends:** C-3.1 **PASS**. Implements **C-12** / **C-13** (and enables **C-9** / **C-11** at coordinator layer). **Not** a wakeup scheduler or retry timer.
+
+### Invariant (fact consumption closure)
+
+When a recovery-relevant external fact matches a `DEFERRED` or `FAILED` residency attempt with open obligation, the system **MUST** emit `RECOVERY_REEVALUATE` and produce a new media-action decision — **not** silent wait.
+
+Implements:
+
+- **C-12:** `wakeupBinding` match → `RECOVERY_REEVALUATE`
+- **C-13:** `Remote module recovered` + matching deferred/failed attempt → forbidden silent gap
+
+### Evidence — before vs after (M03→M02)
+
+**Before C-3.2** (soak `114047`, session `122be247`, C-3.1 only):
+
+```text
+attempt=7 DEFERRED(ROUTE_NOT_READY)
+HELLO from M02 / Remote module recovered
+    → (no RECOVERY_REEVALUATE edge=M02)
+    → OWNER_BLOCKED, connected=2
+```
+
+**After C-3.2** (soak `120053`, session `c93ff44b`):
+
+```text
+attempt=5 OWNER_BLOCKED
+ICE M02 CONNECTED
+    → RECOVERY_REEVALUATE(trigger=ROUTE_CONVERGED)
+    → SUPERSEDE attempt=7 + EDGE_STARTED(pathway=SUPERSEDE)
+    → DISPATCH_REATTACH + RECOVERY_REATTACH_SENT
+    → RECOVERY_EDGE_RECOVERED attempt=7
+    → connected=3
+```
+
+**Note:** `connected=3` in soak `120053` is **observed success**, not a C-3.2 gate requirement.
+
+### Implementation seams (frozen)
+
+```text
+WakeupBinding.matchesTrigger(trigger, session, edge)
+hasDeferredWakeupForTrigger(session, edge, trigger)
+    → bypass R28-G materiality gate when binding matches
+
+onRemoteModuleRecovered → REMOTE_MODULE_RECOVERED trigger
+failedResidencyReevaluate → ROUTE_CONVERGED / AUTHORITY_REACHABLE / …
+```
+
+### Problem statement (soak `114047` evidence — closed)
+
+Deferred attempt has owner **and** `wakeupBinding`, but matching recovery fact does not enter re-evaluate:
+
+```text
+attempt=7
+OWNER=PARTICIPANT_REATTACH
+DEFERRED(ROUTE_NOT_READY)
+wakeupBinding=ROUTE_CONVERGED/edge(...)
+
+          |
+          X
+
+HELLO from M02
+Remote module recovered
+
+          |
+          X
+
+RECOVERY_REEVALUATE(edge=M02)
+```
+
+Missing seam:
+
+```text
+Fact → binding match → RECOVERY_REEVALUATE → resolve ownership/action
+```
+
+### C-12 — Bound recovery fact must consume deferred attempt
+
+If:
+
+```text
+attempt.mediaActionDisposition == DEFERRED
+incomingFact matches attempt.wakeupBinding
+obligation OPEN
+```
+
+the system **MUST** emit:
+
+```text
+RECOVERY_REEVALUATE(session, edge, attempt, trigger=<FACT>)
+```
+
+and proceed to action resolution (dispatch, defer update, or supersede) — **not** silent wait.
+
+### C-13 — No silent recovered fact
+
+**Forbidden:**
+
+```text
+Remote module recovered (or matching external fact)
++
+deferred attempt with matching wakeupBinding
++
+(no RECOVERY_REEVALUATE)
+```
+
+Soak `114047` M03→M02 was the canonical C-13 violation. **Closed** by soak `120053`.
+
+### Soak validation (frozen 2026-07-16)
+
+Soak `20260716-120053`, session `c93ff44b`, M02 host / M03 WiFi flap (Patch 3.2):
+
+| Gate | Result | Evidence |
+|------|--------|----------|
+| G-C3.2-1 | **PASS** | M03→M02 `RECOVERY_REEVALUATE edge=M02 trigger=ROUTE_CONVERGED` @ 12:02:23 |
+| G-C3.2-2 | **PASS** | M03→M01 `RECOVERY_REEVALUATE trigger=REMOTE_MODULE_RECOVERED` @ 12:02:23 |
+| G-C3.2-3 | **PASS** | `decision=DISPATCH_REATTACH` → `RECOVERY_REATTACH_SENT` attempt=7 |
+| G-C3.2-4 | **PASS** | Zero `NO_MEDIA_ACTION_OWNER` in session |
+
+**NOT required for C-3.2 PASS:**
+
+```text
+RECOVERED == true
+connected == 3
+```
+
+Soak `120053` additionally achieved `RECOVERY_EDGE_RECOVERED` attempt=7 and `connected=3` — informational only.
+
+### Soak gates (normative — not recovery success)
+
+**Required:**
+
+```text
+HELLO / REMOTE_MODULE_RECOVERED / ROUTE_CONVERGED
+    → binding match on DEFERRED attempt
+    → RECOVERY_REEVALUATE(edge=M02)
+    → new media action decision (dispatch | defer | supersede)
+```
+
+**NOT required:**
+
+```text
+RECOVERED == true
+connected == 3
+ICE CONNECTED
+```
+
+Even if ICE ultimately fails, `RECOVERY_REEVALUATE` + decision proves C-3.2.
+
+### Out of scope (explicit)
+
+- Watchdog timeout extension, blind retry timers
+- `routeConverged` / `authorityReachable` projection changes (separate reachability ADR if C-3.2 blocked)
+- UI projection (`RECOVERY_FAILED` vs `DEFERRED` — R27′)
+- Membership mutation (ADR-0023)
+- Re-opening C-3.1 supersede admission
+
+### Open question (reachability — deferred)
+
+Host-edge `DEFERRED(ROUTE_NOT_READY)` while control path resumes but `routeConverged` stays false (host ICE `FAILED`). Soak `120053` reconciled via `ICE CONNECTED` → `ROUTE_CONVERGED` trigger. Whether `HELLO` alone must advance reconciliation when mesh ICE remains `FAILED` is **deferred** — not required for C-3.2 PASS.
+
 ## References
 
 - ADR-0020 — Conference Runtime Projection Contract
@@ -680,5 +1688,11 @@ R24 Strategy A (degraded residency) **remains v1 default**; R28 does not authori
 - `docs/audit/p2a-completion-re-evaluate-seam.md`
 - `docs/audit/s13b-recovery-reattach-reachability.md`
 - `docs/audit/ro-m3-recovery-write-matrix.md`
+- Causal trace soak `logs/conf-rcv-*-20260716-103003.log` (session `50e3a660`, PASS via reattach supersede)
+- Causal trace soak `logs/conf-rcv-*-20260715-125859.log` (session `56830c73`, FAIL — no dispatch on attempt=2)
+- Evidence pass soak `logs/conf-rcv-*-20260716-105748-final.log` (session `e408b98f`, M03 WiFi flap — C-2 vs C-3 split)
+- C-2 soak `logs/conf-rcv-*-20260716-112433-final.log` (session `59c4eda9`, G-C2-1..3 **PASS**; attempt=7 supersede gap → C-3.1)
+- C-3.1 soak `logs/conf-rcv-*-20260716-114047-final.log` (session `122be247`, G-C3.1-1..3 **PASS**; C-10 closed; M03→M02 silent fact → C-3.2)
+- C-3.2 soak `logs/conf-rcv-*-20260716-120053-final.log` (session `c93ff44b`, G-C3.2-1..4 **PASS**; M03→M02 `ROUTE_CONVERGED` → `REATTACH_SENT` → `EDGE_RECOVERED`)
 - Issue #73-B Recovery Reattach Reachability
 - R29 soak `logs-r29-soak-20260713-112015` (session `647484ef`)

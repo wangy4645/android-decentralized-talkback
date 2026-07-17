@@ -216,7 +216,8 @@ class ConferencePruneIntegrationTest {
             participant.runtime.simulateRemoteIceState("M03", "DISCONNECTED")
             assertTrue(
                 participant.waitForLogSince(degradeMark, timeoutMs = 8_000L) {
-                    it.contains("FAILED_MEDIA_RECOVERY") && it.contains("remote=M03")
+                    (it.contains("FAILED_MEDIA_RECOVERY") || it.contains("EXPLICIT_RECOVERY_ABORT")) &&
+                        it.contains("remote=M03")
                 }
             )
             participant.runtime.testRunConferenceHealthCleanup(channelId)
@@ -295,7 +296,8 @@ class ConferencePruneIntegrationTest {
             host.runtime.simulateRemoteIceState("M03", "DISCONNECTED")
             assertTrue(
                 host.waitForLogSince(pruneMark, timeoutMs = 8_000L) {
-                    it.contains("FAILED_MEDIA_RECOVERY") && it.contains("remote=M03")
+                    (it.contains("FAILED_MEDIA_RECOVERY") || it.contains("EXPLICIT_RECOVERY_ABORT")) &&
+                        it.contains("remote=M03")
                 }
             )
             assertTrue(host.runtime.testEdgeObligationOpen(sessionId!!, "M03"))
@@ -367,13 +369,17 @@ class ConferencePruneIntegrationTest {
             host.runtime.simulateRemoteIceState("M03", "DISCONNECTED")
             assertTrue(
                 host.waitForLogSince(failMark, timeoutMs = 8_000L) {
-                    it.contains("FAILED_MEDIA_RECOVERY") && it.contains("remote=M03")
+                    (it.contains("FAILED_MEDIA_RECOVERY") || it.contains("EXPLICIT_RECOVERY_ABORT")) &&
+                        it.contains("remote=M03")
                 }
             )
             assertTrue(host.runtime.testEdgeObligationOpen(sessionId!!, "M03"))
             val failedAttemptId = synchronized(host.logs) {
                 host.logs.drop(failMark)
-                    .last { it.contains("FAILED_MEDIA_RECOVERY") && it.contains("remote=M03") }
+                    .last {
+                        (it.contains("FAILED_MEDIA_RECOVERY") || it.contains("EXPLICIT_RECOVERY_ABORT")) &&
+                            it.contains("remote=M03")
+                    }
                     .substringAfter("attempt=")
                     .substringBefore(' ')
                     .toLong()
@@ -388,15 +394,34 @@ class ConferencePruneIntegrationTest {
                         it.contains("trigger=ROUTE_CONVERGED")
                 }
             )
-            assertTrue(host.runtime.testEdgeObligationOpen(sessionId, "M03"))
-            assertFalse(host.runtime.testEdgeObligationClosed(sessionId, "M03"))
+            assertTrue(
+                host.waitForLogSince(reevalMark, timeoutMs = 5_000L) {
+                    (it.contains("decision=SUPERSEDED") && it.contains("edge=M03")) ||
+                        (it.contains("RECOVERY_EDGE_RECOVERED") && it.contains("remote=M03")) ||
+                        (it.contains("RECOVERY_DECISION") && it.contains("edge=M03") &&
+                            it.contains("decision=DISPATCH_REATTACH"))
+                }
+            )
+            val afterReevalHead = synchronized(host.logs) { host.logs.drop(reevalMark) }
+            val edgeRecovered = afterReevalHead.any {
+                it.contains("RECOVERY_EDGE_RECOVERED") && it.contains("remote=M03")
+            }
+            assertTrue(
+                "obligation OPEN or edge RECOVERED after re-evaluate",
+                host.runtime.testEdgeObligationOpen(sessionId, "M03") || edgeRecovered
+            )
+            if (!edgeRecovered) {
+                assertFalse(host.runtime.testEdgeObligationClosed(sessionId, "M03"))
+            }
 
             host.runtime.testRunConferenceHealthCleanup(channelId)
             assertFalse(host.hasLog { it.contains("Pruning unhealthy conference peer M03") })
             assertFalse(host.hasLog { it.contains("source=AUTHORITY_PRUNE") })
-            assertTrue(host.runtime.testEdgeObligationOpen(sessionId, "M03"))
+            assertTrue(
+                host.runtime.testEdgeObligationOpen(sessionId, "M03") || edgeRecovered
+            )
 
-            val afterReeval = synchronized(host.logs) { host.logs.drop(reevalMark) }
+            val afterReeval = afterReevalHead
             assertFalse(
                 "failed attempt id must not become active again",
                 afterReeval.any {
@@ -474,7 +499,8 @@ class ConferencePruneIntegrationTest {
             host.runtime.simulateRemoteIceState("M03", "DISCONNECTED")
             assertTrue(
                 host.waitForLogSince(failMark, timeoutMs = 8_000L) {
-                    it.contains("FAILED_MEDIA_RECOVERY") && it.contains("remote=M03")
+                    (it.contains("FAILED_MEDIA_RECOVERY") || it.contains("EXPLICIT_RECOVERY_ABORT")) &&
+                        it.contains("remote=M03")
                 }
             )
             assertNotNull(host.runtime.testObligationDeadlineAt(sessionId!!, "M03"))
@@ -568,7 +594,8 @@ class ConferencePruneIntegrationTest {
             host.runtime.simulateRemoteIceState("M03", "DISCONNECTED")
             assertTrue(
                 host.waitForLogSince(failMark, timeoutMs = 8_000L) {
-                    it.contains("FAILED_MEDIA_RECOVERY") && it.contains("remote=M03")
+                    (it.contains("FAILED_MEDIA_RECOVERY") || it.contains("EXPLICIT_RECOVERY_ABORT")) &&
+                        it.contains("remote=M03")
                 }
             )
             assertTrue(
@@ -764,14 +791,18 @@ class ConferencePruneIntegrationTest {
             host.runtime.simulateRemoteIceState("M02", "DISCONNECTED")
             assertTrue(
                 host.waitForLogSince(failMark, timeoutMs = 12_000L) {
-                    it.contains("FAILED_MEDIA_RECOVERY") && it.contains("remote=M02")
+                    (it.contains("FAILED_MEDIA_RECOVERY") || it.contains("EXPLICIT_RECOVERY_ABORT")) &&
+                        it.contains("remote=M02")
                 }
             )
             assertTrue(host.runtime.testEdgeObligationOpen(sessionId!!, "M02"))
             assertFalse(host.runtime.testEdgeObligationClosed(sessionId, "M02"))
             val failedAttemptId = synchronized(host.logs) {
                 host.logs.drop(failMark)
-                    .last { it.contains("FAILED_MEDIA_RECOVERY") && it.contains("remote=M02") }
+                    .last {
+                        (it.contains("FAILED_MEDIA_RECOVERY") || it.contains("EXPLICIT_RECOVERY_ABORT")) &&
+                            it.contains("remote=M02")
+                    }
                     .substringAfter("attempt=")
                     .substringBefore(' ')
                     .toLong()

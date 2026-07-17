@@ -87,4 +87,17 @@ class EdgeReachabilitySnapshotTest {
         assertFalse(signature.isMaterialChangeFrom(signature))
         assertEquals(RecoveryWaitingReason.WAITING_FOR_INBOUND, signature.waitingReason)
     }
+
+    @Test
+    fun wakeupBinding_routeConvergedEdge_matchesRemoteRecoveredAndPeerDiscovered() {
+        val binding = WakeupBinding(
+            sourceType = WakeupSourceType.ROUTE_CONVERGED,
+            sourceKey = edgeWakeupKey("sess-1", "M02")
+        )
+        assertTrue(binding.matchesTrigger(RecoveryReevaluateTrigger.ROUTE_CONVERGED, "sess-1", "M02"))
+        assertTrue(binding.matchesTrigger(RecoveryReevaluateTrigger.REMOTE_MODULE_RECOVERED, "sess-1", "M02"))
+        assertTrue(binding.matchesTrigger(RecoveryReevaluateTrigger.PEER_DISCOVERED, "sess-1", "M02"))
+        assertFalse(binding.matchesTrigger(RecoveryReevaluateTrigger.REMOTE_MODULE_RECOVERED, "sess-1", "M01"))
+        assertFalse(binding.matchesTrigger(RecoveryReevaluateTrigger.AUTHORITY_REACHABLE, "sess-1", "M02"))
+    }
 }
