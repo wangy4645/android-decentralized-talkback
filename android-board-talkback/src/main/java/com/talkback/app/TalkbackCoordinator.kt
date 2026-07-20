@@ -70,6 +70,7 @@ import com.talkback.core.session.ConferenceHostEndpointResolver
 import com.talkback.core.session.ConferenceIceConnectedSideEffects
 import com.talkback.core.session.ConferenceBarrierDiagnostics
 import com.talkback.core.session.ConferenceMediaTransmitGate
+import com.talkback.core.session.ConferenceReceivePlaybackPolicy
 import com.talkback.core.session.ConferenceParticipantManager
 import com.talkback.core.session.EdgeReachabilitySnapshot
 import com.talkback.core.session.EdgeRecoveryEligibility
@@ -374,6 +375,9 @@ class TalkbackCoordinator(
                 runOnCoordinatorSync {
                     val session = sessions[sessionId] ?: return@runOnCoordinatorSync
                     applyConferenceTransmitBarrier(session, "recovery_state_changed")
+                    if (session.type == SessionType.CONFERENCE && session.accepted) {
+                        refreshConferenceReceivePlayback(session, "recovery_state_changed")
+                    }
                     emitConferenceRuntimeProjection(session)
                 }
             },
@@ -1897,24 +1901,35 @@ class TalkbackCoordinator(
         }
     }
 
-    fun setCallMuted(sessionId: String, muted: Boolean) = runOnCoordinatorSync {
-        val session = sessions[sessionId] ?: return@runOnCoordinatorSync
-        if (session.type != SessionType.UNICAST && session.type != SessionType.CONFERENCE) {
-            return@runOnCoordinatorSync
-        }
-        session.muted = muted
-        if (muted) {
-            session.conferenceTransmitSuspendedByBarrier = false
-        }
-        sessionMediaEngines(session).forEach { it.setMuted(muted) }
-        if (session.type == SessionType.CONFERENCE && session.accepted && isSessionTransmitReady(session)) {
+    fun setCallMuted(sessionId: String, muted: Boolean, reason: String = "unspecified") =
+        runOnCoordinatorSync {
+            val session = sessions[sessionId] ?: return@runOnCoordinatorSync
+            if (session.type != SessionType.UNICAST && session.type != SessionType.CONFERENCE) {
+                return@runOnCoordinatorSync
+            }
+            val old = session.muted
+            if (old != muted) {
+                logCallMuteChanged(
+                    session = session,
+                    old = old,
+                    new = muted,
+                    reason = reason,
+                    caller = callMuteMutationCaller()
+                )
+            }
+            session.muted = muted
             if (muted) {
-                stopSessionCapture(session)
-            } else {
-                ensureConferenceDuplex(session)
+                session.conferenceTransmitSuspendedByBarrier = false
+            }
+            sessionMediaEngines(session).forEach { it.setMuted(muted) }
+            if (session.type == SessionType.CONFERENCE && session.accepted && isSessionTransmitReady(session)) {
+                if (muted) {
+                    stopSessionCapture(session)
+                } else {
+                    ensureConferenceDuplex(session)
+                }
             }
         }
-    }
 
     fun activeUnicastSession(): TalkbackSessionSnapshot? = runOnCoordinatorSync {
         sessions.values.firstOrNull { it.type == SessionType.UNICAST }?.let { toSessionSnapshot(it) }
@@ -2580,6 +2595,45 @@ class TalkbackCoordinator(
         receivePathLivenessObserver.receivePathLive(sessionId, remoteModuleId)
     }
 
+    fun mediaEverLive(sessionId: String, remoteModuleId: String): Boolean = runOnCoordinatorSync {
+        receivePathLivenessObserver.mediaEverLive(sessionId, remoteModuleId)
+    }
+
+    fun conferenceParticipantRecordExists(sessionId: String, moduleId: String): Boolean =
+        runOnCoordinatorSync {
+            conferenceParticipantManager.containsParticipant(sessionId, moduleId)
+        }
+
+    fun conferenceParticipantMedia(sessionId: String, moduleId: String): MediaState =
+        runOnCoordinatorSync {
+            conferenceParticipantManager.participantMedia(sessionId, moduleId)
+        }
+
+    /** Read-only; probe only. Participant view of host media reachability. */
+    fun conferenceAuthorityReachable(sessionId: String): Boolean = runOnCoordinatorSync {
+        sessions[sessionId]?.let { isConferenceAuthorityReachable(it) } ?: false
+    }
+
+    /** Read-only; probe only. ConferenceEdgeRecoveryController owner state. */
+    fun conferenceEdgeRecoveryLineage(
+        sessionId: String,
+        remoteModuleId: String
+    ): com.talkback.core.session.EdgeAttemptLineageRaw? = runOnCoordinatorSync {
+        conferenceEdgeRecoveryController.attemptLineageObservation(sessionId, remoteModuleId)
+    }
+
+    /** Read-only; ADR-0030 per-peer fact: active recovery attempt on this edge. */
+    fun conferenceEdgeRecovering(sessionId: String, remoteModuleId: String): Boolean =
+        runOnCoordinatorSync {
+            conferenceEdgeRecoveryController.isEdgeRecovering(sessionId, remoteModuleId)
+        }
+
+    /** Read-only; ADR-0030 per-peer fact: failed-media residency (e.g. FAILED_MEDIA_RECOVERY). */
+    fun conferenceMediaUnavailable(sessionId: String, remoteModuleId: String): Boolean =
+        runOnCoordinatorSync {
+            conferenceEdgeRecoveryController.isMediaUnavailable(sessionId, remoteModuleId)
+        }
+
     fun networkQualityLabel(): String = conferenceNetworkIndicator().toQualityLabel()
 
     fun onlineModuleCount(): Int = mergeRemoteModuleViews().size
@@ -2633,6 +2687,27 @@ class TalkbackCoordinator(
     internal fun testCanPublishConferenceAudio(sessionId: String): Boolean = runOnCoordinatorSync {
         val session = sessions[sessionId] ?: return@runOnCoordinatorSync false
         canPublishAudio(session)
+    }
+
+    internal fun testIsSessionPlaybackEnabled(sessionId: String): Boolean = runOnCoordinatorSync {
+        lastPlaybackEnabledBySession[sessionId] ?: false
+    }
+
+    internal fun testRefreshConferenceReceivePlayback(
+        sessionId: String,
+        reason: String = "test_refresh"
+    ) = runOnCoordinatorSync {
+        val session = sessions[sessionId] ?: return@runOnCoordinatorSync
+        refreshConferenceReceivePlayback(session, reason)
+    }
+
+    internal fun testSetSessionPlaybackEnabled(
+        sessionId: String,
+        enabled: Boolean,
+        reason: String
+    ) = runOnCoordinatorSync {
+        val session = sessions[sessionId] ?: return@runOnCoordinatorSync
+        setPlaybackEnabled(session, enabled, reason)
     }
 
     internal fun testConferenceBarrierSnapshot(sessionId: String) = runOnCoordinatorSync {
@@ -3711,8 +3786,8 @@ class TalkbackCoordinator(
         val session = sessions[hostSessionId]
         val authorityId = authority.moduleId.value
         val reachability = buildRecoveryEdgeReachabilitySnapshot(channelId, session, authorityId)
-        if (!reachability.canDispatchRecoverySignal()) {
-            val waiting = reachability.dispatchWaitingReason()!!
+        if (!reachability.canAttemptRecovery()) {
+            val waiting = reachability.attemptWaitingReason()!!
             log(
                 "RECOVERY_REATTACH_DEFERRED session=$hostSessionId ch=$channelId to=$authorityId " +
                     "reason=$waiting ${reachability.formatProbeFields()}"
@@ -4543,7 +4618,11 @@ class TalkbackCoordinator(
                     )
                 }
             }
-            updateSessionReceivePlayback(session)
+            if (session.type == SessionType.CONFERENCE) {
+                notifyConferenceTransportChanged(session, "acceptGroupJoin")
+            } else {
+                updateSessionReceivePlayback(session, "acceptGroupJoin")
+            }
             return
         }
         session.remotePeersByModule[caller.moduleId.value] = fromPeer
@@ -8748,7 +8827,13 @@ class TalkbackCoordinator(
                 if (!SessionDispositionTransitions.beginResume(session)) return@forEach
                 val playbackAfterResume = when {
                     session.type == SessionType.GROUP -> shouldEnableGroupReceivePlayback(session)
-                    session.type == SessionType.CONFERENCE -> session.accepted && !session.muted
+                    session.type == SessionType.CONFERENCE ->
+                        ConferenceReceivePlaybackPolicy.shouldEnableReceivePlayback(
+                            ConferenceReceivePlaybackPolicy.Input(
+                                accepted = session.accepted,
+                                foregroundSuspended = session.isForegroundSuspended()
+                            )
+                        )
                     else -> false
                 }
                 log("${sessionTag(session)} Resuming ${session.type.name} session after unicast disposition=${session.disposition}")
@@ -9443,16 +9528,142 @@ class TalkbackCoordinator(
     private fun isMeshRepairSuppressed(channelId: String): Boolean =
         System.currentTimeMillis() < (suppressMeshRepairUntilMsByChannel[channelId] ?: 0L)
 
+    private fun notifyConferenceTransportChanged(
+        session: TalkbackSession,
+        reason: String = "transport_changed"
+    ) {
+        if (session.type != SessionType.CONFERENCE) return
+        refreshConferenceReceivePlayback(session, reason)
+    }
+
+    private fun refreshConferenceReceivePlayback(session: TalkbackSession, reason: String) {
+        if (session.type != SessionType.CONFERENCE || !session.accepted) return
+        updateSessionReceivePlayback(session, reason)
+    }
+
     private fun updateSessionReceivePlayback(session: TalkbackSession, reason: String = "refreshPlaybackState") {
+        val foregroundSuspended = session.isForegroundSuspended()
         val enabled = when {
-            session.isForegroundSuspended() -> false
+            foregroundSuspended -> false
             session.type == SessionType.UNICAST -> session.accepted
             session.type == SessionType.GROUP -> shouldEnableGroupReceivePlayback(session)
-            session.type == SessionType.CONFERENCE -> session.accepted && !session.muted
+            session.type == SessionType.CONFERENCE ->
+                ConferenceReceivePlaybackPolicy.shouldEnableReceivePlayback(
+                    ConferenceReceivePlaybackPolicy.Input(
+                        accepted = session.accepted,
+                        foregroundSuspended = foregroundSuspended
+                    )
+                )
             else -> false
+        }
+        if (session.type == SessionType.CONFERENCE) {
+            logConferencePlaybackDecision(
+                session = session,
+                reason = reason,
+                accepted = session.accepted,
+                muted = session.muted,
+                foregroundSuspended = foregroundSuspended,
+                enabled = enabled,
+                caller = playbackMutationCaller()
+            )
         }
         setPlaybackEnabled(session, enabled, reason)
         verifyGroupPlaybackInvariant(session, enabled)
+    }
+
+    private fun conferencePlaybackLifecycleLabel(session: TalkbackSession): String =
+        when {
+            session.disposition == SessionDisposition.TERMINATED -> "TERMINATED"
+            !session.accepted -> "JOINING"
+            isConferenceUiReady(session) -> "ESTABLISHED"
+            else -> "CONNECTING"
+        }
+
+    private fun playbackMutationCaller(): String {
+        val skip = setOf(
+            "updateSessionReceivePlayback",
+            "updateSessionReceivePlayback\$default",
+            "refreshConferenceReceivePlayback",
+            "notifyConferenceTransportChanged",
+            "setPlaybackEnabled",
+            "logConferencePlaybackDecision",
+            "playbackMutationCaller"
+        )
+        return Thread.currentThread().stackTrace
+            .asSequence()
+            .drop(2)
+            .firstOrNull { frame ->
+                frame.className.contains("TalkbackCoordinator") &&
+                    frame.methodName !in skip &&
+                    !frame.methodName.startsWith("access$")
+            }
+            ?.methodName
+            ?: "unknown"
+    }
+
+    private fun callMuteMutationCaller(): String {
+        val skipMethods = setOf(
+            "setCallMuted",
+            "logCallMuteChanged",
+            "callMuteMutationCaller"
+        )
+        return Thread.currentThread().stackTrace
+            .asSequence()
+            .drop(2)
+            .firstOrNull { frame ->
+                frame.className.startsWith("com.talkback") &&
+                    !frame.className.contains("TalkbackCoordinator") &&
+                    frame.methodName !in skipMethods &&
+                    !frame.methodName.startsWith("access$")
+            }
+            ?.let { "${it.className.substringAfterLast('.')}#${it.methodName}" }
+            ?: "unknown"
+    }
+
+    private fun logCallMuteChanged(
+        session: TalkbackSession,
+        old: Boolean,
+        new: Boolean,
+        reason: String,
+        caller: String
+    ) {
+        val stack = Thread.currentThread().stackTrace
+            .drop(2)
+            .take(10)
+            .joinToString(" <- ") { "${it.fileName}:${it.lineNumber}#${it.methodName}" }
+        log(
+            "CALL_MUTE_CHANGED\n" +
+                "session=${session.id}\n" +
+                "type=${session.type}\n" +
+                "old=$old\n" +
+                "new=$new\n" +
+                "reason=$reason\n" +
+                "caller=$caller\n" +
+                "stack=$stack"
+        )
+    }
+
+    private fun logConferencePlaybackDecision(
+        session: TalkbackSession,
+        reason: String,
+        accepted: Boolean,
+        muted: Boolean,
+        foregroundSuspended: Boolean,
+        enabled: Boolean,
+        caller: String
+    ) {
+        log(
+            "PLAYBACK_DECISION\n" +
+                "session=${session.id}\n" +
+                "type=CONFERENCE\n" +
+                "reason=$reason\n" +
+                "accepted=$accepted\n" +
+                "muted=$muted\n" +
+                "foregroundSuspended=$foregroundSuspended\n" +
+                "lifecycle=${conferencePlaybackLifecycleLabel(session)}\n" +
+                "enabled=$enabled\n" +
+                "caller=$caller"
+        )
     }
 
     private fun refreshGroupReceivePlaybackAll() {

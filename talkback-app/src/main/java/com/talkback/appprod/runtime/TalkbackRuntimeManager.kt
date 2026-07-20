@@ -563,8 +563,8 @@ class TalkbackRuntimeManager(private val appContext: Context) {
         hangupCall(session.sessionId)
     }
 
-    fun setCallMuted(sessionId: String, muted: Boolean) {
-        runCatching { runtime?.setCallMuted(sessionId, muted) }
+    fun setCallMuted(sessionId: String, muted: Boolean, reason: String = "unspecified") {
+        runCatching { runtime?.setCallMuted(sessionId, muted, reason) }
     }
 
     fun preparePttSession(config: AppConfig): String? = prepareChannelSession(config)
