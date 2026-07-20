@@ -77,8 +77,46 @@ class ReceivePathLivenessObserverTest {
             observer.onInboundPcm("sess-1", "M01")
         }
         assertTrue(observer.receivePathLive("sess-1", "M01"))
+        assertTrue(observer.mediaEverLive("sess-1", "M01"))
 
         observer.clearSession("sess-1")
         assertFalse(observer.receivePathLive("sess-1", "M01"))
+        assertFalse(observer.mediaEverLive("sess-1", "M01"))
+    }
+
+    @Test
+    fun mediaEverLive_latchesWhenReceivePathGoesLive() {
+        var now = 0L
+        val observer = ReceivePathLivenessObserver(
+            debounceMs = 500L,
+            clock = { now }
+        )
+
+        assertFalse(observer.mediaEverLive("sess-1", "M01"))
+        repeat(6) { step ->
+            now = step * 100L
+            observer.onInboundPcm("sess-1", "M01")
+        }
+        assertTrue(observer.receivePathLive("sess-1", "M01"))
+        assertTrue(observer.mediaEverLive("sess-1", "M01"))
+
+        now = 1_200L
+        assertFalse(observer.receivePathLive("sess-1", "M01"))
+        assertTrue(observer.mediaEverLive("sess-1", "M01"))
+    }
+
+    @Test
+    fun mediaEverLive_staysFalseUntilReceivePathLive() {
+        var now = 0L
+        val observer = ReceivePathLivenessObserver(
+            debounceMs = 500L,
+            clock = { now }
+        )
+
+        observer.onInboundPcm("sess-1", "M01")
+        now = 100L
+        observer.onInboundPcm("sess-1", "M01")
+        assertFalse(observer.receivePathLive("sess-1", "M01"))
+        assertFalse(observer.mediaEverLive("sess-1", "M01"))
     }
 }

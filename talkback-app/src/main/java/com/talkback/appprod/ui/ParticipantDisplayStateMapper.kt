@@ -22,7 +22,7 @@ object ParticipantDisplayStateMapper {
     data class Input(
         val membership: ConferenceMembershipLifecycle = ConferenceMembershipLifecycle.JOINED,
         val displayState: ConferenceParticipantDisplayState,
-        val everConnected: Boolean,
+        val mediaEverLive: Boolean,
         val mediaUnavailable: Boolean,
         /** Diagnostic only — consumed inside [LocalReachability.resolve] when path not live. */
         val recovering: Boolean = false,
@@ -37,7 +37,7 @@ object ParticipantDisplayStateMapper {
             receivePathLive = input.receivePathLive,
             recovering = input.recovering,
             mediaUnavailable = input.mediaUnavailable,
-            everConnected = input.everConnected
+            mediaEverLive = input.mediaEverLive
         ).state.toDisplayState()
     }
 

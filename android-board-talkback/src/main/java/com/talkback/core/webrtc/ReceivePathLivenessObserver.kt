@@ -9,8 +9,8 @@ import java.nio.ByteBuffer
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * Media-layer fact owner for [receivePathLive] (ADR-0028 R30-J / R30-J-4).
- * Owns Tplayback debounce; projection reads the boolean only.
+ * Media-layer fact owner for [receivePathLive] and [mediaEverLive] (ADR-0028 R30-J / ADR-0030 Ch.4).
+ * Owns Tplayback debounce; projection reads the booleans only.
  */
 class ReceivePathLivenessObserver(
     private val debounceMs: Long = DEFAULT_DEBOUNCE_MS,
@@ -19,7 +19,8 @@ class ReceivePathLivenessObserver(
     private data class PeerReceiveState(
         var firstPcmAtMs: Long? = null,
         var lastPcmAtMs: Long? = null,
-        var live: Boolean = false
+        var live: Boolean = false,
+        var mediaEverLive: Boolean = false
     )
 
     private val stateBySessionPeer = ConcurrentHashMap<String, ConcurrentHashMap<String, PeerReceiveState>>()
@@ -42,6 +43,7 @@ class ReceivePathLivenessObserver(
         if (!peer.live && now - streakStart >= debounceMs) {
             peer.live = true
         }
+        latchMediaEverLive(peer)
     }
 
     fun receivePathLive(sessionId: String, remoteModuleId: String): Boolean {
@@ -58,7 +60,18 @@ class ReceivePathLivenessObserver(
         if (!peer.live && streakStart != null && now - streakStart >= debounceMs) {
             peer.live = true
         }
+        latchMediaEverLive(peer)
         return peer.live
+    }
+
+    /** ADR-0030 Ch.4: receivePathLive was true at least once this session for this peer. */
+    fun mediaEverLive(sessionId: String, remoteModuleId: String): Boolean =
+        stateBySessionPeer[sessionId]?.get(remoteModuleId)?.mediaEverLive == true
+
+    private fun latchMediaEverLive(peer: PeerReceiveState) {
+        if (peer.live) {
+            peer.mediaEverLive = true
+        }
     }
 
     fun syncMeshSession(

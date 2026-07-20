@@ -30,7 +30,6 @@ object MeetingPresenceDisplay {
         val isLocal: Boolean,
         val membership: ConferenceMembershipLifecycle = ConferenceMembershipLifecycle.JOINED,
         val displayState: ConferenceParticipantDisplayState,
-        val everConnected: Boolean,
         val isRecoveringPeer: Boolean,
         val mediaUnavailablePeer: Boolean,
         val speaking: Boolean,
@@ -57,7 +56,10 @@ object MeetingPresenceDisplay {
             ),
             recovering = facts.isRecoveringPeer,
             mediaUnavailable = facts.mediaUnavailablePeer,
-            everConnected = facts.everConnected
+            mediaEverLive = receivePathLivenessProvider.mediaEverLive(
+                facts.sessionId,
+                facts.moduleId
+            )
         )
     }
 

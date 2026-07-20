@@ -4,6 +4,8 @@
 
 **Accepted** (2026-07-17) — freezes per-participant presentation ownership after soak `wifi-ui-norestore-20260716-175905` exposed illegal cross-projection state combinations. Complements ADR-0022 (edge recovery facts), ADR-0025 (conference-level presence aggregates). **Narrows and supersedes** ADR-0025 R30-I participant hint/avatar ownership. Does **not** introduce a new runtime, controller, or authority.
 
+> **Partially superseded by [ADR-0030](./0030-presence-projection-contract.md)** (2026-07-20): Invariant V1 (R30-J-5) and the presentation priority table (R30-J-6) are **withdrawn** and replaced by ADR-0030 Rule 2 (Edge vetoes Media) and R30-P-5 presence resolution priority. Sessions `efe1d26d` / `fd734a22` proved `receivePathLive` can stay `true` through a full ICE outage. **Remain in force here:** single-owner `LocalReachability(P)`, purity constraints, input blacklist principles, per-peer authority, P2 asymmetric-mesh non-goal, hint/avatar single path. **Observation scope:** [ADR-0031](./0031-distributed-observation-contract.md) (R31-O).
+
 ## Summary
 
 > 当前系统的问题不是某个投影算错，而是同一个用户感知事实（「我现在是否还能感知到这个人」）被 `recoveringPeers`、`displayState`、`hint`、`avatar` 四套投影重复表达，因此系统能够构造出彼此矛盾但局部正确的状态组合。
@@ -11,7 +13,7 @@
 ADR-0028 freezes:
 
 1. **`LocalReachability(P)`** — the sole presentation owner for per-peer user-visible reachability on this device.
-2. **Invariant V1** — if this node is receiving decodable audio from `P`, UI **MUST NOT** show `P` as reconnecting.
+2. **Invariant V1** — **withdrawn**; see ADR-0030 Rule 2 (edge vetoes media). Historical: "if receiving decodable audio, MUST NOT show reconnecting."
 3. **Input / output boundary** — whitelist local facts; forbid aggregate counts and conference-level derivations.
 4. **Time semantics** — debounce lives in media facts; SLA lives in tests only; projection stays stateless.
 5. **P2 out-of-scope** — asymmetric half-open mesh edges are allowed; cross-device UI consistency is not a goal.

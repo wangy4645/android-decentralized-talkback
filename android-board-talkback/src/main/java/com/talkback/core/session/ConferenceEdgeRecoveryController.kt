@@ -72,6 +72,7 @@ class ConferenceEdgeRecoveryController(
             .filter { it.phase.isFailedMediaRecovery() }
             .map { it.key.remoteModuleId }
             .toSet()
+        // ADR-0030: failed-media residency (e.g. FAILED_MEDIA_RECOVERY) == mediaUnavailable(P).
         return EdgeRecoveryFacts(
             recoveringRemoteModuleIds = recovering,
             anyRecovering = recovering.isNotEmpty(),
@@ -79,6 +80,12 @@ class ConferenceEdgeRecoveryController(
             anyFailedMediaRecovery = failed.isNotEmpty(),
             mediaUnavailableRemoteModuleIds = failed
         )
+    }
+
+    /** Per-peer ADR-0030 fact: failed-media residency, not active recovery attempt. */
+    fun isMediaUnavailable(sessionId: String, remoteModuleId: String): Boolean {
+        val record = edges[ConferenceEdgeKey(sessionId, remoteModuleId)] ?: return false
+        return record.phase.isFailedMediaRecovery()
     }
 
     fun isAnyEdgeRecovering(sessionId: String): Boolean = factsForSession(sessionId).anyRecovering

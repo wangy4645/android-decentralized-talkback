@@ -310,7 +310,7 @@ class TalkViewModel(
         val session = manager.activeChannelSession(config) ?: return PttDownResult.NoPeers
         if (session.type != SessionType.CONFERENCE) return PttDownResult.NoPeers
         val nextMuted = !session.muted
-        manager.setCallMuted(session.sessionId, nextMuted)
+        manager.setCallMuted(session.sessionId, nextMuted, "toggleMeetingMute")
         refreshInternal()
         return if (manager.isChannelMediaReady(config)) PttDownResult.Ok else PttDownResult.Connecting
     }
@@ -652,7 +652,7 @@ class TalkViewModel(
     fun toggleCallMute() {
         val session = manager.activeUnicastSession() ?: return
         viewModelScope.launch(Dispatchers.Default) {
-            runCatching { manager.setCallMuted(session.sessionId, !session.muted) }
+            runCatching { manager.setCallMuted(session.sessionId, !session.muted, "toggleCallMute") }
             refreshInternal()
         }
     }
@@ -922,6 +922,9 @@ class TalkViewModel(
                     "phase=$runtimePhase channelReady=$channelReady"
             )
         }
+        if (conferenceActive && session != null) {
+            logReachabilityProbe(session, speakingModuleId, conferenceMuted, localRawKey)
+        }
 
         val conferencePresence = session?.conferencePresenceProjection
         val meetingConnectedCount = conferencePresence?.connectedCount
@@ -1065,11 +1068,10 @@ class TalkViewModel(
         }
 
         val recoveringPeers = session?.conferencePresenceProjection?.recoveringPeers.orEmpty()
-        val mediaUnavailablePeers = session?.conferencePresenceProjection?.mediaUnavailablePeers.orEmpty()
-        val everConnectedModules = session?.conferenceEverConnectedModuleIds.orEmpty()
 
         if (conferenceActive) {
             val visible = session?.visibleParticipants.orEmpty()
+            val sessionId = session?.sessionId.orEmpty()
             if (visible.isNotEmpty()) {
                 visible.forEach { participant ->
                     val moduleId = participant.moduleId
@@ -1080,13 +1082,12 @@ class TalkViewModel(
                         ?: participant.key
                     addItem(
                         conferenceVisibleEndpointItem(
-                            session?.sessionId.orEmpty(),
+                            sessionId,
                             displayKey,
                             participant,
                             speakingModuleId,
-                            moduleId in recoveringPeers,
-                            moduleId in mediaUnavailablePeers,
-                            moduleId in everConnectedModules,
+                            edgeRecoveringPeer(runtime, sessionId, moduleId),
+                            edgeMediaUnavailablePeer(runtime, sessionId, moduleId),
                             conferenceMuted
                         )
                     )
@@ -1213,24 +1214,117 @@ class TalkViewModel(
         return "$module / $endpoint"
     }
 
+    // [DEBUG-rprobe] Diagnostic instrumentation — see logReachabilityProbe.
+
+    companion object {
+        /**
+         * [DEBUG-rprobe] Reachability probe switch — ADR-0030 reference instrument.
+         * Resident diagnostic for presence projection issues (mesh pruning, anchor
+         * failover, backup standby). Keep OFF in normal builds; flip to true when
+         * diagnosing presence/reachability regressions.
+         */
+        private const val ENABLE_REACHABILITY_PROBE = true
+    }
+
+    /**
+     * [DEBUG-rprobe] REACHABILITY_PROBE — temporary instrumentation to split Bug B fork A
+     * (media staleness: ICE lost but receivePathLive still true) from fork B (projection
+     * drops the module from visibleParticipants). Iterates the canonical roster, NOT
+     * visibleParticipants, so a dropped module still gets a probe line with visible=false.
+     * Read-only; no behavior change. Remove via grep DEBUG-rprobe.
+     */
+    private fun logReachabilityProbe(
+        session: TalkbackSessionSnapshot,
+        speakingModuleId: String?,
+        conferenceMuted: Boolean,
+        localRawKey: String
+    ) {
+        if (!ENABLE_REACHABILITY_PROBE) return
+        val runtime = manager.getRuntime() ?: return
+        val localModuleId = moduleIdFromKey(localRawKey)
+        val presence = session.conferencePresenceProjection
+        val recoveringPeers = presence?.recoveringPeers.orEmpty()
+        val everConnectedModules = session.conferenceEverConnectedModuleIds
+        val visibleByModule = session.visibleParticipants.associateBy { it.moduleId }
+        val rosterModules = session.memberKeys.map(::moduleIdFromKey).toSet()
+        // Canonical iteration domain: roster ∪ visible ∪ recovering ∪ transportEverConnected,
+        // so no layer can hide a module from the probe.
+        val allModules = rosterModules + visibleByModule.keys + recoveringPeers + everConnectedModules
+        val authorityId = session.channelId?.let { runtime.conferenceAuthorityModuleId(it) }
+        val authorityReachable = runtime.conferenceAuthorityReachable(session.sessionId)
+        val hostIce = authorityId?.let { runtime.qosSnapshotForModule(it)?.iceState } ?: "-"
+        allModules.sorted().forEach { moduleId ->
+            if (moduleId == localModuleId) return@forEach
+            val rosterContains = moduleId in rosterModules
+            val participantRecordExists =
+                runtime.conferenceParticipantRecordExists(session.sessionId, moduleId)
+            val rawMedia = runtime.conferenceParticipantMedia(session.sessionId, moduleId)
+            val iceConnectionState = runtime.qosSnapshotForModule(moduleId)?.iceState ?: "UNKNOWN"
+            val sessionEdgeRecovering = session.conferenceRuntimeState?.edgeRecovering == true
+            val recoveringPeer = edgeRecoveringPeer(runtime, session.sessionId, moduleId)
+            val mediaUnavailablePeer = edgeMediaUnavailablePeer(runtime, session.sessionId, moduleId)
+            val transportEverConnected = moduleId in everConnectedModules
+            val mediaEverLive = runtime.mediaEverLive(session.sessionId, moduleId)
+            val receivePathLive = runtime.receivePathLive(session.sessionId, moduleId)
+            val edgeLineage = runtime.conferenceEdgeRecoveryLineage(session.sessionId, moduleId)
+            val edgeRecoveryPhase = edgeLineage?.phase?.name ?: "-"
+            val obligationOpen = edgeLineage?.obligationOpen ?: false
+            val viewState = visibleByModule[moduleId]
+            val finalPresence = if (viewState != null) {
+                MeetingPresenceDisplay.resolveParticipantPresentation(
+                    participantPresentationFacts(
+                        session.sessionId,
+                        viewState,
+                        speakingModuleId,
+                        recoveringPeer,
+                        mediaUnavailablePeer,
+                        conferenceMuted
+                    )
+                ).endpointStatus.name
+            } else {
+                "NOT_PROJECTED"
+            }
+            TalkbackLog.i(
+                "[DEBUG-rprobe] REACHABILITY_PROBE session=${session.sessionId}" +
+                    " authorityId=${authorityId ?: "-"}" +
+                    " authorityReachable=$authorityReachable" +
+                    " hostIce=$hostIce" +
+                    " module=$moduleId" +
+                    " rosterContains=$rosterContains" +
+                    " participantRecordExists=$participantRecordExists" +
+                    " media=$rawMedia" +
+                    " sessionEdgeRecovering=$sessionEdgeRecovering" +
+                    " mediaUnavailable=$mediaUnavailablePeer" +
+                    " iceConnectionState=$iceConnectionState" +
+                    " inRecoveringPeers=${moduleId in recoveringPeers}" +
+                    " edgeRecoveryPhase=$edgeRecoveryPhase" +
+                    " obligationOpen=$obligationOpen" +
+                    " controllerEdgeRecovering=$recoveringPeer" +
+                    " transportEverConnected=$transportEverConnected" +
+                    " mediaEverLive=$mediaEverLive" +
+                    " receivePathLive=$receivePathLive" +
+                    " visible=${viewState != null}" +
+                    " displayState=${viewState?.displayState?.name ?: "-"}" +
+                    " finalPresence=$finalPresence"
+            )
+        }
+    }
+
     private fun meetingAvailabilityHint(
         session: com.talkback.app.TalkbackSessionSnapshot?,
         speakingModuleId: String?,
         conferenceMuted: Boolean
     ): String? {
         if (session == null) return null
-        val recoveringPeers = session.conferencePresenceProjection?.recoveringPeers.orEmpty()
-        val mediaUnavailablePeers = session.conferencePresenceProjection?.mediaUnavailablePeers.orEmpty()
-        val everConnectedModules = session.conferenceEverConnectedModuleIds
+        val runtime = manager.getRuntime() ?: return null
         val states = session.visibleParticipants.map { participant ->
             MeetingPresenceDisplay.resolveParticipantPresentation(
                 participantPresentationFacts(
                     session.sessionId,
                     participant,
                     speakingModuleId,
-                    participant.moduleId in recoveringPeers,
-                    participant.moduleId in mediaUnavailablePeers,
-                    participant.moduleId in everConnectedModules,
+                    edgeRecoveringPeer(runtime, session.sessionId, participant.moduleId),
+                    edgeMediaUnavailablePeer(runtime, session.sessionId, participant.moduleId),
                     conferenceMuted
                 )
             )
@@ -1238,13 +1332,25 @@ class TalkViewModel(
         return MeetingPresenceDisplay.aggregateAvailabilityHint(states, conferenceMuted)
     }
 
+    private fun edgeRecoveringPeer(
+        runtime: com.talkback.app.TalkbackRuntime,
+        sessionId: String,
+        moduleId: String
+    ): Boolean = runtime.conferenceEdgeRecovering(sessionId, moduleId)
+
+    /** ADR-0030 per-peer fact; live controller read (not presence aggregate snapshot). */
+    private fun edgeMediaUnavailablePeer(
+        runtime: com.talkback.app.TalkbackRuntime,
+        sessionId: String,
+        moduleId: String
+    ): Boolean = runtime.conferenceMediaUnavailable(sessionId, moduleId)
+
     private fun participantPresentationFacts(
         sessionId: String,
         viewState: com.talkback.core.session.ConferenceParticipantViewState,
         speakingModuleId: String?,
         isRecoveringPeer: Boolean,
         mediaUnavailablePeer: Boolean,
-        wasEverConnected: Boolean,
         conferenceMuted: Boolean
     ): MeetingPresenceDisplay.ParticipantPresentationFacts {
         val moduleId = viewState.moduleId
@@ -1255,7 +1361,6 @@ class TalkViewModel(
             moduleId = moduleId,
             isLocal = viewState.isLocal,
             displayState = viewState.displayState,
-            everConnected = wasEverConnected,
             isRecoveringPeer = isRecoveringPeer,
             mediaUnavailablePeer = mediaUnavailablePeer,
             speaking = speaking,
@@ -1270,7 +1375,6 @@ class TalkViewModel(
         speakingModuleId: String?,
         isRecoveringPeer: Boolean,
         mediaUnavailablePeer: Boolean,
-        wasEverConnected: Boolean,
         conferenceMuted: Boolean
     ): EndpointUiItem {
         val presentation = MeetingPresenceDisplay.resolveParticipantPresentation(
@@ -1280,7 +1384,6 @@ class TalkViewModel(
                 speakingModuleId,
                 isRecoveringPeer,
                 mediaUnavailablePeer,
-                wasEverConnected,
                 conferenceMuted
             )
         )

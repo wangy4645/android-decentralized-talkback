@@ -10,16 +10,17 @@ import org.junit.Test
 class ParticipantDisplayStateMapperTest {
 
     @Test
-    fun case1_recoveringWithReceivePathLive_mapsOnline() {
+    fun case1_recoveringWithReceivePathLive_mapsReconnecting_rule2() {
+        // Rule 2 (session efe1d26d): edge recovering vetoes media liveness.
         val state = ParticipantDisplayStateMapper.map(
             input(
                 recovering = true,
                 displayState = ConferenceParticipantDisplayState.VISIBLE_CONNECTED,
-                everConnected = true,
+                mediaEverLive = true,
                 receivePathLive = true
             )
         )
-        assertEquals(ParticipantDisplayStateMapper.ParticipantDisplayState.ONLINE, state)
+        assertEquals(ParticipantDisplayStateMapper.ParticipantDisplayState.RECONNECTING, state)
     }
 
     @Test
@@ -27,7 +28,7 @@ class ParticipantDisplayStateMapperTest {
         val input = input(
             recovering = true,
             displayState = ConferenceParticipantDisplayState.VISIBLE_RECONNECTING,
-            everConnected = true,
+            mediaEverLive = true,
             receivePathLive = false
         )
         assertEquals(ParticipantDisplayStateMapper.ParticipantDisplayState.RECONNECTING, ParticipantDisplayStateMapper.map(input))
@@ -38,17 +39,17 @@ class ParticipantDisplayStateMapperTest {
         val input = input(
             recovering = false,
             displayState = ConferenceParticipantDisplayState.VISIBLE_RECONNECTING,
-            everConnected = true,
+            mediaEverLive = true,
             receivePathLive = false
         )
         assertEquals(ParticipantDisplayStateMapper.ParticipantDisplayState.RECONNECTING, ParticipantDisplayStateMapper.map(input))
     }
 
     @Test
-    fun receivePathLiveFalseWhileVisibleConnected_mapsReconnectingWhenEverConnected() {
+    fun receivePathLiveFalseWhileVisibleConnected_mapsReconnectingWhenMediaEverLive() {
         val input = input(
             displayState = ConferenceParticipantDisplayState.VISIBLE_CONNECTED,
-            everConnected = true,
+            mediaEverLive = true,
             receivePathLive = false
         )
         assertFalse(input.receivePathLive)
@@ -56,11 +57,21 @@ class ParticipantDisplayStateMapperTest {
     }
 
     @Test
+    fun receivePathLiveFalseWithoutMediaEverLive_mapsJoining() {
+        val input = input(
+            displayState = ConferenceParticipantDisplayState.VISIBLE_CONNECTED,
+            mediaEverLive = false,
+            receivePathLive = false
+        )
+        assertEquals(ParticipantDisplayStateMapper.ParticipantDisplayState.JOINING, ParticipantDisplayStateMapper.map(input))
+    }
+
+    @Test
     fun leftMembership_mapsLeft() {
         val input = input(
             membership = ConferenceMembershipLifecycle.LEFT,
             displayState = ConferenceParticipantDisplayState.VISIBLE_CONNECTED,
-            everConnected = true,
+            mediaEverLive = true,
             receivePathLive = true
         )
         assertEquals(ParticipantDisplayStateMapper.ParticipantDisplayState.LEFT, ParticipantDisplayStateMapper.map(input))
@@ -69,14 +80,14 @@ class ParticipantDisplayStateMapperTest {
     private fun input(
         recovering: Boolean = false,
         displayState: ConferenceParticipantDisplayState,
-        everConnected: Boolean,
+        mediaEverLive: Boolean,
         mediaUnavailable: Boolean = false,
         membership: ConferenceMembershipLifecycle = ConferenceMembershipLifecycle.JOINED,
         receivePathLive: Boolean = false
     ) = ParticipantDisplayStateMapper.Input(
         membership = membership,
         displayState = displayState,
-        everConnected = everConnected,
+        mediaEverLive = mediaEverLive,
         mediaUnavailable = mediaUnavailable,
         recovering = recovering,
         receivePathLive = receivePathLive

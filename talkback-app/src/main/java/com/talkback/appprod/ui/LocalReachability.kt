@@ -3,8 +3,12 @@ package com.talkback.appprod.ui
 import com.talkback.core.session.ConferenceMembershipLifecycle
 
 /**
- * Sole presentation owner for per-peer user-visible reachability (ADR-0028 R30-J).
- * Pure projection — no timers, latch, or cache.
+ * Sole presentation owner for per-peer user-visible reachability (ADR-0028 R30-J,
+ * composition rules frozen by ADR-0030 Presence Projection Contract).
+ * Pure projection — no timers, latch, or cache. No projection output may feed back in.
+ *
+ * ADR-0030 Rule 2: edge signals (recovering, mediaUnavailable) veto media
+ * receivePathLive; media cannot imply ONLINE while edge is recovering/unavailable.
  */
 object LocalReachability {
 
@@ -26,21 +30,23 @@ object LocalReachability {
         val state: ParticipantPresenceState
     )
 
-    @Suppress("UNUSED_PARAMETER")
     fun resolve(
         membership: MembershipState,
         receivePathLive: Boolean,
         recovering: Boolean,
         mediaUnavailable: Boolean,
-        everConnected: Boolean
+        mediaEverLive: Boolean
     ): Result {
         if (membership == MembershipState.LEFT) {
             return Result(ParticipantPresenceState.LEFT)
         }
+        if (recovering || mediaUnavailable) {
+            return Result(ParticipantPresenceState.RECONNECTING)
+        }
         if (receivePathLive) {
             return Result(ParticipantPresenceState.ONLINE)
         }
-        if (mediaUnavailable || everConnected) {
+        if (mediaEverLive) {
             return Result(ParticipantPresenceState.RECONNECTING)
         }
         return Result(ParticipantPresenceState.JOINING)
