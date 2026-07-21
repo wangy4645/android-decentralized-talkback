@@ -2,7 +2,7 @@
 
 ## Status
 
-**Partial Accepted** (2026-07-10; **R28-H / R28-H.1 Accepted 2026-07-13**; **R28-H.2 Accepted 2026-07-13**; **R28-I Accepted 2026-07-14**; **R28-J Accepted 2026-07-20**; **Appendix C Accepted 2026-07-16**; **Appendix C-2 Accepted 2026-07-16**; **Appendix C-3.1 Accepted 2026-07-16**; **Appendix C-3.2 Accepted 2026-07-16**) — **Accepted:** R27′-A/B, R28-D/D1 (gate), **R28-E/F/G** (P2-A completion re-evaluate seam, frozen `/grill-with-docs` 2026-07-10), **R28-H / R28-H.1** (Recovery Edge Obligation Lifetime + deadline / pending-decision single writer; soak `647484ef`; **scope per Obligation Episode — see R28-J**), **R28-H.2** (DISCONNECTED_DEBOUNCING reconnect clears suspicion without starting recovery), **R28-I** (WAITING ownership; soak `ea6466f1` M03→M02 participant edge), **R28-J** (Obligation Episode Generation within Edge Lifecycle; soak `obligation-p1-clean-20260720-125309` session `8f1bcfdc` M02→M01 **PASS**), **Appendix C** (Recovery Attempt Media Action Ownership; causal trace soak `103003` / `125859`), **Appendix C-2** (Deferred Media Action Ownership; soak `112433` **PASS**), **Appendix C-3.1** (Supersede Admission Closure; soak `114047` **PASS**), **Appendix C-3.2** (Recovery Fact Consumption; soak `120053` **PASS**). **Accepted companion:** ADR-0024 R29-E (host prune eligibility consumes R28-H; does not redefine obligation). **Draft:** P2-B re-evaluate action decision tree, full S13 completion. Complements ADR-0021 (R24–R26) and ADR-0023 (R29).
+**Partial Accepted** (2026-07-10; **R28-H / R28-H.1 Accepted 2026-07-13**; **R28-H.2 Accepted 2026-07-13**; **R28-I Accepted 2026-07-14**; **R28-J Accepted 2026-07-20**; **R28-K Accepted 2026-07-21**; **Appendix C Accepted 2026-07-16**; **Appendix C-2 Accepted 2026-07-16**; **Appendix C-3.1 Accepted 2026-07-16**; **Appendix C-3.2 Accepted 2026-07-16**) — **Accepted:** R27′-A/B, R28-D/D1 (gate), **R28-E/F/G** (P2-A completion re-evaluate seam, frozen `/grill-with-docs` 2026-07-10), **R28-H / R28-H.1** (Recovery Edge Obligation Lifetime + deadline / pending-decision single writer; soak `647484ef`; **scope per Obligation Episode — see R28-J**), **R28-H.2** (DISCONNECTED_DEBOUNCING reconnect clears suspicion without starting recovery), **R28-I** (WAITING ownership; soak `ea6466f1` M03→M02 participant edge), **R28-J** (Obligation Episode Generation within Edge Lifecycle; soak `obligation-p1-clean-20260720-125309` session `8f1bcfdc` M02→M01 **PASS**), **R28-K** (Recovery Capability vs Attempt Lifetime; soak `obs-matrix-ms1-20260721-120208` session `faaf8579` M-S1 second flap **motivation**), **Appendix C** (Recovery Attempt Media Action Ownership; causal trace soak `103003` / `125859`), **Appendix C-2** (Deferred Media Action Ownership; soak `112433` **PASS**), **Appendix C-3.1** (Supersede Admission Closure; soak `114047` **PASS**), **Appendix C-3.2** (Recovery Fact Consumption; soak `120053` **PASS**). **Accepted companion:** ADR-0024 R29-E (host prune eligibility consumes R28-H; does not redefine obligation). **Draft:** P2-B re-evaluate action decision tree, full S13 completion. Complements ADR-0021 (R24–R26) and ADR-0023 (R29).
 
 ## Summary
 
@@ -21,6 +21,7 @@ This ADR freezes:
 9. **Recovery Attempt Media Action Ownership** (Appendix C: attempt MUST resolve media action before silent `FAILED_MEDIA_RECOVERY`)
 10. **Deferred Media Action Ownership** (Appendix C-2: `DEFERRED` retains owner; soak `112433` **PASS** — Accepted 2026-07-16)
 11. **Recovery Fact Reconciliation** (Appendix C-3: C-3.1 supersede admission **PASS** soak `114047`; C-3.2 fact consumption **PASS** soak `120053`)
+12. **Recovery Capability vs Attempt Lifetime** (R28-K: capability unavailable MUST NOT produce attempt failure; timers scoped to capability lifecycle; resume/supersede lineage; soak `obs-matrix-ms1-20260721-120208`)
 
 ```text
 ReachabilitySnapshot  →  Recovery Controller  →  EdgeRecoveryFacts
@@ -1786,6 +1787,190 @@ Even if ICE ultimately fails, `RECOVERY_REEVALUATE` + decision proves C-3.2.
 
 Host-edge `DEFERRED(ROUTE_NOT_READY)` while control path resumes but `routeConverged` stays false (host ICE `FAILED`). Soak `120053` reconciled via `ICE CONNECTED` → `ROUTE_CONVERGED` trigger. Whether `HELLO` alone must advance reconciliation when mesh ICE remains `FAILED` is **deferred** — not required for C-3.2 PASS.
 
+## R28-K — Recovery Capability vs Attempt Lifetime (Accepted 2026-07-21)
+
+**Refines:** R28-F (attempt terminal vs obligation), R28-G (capability signature), Appendix C-2/C-3 (deferred / supersede). **Does not amend:** ADR-0024 (membership prune), ADR-0030/0031 (presence / distributed observation), Appendix D (REATTACH delivery). **Out of scope:** controller API, watchdog implementation details, REATTACH state machine.
+
+### 1. Motivation
+
+Soak `obs-matrix-ms1-20260721-120208` (session `faaf8579-c32f-43c7-98ed-ab9539e5f2aa`, M-S1 WiFi flap, M02 host):
+
+- **Round 1:** `FAILED_MEDIA_RECOVERY` @ 12:05:01 while `routeConverged=false`, then `ROUTE_CONVERGED` → attempt supersede → `RECOVERED` @ 12:05:22.
+- **Round 2:** same pattern — `MEDIA_ACTION_DEFERRED` / `WAITING_FOR_ROUTE`, 13s watchdog → `ATTEMPT_TIMEOUT` / `EXPLICIT_ABORT:OWNER_BLOCKED` while capability still blocked; WiFi restore did not converge to `RECOVERED` before `OBLIGATION_DEADLINE`.
+
+ADR-0024 v2 fail-closed prune **PASS** (no `AUTHORITY_PRUNE`; `RECOVERY_PRUNE_DEFERRED`; `OBLIGATION_DEADLINE` closed obligation only).
+
+**Root cause class:** Recovery treated **environment unavailability** as **attempt failure**. This is distinct from presence projection gaps (M03 not seeing M01 disconnect — expected under ADR-0030/0031 local-edge model; Conference Health aggregation remains deferred).
+
+### 2. Model separation
+
+Three lifecycles MUST NOT be conflated:
+
+```text
+Capability lifecycle          Attempt lifecycle           Episode lifecycle
+(route, authority,            (open → waiting →           (obligationGeneration;
+ transport, control path)      executing → outcome)        OPEN → CLOSED)
+
+        |                              |                            |
+        v                              v                            v
+Controls whether attempt      Produces attempt-level        Bounds recovery
+execution / timers may run    outcomes (not membership)     responsibility window
+```
+
+**Frozen boundary chain:**
+
+```text
+Capability availability  →  controls attempt execution
+Attempt result           →  updates recovery episode facts
+Recovery episode         →  MUST NOT directly mutate membership (ADR-0024 / INV-MEM-002)
+```
+
+| Layer | Episode terminal (examples) | Attempt outcome (examples) |
+|-------|----------------------------|----------------------------|
+| **Episode** | `RECOVERED`, `OBLIGATION_DEADLINE` | — |
+| **Attempt** | — | `RECOVERED`, `EXHAUSTED` / `FAILED_MEDIA_RECOVERY`, `SUPERSEDED`, `CANCELLED` |
+
+**Attempt terminal outcome MUST NOT be interpreted as episode terminal state.** Episode closure follows R28-H / R28-J only.
+
+### 3. Normative invariants
+
+#### INV-REC-001 — Capability unavailable MUST NOT produce attempt failure
+
+```text
+Recovery attempt failure MUST NOT be emitted while required recovery
+capability is unavailable.
+
+When required recovery capability is unavailable, the attempt MUST enter
+a WAITING/deferred state. Attempt-level failure MUST NOT be emitted solely
+because no progress was observed during capability blockage.
+
+Forbidden solely-during-capability-blockage (non-exhaustive):
+- ATTEMPT_TIMEOUT
+- EXPLICIT_ABORT or OWNER_BLOCKED induced only by capability blockage
+  (e.g. watchdog expiry while routeConverged=false)
+
+Permitted (not blocked by this invariant):
+- OWNER_BLOCKED when the owner is permanently absent or the episode
+  deadline has been reached under an explicit episode-level rule
+- EXPLICIT_ABORT for reasons other than capability-induced watchdog expiry
+  (e.g. NO_MEDIA_ACTION_OWNER per Appendix C)
+
+Capability unavailable includes (non-exhaustive):
+- route not converged
+- authority unreachable (when required for the pending action)
+- signaling / control transport unavailable
+- required control channel unavailable
+
+Normative implementation constraint:
+Starting or continuing an attempt failure timer while capability is
+unavailable is FORBIDDEN. Setting phase to WAITING while a watchdog
+continues to count down is NON-COMPLIANT.
+```
+
+#### INV-REC-002 — Attempt terminal outcome ≠ episode terminal
+
+```text
+Recovery attempt terminal outcome MUST NOT be interpreted as recovery
+episode terminal state.
+
+Attempt terminal outcomes (including FAILED_MEDIA_RECOVERY, ATTEMPT_TIMEOUT,
+EXHAUSTED) close or exhaust the current attempt only. They MUST NOT, by
+themselves, imply:
+- membership removal eligibility
+- permanent recovery impossibility for the edge
+- obligation episode CLOSED (unless a separate episode rule applies, e.g.
+  OBLIGATION_DEADLINE per R28-H)
+
+"No progress during capability blockage" is NEVER sufficient for attempt
+terminal failure (see INV-REC-001).
+```
+
+#### INV-REC-003 — Timers scoped to capability lifecycle
+
+```text
+Recovery attempt timers MUST be scoped to the lifecycle of the capability
+they measure.
+
+A timer that measures progress toward a recovery action MUST NOT start,
+advance, or expire while the capability prerequisite for that action is
+unavailable.
+
+This applies uniformly to all attempt-scoped timers (watchdog, ICE restart,
+signaling, ACK, media establishment). Adding a new timer MUST NOT require a
+new invariant; it MUST declare which capability lifecycle gates its
+advancement.
+
+Examples:
+- Attempt watchdog: MUST NOT start while recoveryCapabilityAvailable is
+  false for the pending action; MUST NOT advance during capability blockage.
+- ICE restart timer: advances only while route converged AND ICE restart
+  has been dispatched.
+
+Preferred pattern when capability is unavailable:
+  evaluate → WAITING → (no timer)
+Not:
+  start watchdog → pause watchdog
+```
+
+**Refinement of R28-F:** `RECOVERY_WAITING` **MUST** suppress attempt failure timers when the wait reason is capability blockage (`WAITING_FOR_ROUTE`, `MEDIA_NOT_READY` with route/transport blocked, etc.). R28-F watchdog budget still belongs to attempts — but the clock runs only when capability permits execution.
+
+#### INV-REC-004 — Capability restoration: explicit resume or supersede with lineage
+
+```text
+When recovery capability becomes available after a WAITING period, the
+system MUST explicitly choose one of:
+
+(A) Resume — continue the existing open attempt:
+    same attemptId AND same recovery lineage binding
+    (sessionId, edge, attemptId, obligationGeneration per Appendix D)
+
+(B) Supersede — open a new attempt:
+    new attemptId AND new lineage reference recorded;
+    supersede admission per Appendix C-3.1
+
+Implicit resume (e.g. applying inbound signals stamped with a stale
+attemptId or obligationGeneration without explicit admission) is FORBIDDEN.
+
+Lineage dimensions (all MUST align for resume):
+- attemptId
+- obligationGeneration (within the current Obligation Episode)
+- recovery signal nonce / envelope binding where applicable (Appendix D)
+
+Example forbidden without supersede:
+  attempt=3 open, inbound candidate or signal belongs to attempt=2
+  → MUST reject or supersede with causal record, not silent apply.
+```
+
+### 4. FAILED_MEDIA_RECOVERY — semantics clarification (no enum change)
+
+Frozen 2026-07-21. **Does not rename** `EdgeRecoveryPhase.FAILED_MEDIA_RECOVERY` in this amendment.
+
+```text
+FAILED_MEDIA_RECOVERY is an attempt-level failure indication.
+
+1. Marks the current attempt as exhausted or aborted; NOT episode terminal
+   by itself.
+2. MUST NOT be interpreted as: membership failure, permanent recovery
+   impossibility, or authority to prune (ADR-0024 / INV-MEM-002).
+3. Obligation episode MAY remain OPEN after FAILED_MEDIA_RECOVERY (R28-H).
+   Material capability restoration MAY trigger RECOVERY_REEVALUATE and
+   supersede to a new attempt (soak round 1: FAILED → RECOVERED).
+4. Future migration target (non-normative): AttemptState EXHAUSTED vs
+   EpisodeState DEADLINE — not in this freeze.
+```
+
+**Semantic correction:** `FAILED` in this phase name means **current attempt abandoned**, not **recovery finished** or **edge dead**.
+
+### 5. Soak gates
+
+| Gate | Criterion |
+|------|-----------|
+| **G-R28-K1** | WiFi flap (M-S1): while `routeConverged=false` (or equivalent capability blocker), logs MUST show `WAITING` / `RECOVERY_MEDIA_ACTION_DEFERRED` / `RECOVERY_REATTACH_DEFERRED`; MUST NOT show `ATTEMPT_TIMEOUT` or capability-induced `OWNER_BLOCKED` solely from watchdog during blockage |
+| **G-R28-K2** | After route restored: MUST show `RECOVERY_REEVALUATE` or explicit supersede with lineage before `RECOVERED` or episode `OBLIGATION_DEADLINE` |
+| **G-R28-K3** | MUST NOT increment `attemptId` (new attempt generation) solely due to capability blockage timer expiry — no attempt-storm via repeated timeout → supersede while still blocked |
+
+**Evidence (pre-fix, motivation):** `logs/obs-matrix-ms1-20260721-120208/` — round 2 `12:06:08` deferred → `12:06:21` `ATTEMPT_TIMEOUT` `controlPlaneStarted=false` → `OWNER_BLOCKED` → stuck `FAILED_MEDIA_RECOVERY`; `AUTHORITY_PRUNE` absent (ADR-0024 v2 **PASS**).
+
 ## Appendix D — REATTACH Control-Plane Delivery Contract (P0-A)
 
 Frozen 2026-07-21. Closes soak `8c187a94` (M-S1): `RECOVERY_REATTACH_SENT` without peer `INBOUND`.
@@ -1901,3 +2086,4 @@ MembershipEviction, tombstone/roster replay, R28-J obligation episode semantics,
 - C-3.2 soak `logs/conf-rcv-*-20260716-120053-final.log` (session `c93ff44b`, G-C3.2-1..4 **PASS**; M03→M02 `ROUTE_CONVERGED` → `REATTACH_SENT` → `EDGE_RECOVERED`)
 - Issue #73-B Recovery Reattach Reachability
 - R29 soak `logs-r29-soak-20260713-112015` (session `647484ef`)
+- R28-K motivation soak `logs/obs-matrix-ms1-20260721-120208` (session `faaf8579`, M-S1 WiFi flap; ADR-0024 v2 prune fail-closed **PASS**; attempt lifetime **FAIL** pre-R28-K implementation)
