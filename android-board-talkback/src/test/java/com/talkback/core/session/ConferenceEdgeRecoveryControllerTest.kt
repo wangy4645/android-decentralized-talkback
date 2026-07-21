@@ -30,6 +30,7 @@ class ConferenceEdgeRecoveryControllerTest {
     private fun buildController(
         observationWindowMs: Long = 10_000L,
         attemptBudgetMs: Long = 500L,
+        debounceMs: Long = 50L,
         onRequestReattach: (String, String, String) -> ReattachDispatchOutcome = { _, _, _ ->
             reattachCalls++
             ReattachDispatchOutcome.SENT
@@ -41,7 +42,7 @@ class ConferenceEdgeRecoveryControllerTest {
         isIceConnected: (String, String) -> Boolean = { _, _ -> false },
         canDispatchRecoveryMediaAction: (String, String) -> Boolean = { _, _ -> true }
     ) = ConferenceEdgeRecoveryController(
-        debounceMs = 50L,
+        debounceMs = debounceMs,
         iceRestartTimeoutMs = 200L,
         attemptBudgetMs = attemptBudgetMs,
         observationWindowMs = observationWindowMs,
@@ -66,6 +67,12 @@ class ConferenceEdgeRecoveryControllerTest {
         remoteJoined = true,
         conferenceTerminated = false
     )
+
+    private fun participantReattachCapabilityBeforeRoute(): RecoveryCapabilitySignature =
+        RecoveryCapabilitySignature(
+            permittedActions = setOf(RecoveryAction.DISPATCH_REATTACH),
+            waitingReason = null
+        )
 
     @Test
     fun deferredReattach_keepsRecoveryPending() {
@@ -580,6 +587,9 @@ class ConferenceEdgeRecoveryControllerTest {
         assertFalse(facts.anyRecovering)
         assertTrue(facts.anyFailedMediaRecovery)
         assertTrue(facts.failedRemoteModuleIds.contains("M01"))
+        assertTrue(facts.mediaUnavailableRemoteModuleIds.contains("M01"))
+        assertFalse(controller.isMediaUnavailable("sess-1", "M02"))
+        assertTrue(controller.isMediaUnavailable("sess-1", "M01"))
         assertTrue(decisionLogs.any { it.contains("FAILED_MEDIA_RECOVERY") && it.contains("attempt_timeout") })
         assertTrue(decisionLogs.any { it.contains("RECOVERY_FINAL_EVALUATION") && it.contains("reason=ATTEMPT_TIMEOUT") })
     }
@@ -612,10 +622,7 @@ class ConferenceEdgeRecoveryControllerTest {
             routeConverged = true,
             authorityReachable = false
         )
-        val before = RecoveryCapabilitySignature(
-            permittedActions = emptySet(),
-            waitingReason = RecoveryWaitingReason.WAITING_FOR_ROUTE
-        )
+        val before = participantReattachCapabilityBeforeRoute()
         val after = projectRecoveryCapabilitySignature(
             snapshot,
             initiatesReattach = true,
@@ -674,10 +681,7 @@ class ConferenceEdgeRecoveryControllerTest {
             routeConverged = true,
             authorityReachable = false
         )
-        val before = RecoveryCapabilitySignature(
-            permittedActions = emptySet(),
-            waitingReason = RecoveryWaitingReason.WAITING_FOR_ROUTE
-        )
+        val before = participantReattachCapabilityBeforeRoute()
         val after = projectRecoveryCapabilitySignature(
             snapshot,
             initiatesReattach = true,
@@ -757,10 +761,7 @@ class ConferenceEdgeRecoveryControllerTest {
             routeConverged = true,
             authorityReachable = false
         )
-        val before = RecoveryCapabilitySignature(
-            permittedActions = emptySet(),
-            waitingReason = RecoveryWaitingReason.WAITING_FOR_ROUTE
-        )
+        val before = participantReattachCapabilityBeforeRoute()
         val after = projectRecoveryCapabilitySignature(
             snapshot,
             initiatesReattach = true,
@@ -934,10 +935,7 @@ class ConferenceEdgeRecoveryControllerTest {
             routeConverged = true,
             authorityReachable = false
         )
-        val before = RecoveryCapabilitySignature(
-            permittedActions = emptySet(),
-            waitingReason = RecoveryWaitingReason.WAITING_FOR_ROUTE
-        )
+        val before = participantReattachCapabilityBeforeRoute()
         val after = projectRecoveryCapabilitySignature(
             snapshot,
             initiatesReattach = true,
@@ -1323,9 +1321,9 @@ class ConferenceEdgeRecoveryControllerTest {
         )
         assertTrue(
             decisionLogs.any {
-                it.contains("RECOVERY_WAITING") &&
+                it.contains("decision=DISPATCH_REATTACH") &&
                     it.contains("edge=M02") &&
-                    it.contains("WAITING_FOR_ROUTE")
+                    it.contains("trigger=REMOTE_MODULE_RECOVERED")
             }
         )
     }
@@ -1521,5 +1519,214 @@ class ConferenceEdgeRecoveryControllerTest {
         assertEquals(2, iceRestartCalls)
         assertTrue(controller.isEdgeRecovering("sess-1", "M02"))
         assertFalse(controller.factsForSession("sess-1").anyFailedMediaRecovery)
+    }
+
+    @Test
+    fun p0_5_iceFailed_doesNotCreateNewAttempt_whenReattachRequested() {
+        controller.onIceStateChanged(
+            sessionId = "sess-1",
+            channelId = "CH-1",
+            remoteModuleId = "M02",
+            iceState = "DISCONNECTED",
+            eligibility = eligible(),
+            initiatesReattach = true
+        )
+        Thread.sleep(80)
+        val attemptId = controller.attemptLineageObservation("sess-1", "M02")!!.attemptId
+        assertEquals(EdgeRecoveryPhase.REATTACH_REQUESTED, controller.attemptLineageObservation("sess-1", "M02")!!.phase)
+        decisionLogs.clear()
+
+        controller.onIceStateChanged(
+            sessionId = "sess-1",
+            channelId = "CH-1",
+            remoteModuleId = "M02",
+            iceState = "FAILED",
+            eligibility = eligible(),
+            initiatesReattach = true
+        )
+
+        assertEquals(attemptId, controller.attemptLineageObservation("sess-1", "M02")!!.attemptId)
+        assertTrue(decisionLogs.any { it.contains("RECOVERY_EVENT_ATTACHED_EXISTING_ATTEMPT") })
+        assertFalse(decisionLogs.any { it.contains("RECOVERY_EDGE_STARTED") })
+        assertFalse(decisionLogs.any { it.contains("pathway=BEGIN_RECOVERY") })
+    }
+
+    @Test
+    fun p0_5_debounceCancelledAfterEarlyDispatch_attemptUnchanged() {
+        controller.onIceStateChanged(
+            sessionId = "sess-1",
+            channelId = "CH-1",
+            remoteModuleId = "M02",
+            iceState = "DISCONNECTED",
+            eligibility = eligible(),
+            initiatesReattach = true
+        )
+        val attemptId = controller.attemptLineageObservation("sess-1", "M02")!!.attemptId
+        val snapshot = EdgeReachabilitySnapshot(
+            linkReady = true,
+            peerDiscovered = true,
+            routeConverged = false,
+            authorityReachable = true
+        )
+        val signature = participantReattachCapabilityBeforeRoute()
+        controller.onRecoveryReachabilityChanged(
+            sessionId = "sess-1",
+            channelId = "CH-1",
+            remoteModuleId = "M02",
+            snapshot = snapshot,
+            signature = signature,
+            capabilityBefore = signature,
+            trigger = RecoveryReevaluateTrigger.REMOTE_MODULE_RECOVERED
+        )
+        assertTrue(decisionLogs.any { it.contains("RECOVERY_REATTACH_REQUESTED") })
+        decisionLogs.clear()
+
+        Thread.sleep(80)
+
+        assertEquals(attemptId, controller.attemptLineageObservation("sess-1", "M02")!!.attemptId)
+        assertFalse(decisionLogs.any { it.contains("RECOVERY_EDGE_STARTED") })
+        assertFalse(decisionLogs.any { it.contains("pathway=BEGIN_RECOVERY") })
+        assertFalse(decisionLogs.any { it.contains("RECOVERY_ATTEMPT_REUSED") })
+    }
+
+    @Test
+    fun p0_5_explicitSupersede_stillCreatesNewAttempt() {
+        controller.onIceStateChanged(
+            sessionId = "sess-1",
+            channelId = "CH-1",
+            remoteModuleId = "M02",
+            iceState = "DISCONNECTED",
+            eligibility = eligible(),
+            initiatesReattach = true
+        )
+        Thread.sleep(80)
+        val attempt1 = controller.attemptLineageObservation("sess-1", "M02")!!.attemptId
+        assertEquals(EdgeRecoveryPhase.REATTACH_REQUESTED, controller.attemptLineageObservation("sess-1", "M02")!!.phase)
+
+        controller.onRecoveryReattachAccepted(
+            "sess-1",
+            "M02",
+            RecoveryReason.NETWORK_RECOVERY,
+            RecoverySource.ICE_MONITOR
+        )
+
+        val attempt2 = controller.attemptLineageObservation("sess-1", "M02")!!.attemptId
+        assertTrue(attempt2 > attempt1)
+        assertTrue(decisionLogs.any { it.contains("RECOVERY_ATTEMPT_SUPERSEDED") })
+        assertTrue(decisionLogs.any { it.contains("decision=SUPERSEDED") })
+    }
+
+    @Test
+    fun p1_recoveredDisconnect_opensNewObligationEpisode() {
+        controller = buildController(attemptBudgetMs = 500L)
+        controller.onIceStateChanged(
+            sessionId = "sess-1",
+            channelId = "CH-1",
+            remoteModuleId = "M01",
+            iceState = "FAILED",
+            eligibility = eligible(),
+            initiatesReattach = true
+        )
+        controller.onRecoveryReattachAccepted(
+            "sess-1",
+            "M01",
+            RecoveryReason.HOST_REATTACH,
+            RecoverySource.ICE_MONITOR
+        )
+        controller.onIceConnected("sess-1", "M01")
+        val gen1 = controller.obligationGeneration("sess-1", "M01")!!
+        val attempt1 = controller.attemptLineageObservation("sess-1", "M01")!!.attemptId
+        assertEquals(ObligationCloseReason.RECOVERED, controller.obligationCloseReason("sess-1", "M01"))
+        decisionLogs.clear()
+
+        controller.onIceStateChanged(
+            sessionId = "sess-1",
+            channelId = "CH-1",
+            remoteModuleId = "M01",
+            iceState = "DISCONNECTED",
+            eligibility = eligible(),
+            initiatesReattach = true
+        )
+
+        assertTrue(decisionLogs.any { it.contains("RECOVERY_OBLIGATION_OPENED") })
+        val lineage = controller.attemptLineageObservation("sess-1", "M01")!!
+        assertTrue(lineage.obligationGeneration > gen1)
+        assertTrue(lineage.attemptId > attempt1)
+        assertTrue(lineage.obligationOpen)
+        assertEquals(EdgeRecoveryPhase.DISCONNECTED_DEBOUNCING, lineage.phase)
+    }
+
+    @Test
+    fun p1_activeRecovery_keepsSameObligationGeneration() {
+        controller.onIceStateChanged(
+            sessionId = "sess-1",
+            channelId = "CH-1",
+            remoteModuleId = "M02",
+            iceState = "DISCONNECTED",
+            eligibility = eligible(),
+            initiatesReattach = true
+        )
+        Thread.sleep(80)
+        val gen = controller.obligationGeneration("sess-1", "M02")!!
+        val attempt = controller.attemptLineageObservation("sess-1", "M02")!!.attemptId
+        decisionLogs.clear()
+
+        controller.onIceStateChanged(
+            sessionId = "sess-1",
+            channelId = "CH-1",
+            remoteModuleId = "M02",
+            iceState = "FAILED",
+            eligibility = eligible(),
+            initiatesReattach = true
+        )
+
+        assertEquals(gen, controller.obligationGeneration("sess-1", "M02"))
+        assertEquals(attempt, controller.attemptLineageObservation("sess-1", "M02")!!.attemptId)
+        assertTrue(decisionLogs.any { it.contains("RECOVERY_EVENT_ATTACHED_EXISTING_ATTEMPT") })
+        assertFalse(decisionLogs.any { it.contains("RECOVERY_OBLIGATION_OPENED") })
+    }
+
+    @Test
+    fun p1_watchdog_doesNotTimeoutPriorObligationGeneration() {
+        controller = buildController(
+            attemptBudgetMs = 120L,
+            debounceMs = 20L
+        )
+        controller.onIceStateChanged(
+            sessionId = "sess-1",
+            channelId = "CH-1",
+            remoteModuleId = "M01",
+            iceState = "FAILED",
+            eligibility = eligible(),
+            initiatesReattach = true
+        )
+        controller.onRecoveryReattachAccepted(
+            "sess-1",
+            "M01",
+            RecoveryReason.HOST_REATTACH,
+            RecoverySource.ICE_MONITOR
+        )
+        controller.onIceConnected("sess-1", "M01")
+        val gen1 = controller.obligationGeneration("sess-1", "M01")!!
+        decisionLogs.clear()
+
+        controller.onIceStateChanged(
+            sessionId = "sess-1",
+            channelId = "CH-1",
+            remoteModuleId = "M01",
+            iceState = "DISCONNECTED",
+            eligibility = eligible(),
+            initiatesReattach = true
+        )
+        val gen2 = controller.obligationGeneration("sess-1", "M01")!!
+        assertTrue(gen2 > gen1)
+        Thread.sleep(80)
+        assertTrue(decisionLogs.any { it.contains("RECOVERY_WATCHDOG_STARTED") && it.contains("obligationGen=$gen2") })
+        decisionLogs.clear()
+
+        Thread.sleep(200)
+
+        assertFalse(decisionLogs.any { it.contains("RECOVERY_ATTEMPT_TIMEOUT") && it.contains("obligationGen=$gen1") })
+        assertTrue(controller.attemptLineageObservation("sess-1", "M01")!!.obligationGeneration == gen2)
     }
 }

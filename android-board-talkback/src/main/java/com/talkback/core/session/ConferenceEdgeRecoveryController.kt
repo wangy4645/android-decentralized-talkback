@@ -183,9 +183,13 @@ class ConferenceEdgeRecoveryController(
             phase = record.phase,
             mediaRestored = record.mediaRestored,
             obligationOpen = record.edgeObligationOpen(),
-            pendingCompletion = record.hasPendingCompletionDecision
+            pendingCompletion = record.hasPendingCompletionDecision,
+            obligationGeneration = record.obligationGeneration
         )
     }
+
+    fun obligationGeneration(sessionId: String, remoteModuleId: String): Long? =
+        edges[ConferenceEdgeKey(sessionId, remoteModuleId)]?.obligationGeneration
 
     private fun notifyAttemptLineageObservation(
         record: EdgeRecoveryRecord,
@@ -212,6 +216,7 @@ class ConferenceEdgeRecoveryController(
         previousAttempt: Long?,
         previousPhase: EdgeRecoveryPhase?,
         obligationOpen: Boolean,
+        obligationGeneration: Long,
         pathway: String
     ): String =
         "RECOVERY_ATTEMPT_OPENED session=$sessionId remote=$remoteModuleId " +
@@ -219,7 +224,7 @@ class ConferenceEdgeRecoveryController(
             "supersededFromAttempt=${supersededFromAttempt ?: "NONE"} reason=$reason " +
             "newAttempt=$attemptId previousAttempt=${previousAttempt ?: "NONE"} " +
             "previousPhase=${previousPhase ?: "NONE"} previousObligationOpen=$obligationOpen " +
-            "pathway=$pathway"
+            "obligationGen=$obligationGeneration pathway=$pathway"
 
     private fun logPhaseTransition(
         record: EdgeRecoveryRecord,
@@ -231,9 +236,82 @@ class ConferenceEdgeRecoveryController(
         onLog(
             "RECOVERY_TRANSITION session=${record.key.sessionId} remote=${record.key.remoteModuleId} " +
                 "old=${oldPhase ?: "NONE"} new=$newPhase trigger=$trigger attempt=${record.recoveryAttemptId} " +
+                "obligationGen=${record.obligationGeneration} " +
                 "obligationOpen=${record.edgeObligationOpen()} " +
                 "pendingCompletion=${record.hasPendingCompletionDecision}"
         )
+    }
+
+    /**
+     * True when a new ICE failure must start a fresh obligation episode (P1).
+     * Active recovery / failed-media residency continues the current episode.
+     */
+    private fun needsNewObligationEpisode(record: EdgeRecoveryRecord?): Boolean {
+        if (record == null) return false
+        if (record.phase == EdgeRecoveryPhase.RECOVERED) return true
+        if (record.obligationClosedAtMs != null) return true
+        return !record.edgeObligationOpen() &&
+            !record.phase.isActivelyRecovering() &&
+            !record.phase.isFailedMediaRecovery()
+    }
+
+    /**
+     * Opens a new recovery obligation episode after a healthy edge failure (P1).
+     * Does not reuse closed recovery identity or prior attempt context.
+     */
+    private fun openNewRecoveryObligation(
+        key: ConferenceEdgeKey,
+        channelId: String,
+        phase: EdgeRecoveryPhase,
+        initiatesReattach: Boolean,
+        trigger: String
+    ): EdgeRecoveryRecord {
+        cancelDebounce(key)
+        cancelWatchdog(key)
+        cancelDeadline(key)
+        val existing = edges[key]
+        val now = clock()
+        val newGeneration = (existing?.obligationGeneration ?: 0L) + 1L
+        val previousAttempt = existing?.recoveryAttemptId
+        val previousPhase = existing?.phase
+        val record = EdgeRecoveryRecord(
+            key = key,
+            phase = phase,
+            channelId = channelId.ifBlank { existing?.channelId ?: "" },
+            recoveryAttemptId = ++attemptSeq,
+            recoveryStartedAtMs = now,
+            initiatesReattach = initiatesReattach,
+            obligationGeneration = newGeneration,
+            obligationOpenedAtMs = now,
+            obligationDeadlineAtMs = null,
+            obligationClosedAtMs = null,
+            obligationCloseReason = null,
+            hasPendingCompletionDecision = false
+        )
+        edges[key] = record
+        onLog(
+            "RECOVERY_OBLIGATION_OPENED session=${key.sessionId} remote=${key.remoteModuleId} " +
+                "obligationGen=$newGeneration attempt=${record.recoveryAttemptId} trigger=$trigger"
+        )
+        onLog(
+            formatRecoveryAttemptOpenedLog(
+                sessionId = key.sessionId,
+                remoteModuleId = key.remoteModuleId,
+                attemptId = record.recoveryAttemptId,
+                initiator = resolveRecoveryInitiator(initiatesReattach),
+                policy = resolveRecoveryPolicy(initiatesReattach),
+                startedAt = record.recoveryStartedAtMs,
+                supersededFromAttempt = null,
+                reason = trigger,
+                previousAttempt = previousAttempt,
+                previousPhase = previousPhase,
+                obligationOpen = true,
+                obligationGeneration = newGeneration,
+                pathway = "NEW_OBLIGATION_EPISODE"
+            )
+        )
+        logPhaseTransition(record, previousPhase, phase, trigger)
+        return record
     }
 
     private fun assignMediaActionOwner(
@@ -556,6 +634,16 @@ class ConferenceEdgeRecoveryController(
 
         if (iceState == "FAILED") {
             cancelDebounce(key)
+            val existing = edges[key]
+            if (existing?.hasActiveAttempt() == true &&
+                existing.phase != EdgeRecoveryPhase.DISCONNECTED_DEBOUNCING
+            ) {
+                onLog(
+                    "RECOVERY_EVENT_ATTACHED_EXISTING_ATTEMPT session=$sessionId remote=$remoteModuleId " +
+                        "attempt=${existing.recoveryAttemptId} trigger=ICE_FAILED"
+                )
+                return
+            }
             beginRecovery(
                 key,
                 channelId,
@@ -576,7 +664,31 @@ class ConferenceEdgeRecoveryController(
         }
 
         cancelDebounce(key)
+        val existingBeforeDebounce = edges[key]
+        if (needsNewObligationEpisode(existingBeforeDebounce)) {
+            openNewRecoveryObligation(
+                key,
+                channelId,
+                EdgeRecoveryPhase.DISCONNECTED_DEBOUNCING,
+                initiatesReattach,
+                RecoveryDecisionTrigger.ICE_DISCONNECTED.name
+            )
+        } else {
+            upsertEdge(
+                key,
+                channelId,
+                EdgeRecoveryPhase.DISCONNECTED_DEBOUNCING,
+                initiatesReattach = initiatesReattach,
+                attemptOpenTrigger = RecoveryDecisionTrigger.ICE_DISCONNECTED.name
+            )
+        }
         val debounce = scheduler.schedule({
+            val current = edges[key]
+            if (current?.hasActiveAttempt() == true &&
+                current.phase != EdgeRecoveryPhase.DISCONNECTED_DEBOUNCING
+            ) {
+                return@schedule
+            }
             beginRecovery(
                 key,
                 channelId,
@@ -587,13 +699,6 @@ class ConferenceEdgeRecoveryController(
             )
         }, debounceMs, TimeUnit.MILLISECONDS)
         debounceTimers[key] = debounce
-        upsertEdge(
-            key,
-            channelId,
-            EdgeRecoveryPhase.DISCONNECTED_DEBOUNCING,
-            initiatesReattach = initiatesReattach,
-            attemptOpenTrigger = RecoveryDecisionTrigger.ICE_DISCONNECTED.name
-        )
     }
 
     /**
@@ -961,14 +1066,39 @@ class ConferenceEdgeRecoveryController(
             )
             return
         }
-        val record = upsertEdge(
-            key,
-            channelId,
-            if (initiatesReattach) EdgeRecoveryPhase.RECOVERY_PENDING else EdgeRecoveryPhase.RECOVERY_PENDING,
-            initiatesReattach = initiatesReattach,
-            newAttempt = true,
-            attemptOpenTrigger = trigger.name
-        )
+        val existing = edges[key]
+        if (existing?.hasActiveAttempt() == true &&
+            existing.phase != EdgeRecoveryPhase.DISCONNECTED_DEBOUNCING
+        ) {
+            onLog(
+                "RECOVERY_ATTEMPT_REUSED session=${key.sessionId} remote=${key.remoteModuleId} " +
+                    "attempt=${existing.recoveryAttemptId} trigger=$trigger " +
+                    "phase=${existing.phase} existingOwnerRetained=true"
+            )
+            return
+        }
+        val record = when {
+            needsNewObligationEpisode(existing) &&
+                existing?.phase != EdgeRecoveryPhase.DISCONNECTED_DEBOUNCING -> {
+                openNewRecoveryObligation(
+                    key,
+                    channelId,
+                    EdgeRecoveryPhase.RECOVERY_PENDING,
+                    initiatesReattach,
+                    trigger.name
+                )
+            }
+            else -> {
+                upsertEdge(
+                    key,
+                    channelId,
+                    EdgeRecoveryPhase.RECOVERY_PENDING,
+                    initiatesReattach = initiatesReattach,
+                    newAttempt = existing == null,
+                    attemptOpenTrigger = trigger.name
+                )
+            }
+        }
         val policy = if (initiatesReattach) {
             RecoveryDecisionPolicy.REATTACH_THEN_ICE_RESTART
         } else {
@@ -1052,25 +1182,36 @@ class ConferenceEdgeRecoveryController(
     private fun scheduleWatchdog(record: EdgeRecoveryRecord) {
         val key = record.key
         val attemptId = record.recoveryAttemptId
+        val obligationGen = record.obligationGeneration
         cancelWatchdog(key)
         val budgetMs = minOf(attemptBudgetMs, iceRestartTimeoutMs + debounceMs)
+        onLog(
+            "RECOVERY_WATCHDOG_STARTED session=${key.sessionId} edge=${key.remoteModuleId} " +
+                "obligationGen=$obligationGen attempt=$attemptId budgetMs=$budgetMs"
+        )
         val future = scheduler.schedule({
             val current = edges[key] ?: return@schedule
-            // Attempt-scoped: a superseded attempt's timer must not fail the live attempt (#79).
             if (current.recoveryAttemptId != attemptId) return@schedule
+            if (current.obligationGeneration != obligationGen) return@schedule
             if (!current.phase.isActivelyRecovering()) return@schedule
             onLog(
                 "RECOVERY_FINAL_EVALUATION session=${key.sessionId} edge=${key.remoteModuleId} " +
-                    "attempt=${current.recoveryAttemptId} reason=ATTEMPT_TIMEOUT " +
-                    "controlPlaneStarted=${current.controlPlaneStarted()}"
+                    "attempt=${current.recoveryAttemptId} obligationGen=${current.obligationGeneration} " +
+                    "reason=ATTEMPT_TIMEOUT controlPlaneStarted=${current.controlPlaneStarted()}"
             )
             onLog(
                 "RECOVERY_DECISION session=${key.sessionId} edge=${key.remoteModuleId} " +
-                    "attempt=${current.recoveryAttemptId} decision=ATTEMPT_TIMEOUT approved=false"
+                    "attempt=${current.recoveryAttemptId} obligationGen=${current.obligationGeneration} " +
+                    "decision=ATTEMPT_TIMEOUT approved=false"
+            )
+            onLog(
+                "RECOVERY_ATTEMPT_TIMEOUT session=${key.sessionId} edge=${key.remoteModuleId} " +
+                    "obligationGen=${current.obligationGeneration} attempt=${current.recoveryAttemptId}"
             )
             // Re-check after logging: ACCEPTED may have SUPERSEDED mid-callback (TOCTOU).
             val still = edges[key] ?: return@schedule
             if (still.recoveryAttemptId != attemptId) return@schedule
+            if (still.obligationGeneration != obligationGen) return@schedule
             if (!still.phase.isActivelyRecovering()) return@schedule
             val abortReason = when {
                 hasDeferredMediaAction(still) -> {
@@ -1150,6 +1291,11 @@ class ConferenceEdgeRecoveryController(
             // While OPEN, preserve obligation facts across attempts. After CLOSED, a later
             // recovery cycle starts a new obligation (not a reopen of the closed one).
             val preserveOpen = existing != null && existing.obligationClosedAtMs == null
+            val obligationGen = when {
+                preserveOpen -> existing!!.obligationGeneration
+                existing == null -> 1L
+                else -> existing.obligationGeneration + 1L
+            }
             EdgeRecoveryRecord(
                 key = key,
                 phase = phase,
@@ -1157,6 +1303,7 @@ class ConferenceEdgeRecoveryController(
                 recoveryAttemptId = ++attemptSeq,
                 recoveryStartedAtMs = now,
                 initiatesReattach = initiatesReattach,
+                obligationGeneration = obligationGen,
                 obligationOpenedAtMs = if (preserveOpen) {
                     existing!!.obligationOpenedAtMs ?: now
                 } else {
@@ -1192,6 +1339,7 @@ class ConferenceEdgeRecoveryController(
                         previousAttempt = previousAttempt,
                         previousPhase = previousPhase,
                         obligationOpen = previousObligationOpen,
+                        obligationGeneration = created.obligationGeneration,
                         pathway = pathway
                     )
                 )
@@ -1206,7 +1354,10 @@ class ConferenceEdgeRecoveryController(
                 }
                 if (channelId.isNotBlank()) this.channelId = channelId
                 this.initiatesReattach = initiatesReattach
-                if (obligationOpenedAtMs == null) obligationOpenedAtMs = now
+                if (obligationOpenedAtMs == null) {
+                    obligationOpenedAtMs = now
+                    if (obligationGeneration == 0L) obligationGeneration = 1L
+                }
             }
         }
         return record
@@ -1423,6 +1574,7 @@ class ConferenceEdgeRecoveryController(
         val triggerPart = trigger?.let { " trigger=$it" } ?: ""
         when (outcome) {
             ReattachDispatchOutcome.SENT -> {
+                cancelDebounce(key)
                 record.phase = EdgeRecoveryPhase.REATTACH_REQUESTED
                 assignMediaActionOwner(record, MediaActionOwner.HOST_RESTART)
                 onLog(
@@ -1570,6 +1722,7 @@ class ConferenceEdgeRecoveryController(
                 previousAttempt = previousAttempt,
                 previousPhase = previousPhase,
                 obligationOpen = previousObligationOpen,
+                obligationGeneration = record.obligationGeneration,
                 pathway = "SUPERSEDE"
             )
         )

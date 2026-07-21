@@ -62,6 +62,10 @@ class ConferenceParticipantManager {
     fun containsParticipant(sessionId: String, moduleId: String): Boolean =
         sessions[sessionId]?.participants?.containsKey(moduleId) == true
 
+    /** Read-only; does not create or repair participant records. */
+    fun participantMedia(sessionId: String, moduleId: String): MediaState =
+        sessions[sessionId]?.participants?.get(moduleId)?.media ?: MediaState.NONE
+
     fun syncParticipantsFromMembers(sessionId: String, localModuleId: ModuleId) {
         val state = sessions[sessionId] ?: return
         state.roster.forEach { member ->
