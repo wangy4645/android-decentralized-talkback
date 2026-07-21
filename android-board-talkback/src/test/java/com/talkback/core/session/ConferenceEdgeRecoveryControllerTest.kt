@@ -1977,7 +1977,7 @@ class ConferenceEdgeRecoveryControllerTest {
     }
 
     @Test
-    fun r28l_invRec007_obligationClosedReject_triggersReevaluate_notRecovered() {
+    fun r28l_invRec007_validObligationClosedReject_triggersReevaluateRequired() {
         controller.onIceStateChanged(
             sessionId = "sess-1",
             channelId = "CH-1",
@@ -1988,37 +1988,120 @@ class ConferenceEdgeRecoveryControllerTest {
         )
         nowMs = 60L
         Thread.sleep(80)
-        assertEquals(
-            EdgeRecoveryPhase.REATTACH_REQUESTED,
-            controller.attemptLineageObservation("sess-1", "M02")!!.phase
-        )
+        val lineage = controller.attemptLineageObservation("sess-1", "M02")!!
+        assertEquals(EdgeRecoveryPhase.REATTACH_REQUESTED, lineage.phase)
 
         val logMark = decisionLogs.size
-        controller.onRecoveryReattachOutboundRejected(
+        val handled = controller.onRecoveryReattachOutboundRejected(
             sessionId = "sess-1",
             remoteModuleId = "M02",
+            rejectedAttemptId = lineage.attemptId,
+            rejectedObligationGeneration = controller.obligationGeneration("sess-1", "M02")!!,
             reason = OutboundReattachRejectReason.OBLIGATION_CLOSED
         )
         val afterReject = decisionLogs.drop(logMark)
 
+        assertTrue(handled)
         assertTrue(
             afterReject.any {
                 it.contains("RECOVERY_REATTACH_OUTBOUND_REJECTED") &&
                     it.contains("reason=OBLIGATION_CLOSED")
             }
         )
-        assertTrue(
-            afterReject.any {
-                it.contains("RECOVERY_REEVALUATE") &&
-                    it.contains("trigger=REATtach_OUTBOUND_REJECTED") &&
-                    it.contains("rejectReason=OBLIGATION_CLOSED")
-            }
-        )
+        assertTrue(afterReject.any { it.contains("RECOVERY_REEVALUATE_REQUIRED") })
         assertFalse(afterReject.any { it.contains("RECOVERY_EDGE_RECOVERED") })
         assertFalse(controller.edgeObligationClosed("sess-1", "M02"))
         assertEquals(null, controller.obligationCloseReason("sess-1", "M02"))
         assertTrue(controller.edgeObligationOpen("sess-1", "M02"))
-        assertTrue(controller.isEdgeRecovering("sess-1", "M02"))
+        assertTrue(controller.hasPendingCompletionDecision("sess-1", "M02"))
+        assertEquals(lineage.attemptId, controller.attemptLineageObservation("sess-1", "M02")!!.attemptId)
+        assertEquals(
+            lineage.obligationGeneration,
+            controller.obligationGeneration("sess-1", "M02")
+        )
+    }
+
+    @Test
+    fun r28l_invRec007_staleObligationClosedReject_isIgnoredWithoutSideEffects() {
+        controller.onIceStateChanged(
+            sessionId = "sess-1",
+            channelId = "CH-1",
+            remoteModuleId = "M02",
+            iceState = "DISCONNECTED",
+            eligibility = eligible(),
+            initiatesReattach = true
+        )
+        nowMs = 60L
+        Thread.sleep(80)
+        controller.onRecoveryReattachAccepted(
+            "sess-1",
+            "M02",
+            RecoveryReason.HOST_REATTACH,
+            RecoverySource.ICE_MONITOR
+        )
+        controller.onIceConnected("sess-1", "M02")
+        assertEquals(ObligationCloseReason.RECOVERED, controller.obligationCloseReason("sess-1", "M02"))
+        decisionLogs.clear()
+
+        controller.onIceStateChanged(
+            sessionId = "sess-1",
+            channelId = "CH-1",
+            remoteModuleId = "M02",
+            iceState = "DISCONNECTED",
+            eligibility = eligible(),
+            initiatesReattach = true
+        )
+        nowMs += 60L
+        Thread.sleep(80)
+        val current = controller.attemptLineageObservation("sess-1", "M02")!!
+        val currentGen = controller.obligationGeneration("sess-1", "M02")!!
+        assertTrue(current.attemptId > 1L)
+        assertTrue(currentGen >= 2L)
+
+        val logMark = decisionLogs.size
+        val handled = controller.onRecoveryReattachOutboundRejected(
+            sessionId = "sess-1",
+            remoteModuleId = "M02",
+            rejectedAttemptId = current.attemptId - 1L,
+            rejectedObligationGeneration = currentGen - 1L,
+            reason = OutboundReattachRejectReason.OBLIGATION_CLOSED
+        )
+        val afterReject = decisionLogs.drop(logMark)
+
+        assertTrue(handled)
+        assertTrue(afterReject.any { it.contains("STALE_REATTACH_REJECT_IGNORED") })
+        assertFalse(afterReject.any { it.contains("RECOVERY_REEVALUATE_REQUIRED") })
+        assertFalse(afterReject.any { it.contains("RECOVERY_EDGE_RECOVERED") })
+        assertEquals(current.attemptId, controller.attemptLineageObservation("sess-1", "M02")!!.attemptId)
+        assertEquals(currentGen, controller.obligationGeneration("sess-1", "M02"))
+        assertFalse(controller.hasPendingCompletionDecision("sess-1", "M02"))
+    }
+
+    @Test
+    fun r28l_appendixD_obligationClosedPayload_routesToReevaluateRequired() {
+        controller.onIceStateChanged(
+            sessionId = "sess-1",
+            channelId = "CH-1",
+            remoteModuleId = "M02",
+            iceState = "DISCONNECTED",
+            eligibility = eligible(),
+            initiatesReattach = true
+        )
+        nowMs = 60L
+        Thread.sleep(80)
+
+        val logMark = decisionLogs.size
+        val handled = controller.onConferenceRecoveryReattachOutboundReject(
+            sessionId = "sess-1",
+            remoteModuleId = "M02",
+            reasonPayload = "OBLIGATION_CLOSED"
+        )
+        val afterReject = decisionLogs.drop(logMark)
+
+        assertTrue(handled)
+        assertTrue(afterReject.any { it.contains("RECOVERY_REEVALUATE_REQUIRED") })
+        assertFalse(afterReject.any { it.contains("RECOVERY_EDGE_RECOVERED") })
+        assertTrue(controller.hasPendingCompletionDecision("sess-1", "M02"))
     }
 
     @Test

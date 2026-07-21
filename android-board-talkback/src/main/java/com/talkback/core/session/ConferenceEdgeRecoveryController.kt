@@ -1025,44 +1025,71 @@ class ConferenceEdgeRecoveryController(
     }
 
     /**
+     * Coordinator routing entry for outbound REATTACH reject payloads (ADR-0022 Appendix D / R28-L).
+     * Parses [reasonPayload] and resolves lineage from the outbound dispatch snapshot on the edge.
+     */
+    fun onConferenceRecoveryReattachOutboundReject(
+        sessionId: String,
+        remoteModuleId: String,
+        reasonPayload: String
+    ): Boolean {
+        val reason = OutboundReattachRejectReason.fromPayload(reasonPayload) ?: return false
+        val record = edges[ConferenceEdgeKey(sessionId, remoteModuleId)] ?: return false
+        val rejectedAttemptId = record.outboundDispatchAttemptId ?: record.recoveryAttemptId
+        val rejectedObligationGeneration = record.outboundDispatchObligationGeneration
+            ?: record.obligationGeneration
+        return onRecoveryReattachOutboundRejected(
+            sessionId = sessionId,
+            remoteModuleId = remoteModuleId,
+            rejectedAttemptId = rejectedAttemptId,
+            rejectedObligationGeneration = rejectedObligationGeneration,
+            reason = reason
+        )
+    }
+
+    /**
      * Requester-side REATTACH reject (ADR-0022 R28-L INV-REC-007).
      * Reject is a reevaluate trigger — never direct [markRecovered].
      */
     fun onRecoveryReattachOutboundRejected(
         sessionId: String,
         remoteModuleId: String,
+        rejectedAttemptId: Long,
+        rejectedObligationGeneration: Long,
         reason: OutboundReattachRejectReason
-    ) {
+    ): Boolean {
         val key = ConferenceEdgeKey(sessionId, remoteModuleId)
-        val record = edges[key] ?: return
-        onLog(
-            "RECOVERY_REATTACH_OUTBOUND_REJECTED session=$sessionId remote=$remoteModuleId " +
-                "reason=$reason attempt=${record.recoveryAttemptId} " +
-                "obligationGen=${record.obligationGeneration}"
-        )
-        record.reattachDeliveryState = ReattachDeliveryState.REJECTED
+        val record = edges[key] ?: return false
+        if (rejectedAttemptId != record.recoveryAttemptId ||
+            rejectedObligationGeneration != record.obligationGeneration
+        ) {
+            onLog(
+                "STALE_REATTACH_REJECT_IGNORED session=$sessionId remote=$remoteModuleId " +
+                    "reason=$reason rejectedAttempt=$rejectedAttemptId " +
+                    "rejectedObligationGen=$rejectedObligationGeneration " +
+                    "currentAttempt=${record.recoveryAttemptId} " +
+                    "currentObligationGen=${record.obligationGeneration}"
+            )
+            return true
+        }
         when (reason) {
-            OutboundReattachRejectReason.OBLIGATION_CLOSED ->
-                reevaluateAfterOutboundReattachReject(record, reason)
+            OutboundReattachRejectReason.OBLIGATION_CLOSED -> {
+                record.reattachDeliveryState = ReattachDeliveryState.REJECTED
+                onLog(
+                    "RECOVERY_REATTACH_OUTBOUND_REJECTED session=$sessionId remote=$remoteModuleId " +
+                        "reason=$reason attempt=${record.recoveryAttemptId} " +
+                        "obligationGen=${record.obligationGeneration}"
+                )
+                onLog(
+                    "RECOVERY_REEVALUATE_REQUIRED session=$sessionId edge=$remoteModuleId " +
+                        "attempt=${record.recoveryAttemptId} trigger=REATtach_OUTBOUND_REJECTED " +
+                        "rejectReason=$reason"
+                )
+                record.hasPendingCompletionDecision = true
+                notifyChanged(sessionId)
+            }
         }
-        notifyChanged(sessionId)
-    }
-
-    private fun reevaluateAfterOutboundReattachReject(
-        record: EdgeRecoveryRecord,
-        reason: OutboundReattachRejectReason
-    ) {
-        val key = record.key
-        onLog(
-            "RECOVERY_REEVALUATE session=${key.sessionId} edge=${key.remoteModuleId} " +
-                "attempt=${record.recoveryAttemptId} trigger=REATtach_OUTBOUND_REJECTED " +
-                "rejectReason=$reason controlPlaneStarted=${record.controlPlaneStarted()} " +
-                "mediaRestored=${record.mediaRestored}"
-        )
-        when {
-            record.mediaRestored && record.controlPlaneStarted() -> markRecovered(record)
-            record.mediaRestored -> continueControlPlaneRecoveryAfterMediaRestored(record)
-        }
+        return true
     }
 
     fun onReattachRejected(
@@ -1836,6 +1863,8 @@ class ConferenceEdgeRecoveryController(
                 cancelDebounce(key)
                 record.phase = EdgeRecoveryPhase.REATTACH_REQUESTED
                 record.reattachDeliveryState = ReattachDeliveryState.TRANSPORT_SENT
+                record.outboundDispatchAttemptId = record.recoveryAttemptId
+                record.outboundDispatchObligationGeneration = record.obligationGeneration
                 record.reattachNonce = pendingTransportNonce.remove(key) ?: record.reattachNonce
                 assignMediaActionOwner(record, MediaActionOwner.HOST_RESTART)
                 val noncePart = record.reattachNonce?.let { " nonce=$it" } ?: ""

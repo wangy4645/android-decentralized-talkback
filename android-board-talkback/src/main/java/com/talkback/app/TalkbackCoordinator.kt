@@ -3566,6 +3566,19 @@ class TalkbackCoordinator(
         }
         val rejectorModuleId = signal.from.moduleId.value
         if (session.type.isMeshSession()) {
+            if (session.type == SessionType.CONFERENCE &&
+                conferenceEdgeRecoveryController.onConferenceRecoveryReattachOutboundReject(
+                    sessionId = session.id,
+                    remoteModuleId = rejectorModuleId,
+                    reasonPayload = signal.payload.orEmpty()
+                )
+            ) {
+                log(
+                    "[${session.traceId}] Recovery reattach outbound reject routed " +
+                        "from=$rejectorModuleId payload=${signal.payload}"
+                )
+                return
+            }
             if (signal.payload == "MEETING_ENDED" && session.type == SessionType.CONFERENCE) {
                 val channelId = session.channelId
                 hangupInternal(session.id)

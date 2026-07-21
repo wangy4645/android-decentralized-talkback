@@ -185,7 +185,15 @@ enum class InboundReattachLineageVerdict {
 
 /** Outbound REATTACH reject reasons that require completion reevaluation (ADR-0022 R28-L INV-REC-007). */
 enum class OutboundReattachRejectReason {
-    OBLIGATION_CLOSED
+    OBLIGATION_CLOSED;
+
+    companion object {
+        fun fromPayload(payload: String): OutboundReattachRejectReason? =
+            when {
+                payload.equals(OBLIGATION_CLOSED.name, ignoreCase = true) -> OBLIGATION_CLOSED
+                else -> null
+            }
+    }
 }
 
 data class ReattachDispatchLineage(
@@ -223,7 +231,10 @@ internal data class EdgeRecoveryRecord(
     /** Delivery-plane state for outbound/inbound REATTACH (ADR-0022 Appendix D). */
     var reattachDeliveryState: ReattachDeliveryState = ReattachDeliveryState.QUEUED,
     /** Envelope nonce of the current outbound REATTACH dispatch. */
-    var reattachNonce: String? = null
+    var reattachNonce: String? = null,
+    /** Lineage bound at last outbound REATTACH transport send (ADR-0022 R28-L reject guard). */
+    var outboundDispatchAttemptId: Long? = null,
+    var outboundDispatchObligationGeneration: Long? = null
 ) {
     /** True while this record owns an active recovery attempt (ADR-0022 P0.5). */
     fun hasActiveAttempt(): Boolean = phase.isActivelyRecovering()
