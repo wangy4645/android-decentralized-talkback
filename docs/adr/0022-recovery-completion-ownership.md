@@ -2,7 +2,7 @@
 
 ## Status
 
-**Partial Accepted** (2026-07-10; **R28-H / R28-H.1 Accepted 2026-07-13**; **R28-H.2 Accepted 2026-07-13**; **R28-I Accepted 2026-07-14**; **Appendix C Accepted 2026-07-16**; **Appendix C-2 Accepted 2026-07-16**; **Appendix C-3.1 Accepted 2026-07-16**; **Appendix C-3.2 Accepted 2026-07-16**) — **Accepted:** R27′-A/B, R28-D/D1 (gate), **R28-E/F/G** (P2-A completion re-evaluate seam, frozen `/grill-with-docs` 2026-07-10), **R28-H / R28-H.1** (Recovery Edge Obligation Lifetime + deadline / pending-decision single writer; soak `647484ef`), **R28-H.2** (DISCONNECTED_DEBOUNCING reconnect clears suspicion without starting recovery), **R28-I** (WAITING ownership; soak `ea6466f1` M03→M02 participant edge), **Appendix C** (Recovery Attempt Media Action Ownership; causal trace soak `103003` / `125859`), **Appendix C-2** (Deferred Media Action Ownership; soak `112433` **PASS**), **Appendix C-3.1** (Supersede Admission Closure; soak `114047` **PASS**), **Appendix C-3.2** (Recovery Fact Consumption; soak `120053` **PASS**). **Accepted companion:** ADR-0024 R29-E (host prune eligibility consumes R28-H; does not redefine obligation). **Draft:** P2-B re-evaluate action decision tree, full S13 completion. Complements ADR-0021 (R24–R26) and ADR-0023 (R29).
+**Partial Accepted** (2026-07-10; **R28-H / R28-H.1 Accepted 2026-07-13**; **R28-H.2 Accepted 2026-07-13**; **R28-I Accepted 2026-07-14**; **R28-J Accepted 2026-07-20**; **Appendix C Accepted 2026-07-16**; **Appendix C-2 Accepted 2026-07-16**; **Appendix C-3.1 Accepted 2026-07-16**; **Appendix C-3.2 Accepted 2026-07-16**) — **Accepted:** R27′-A/B, R28-D/D1 (gate), **R28-E/F/G** (P2-A completion re-evaluate seam, frozen `/grill-with-docs` 2026-07-10), **R28-H / R28-H.1** (Recovery Edge Obligation Lifetime + deadline / pending-decision single writer; soak `647484ef`; **scope per Obligation Episode — see R28-J**), **R28-H.2** (DISCONNECTED_DEBOUNCING reconnect clears suspicion without starting recovery), **R28-I** (WAITING ownership; soak `ea6466f1` M03→M02 participant edge), **R28-J** (Obligation Episode Generation within Edge Lifecycle; soak `obligation-p1-clean-20260720-125309` session `8f1bcfdc` M02→M01 **PASS**), **Appendix C** (Recovery Attempt Media Action Ownership; causal trace soak `103003` / `125859`), **Appendix C-2** (Deferred Media Action Ownership; soak `112433` **PASS**), **Appendix C-3.1** (Supersede Admission Closure; soak `114047` **PASS**), **Appendix C-3.2** (Recovery Fact Consumption; soak `120053` **PASS**). **Accepted companion:** ADR-0024 R29-E (host prune eligibility consumes R28-H; does not redefine obligation). **Draft:** P2-B re-evaluate action decision tree, full S13 completion. Complements ADR-0021 (R24–R26) and ADR-0023 (R29).
 
 ## Summary
 
@@ -10,16 +10,17 @@ S13-B soak proved `RECOVERY_REATTACH_SENT` with `peerReachable=true transportRea
 
 This ADR freezes:
 
-1. **Recovery Edge vs Recovery Attempt** (edge obligation ≠ attempt terminal)
+1. **Recovery Edge vs Recovery Attempt vs Obligation Episode** (edge obligation ≠ attempt terminal; R28-J episode scope)
 2. **Completion ownership** (per-edge controller, not initiator module)
 3. **Action authority + explicit completion decisions** (no decision vacuum)
 4. **Two-axis reachability** (`ReachabilitySnapshot`, not linear chain)
 5. **Presence projection boundary** (UI reads `ConferencePresenceProjection`, never `ReachabilitySnapshot`)
-6. **Recovery Edge Obligation Lifetime** (R28-H: OPEN/CLOSED exclusive close set + observation window; attempt terminal ≠ obligation CLOSED)
-7. **WAITING ownership** (R28-I: every WAITING state must name a next-action owner)
-8. **Recovery Attempt Media Action Ownership** (Appendix C: attempt MUST resolve media action before silent `FAILED_MEDIA_RECOVERY`)
-9. **Deferred Media Action Ownership** (Appendix C-2: `DEFERRED` retains owner; soak `112433` **PASS** — Accepted 2026-07-16)
-10. **Recovery Fact Reconciliation** (Appendix C-3: C-3.1 supersede admission **PASS** soak `114047`; C-3.2 fact consumption **PASS** soak `120053`)
+6. **Recovery Edge Obligation Lifetime** (R28-H: OPEN/CLOSED exclusive close set + observation window; attempt terminal ≠ obligation CLOSED; **scoped per Obligation Episode**)
+7. **Obligation Episode Generation** (R28-J: Edge Lifecycle vs Obligation Episode; `obligationGeneration`; `OBLIGATION_CLOSED(RECOVERED)` ≠ edge termination)
+8. **WAITING ownership** (R28-I: every WAITING state must name a next-action owner)
+9. **Recovery Attempt Media Action Ownership** (Appendix C: attempt MUST resolve media action before silent `FAILED_MEDIA_RECOVERY`)
+10. **Deferred Media Action Ownership** (Appendix C-2: `DEFERRED` retains owner; soak `112433` **PASS** — Accepted 2026-07-16)
+11. **Recovery Fact Reconciliation** (Appendix C-3: C-3.1 supersede admission **PASS** soak `114047`; C-3.2 fact consumption **PASS** soak `120053`)
 
 ```text
 ReachabilitySnapshot  →  Recovery Controller  →  EdgeRecoveryFacts
@@ -59,14 +60,17 @@ ConferencePresenceProjector    — joinedCount, connectedCount, recoveringPeers 
 
 ### R28-A — Recovery Edge vs Recovery Attempt
 
-A **Recovery Edge** is keyed `(sessionId, remoteModuleId)` and may span multiple **Recovery Attempts** (`attemptId`).
+A **Recovery Edge** is keyed `(sessionId, remoteModuleId)` and may span multiple **Recovery Attempts** (`attemptId`) and multiple **Obligation Episodes** (`obligationGeneration`; R28-J).
 
 | Terminal scope | Allowed values |
 |----------------|----------------|
 | **Attempt** | `RECOVERED`, `CANCELLED`, `ATTEMPT_TIMEOUT`, `SUPERSEDED` |
-| **Edge obligation** | `RECOVERED`, Membership `LEFT(remoteModuleId)`, `CONFERENCE_TERMINATED`, **`obligationDeadline exceeded` (R28-H)** |
+| **Obligation episode** (R28-H) | `RECOVERED`, **`obligationDeadline exceeded`** |
+| **Edge lifecycle** (R28-J) | Membership `LEFT(remoteModuleId)`, `CONFERENCE_TERMINATED`, local session teardown |
 
-**`ATTEMPT_TIMEOUT` terminates the attempt, not the edge completion obligation.**
+**`ATTEMPT_TIMEOUT` terminates the attempt, not the obligation episode.**
+
+**`CLOSED(RECOVERED)` terminates the obligation episode, not the Edge Lifecycle (R28-J).**
 
 When reachability improves after attempt terminal, the edge controller **MUST re-evaluate** completion. Re-evaluate **MAY** start a new attempt but **MUST NOT** be conflated with "must start next attempt."
 
@@ -78,11 +82,11 @@ Complements ADR-0021 R24 (Strategy A degraded residency); R28-A clarifies edge/a
 
 | Concept | Meaning |
 |---------|---------|
-| **Completion Owner** | Controller maintaining re-evaluate obligation until edge terminal |
+| **Completion Owner** | Controller maintaining re-evaluate obligation until **obligation episode** terminal (R28-H) or **Edge Lifecycle** end (R28-J) |
 | **Preferred Recovery Initiator** | Role hint (`initiatesReattach`); **≠** lifetime owner |
 | **Recovery Action Authority** | Which side **may invoke** role-allowed actions when reachable |
 
-Exactly-one obligation is **per edge per local controller**, not "M01 or M02 owns the edge globally."
+Exactly-one obligation episode is **active per edge per local controller** at a time, not "M01 or M02 owns the edge globally."
 
 ### R28-C — Action Authority & Explicit Decisions
 
@@ -178,10 +182,12 @@ Diagnostic probes (S13-B) may log legacy fields; they **MUST NOT** drive gating 
 #### Core invariant
 
 ```text
-Media Edge Restored     — transport / ICE connectivity re-established (connectivity fact)
-Recovery Edge Completed — controller explicitly declares edge terminal (recovery decision)
+Media Edge Restored          — transport / ICE connectivity re-established (connectivity fact)
+Obligation Episode Completed — controller closes current episode (e.g. `CLOSED(RECOVERED)`)
+Edge Lifecycle Ended         — record removed; membership / conference / local teardown (R28-J)
 
-Media Edge Restored MUST NOT imply Recovery Edge Completed.
+Media Edge Restored MUST NOT imply Obligation Episode Completed.
+Obligation Episode Completed MUST NOT imply Edge Lifecycle Ended (R28-J).
 ```
 
 #### ICE restoration vs completion
@@ -224,14 +230,14 @@ The re-evaluate **seam is identical for all edges** (host and participant). Role
 | Term | Meaning |
 |------|---------|
 | **Attempt Terminal** | Current recovery attempt ends: `RECOVERED`, `FAILED_MEDIA_RECOVERY`, `CANCELLED`, `SUPERSEDED` |
-| **Edge Obligation** | Completion owner maintains re-evaluate duty until edge terminal: `RECOVERED`, Membership `LEFT(remote)`, or Conference `TERMINATED` |
+| **Edge Obligation** | Completion owner maintains re-evaluate duty for the **current Obligation Episode** until episode terminal per R28-H (`RECOVERED`, `OBLIGATION_DEADLINE`, or lifecycle-ending close). **Not** synonymous with Edge Lifecycle (R28-J). |
 | **Superseded Attempt** | Material capability change causes explicit abandonment of current attempt; new attempt receives new budget |
 
 #### Rules
 
 ```text
 attempt_timeout terminates the current attempt only.
-It MUST NOT terminate the edge obligation.
+It MUST NOT terminate the obligation episode.
 ```
 
 **Phase model (v1 / P2-A):** `FAILED_MEDIA_RECOVERY` = **attempt terminal marker**; edge record **remains** in the controller map (R24-A degraded residency). P2-A deferred an explicit obligation state machine; **R28-H supersedes that deferral** and freezes `OPEN`/`CLOSED` lifetime + `obligationDeadline`.
@@ -335,13 +341,18 @@ See `docs/audit/p2a-completion-re-evaluate-seam.md` (Accepted).
 
 **Naming note:** R28-G remains **Capability Re-evaluation Contract**. This section is **R28-H**.
 
-#### Two independent lifecycles
+**Scope (R28-J, 2026-07-20):** R28-H defines OPEN / CLOSED / `obligationDeadline` for **one Obligation Episode** (`obligationGeneration`). An **Edge Lifecycle** (R28-J) may contain multiple sequential episodes. The no-reopen invariant applies **within** one episode only; a later recovery responsibility after a terminal episode outcome starts a **new** episode (new generation), not a reopen.
+
+#### Lifecycles (R28-H scope + R28-J)
 
 ```text
-RecoveryAttempt              — one recovery try (phase machine already in code)
+RecoveryAttempt              — one recovery try (phase machine)
         │
         ▼
-RecoveryEdgeObligation       — whether Controller still owes completion (THIS section)
+RecoveryEdgeObligation       — one obligation episode OPEN/CLOSED (THIS section; R28-J)
+        │
+        ▼
+Edge Lifecycle               — continuous edge record existence (R28-J)
         │
         ▼
 Membership Mutation (R29)    — who may prune / leave (ADR-0023; when = ADR-0024 R29-E)
@@ -350,10 +361,11 @@ Membership Mutation (R29)    — who may prune / leave (ADR-0023; when = ADR-002
 | Lifecycle | Answers | Terminal meaning |
 |-----------|---------|------------------|
 | **RecoveryAttempt** | Did this try end? | End of attempt #N only |
-| **RecoveryEdgeObligation** | Does Controller still own completion for this edge? | End of recovery ownership for `(sessionId, remote)` |
+| **RecoveryEdgeObligation** | Does Controller still own completion for **this episode**? | Episode CLOSED (`RECOVERED`, `OBLIGATION_DEADLINE`, or lifecycle-ending reason) |
+| **Edge Lifecycle** | Does this observer still track this peer edge? | Record removed (`cancelEdge`) |
 | **Membership** | Who may mutate roster? | Separate authority boundary (ADR-0023) |
 
-They **MUST** remain independent. **MUST NOT** implicitly terminate each other except via the explicit close set below.
+They **MUST** remain independent. **MUST NOT** implicitly terminate each other except via the explicit close / removal rules below.
 
 #### Attempt Terminal (unchanged scope; clarified non-derivations)
 
@@ -384,27 +396,29 @@ OPEN
 CLOSED
 ```
 
-While **OPEN**, the edge **MAY** host many attempts without closing:
+While **OPEN** (one episode), the edge record **MAY** host many attempts without closing the episode:
 
 ```text
-Attempt#3 FAILED     →  obligation stays OPEN
-Attempt#4 SUPERSEDED →  obligation stays OPEN
-Attempt#5 FAILED     →  obligation stays OPEN
+Attempt#3 FAILED     →  obligation episode stays OPEN
+Attempt#4 SUPERSEDED →  obligation episode stays OPEN
+Attempt#5 FAILED     →  obligation episode stays OPEN
 …
 ```
 
-**There is no "reopen".** Obligation never left OPEN; a material transition starts a **new Attempt**, not a reopen of the obligation.
+**There is no "reopen" within one episode.** While the episode stays OPEN, a material transition starts a **new Attempt**, not a reopen of the obligation. A later failure after episode CLOSED starts a **new episode** (R28-J), not a reopen.
 
-#### Close Conditions (exclusive set)
+#### Close Conditions (exclusive set per episode)
 
-`RecoveryEdgeObligation` **MUST** transition to **CLOSED** **only** when one of:
+`RecoveryEdgeObligation` (current episode) **MUST** transition to **CLOSED** **only** when one of:
 
 ```text
-1. RECOVERED                         — completion success
-2. membership committed LEFT(remote) — authority-driven membership terminal (R29)
-3. conference TERMINATED             — conference lifecycle terminal
-4. obligationDeadline exceeded       — hard abandon (anti permanent stuck roster)
+1. RECOVERED                         — episode success (Edge Lifecycle MAY continue — R28-J)
+2. membership committed LEFT(remote) — closes episode; Edge Lifecycle ends (record removed)
+3. conference TERMINATED             — closes episode; Edge Lifecycle ends
+4. obligationDeadline exceeded       — episode abandon (Edge Lifecycle MAY continue — R28-J)
 ```
+
+**Episode vs lifecycle:** conditions 1 and 4 close the **episode only**. Conditions 2 and 3 close the episode **and** terminate the Edge Lifecycle.
 
 **MUST NOT** close obligation:
 
@@ -462,7 +476,7 @@ Membership / projector / prune / `cleanupUnhealthyConferenceSession` **MUST** co
 
 **Forbidden:** deriving `hasPendingCompletionDecision` from HELLO silence, ICE CLOSED, or `route=false` outside the controller.
 
-Controller **MUST** set `obligationDeadlineAt` when an attempt enters a failed-media residency that leaves obligation OPEN (`attemptTerminalAt + observationWindow`). Subsequent failed residency after SUPERSEDE **MAY** refresh `obligationDeadlineAt` (follows latest failed entry). Closing **MUST** stamp `obligationClosedAt` + `obligationCloseReason` exactly once; CLOSED **MUST NOT** reopen.
+Controller **MUST** set `obligationDeadlineAt` when an attempt enters a failed-media residency that leaves obligation OPEN (`attemptTerminalAt + observationWindow`). Subsequent failed residency after SUPERSEDE **MAY** refresh `obligationDeadlineAt` (follows latest failed entry). Closing **MUST** stamp `obligationClosedAt` + `obligationCloseReason` exactly once per episode; a CLOSED episode **MUST NOT** reopen (R28-J: new failure after terminal episode outcome starts a new episode).
 
 `hasPendingCompletionDecision` **MUST** be true while a completion evaluation / re-evaluate / supersede decision for that edge is in flight, and false only when the controller has emitted a settled completion decision (or the edge has no active evaluation). Membership **MUST NOT** invent this flag.
 
@@ -486,6 +500,95 @@ DISCONNECTED_DEBOUNCING + ICE CONNECTED  →  HEALTHY
 ```
 
 **Rationale:** leaving the debounce timer armed after media is already CONNECTED produces false `beginRecovery` / `REATTACH` and sticky `edgeRecovering` while topology is healthy — conflating suspicion with obligation/attempt lifecycles.
+
+#### R28-J — Obligation Episode Generation
+
+**Rationale (soak `obligation-p1-clean-20260720-125309`, 2026-07-20):** session `8f1bcfdc`, M02 host → M01: `CLOSED(RECOVERED)` at `obligationGen=1`, healthy gap, second WiFi loss → `RECOVERY_OBLIGATION_OPENED obligationGen=2` with `previousPhase=RECOVERED` / `pathway=NEW_OBLIGATION_EPISODE`; second `CLOSED(RECOVERED)` at `obligationGen=2`. Prior contaminated soak showed `GROUP_LEAVE` → `cancelEdge()` → `edges.remove()` erased history — not an episode-renewal failure. Frozen `/grill-with-docs` 2026-07-20.
+
+R28-H governs **one recovery obligation episode**. R28-J governs **how many sequential episodes** may exist inside one Edge Lifecycle and when `obligationGeneration` advances.
+
+##### Three lifecycles (orthogonal)
+
+```text
+Edge Lifecycle          — does this peer relationship still exist on this observer?
+Obligation Episode      — one recovery-responsibility cycle (R28-H OPEN → CLOSED)
+Recovery Attempt        — one bounded try inside an episode (R28-A / R28-F)
+```
+
+| Lifecycle | Identity (v1) | Answers |
+|-----------|---------------|---------|
+| **Edge Lifecycle** | Continuous `(sessionId, remoteModuleId)` edge record existence | Does this observer still track recovery for this peer in this session? |
+| **Obligation Episode** | `obligationGeneration` within one Edge Lifecycle | Is this recovery-responsibility cycle open or closed? |
+| **Recovery Attempt** | `attemptId` within one episode | How is this episode being executed right now? |
+
+Edge Lifecycle persistence **does not** imply obligation continuity across episodes.
+
+##### Edge Lifecycle Identity (v1)
+
+In v1, an Edge Lifecycle is identified **implicitly** by the continuous existence of an edge recovery record keyed by `(sessionId, remoteModuleId)`. Removal of this record terminates the lifecycle. Recreating the record starts a new Edge Lifecycle.
+
+**Termination (lifecycle ends; record removed):** only when the underlying peer relationship is **explicitly** ended:
+
+1. **Membership termination** — member explicitly leaves; authority removes member; membership is no longer valid for this peer.
+2. **Conference termination** — conference / session lifecycle ends.
+3. **Local endpoint teardown** — local user explicitly hangs up; local session is intentionally destroyed.
+
+**Invariant:** `OBLIGATION_CLOSED(*)` **MUST NOT** terminate an Edge Lifecycle. Recovery completion and temporary connectivity failures **MUST NOT** terminate an Edge Lifecycle.
+
+v1 maps lifecycle termination to `cancelEdge()` → `edges.remove(key)` (implementation). ADR reason strings are non-normative; semantic categories above are normative.
+
+##### Obligation Episode
+
+An **Obligation Episode** is one recovery-responsibility cycle **inside** an active Edge Lifecycle. Each episode runs a full R28-H OPEN → attempts → terminal close arc.
+
+`obligationGeneration` is monotonically increasing **within** the current Edge Lifecycle. It identifies the episode counter, **not** edge identity, remote membership version, or endpoint topology generation.
+
+When a new Edge Lifecycle begins (record recreated after removal), `obligationGeneration` **MUST** start from its initial value (v1: `1`).
+
+##### New episode admission (narrow rule)
+
+A **new** Obligation Episode **MAY** be opened only when:
+
+1. The previous episode within the **same** Edge Lifecycle reached a **terminal recovery outcome**, and
+2. A subsequent edge failure requires new recovery responsibility.
+
+**Allowed terminal outcomes that admit the next episode:**
+
+```text
+CLOSED(RECOVERED)
+CLOSED(OBLIGATION_DEADLINE)
+```
+
+**MUST NOT** advance `obligationGeneration` (same episode continues):
+
+```text
+ATTEMPT_TIMEOUT
+FAILED_MEDIA_RECOVERY
+FAILED_REQUIRES_USER_ACTION
+SUPERSEDED
+REATTACH_REQUESTED
+REATTACH_ACCEPTED
+ICE_RESTARTING
+DISCONNECTED_DEBOUNCING
+```
+
+Episode generation advances only across **completed recovery responsibilities**, never across attempts or intermediate failure states.
+
+##### No-reopen rule (tightened)
+
+Within one Obligation Episode: once CLOSED, that episode **MUST NOT** reopen.
+
+A later recovery requirement after a terminal episode outcome **MUST** start a **new** Obligation Episode with `obligationGeneration + 1`. This is **not** a reopen.
+
+##### Non-goals (R28-J)
+
+R28-J **does not** define:
+
+- recovery lineage across removed edge records (`cancelEdge` is an identity boundary);
+- whether rejoin after explicit leave should inherit prior edge history;
+- obligation continuity after transient membership loss or endpoint / module topology migration.
+
+Those belong to a future ADR (e.g. detached edge / rejoin lineage), not R28-J.
 
 #### R28-I — WAITING Ownership
 
@@ -552,13 +655,14 @@ isFailedMediaRecovery()     // Attempt residency marker only
 isActivelyRecovering()      // Attempt phase only
 ```
 
-Existing `EdgeRecoveryRecord.edgeObligationOpen()` (phase actively recovering **or** failed-media residency) is a **partial** open predicate for P2-A. R28-H requires it to become a true lifetime API: OPEN until exclusive close set; expose CLOSED; honor `obligationDeadlineAt` owned solely by the controller.
+Existing `EdgeRecoveryRecord.edgeObligationOpen()` (phase actively recovering **or** failed-media residency) is a **partial** open predicate for P2-A. R28-H requires it to become a true **per-episode** lifetime API: OPEN until exclusive close set; expose CLOSED; honor `obligationDeadlineAt` owned solely by the controller. Edge Lifecycle may continue after episode CLOSED(RECOVERED) (R28-J).
 
 #### Boundary with Membership (ADR-0024 R29-E)
 
 ```text
-ADR-0022 R28-H  →  when Recovery truly ends (obligation CLOSED)
-ADR-0024 R29-E  →  after that, when Membership MAY mutate (prune eligibility)
+ADR-0022 R28-H  →  when the current obligation episode ends (episode CLOSED)
+ADR-0022 R28-J  →  when the Edge Lifecycle ends (record removed)
+ADR-0024 R29-E  →  after episode CLOSED (and deadline rules), when Membership MAY mutate (prune eligibility)
 ```
 
 R28-H **MUST NOT** define `canAuthorityPrune`. It only freezes obligation CLOSED as a **necessary** recovery-domain input for that future contract.
@@ -644,10 +748,11 @@ R24 Strategy A (degraded residency) **remains v1 default**; R28 does not authori
 2. **P1 R27′ (implemented 2026-07-10):** `ConferencePresenceProjector` + `TalkbackSessionSnapshot.conferencePresenceProjection`; Meeting pill reads `connectedCount` / `recoveringPeers` — not roster size.
 3. **P1 R28 reachability (implemented 2026-07-10):** `EdgeReachabilitySnapshot` gates `dispatchRecoveryReattachOutcome`; `DEFERRED` → `RECOVERY_PENDING` + `RECOVERY_WAITING(reason)`; v1 `routeConverged = qosMonitor.isGroupConnected(remoteModuleId)`. Soak G-R28-D PASS (`logs-s13b-reattach-reachability-20260710-161257`): no `RECOVERY_REATTACH_SENT` while `routeConverged=false`.
 4. **P2-A re-evaluate seam (frozen 2026-07-10):** R28-E/F/G — Coordinator-owned `RecoveryCapabilitySignature`; `RECOVERY_REEVALUATE` / `RECOVERY_FINAL_EVALUATION`; `FAILED_MEDIA_RECOVERY` record retained; material transition → MUST re-evaluate, MAY SUPERSEDE. See grill: `p2a-completion-re-evaluate-seam.md`.
-5. **R28-H obligation lifetime (frozen 2026-07-13):** OPEN/CLOSED exclusive close set + `obligationDeadline`; no reopen; prune consumers must use `edgeObligationClosed()` — implementation pending; `observationWindow` value TBD at impl (soak showed ~4s too short vs ~20s WiFi restore).
-6. **P2-B re-evaluate actions:** decision tree for `permittedActions` → dispatch / ICE restart / `WAITING_FOR_INBOUND` / SUPERSEDE — not frozen in P2-A.
-7. **P2 cleanup:** retire probe-only bools from decision paths; S13→E matrix update in write matrix.
-8. **ADR-0024 R29-E (not this ADR):** host post-terminal prune eligibility after obligation CLOSED.
+5. **R28-H obligation lifetime (frozen 2026-07-13):** OPEN/CLOSED exclusive close set + `obligationDeadline`; no reopen **within one episode** (R28-J); prune consumers must use `edgeObligationClosed()` — implementation pending; `observationWindow` value TBD at impl (soak showed ~4s too short vs ~20s WiFi restore).
+6. **R28-J obligation episode generation (implemented 2026-07-20):** `obligationGeneration` on `EdgeRecoveryRecord`; `needsNewObligationEpisode()` / `openNewRecoveryObligation()`; watchdog binds generation. Soak **PASS** `obligation-p1-clean-20260720-125309` (session `8f1bcfdc`, M02→M01 gen=1→gen=2).
+7. **P2-B re-evaluate actions:** decision tree for `permittedActions` → dispatch / ICE restart / `WAITING_FOR_INBOUND` / SUPERSEDE — not frozen in P2-A.
+8. **P2 cleanup:** retire probe-only bools from decision paths; S13→E matrix update in write matrix.
+9. **ADR-0024 R29-E (not this ADR):** host post-terminal prune eligibility after obligation CLOSED.
 
 ## Soak gates (future)
 
@@ -663,6 +768,7 @@ R24 Strategy A (degraded residency) **remains v1 default**; R28 does not authori
 | G-R28-H1 | After `FAILED_MEDIA_RECOVERY`: obligation stays OPEN; no `AUTHORITY_PRUNE` until CLOSED | **PASS** UT `obligationFacts_stayOpenAfterFailedMediaRecovery` + IT `conferenceR29E_hostMayAuthorityPruneAfterObligationDeadline` (pre-deadline: no prune). Evidence: `ConferenceEdgeRecoveryController` is the single writer of obligation lifecycle (`openedAt` / `deadlineAt` / `closedAt` / `closeReason`); cleanup and prune paths consume facts only |
 | G-R28-H2 | Material transition inside observation window → `RECOVERY_REEVALUATE` / new attempt; obligation still OPEN | **PASS** UT `failedMediaRecovery_materialTransition_emitsReevaluate` + IT `conferenceR28H2_materialReevalKeepsObligationOpenWithoutPrune` (also covers G-R29-E2 no prune) |
 | G-R28-H3 | Permanent offline past `obligationDeadline` → obligation CLOSED (enables later R29-E prune) | **PASS** UT `obligationDeadline_pastWindow_closesWithObligationDeadline` + IT `conferenceR29E_hostMayAuthorityPruneAfterObligationDeadline`. Evidence: `FAILED_MEDIA_RECOVERY` keeps obligation OPEN until `obligationDeadline`; deadline expiration closes with `closeReason=OBLIGATION_DEADLINE` and unlocks R29-E prune eligibility |
+| G-R28-J1 | Same Edge Lifecycle: `CLOSED(RECOVERED)` at gen=N, healthy gap, second disconnect → `RECOVERY_OBLIGATION_OPENED` gen=N+1, `pathway=NEW_OBLIGATION_EPISODE`, second `CLOSED(RECOVERED)`; no `member_left` / `cancelEdge` between rounds | **PASS** `obligation-p1-clean-20260720-125309` session `8f1bcfdc` M02 host → M01 |
 
 ## Conference transmit barrier scope — closed by ADR-0026 (2026-07-14)
 
@@ -1685,6 +1791,8 @@ Host-edge `DEFERRED(ROUTE_NOT_READY)` while control path resumes but `routeConve
 - ADR-0021 — Conference Edge Recovery Lifecycle (R24–R26)
 - ADR-0023 — Conference Membership Mutation Authority Boundary (R29)
 - ADR-0024 — Host Post-Terminal Prune Eligibility (R29-E)
+- [ADR-0030](./0030-presence-projection-contract.md) — Presence projection contract (R30-P)
+- [ADR-0031](./0031-distributed-observation-contract.md) — Distributed observation contract (R31-O)
 - `docs/audit/p2a-completion-re-evaluate-seam.md`
 - `docs/audit/s13b-recovery-reattach-reachability.md`
 - `docs/audit/ro-m3-recovery-write-matrix.md`

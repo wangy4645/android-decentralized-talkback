@@ -68,7 +68,8 @@ Root cause is not missing Runtime facts. It is incomplete Presence Plane contrac
 | Concern | Owner |
 |---------|-------|
 | Who may mutate roster | ADR-0023 |
-| When obligation closes / when host may prune | ADR-0022 R28-H, ADR-0024 R29-E |
+| When obligation episode closes / when host may prune | ADR-0022 R28-H / **R28-J**, ADR-0024 R29-E |
+| Per-peer Presence synthesis | **ADR-0030** |
 | Live / Waiting / Connecting pill mapping | **Deferred** — separate ADR (e.g. 0026 Conference Pill Mapping) |
 | Authority edge-matrix “local grey vs global grey” | **Deferred P2** — field reserved, algorithm not frozen here |
 

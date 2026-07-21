@@ -2,7 +2,7 @@
 
 ## Status
 
-**Accepted** (2026-07-13) — R29-A/B/C/D. Implements **R26 v2** and formalizes **WM-R5** post-terminal guarantees. Complements ADR-0021 (R24–R26) and ADR-0022 R28-F (attempt vs edge obligation).
+**Accepted** (2026-07-13) — R29-A/B/C/D. Implements **R26 v2** and formalizes **WM-R5** post-terminal guarantees. Complements ADR-0021 (R24–R26) and ADR-0022 R28-F / **R28-J** (attempt vs obligation episode vs Edge Lifecycle).
 
 > This is not a new requirement. It closes the `R26 v2 post-terminal roster semantics` hole that `ro-m3-recovery-write-matrix.md` §7 explicitly froze, and it upgrades WM-R5 from "not violated this soak" to an enforced boundary after the P2-B soak proved it violated on participant nodes.
 
@@ -23,7 +23,7 @@ This ADR freezes:
 1. **Membership mutation is a transaction** (roster + memberModules + floor + mesh binding), not four independent writes.
 2. **Only authority sources may execute it** (`AuthorityMembershipMutationSource`).
 3. **`LOCAL_RECOVERY_FAILURE` is not a mutation source** — it is a recovery fact source only, and MUST NOT enter the mutation API.
-4. **Membership mutation MUST NOT implicitly terminate the edge recovery obligation** (couples ADR-0022 R28-F).
+4. **Membership mutation MUST NOT implicitly terminate the Edge Lifecycle or the current obligation episode** (couples ADR-0022 R28-F / R28-J).
 
 ```text
 FAILED_MEDIA_RECOVERY  ≠  member_left  ≠  GROUP_LEAVE
@@ -52,7 +52,7 @@ FAILED_MEDIA_RECOVERY  ≠  member_left  ≠  GROUP_LEAVE
 ```kotlin
 // removeConferenceParticipant(session, moduleId) — four writes, no source contract:
 conferenceParticipantManager.applyPrune(session.id, moduleId)   // canonical roster
-conferenceEdgeRecoveryController.cancelEdge(session.id, moduleId, "member_left")  // edge obligation
+conferenceEdgeRecoveryController.cancelEdge(session.id, moduleId, "member_left")  // Edge Lifecycle end (+ episode close)
 session.memberModules.remove(ModuleId(moduleId))                // canonical membership
 releaseMeshPeer(session, moduleId)                              // mesh binding
 // + releaseFloorIfHolderUnavailable(session, moduleId)          // floor ownership
@@ -67,7 +67,7 @@ The following mutations form a single **Conference Membership Mutation Transacti
 ```text
 - conferenceParticipantManager roster mutation (applyPrune / replaceRoster)
 - session.memberModules mutation
-- edge obligation termination (cancelEdge)
+- Edge Lifecycle termination (`cancelEdge` / record remove)
 - floor ownership cleanup (releaseFloorIfHolderUnavailable)
 - mesh peer release (releaseMeshPeer)
 ```
@@ -130,23 +130,23 @@ FORBIDDEN:
 
 **Convergence guarantee:** participant membership is eventually consistent and is driven **solely** by the host's `GROUP_LEAVE` / roster broadcast. If M03 genuinely leaves, the host emits authority membership, and the participant removes it via `AUTHORITY_GROUP_LEAVE`.
 
-### R29-D — Membership Mutation MUST NOT Terminate the Edge Recovery Obligation
+### R29-D — Membership Mutation MUST NOT Terminate Recovery Ownership (Implicitly)
 
 The old model coupled membership and recovery lifetime:
 
 ```text
-FAILED_MEDIA_RECOVERY → cancelEdge(member_left) → releaseMeshPeer → edge obligation gone
+FAILED_MEDIA_RECOVERY → cancelEdge(member_left) → releaseMeshPeer → Edge Lifecycle ended
 ```
 
-This violates **ADR-0022 R28-F** (`attempt terminal ≠ edge obligation terminal`) in addition to R29.
+This violates **ADR-0022 R28-F** (`attempt terminal ≠ obligation episode`) and **R28-J** (recovery completion ≠ Edge Lifecycle end) in addition to R29.
 
 Frozen rule:
 
 ```text
-Membership mutation MUST NOT implicitly terminate the edge recovery obligation.
+Membership mutation MUST NOT implicitly terminate the Edge Lifecycle or the current obligation episode.
 ```
 
-Per R28-A the edge obligation is terminated only by `RECOVERED`, Membership `LEFT(remote)` (authority-driven), or Conference `TERMINATED`. A participant-local recovery failure is none of these, so it MUST leave both the membership and the edge obligation intact — allowing the same `RECOVERY_REEVALUATE → SUPERSEDED → RECOVERED` path the M01↔M02 edge demonstrated in this soak.
+Per **ADR-0022 R28-A / R28-J**: an obligation **episode** closes on `RECOVERED` or `OBLIGATION_DEADLINE` (Edge Lifecycle **may** continue). Edge Lifecycle ends only on membership removal, conference termination, or local teardown — never on participant-local recovery failure alone. A participant-local recovery failure is none of the lifecycle-ending events, so it MUST leave both membership and the edge recovery record intact — allowing the same `RECOVERY_REEVALUATE → SUPERSEDED → RECOVERED` path the M01↔M02 edge demonstrated in this soak.
 
 ## Relationship to prior governance
 
@@ -155,7 +155,7 @@ Per R28-A the edge obligation is terminated only by `RECOVERED`, Membership `LEF
 | write-matrix §1 Membership Single Writer | R29-A makes the four writes one authority-owned transaction |
 | write-matrix WM-R5 (`FAILED_MEDIA_RECOVERY` must not mutate Membership) | R29-C enforces it on participant + post-terminal (soak now proves it was violated) |
 | write-matrix §3.5 / §7 R26 v2 (post-terminal prune, frozen) | R29 is the R26 v2 resolution |
-| ADR-0022 R28-F (attempt vs edge obligation) | R29-D forbids membership mutation from implicitly terminating the edge obligation |
+| ADR-0022 R28-F / R28-J (attempt vs episode vs Edge Lifecycle) | R29-D forbids membership mutation from implicitly terminating recovery ownership |
 | ADR-0013 Floor Authority Route | floor cleanup is part of the authority mutation transaction (R29-A) |
 
 ## Consequences
@@ -196,7 +196,7 @@ P2  Presence / Pill          — do not touch until P0 + P1 land
 ## References
 
 - ADR-0021 — Conference Edge Recovery Lifecycle (R24–R26)
-- ADR-0022 — Recovery Completion Ownership & Reachability (R28-F attempt vs edge obligation)
+- ADR-0022 — Recovery Completion Ownership & Reachability (R28-F / R28-J)
 - ADR-0013 — Floor Authority Route
 - `docs/audit/ro-m3-recovery-write-matrix.md` (§1 Membership Single Writer, WM-R5, §3.5 / §7 R26 v2)
 - Soak `logs-p2a-reevaluate-20260713-104019` (session `c46a2ba0`)
