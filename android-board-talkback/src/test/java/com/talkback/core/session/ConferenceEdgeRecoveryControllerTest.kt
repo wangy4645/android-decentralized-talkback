@@ -902,12 +902,13 @@ class ConferenceEdgeRecoveryControllerTest {
             ObligationCloseReason.OBLIGATION_DEADLINE,
             controller.obligationCloseReason("sess-1", "M01")
         )
-        assertTrue(ObligationCloseReason.OBLIGATION_DEADLINE.isPruneEligible())
+        assertFalse(ObligationCloseReason.OBLIGATION_DEADLINE.isPruneEligible())
         assertFalse(controller.hasPendingCompletionDecision("sess-1", "M01"))
     }
 
     @Test
-    fun obligationCloseReason_nonDeadline_isNotPruneEligible() {
+    fun obligationCloseReason_v2_noReasonIsPruneEligible() {
+        assertFalse(ObligationCloseReason.OBLIGATION_DEADLINE.isPruneEligible())
         assertFalse(ObligationCloseReason.RECOVERED.isPruneEligible())
         assertFalse(ObligationCloseReason.MEMBERSHIP_LEFT.isPruneEligible())
         assertFalse(ObligationCloseReason.CONFERENCE_TERMINATED.isPruneEligible())

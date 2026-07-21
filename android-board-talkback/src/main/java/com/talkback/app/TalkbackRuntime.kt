@@ -465,6 +465,13 @@ class TalkbackRuntime(
     internal fun testObligationCloseReason(sessionId: String, remoteModuleId: String) =
         coordinator.testObligationCloseReason(sessionId, remoteModuleId)
 
+    internal fun testCanAuthorityPrune(sessionId: String, remoteModuleId: String): Boolean =
+        coordinator.testCanAuthorityPrune(sessionId, remoteModuleId)
+
+    internal fun testAuthorityPruneConferenceMember(sessionId: String, moduleId: String) {
+        coordinator.testAuthorityPruneConferenceMember(sessionId, moduleId)
+    }
+
     internal fun testObligationDeadlineAt(sessionId: String, remoteModuleId: String): Long? =
         coordinator.testObligationDeadlineAt(sessionId, remoteModuleId)
 

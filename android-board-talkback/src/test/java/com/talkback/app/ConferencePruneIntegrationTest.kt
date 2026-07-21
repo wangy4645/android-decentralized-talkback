@@ -443,9 +443,9 @@ class ConferencePruneIntegrationTest {
     }
 
     @Test
-    fun conferenceR29E_hostMayAuthorityPruneAfterObligationDeadline() {
-        // G-R28-H3 / G-R29-E3: past controller deadline → CLOSED(OBLIGATION_DEADLINE)
-        // → canAuthorityPrune may become true; non-deadline reasons stay off this path.
+    fun conferenceR29E3_deadlineClosesObligationWithoutAuthorityPrune() {
+        // G-R28-H3 / G-R29-E3 v2: past controller deadline → CLOSED(OBLIGATION_DEADLINE)
+        // closes recovery obligation only; must not authorize AUTHORITY_PRUNE (ADR-0024 v2).
         val channelId = "CONF-R29-DEADLINE-PRUNE"
         val context = RuntimeEnvironment.getApplication()
         val peers = TestTalkbackNode.allPeers(m01 to 50051, m02 to 50052, m03 to 50053)
@@ -521,16 +521,17 @@ class ConferencePruneIntegrationTest {
                 ObligationCloseReason.OBLIGATION_DEADLINE,
                 host.runtime.testObligationCloseReason(sessionId, "M03")
             )
-            assertTrue(
+            assertFalse(
                 host.runtime.testObligationCloseReason(sessionId, "M03")!!.isPruneEligible()
             )
+            assertFalse(host.runtime.testCanAuthorityPrune(sessionId!!, "M03"))
 
             host.runtime.testRunConferenceHealthCleanup(channelId)
 
-            assertTrue(host.hasLog { it.contains("Pruning unhealthy conference peer M03") })
-            assertTrue(host.hasLog { it.contains("source=AUTHORITY_PRUNE") })
+            assertFalse(host.hasLog { it.contains("Pruning unhealthy conference peer M03") })
+            assertFalse(host.hasLog { it.contains("source=AUTHORITY_PRUNE") })
             val after = host.runtime.sessionSnapshots().first { it.sessionId == sessionId }
-            assertFalse(after.memberKeys.any { it.startsWith("M03") })
+            assertTrue(after.memberKeys.any { it.startsWith("M03") })
         } finally {
             participant.stop()
             host.stop()
@@ -606,7 +607,7 @@ class ConferencePruneIntegrationTest {
                 }
             )
 
-            host.runtime.testRunConferenceHealthCleanup(channelId)
+            host.runtime.testAuthorityPruneConferenceMember(sessionId!!, "M03")
             assertTrue(host.hasLog { it.contains("source=AUTHORITY_PRUNE") })
 
             assertTrue(

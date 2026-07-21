@@ -2922,6 +2922,23 @@ class TalkbackCoordinator(
         conferenceEdgeRecoveryController.obligationCloseReason(sessionId, remoteModuleId)
     }
 
+    internal fun testCanAuthorityPrune(sessionId: String, remoteModuleId: String): Boolean =
+        runOnCoordinatorSync {
+            val session = sessions[sessionId] ?: return@runOnCoordinatorSync false
+            canAuthorityPrune(session, remoteModuleId)
+        }
+
+    internal fun testAuthorityPruneConferenceMember(sessionId: String, moduleId: String) =
+        runOnCoordinatorSync {
+            val session = sessions[sessionId] ?: return@runOnCoordinatorSync
+            removeConferenceParticipant(
+                session,
+                moduleId,
+                AuthorityMembershipMutationSource.AUTHORITY_PRUNE
+            )
+            repairConferenceMeshAfterLeave(session)
+        }
+
     internal fun testObligationDeadlineAt(sessionId: String, remoteModuleId: String): Long? =
         runOnCoordinatorSync {
             conferenceEdgeRecoveryController.obligationDeadlineAt(sessionId, remoteModuleId)
@@ -9102,6 +9119,9 @@ class TalkbackCoordinator(
         val closeReason =
             conferenceEdgeRecoveryController.obligationCloseReason(session.id, moduleId)
                 ?: return false
+        // ADR-0024 R29-E v2 / INV-MEM-002: OBLIGATION_DEADLINE closes recovery obligation
+        // only — temporary fail-closed until explicit Membership Eviction decision exists.
+        if (closeReason == ObligationCloseReason.OBLIGATION_DEADLINE) return false
         if (!closeReason.isPruneEligible()) return false
         if (conferenceEdgeRecoveryController.hasPendingCompletionDecision(session.id, moduleId)) {
             return false

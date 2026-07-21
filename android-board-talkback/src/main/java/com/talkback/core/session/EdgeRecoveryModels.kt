@@ -74,7 +74,7 @@ data class EdgeRecoveryFacts(
 
 /**
  * Exclusive close set for Recovery Edge Obligation (ADR-0022 R28-H).
- * v1 prune-eligible set is owned by ADR-0024 R29-E ([isPruneEligible]).
+ * Prune eligibility is owned by ADR-0024 R29-E v2 ([isPruneEligible]).
  */
 enum class ObligationCloseReason {
     RECOVERED,
@@ -82,8 +82,12 @@ enum class ObligationCloseReason {
     CONFERENCE_TERMINATED,
     OBLIGATION_DEADLINE;
 
-    /** ADR-0024 R29-E: v1 prune-eligible reasons only. */
-    fun isPruneEligible(): Boolean = this == OBLIGATION_DEADLINE
+    /**
+     * ADR-0024 R29-E v2: recovery close reasons do **not** alone authorize membership prune.
+     * v1 `OBLIGATION_DEADLINE → isPruneEligible() → AUTHORITY_PRUNE` is deprecated.
+     * Prune requires an explicit Membership Eviction decision (not yet implemented).
+     */
+    fun isPruneEligible(): Boolean = false
 }
 
 /** Media-action ownership sub-state on an attempt (ADR-0022 Appendix C / C-2). */
