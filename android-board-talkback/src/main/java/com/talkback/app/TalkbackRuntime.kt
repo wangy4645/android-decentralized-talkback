@@ -105,6 +105,9 @@ class TalkbackRuntime(
     fun sendConferenceInvites(sessionId: String, invitees: List<EndpointAddress>): Int =
         coordinator.sendConferenceInvites(sessionId, invitees)
 
+    fun sendConferenceRejoinInvites(sessionId: String, invitees: List<EndpointAddress>): Int =
+        coordinator.sendConferenceRejoinInvites(sessionId, invitees)
+
     fun sendConferenceRejoin(
         channelId: String,
         authority: EndpointAddress,

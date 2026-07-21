@@ -1137,6 +1137,9 @@ class TalkbackCoordinator(
     fun sendConferenceInvites(sessionId: String, invitees: List<EndpointAddress>): Int =
         runOnCoordinatorSync { sendConferenceInvitesInternal(sessionId, invitees) }
 
+    fun sendConferenceRejoinInvites(sessionId: String, invitees: List<EndpointAddress>): Int =
+        runOnCoordinatorSync { sendConferenceInvitesInternal(sessionId, invitees, rejoin = true) }
+
     /**
      * Internal (coordinator-thread) variant of sendConferenceInvites — call this when already
      * running on the coordinator executor to avoid a re-entrancy deadlock.
@@ -5627,6 +5630,16 @@ class TalkbackCoordinator(
             )
             return false
         }
+        if (session.type == SessionType.CONFERENCE &&
+            isBusyRejectPayload(signalPayload) &&
+            shouldPreserveMembershipOnConferenceBusyReject(session, moduleId)
+        ) {
+            log(
+                "[${session.traceId}] Ignoring BUSY from established member $moduleId " +
+                    "(INV-MEM-001: invite rejection does not imply departure)"
+            )
+            return false
+        }
         if (session.type == SessionType.CONFERENCE) {
             if (!conferenceParticipantManager.evictInvitee(session.id, moduleId, inviteState)) {
                 return false
@@ -8925,6 +8938,25 @@ class TalkbackCoordinator(
     private fun isConferenceRejoinEligible(session: TalkbackSession, moduleId: String): Boolean {
         val lifecycle = resolveConferenceMembershipLifecycle(session, moduleId) ?: return false
         return ConferenceRejoinEligibility.isEligible(lifecycle)
+    }
+
+    /**
+     * INV-MEM-001: rejoin / duplicate invite BUSY must not remove established roster membership.
+     * Uses membership plane only — MUST NOT read recovery obligation or edge facts.
+     */
+    private fun shouldPreserveMembershipOnConferenceBusyReject(
+        session: TalkbackSession,
+        moduleId: String
+    ): Boolean {
+        if (!isConferenceSession(session)) return false
+        val sessionId = session.id
+        if (!conferenceParticipantManager.containsParticipant(sessionId, moduleId)) {
+            return false
+        }
+        if (conferenceParticipantManager.wasEverConnected(sessionId, moduleId)) {
+            return true
+        }
+        return conferenceParticipantManager.participant(sessionId, moduleId).invite == InviteState.ACCEPTED
     }
 
     /**
