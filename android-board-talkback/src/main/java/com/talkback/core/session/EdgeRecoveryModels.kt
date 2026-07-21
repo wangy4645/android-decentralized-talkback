@@ -183,6 +183,11 @@ enum class InboundReattachLineageVerdict {
     OBLIGATION_CLOSED
 }
 
+/** Outbound REATTACH reject reasons that require completion reevaluation (ADR-0022 R28-L INV-REC-007). */
+enum class OutboundReattachRejectReason {
+    OBLIGATION_CLOSED
+}
+
 data class ReattachDispatchLineage(
     val attemptId: Long,
     val obligationGeneration: Long

@@ -4,6 +4,7 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -1936,5 +1937,136 @@ class ConferenceEdgeRecoveryControllerTest {
         )
         assertTrue(decisionLogs.any { it.contains("RECOVERY_REATTACH_RECEIPT") })
         assertFalse(controller.isControlPlaneStarted("sess-1", "M02"))
+    }
+
+    // --- R28-L (ADR-0022 INV-REC-005/007/008) — recovery-domain completion gates ---
+
+    @Test
+    fun r28l_invRec005_iceRestoredWithoutControlPlane_mustNotEdgeRecover() {
+        controller = buildController(attemptBudgetMs = 5_000L)
+        controller.onIceStateChanged(
+            sessionId = "sess-1",
+            channelId = "CH-1",
+            remoteModuleId = "M02",
+            iceState = "DISCONNECTED",
+            eligibility = eligible(),
+            initiatesReattach = true
+        )
+        nowMs = 60L
+        Thread.sleep(80)
+        assertTrue(controller.isEdgeRecovering("sess-1", "M02"))
+        assertFalse(controller.isControlPlaneStarted("sess-1", "M02"))
+
+        val logMark = decisionLogs.size
+        controller.onIceConnected("sess-1", "M02")
+        val afterIceConnected = decisionLogs.drop(logMark)
+
+        assertTrue(
+            afterIceConnected.any {
+                it.contains("RECOVERY_REEVALUATE") &&
+                    it.contains("trigger=${RecoveryReevaluateTrigger.ICE_RESTORED}") &&
+                    it.contains("mediaRestored=true") &&
+                    it.contains("controlPlaneStarted=false")
+            }
+        )
+        assertFalse(afterIceConnected.any { it.contains("RECOVERY_EDGE_RECOVERED") })
+        assertTrue(controller.edgeObligationOpen("sess-1", "M02"))
+        assertFalse(controller.edgeObligationClosed("sess-1", "M02"))
+        assertEquals(null, controller.obligationCloseReason("sess-1", "M02"))
+        assertTrue(controller.isEdgeRecovering("sess-1", "M02"))
+    }
+
+    @Test
+    fun r28l_invRec007_obligationClosedReject_triggersReevaluate_notRecovered() {
+        controller.onIceStateChanged(
+            sessionId = "sess-1",
+            channelId = "CH-1",
+            remoteModuleId = "M02",
+            iceState = "DISCONNECTED",
+            eligibility = eligible(),
+            initiatesReattach = true
+        )
+        nowMs = 60L
+        Thread.sleep(80)
+        assertEquals(
+            EdgeRecoveryPhase.REATTACH_REQUESTED,
+            controller.attemptLineageObservation("sess-1", "M02")!!.phase
+        )
+
+        val logMark = decisionLogs.size
+        controller.onRecoveryReattachOutboundRejected(
+            sessionId = "sess-1",
+            remoteModuleId = "M02",
+            reason = OutboundReattachRejectReason.OBLIGATION_CLOSED
+        )
+        val afterReject = decisionLogs.drop(logMark)
+
+        assertTrue(
+            afterReject.any {
+                it.contains("RECOVERY_REATTACH_OUTBOUND_REJECTED") &&
+                    it.contains("reason=OBLIGATION_CLOSED")
+            }
+        )
+        assertTrue(
+            afterReject.any {
+                it.contains("RECOVERY_REEVALUATE") &&
+                    it.contains("trigger=REATtach_OUTBOUND_REJECTED") &&
+                    it.contains("rejectReason=OBLIGATION_CLOSED")
+            }
+        )
+        assertFalse(afterReject.any { it.contains("RECOVERY_EDGE_RECOVERED") })
+        assertFalse(controller.edgeObligationClosed("sess-1", "M02"))
+        assertEquals(null, controller.obligationCloseReason("sess-1", "M02"))
+        assertTrue(controller.edgeObligationOpen("sess-1", "M02"))
+        assertTrue(controller.isEdgeRecovering("sess-1", "M02"))
+    }
+
+    @Test
+    fun r28l_invRec008_rejoinSessionBoundary_clearsPriorLineage() {
+        val oldSessionId = "sess-old"
+        val newSessionId = "sess-new"
+        controller.onIceStateChanged(
+            sessionId = oldSessionId,
+            channelId = "CH-1",
+            remoteModuleId = "M02",
+            iceState = "DISCONNECTED",
+            eligibility = eligible(),
+            initiatesReattach = true
+        )
+        nowMs = 60L
+        Thread.sleep(80)
+        val oldLineage = controller.attemptLineageObservation(oldSessionId, "M02")
+        assertNotNull(oldLineage)
+        val oldAttemptId = oldLineage!!.attemptId
+        val oldObligationGen = controller.obligationGeneration(oldSessionId, "M02")!!
+        assertTrue(controller.isEdgeRecovering(oldSessionId, "M02"))
+        assertTrue(controller.factsForSession(oldSessionId).recoveringRemoteModuleIds.contains("M02"))
+
+        controller.cancelSession(oldSessionId, "local_leave")
+
+        assertNull(controller.attemptLineageObservation(oldSessionId, "M02"))
+        assertNull(controller.obligationGeneration(oldSessionId, "M02"))
+        assertFalse(controller.isEdgeRecovering(oldSessionId, "M02"))
+        assertFalse(controller.factsForSession(oldSessionId).anyRecovering)
+
+        controller.onIceStateChanged(
+            sessionId = newSessionId,
+            channelId = "CH-1",
+            remoteModuleId = "M02",
+            iceState = "DISCONNECTED",
+            eligibility = eligible(),
+            initiatesReattach = true
+        )
+        nowMs += 60L
+        Thread.sleep(80)
+
+        val newLineage = controller.attemptLineageObservation(newSessionId, "M02")
+        assertNotNull(newLineage)
+        assertTrue(newLineage!!.obligationOpen)
+        assertEquals(1L, controller.obligationGeneration(newSessionId, "M02"))
+        assertTrue(newLineage.attemptId > oldAttemptId)
+        assertFalse(controller.factsForSession(oldSessionId).recoveringRemoteModuleIds.contains("M02"))
+        assertTrue(controller.factsForSession(newSessionId).recoveringRemoteModuleIds.contains("M02"))
+        assertEquals(oldObligationGen, 1L)
     }
 }

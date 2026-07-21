@@ -1024,6 +1024,47 @@ class ConferenceEdgeRecoveryController(
         notifyChanged(sessionId)
     }
 
+    /**
+     * Requester-side REATTACH reject (ADR-0022 R28-L INV-REC-007).
+     * Reject is a reevaluate trigger — never direct [markRecovered].
+     */
+    fun onRecoveryReattachOutboundRejected(
+        sessionId: String,
+        remoteModuleId: String,
+        reason: OutboundReattachRejectReason
+    ) {
+        val key = ConferenceEdgeKey(sessionId, remoteModuleId)
+        val record = edges[key] ?: return
+        onLog(
+            "RECOVERY_REATTACH_OUTBOUND_REJECTED session=$sessionId remote=$remoteModuleId " +
+                "reason=$reason attempt=${record.recoveryAttemptId} " +
+                "obligationGen=${record.obligationGeneration}"
+        )
+        record.reattachDeliveryState = ReattachDeliveryState.REJECTED
+        when (reason) {
+            OutboundReattachRejectReason.OBLIGATION_CLOSED ->
+                reevaluateAfterOutboundReattachReject(record, reason)
+        }
+        notifyChanged(sessionId)
+    }
+
+    private fun reevaluateAfterOutboundReattachReject(
+        record: EdgeRecoveryRecord,
+        reason: OutboundReattachRejectReason
+    ) {
+        val key = record.key
+        onLog(
+            "RECOVERY_REEVALUATE session=${key.sessionId} edge=${key.remoteModuleId} " +
+                "attempt=${record.recoveryAttemptId} trigger=REATtach_OUTBOUND_REJECTED " +
+                "rejectReason=$reason controlPlaneStarted=${record.controlPlaneStarted()} " +
+                "mediaRestored=${record.mediaRestored}"
+        )
+        when {
+            record.mediaRestored && record.controlPlaneStarted() -> markRecovered(record)
+            record.mediaRestored -> continueControlPlaneRecoveryAfterMediaRestored(record)
+        }
+    }
+
     fun onReattachRejected(
         sessionId: String,
         remoteModuleId: String,
