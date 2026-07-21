@@ -2,7 +2,7 @@
 
 ## Status
 
-**Partial Accepted** (2026-07-10; **R28-H / R28-H.1 Accepted 2026-07-13**; **R28-H.2 Accepted 2026-07-13**; **R28-I Accepted 2026-07-14**; **R28-J Accepted 2026-07-20**; **R28-K Accepted 2026-07-21**; **Appendix C Accepted 2026-07-16**; **Appendix C-2 Accepted 2026-07-16**; **Appendix C-3.1 Accepted 2026-07-16**; **Appendix C-3.2 Accepted 2026-07-16**) — **Accepted:** R27′-A/B, R28-D/D1 (gate), **R28-E/F/G** (P2-A completion re-evaluate seam, frozen `/grill-with-docs` 2026-07-10), **R28-H / R28-H.1** (Recovery Edge Obligation Lifetime + deadline / pending-decision single writer; soak `647484ef`; **scope per Obligation Episode — see R28-J**), **R28-H.2** (DISCONNECTED_DEBOUNCING reconnect clears suspicion without starting recovery), **R28-I** (WAITING ownership; soak `ea6466f1` M03→M02 participant edge), **R28-J** (Obligation Episode Generation within Edge Lifecycle; soak `obligation-p1-clean-20260720-125309` session `8f1bcfdc` M02→M01 **PASS**), **R28-K** (Recovery Capability vs Attempt Lifetime; soak `obs-matrix-ms1-20260721-120208` session `faaf8579` M-S1 second flap **motivation**), **Appendix C** (Recovery Attempt Media Action Ownership; causal trace soak `103003` / `125859`), **Appendix C-2** (Deferred Media Action Ownership; soak `112433` **PASS**), **Appendix C-3.1** (Supersede Admission Closure; soak `114047` **PASS**), **Appendix C-3.2** (Recovery Fact Consumption; soak `120053` **PASS**). **Accepted companion:** ADR-0024 R29-E (host prune eligibility consumes R28-H; does not redefine obligation). **Draft:** P2-B re-evaluate action decision tree, full S13 completion. Complements ADR-0021 (R24–R26) and ADR-0023 (R29).
+**Partial Accepted** (2026-07-10; **R28-H / R28-H.1 Accepted 2026-07-13**; **R28-H.2 Accepted 2026-07-13**; **R28-I Accepted 2026-07-14**; **R28-J Accepted 2026-07-20**; **R28-K Accepted 2026-07-21**; **R28-L Accepted 2026-07-21**; **Appendix C Accepted 2026-07-16**; **Appendix C-2 Accepted 2026-07-16**; **Appendix C-3.1 Accepted 2026-07-16**; **Appendix C-3.2 Accepted 2026-07-16**) — **Accepted:** R27′-A/B, R28-D/D1 (gate), **R28-E/F/G** (P2-A completion re-evaluate seam, frozen `/grill-with-docs` 2026-07-10), **R28-H / R28-H.1** (Recovery Edge Obligation Lifetime + deadline / pending-decision single writer; soak `647484ef`; **scope per Obligation Episode — see R28-J**), **R28-H.2** (DISCONNECTED_DEBOUNCING reconnect clears suspicion without starting recovery), **R28-I** (WAITING ownership; soak `ea6466f1` M03→M02 participant edge), **R28-J** (Obligation Episode Generation within Edge Lifecycle; soak `obligation-p1-clean-20260720-125309` session `8f1bcfdc` M02→M01 **PASS**), **R28-K** (Recovery Capability vs Attempt Lifetime; soak `obs-matrix-ms1-20260721-120208` session `faaf8579` M-S1 second flap **motivation**), **R28-L** (Recovery Completion Ownership & Convergence; soak `obs-matrix-ms1-r28k-20260721-132235` session `f498ab74` M-S1 post-R28-K **motivation**), **Appendix C** (Recovery Attempt Media Action Ownership; causal trace soak `103003` / `125859`), **Appendix C-2** (Deferred Media Action Ownership; soak `112433` **PASS**), **Appendix C-3.1** (Supersede Admission Closure; soak `114047` **PASS**), **Appendix C-3.2** (Recovery Fact Consumption; soak `120053` **PASS**). **Accepted companion:** ADR-0024 R29-E (host prune eligibility consumes R28-H; does not redefine obligation). **Draft:** P2-B re-evaluate action decision tree, full S13 completion. Complements ADR-0021 (R24–R26) and ADR-0023 (R29).
 
 ## Summary
 
@@ -22,6 +22,7 @@ This ADR freezes:
 10. **Deferred Media Action Ownership** (Appendix C-2: `DEFERRED` retains owner; soak `112433` **PASS** — Accepted 2026-07-16)
 11. **Recovery Fact Reconciliation** (Appendix C-3: C-3.1 supersede admission **PASS** soak `114047`; C-3.2 fact consumption **PASS** soak `120053`)
 12. **Recovery Capability vs Attempt Lifetime** (R28-K: capability unavailable MUST NOT produce attempt failure; timers scoped to capability lifecycle; resume/supersede lineage; soak `obs-matrix-ms1-20260721-120208`)
+13. **Recovery Completion Ownership & Convergence** (R28-L: completion fact layer; media ≠ edge recovered; REATTACH reject → reevaluate; rejoin lineage boundary; soak `obs-matrix-ms1-r28k-20260721-132235`)
 
 ```text
 ReachabilitySnapshot  →  Recovery Controller  →  EdgeRecoveryFacts
@@ -1971,6 +1972,251 @@ FAILED_MEDIA_RECOVERY is an attempt-level failure indication.
 
 **Evidence (pre-fix, motivation):** `logs/obs-matrix-ms1-20260721-120208/` — round 2 `12:06:08` deferred → `12:06:21` `ATTEMPT_TIMEOUT` `controlPlaneStarted=false` → `OWNER_BLOCKED` → stuck `FAILED_MEDIA_RECOVERY`; `AUTHORITY_PRUNE` absent (ADR-0024 v2 **PASS**).
 
+## R28-L — Recovery Completion Ownership & Convergence (Accepted 2026-07-21)
+
+**Refines:** R28-E (completion re-evaluate seam), R28-F (`FAILED_MEDIA_RECOVERY` semantics), R28-K (capability vs attempt — **does not extend**). **Does not amend:** ADR-0024 (membership prune), ADR-0030/0031 (presence / distributed observation), R28-J (obligation episode lifecycle), Appendix D (REATTACH delivery transport). **Out of scope (deferred to implementation design):** `RecoveryCompletionFact` transport protocol, ACK model, authority as sole completion owner, REATTACH state machine details, tombstone / cache policy.
+
+### 1. Motivation
+
+Post-R28-K soak `obs-matrix-ms1-r28k-20260721-132235` (session `f498ab74`, M-S1 WiFi flap) confirms **G-R28-K1 PASS**: capability blockage produced `RECOVERY_WAITING` / `RECOVERY_WATCHDOG_DEFERRED` without capability-induced `ATTEMPT_TIMEOUT`.
+
+Remaining failures are **completion ownership** gaps, not capability lifetime gaps:
+
+1. **Split-brain completion** — one observer records edge `RECOVERED` and closes its obligation; a related observer retains an open attempt (`REATTACH_REQUESTED`) because completion is local mutable state, not an observable fact.
+2. **Media-plane over-completion** — `ICE_CONNECTED` / `mediaRestored=true` interpreted as full recovery while `controlPlaneStarted=false`, yielding `ATTEMPT_TIMEOUT` → `FAILED_MEDIA_RECOVERY` despite live media.
+3. **Stale lineage after rejoin** — leave/rejoin does not boundary prior participant incarnation recovery state; old `attemptId` / obligation affects new lifecycle.
+
+The recovery model already distinguishes **Capability lifecycle**, **Attempt lifecycle**, and **Obligation lifecycle** (R28-K). It lacks a frozen **Completion lifecycle**: who may declare recovery complete, and how other observers converge.
+
+REATTACH is one carrier that exposed this gap; R28-L is **not** “fix REATTACH delivery.”
+
+### 2. Model — four layers
+
+```text
+Capability
+    |
+    v
+Recovery Attempt
+    |
+    v
+Completion Evaluation
+    |
+    v
+Recovery Completion Fact
+```
+
+| Layer | Role |
+|-------|------|
+| **Capability** | Whether attempt execution / timers may run (R28-K) |
+| **Recovery Attempt** | Attempt-scoped outcomes (`RECOVERED`, `FAILED_MEDIA_RECOVERY`, `SUPERSEDED`, …) |
+| **Completion Evaluation** | Decides whether declared completion requirements are satisfied |
+| **Recovery Completion Fact** | Observable recovery-domain fact consumable by other observers |
+
+**Recovery Completion Fact** is recovery-domain only. It is **not**:
+
+- membership mutation
+- presence state
+- UI state
+
+This ADR freezes **semantic boundaries** for completion facts. It does **not** require a specific broadcast mechanism.
+
+### 3. Completion evaluation — media vs control vs edge
+
+R28-E already forbids ICE restoration → direct `RECOVERED` when `controlPlaneStarted == false`. R28-L freezes the **outcome taxonomy**:
+
+```text
+ICE_RESTORED / media connectivity evidence
+        |
+        v
+   MEDIA_RECOVERED          (media-plane fact only)
+
+MEDIA_RECOVERED
+        +
+CONTROL_PLANE_READY        (per declared completion requirements)
+        |
+        v
+   EDGE_RECOVERED           (recovery completion for the edge)
+```
+
+`CONTROL_PLANE_READY` is defined by existing recovery contracts (e.g. Appendix D `controlPlaneStarted` derivation). R28-L does not redefine it.
+
+**Forbidden implicit upgrade:**
+
+```text
+ICE_CONNECTED  →  EDGE_RECOVERED     (without completion evaluation)
+mediaRestored  →  obligation CLOSED  (without completion evaluation)
+```
+
+### 4. Normative invariants
+
+#### INV-REC-005 — Media restoration MUST NOT imply recovery completion
+
+```text
+INV-REC-005 — Media connectivity restoration alone MUST NOT complete a
+recovery obligation or establish EDGE_RECOVERED.
+
+ICE_CONNECTED, mediaRestored, or equivalent media-plane evidence MAY
+establish MEDIA_RECOVERED.
+
+They MUST NOT alone establish EDGE_RECOVERED.
+
+EDGE_RECOVERED requires all declared recovery completion requirements
+for the edge, including required control-plane readiness when the
+recovery policy declares it.
+```
+
+**Distinction from INV-REC-003 (R28-K):** INV-REC-003 gates timers while **capability is unavailable**. INV-REC-005 gates **completion conclusions** while **capability may be available** but **completion requirements are incomplete** (e.g. media up, control plane not started).
+
+#### INV-REC-006 — Recovery completion MUST have observable ownership
+
+```text
+INV-REC-006 — Recovery completion MUST be representable as an observable
+recovery-domain fact.
+
+A local recovery state transition MUST NOT be the sole source of truth
+when other observers maintain independent recovery state for the same
+edge and obligation generation.
+
+A Recovery Completion Fact MUST identify at minimum:
+
+- session identity
+- edge identity
+- obligation generation
+- completion result
+- completion source (local | remote-confirmed)
+
+Completion result (non-exhaustive):
+- RECOVERED
+- DEADLINE
+- SUPERSEDED
+
+This invariant does NOT require:
+- a specific transport or broadcast protocol
+- that all observers receive the fact synchronously
+- that presence projection equals completion fact
+
+It requires that completion be **associable and verifiable** across
+observers that share recovery responsibility for the edge.
+```
+
+**Non-normative sketch (implementation deferred):**
+
+```text
+RecoveryCompletionFact
+  sessionId
+  edgeId
+  obligationGeneration
+  result: RECOVERED | DEADLINE | SUPERSEDED
+  source: local | remote-confirmed
+```
+
+#### INV-REC-007 — REATTACH rejection is not completion
+
+```text
+INV-REC-007 — A rejected recovery request MUST NOT directly mark the
+requester edge as recovered.
+
+REATTACH_REJECTED with reason OBLIGATION_CLOSED indicates that the
+remote side has closed its recovery obligation for the referenced
+lineage. It is a negative response carrying a positive hint: "this
+obligation episode is already closed on the responder."
+
+The requester MUST perform recovery reevaluation using current:
+
+- capability state
+- media state (including MEDIA_RECOVERED if applicable)
+- control-plane state
+- completion facts (INV-REC-006)
+
+Forbidden:
+
+  REATTACH_REJECTED(OBLIGATION_CLOSED)  →  markRecovered()   (direct)
+
+Required:
+
+  REATTACH_REJECTED  →  RECOVERY_REEVALUATE  →  completion evaluation
+                              |
+              +---------------+---------------+
+              |               |               |
+         RECOVERED      new attempt      deadline / WAITING
+```
+
+Reject is **not** a completion event. It is a **reevaluate trigger**.
+
+#### INV-REC-008 — Rejoin creates a new recovery lineage boundary
+
+```text
+INV-REC-008 — Conference rejoin MUST NOT inherit stale recovery
+attempt state from a previous participant incarnation.
+
+A rejoin creates a new recovery lineage boundary. Outstanding recovery
+state from the previous incarnation MUST NOT affect the new
+participant lifecycle.
+
+At minimum, lineage binding MUST distinguish:
+
+- sessionId
+- participantInstanceId (or equivalent incarnation identity)
+- obligationGeneration
+- attemptId
+
+Clearing `recovering[]` in UI projection alone is NON-COMPLIANT if
+controller obligation / attempt records from the prior incarnation
+remain active.
+```
+
+### 5. FAILED_MEDIA_RECOVERY — semantic supplement (no enum change)
+
+`FAILED_MEDIA_RECOVERY` remains an **attempt-level exhaustion signal** (R28-F). R28-L adds:
+
+```text
+FAILED_MEDIA_RECOVERY does NOT imply:
+
+- episode terminal failure (obligation MAY remain OPEN per R28-H)
+- membership failure or prune eligibility by itself
+- permanent inability to recover
+
+An open obligation MAY supersede a failed attempt after capability
+restoration or new completion evidence (INV-REC-004 / R28-K).
+```
+
+Attempt timeout while `mediaRestored=true` and `controlPlaneStarted=false` is a **completion evaluation failure**, not evidence that media recovery failed.
+
+### 6. Soak gates
+
+| Gate | Criterion |
+|------|-----------|
+| **G-R28-L1** | Media-only recovery: `ICE_CONNECTED` + `mediaRestored` without required control-plane readiness MUST NOT produce `EDGE_RECOVERED` or close the obligation solely on media evidence |
+| **G-R28-L2** | Completion convergence: when one observer records `EDGE_RECOVERED` / obligation `CLOSED(RECOVERED)` for `(session, edge, obligationGeneration)`, other observers with related open recovery state for that lineage MUST either consume an equivalent completion fact or reevaluate to a consistent local outcome. **Does not require** identical UI presence (ADR-0030/0031) |
+| **G-R28-L3** | Rejoin lineage: after leave/rejoin, prior incarnation `attemptId` / recovery obligation state MUST NOT affect the new participant incarnation |
+
+**Evidence (motivation, post-R28-K):** `logs/obs-matrix-ms1-r28k-20260721-132235/` session `f498ab74`:
+
+- **G-R28-K PASS:** `14:20:55` `RECOVERY_WATCHDOG_DEFERRED` `ROUTE_NOT_READY` on M01→M02; no capability-block `ATTEMPT_TIMEOUT`.
+- **G-R28-L1/L2 FAIL (M01→M02):** `14:21:36` M01 `REATTACH_SENT`; M02 `EDGE_RECOVERED` for M01 via ICE restart; `14:21:38` `REATTACH_INBOUND_REJECTED` `OBLIGATION_CLOSED`; M01 remains `REATTACH_REQUESTED` / `obligationOpen=true` with `hostIce=CONNECTED`.
+- **G-R28-L1 FAIL (M03→M02):** `14:21:24` `ICE_RESTORED` `mediaRestored=true`; `14:21:37` `ATTEMPT_TIMEOUT` → `FAILED_MEDIA_RECOVERY` with `controlPlaneStarted=false`.
+- **G-R28-L3 FAIL (M01):** `14:22:35` leave with `edges={M02:REATTACH_REQUESTED@a1}`; `14:22:42` rejoin; `14:22:43+` still `recovering=[M02]`.
+
+### 7. Relationship to adjacent ADRs
+
+| ADR / section | Relationship |
+|---------------|--------------|
+| **R28-K** | Upstream: capability vs attempt. R28-L does **not** extend capability deferral rules. |
+| **R28-E** | Upstream: re-evaluate seam. R28-L freezes completion outcome taxonomy (`MEDIA_RECOVERED` vs `EDGE_RECOVERED`). |
+| **R28-J / R28-H** | Unchanged: obligation episode lifecycle and deadline. |
+| **ADR-0024** | Unchanged: membership eviction consumes obligation facts; completion fact ≠ prune. |
+| **ADR-0030 / 0031** | Unchanged: completion fact ≠ presence projection. |
+| **Appendix D** | Unchanged transport contract; R28-L does not subsume delivery ACK design. |
+
+### 8. Deferred (implementation design — not in this freeze)
+
+- `RecoveryCompletionFact` propagation (broadcast, pull, implicit inference)
+- Whether authority is the sole completion fact emitter for host edges
+- Tombstone / dedup / cache TTL for completion facts
+- Full REATTACH state machine beyond INV-REC-007 reject semantics
+
+**Suggested implementation order (non-normative):** (1) ADR R28-L freeze; (2) minimal UT for INV-REC-005/007/008; (3) then evaluate Appendix D delivery work.
+
 ## Appendix D — REATTACH Control-Plane Delivery Contract (P0-A)
 
 Frozen 2026-07-21. Closes soak `8c187a94` (M-S1): `RECOVERY_REATTACH_SENT` without peer `INBOUND`.
@@ -2087,3 +2333,4 @@ MembershipEviction, tombstone/roster replay, R28-J obligation episode semantics,
 - Issue #73-B Recovery Reattach Reachability
 - R29 soak `logs-r29-soak-20260713-112015` (session `647484ef`)
 - R28-K motivation soak `logs/obs-matrix-ms1-20260721-120208` (session `faaf8579`, M-S1 WiFi flap; ADR-0024 v2 prune fail-closed **PASS**; attempt lifetime **FAIL** pre-R28-K implementation)
+- R28-L motivation soak `logs/obs-matrix-ms1-r28k-20260721-132235` (session `f498ab74`, M-S1 post-R28-K; G-R28-K **PASS**; G-R28-L1/L2/L3 **FAIL** — completion convergence)
