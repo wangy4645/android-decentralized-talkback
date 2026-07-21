@@ -116,7 +116,7 @@ internal enum class MediaActionDisposition {
     ABORTED
 }
 
-internal enum class DeferredReason {
+enum class DeferredReason {
     ROUTE_NOT_READY,
     AUTHORITY_NOT_READY,
     MEDIA_NOT_READY,
@@ -166,6 +166,28 @@ internal fun edgeWakeupKey(sessionId: String, remoteModuleId: String): String =
 
 internal fun moduleWakeupKey(moduleId: String): String = "module($moduleId)"
 
+/** REATTACH control-plane delivery facts — orthogonal to obligation state (ADR-0022 Appendix D). */
+enum class ReattachDeliveryState {
+    QUEUED,
+    TRANSPORT_SENT,
+    REMOTE_RECEIPT_ACKED,
+    RECEIVED,
+    ACCEPTED,
+    REJECTED,
+    DEFERRED
+}
+
+enum class InboundReattachLineageVerdict {
+    ACCEPT,
+    STALE_OBLIGATION_GENERATION,
+    OBLIGATION_CLOSED
+}
+
+data class ReattachDispatchLineage(
+    val attemptId: Long,
+    val obligationGeneration: Long
+)
+
 internal data class EdgeRecoveryRecord(
     val key: ConferenceEdgeKey,
     var phase: EdgeRecoveryPhase,
@@ -192,14 +214,17 @@ internal data class EdgeRecoveryRecord(
     var obligationDeadlineAtMs: Long? = null,
     var obligationClosedAtMs: Long? = null,
     var obligationCloseReason: ObligationCloseReason? = null,
-    var hasPendingCompletionDecision: Boolean = false
+    var hasPendingCompletionDecision: Boolean = false,
+    /** Delivery-plane state for outbound/inbound REATTACH (ADR-0022 Appendix D). */
+    var reattachDeliveryState: ReattachDeliveryState = ReattachDeliveryState.QUEUED,
+    /** Envelope nonce of the current outbound REATTACH dispatch. */
+    var reattachNonce: String? = null
 ) {
     /** True while this record owns an active recovery attempt (ADR-0022 P0.5). */
     fun hasActiveAttempt(): Boolean = phase.isActivelyRecovering()
 
-    /** True once attempt crossed the control-plane boundary (ADR-0022 R28-E). */
+    /** True once attempt crossed the control-plane boundary (ADR-0022 R28-E / Appendix D). */
     fun controlPlaneStarted(): Boolean = when (phase) {
-        EdgeRecoveryPhase.REATTACH_REQUESTED,
         EdgeRecoveryPhase.REATTACH_ACCEPTED,
         EdgeRecoveryPhase.ICE_RESTARTING -> true
         else -> false

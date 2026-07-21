@@ -352,6 +352,12 @@ class ConferenceEdgeRecoveryControllerTest {
             initiatesReattach = true
         )
         assertEquals(1, reattachCalls)
+        controller.onRecoveryReattachAccepted(
+            "sess-1",
+            "M01",
+            RecoveryReason.HOST_REATTACH,
+            RecoverySource.ICE_MONITOR
+        )
         controller.onIceConnected("sess-1", "M01")
         assertFalse(controller.factsForSession("sess-1").anyRecovering)
         assertFalse(controller.factsForSession("sess-1").anyFailedMediaRecovery)
@@ -385,6 +391,12 @@ class ConferenceEdgeRecoveryControllerTest {
             iceState = "FAILED",
             eligibility = eligible(),
             initiatesReattach = true
+        )
+        controller.onRecoveryReattachAccepted(
+            "sess-1",
+            "M01",
+            RecoveryReason.HOST_REATTACH,
+            RecoverySource.ICE_MONITOR
         )
         controller.onIceConnected("sess-1", "M01")
         assertFalse(controller.isEdgeRecovering("sess-1", "M01"))
@@ -971,6 +983,12 @@ class ConferenceEdgeRecoveryControllerTest {
             eligibility = eligible(),
             initiatesReattach = true
         )
+        controller.onRecoveryReattachAccepted(
+            "sess-1",
+            "M01",
+            RecoveryReason.HOST_REATTACH,
+            RecoverySource.ICE_MONITOR
+        )
         controller.onIceConnected("sess-1", "M01")
         assertFalse(controller.edgeObligationOpen("sess-1", "M01"))
         assertTrue(controller.edgeObligationClosed("sess-1", "M01"))
@@ -1295,7 +1313,7 @@ class ConferenceEdgeRecoveryControllerTest {
         val snapshot = EdgeReachabilitySnapshot(
             linkReady = true,
             peerDiscovered = true,
-            routeConverged = false,
+            routeConverged = true,
             authorityReachable = false
         )
         val signature = projectRecoveryCapabilitySignature(
@@ -1580,6 +1598,7 @@ class ConferenceEdgeRecoveryControllerTest {
             trigger = RecoveryReevaluateTrigger.REMOTE_MODULE_RECOVERED
         )
         assertTrue(decisionLogs.any { it.contains("RECOVERY_REATTACH_REQUESTED") })
+        assertFalse(controller.isControlPlaneStarted("sess-1", "M02"))
         decisionLogs.clear()
 
         Thread.sleep(80)
@@ -1729,5 +1748,150 @@ class ConferenceEdgeRecoveryControllerTest {
 
         assertFalse(decisionLogs.any { it.contains("RECOVERY_ATTEMPT_TIMEOUT") && it.contains("obligationGen=$gen1") })
         assertTrue(controller.attemptLineageObservation("sess-1", "M01")!!.obligationGeneration == gen2)
+    }
+
+    @Test
+    fun reattach_sent_without_receipt_doesNotStartControlPlane() {
+        controller.onIceStateChanged(
+            sessionId = "sess-1",
+            channelId = "CH-1",
+            remoteModuleId = "M02",
+            iceState = "DISCONNECTED",
+            eligibility = eligible(),
+            initiatesReattach = true
+        )
+        Thread.sleep(80)
+        assertTrue(
+            decisionLogs.any {
+                it.contains("RECOVERY_REATTACH_SENT") && it.contains("deliveryState=TRANSPORT_SENT")
+            }
+        )
+        assertFalse(controller.isControlPlaneStarted("sess-1", "M02"))
+        assertEquals(
+            EdgeRecoveryPhase.REATTACH_REQUESTED,
+            controller.attemptLineageObservation("sess-1", "M02")!!.phase
+        )
+    }
+
+    @Test
+    fun stale_obligationGeneration_rejectsInboundReattach() {
+        controller = buildController(isIceConnected = { _, _ -> true })
+        controller.onIceStateChanged(
+            sessionId = "sess-1",
+            channelId = "CH-1",
+            remoteModuleId = "M01",
+            iceState = "DISCONNECTED",
+            eligibility = eligible(),
+            initiatesReattach = false
+        )
+        Thread.sleep(80)
+        controller.onRecoveryReattachAccepted(
+            "sess-1",
+            "M01",
+            RecoveryReason.NETWORK_RECOVERY,
+            RecoverySource.ICE_MONITOR
+        )
+        controller.onIceConnected("sess-1", "M01")
+        assertFalse(controller.edgeObligationOpen("sess-1", "M01"))
+
+        controller.onIceStateChanged(
+            sessionId = "sess-1",
+            channelId = "CH-1",
+            remoteModuleId = "M01",
+            iceState = "DISCONNECTED",
+            eligibility = eligible(),
+            initiatesReattach = false
+        )
+        Thread.sleep(80)
+        val currentGen = controller.obligationGeneration("sess-1", "M01")!!
+        assertTrue(currentGen >= 2L)
+
+        val verdict = controller.evaluateInboundReattachLineage(
+            sessionId = "sess-1",
+            remoteModuleId = "M01",
+            senderAttemptId = 1L,
+            senderObligationGeneration = currentGen - 1L
+        )
+        assertEquals(InboundReattachLineageVerdict.STALE_OBLIGATION_GENERATION, verdict)
+
+        val inbound = controller.onRecoveryReattachInboundReceived(
+            sessionId = "sess-1",
+            channelId = "CH-1",
+            remoteModuleId = "M01",
+            senderAttemptId = 1L,
+            senderObligationGeneration = currentGen - 1L,
+            nonce = "stale-nonce"
+        )
+        assertEquals(InboundReattachLineageVerdict.STALE_OBLIGATION_GENERATION, inbound)
+        assertTrue(decisionLogs.any { it.contains("RECOVERY_REATTACH_INBOUND_REJECTED") })
+    }
+
+    @Test
+    fun ownerBlockedInboundProducesDeferredDecision() {
+        controller.onIceStateChanged(
+            sessionId = "sess-1",
+            channelId = "CH-1",
+            remoteModuleId = "M01",
+            iceState = "DISCONNECTED",
+            eligibility = eligible(),
+            initiatesReattach = false
+        )
+        Thread.sleep(80)
+        val attemptId = controller.attemptLineageObservation("sess-1", "M01")!!.attemptId
+        val obligationGen = controller.obligationGeneration("sess-1", "M01")!!
+
+        val received = controller.onRecoveryReattachInboundReceived(
+            sessionId = "sess-1",
+            channelId = "CH-1",
+            remoteModuleId = "M01",
+            senderAttemptId = attemptId,
+            senderObligationGeneration = obligationGen,
+            nonce = "inbound-nonce"
+        )
+        assertEquals(InboundReattachLineageVerdict.ACCEPT, received)
+        assertTrue(decisionLogs.any { it.contains("deliveryState=RECEIVED") })
+
+        controller.onRecoveryReattachInboundDeferred(
+            sessionId = "sess-1",
+            channelId = "CH-1",
+            remoteModuleId = "M01",
+            reason = DeferredReason.MEDIA_NOT_READY,
+            trigger = "INBOUND_REATTACH"
+        )
+        assertTrue(decisionLogs.any { it.contains("RECOVERY_REATTACH_INBOUND_DEFERRED") })
+        assertTrue(decisionLogs.any { it.contains("deferredReason=MEDIA_NOT_READY") })
+    }
+
+    @Test
+    fun reattach_receipt_without_accept_doesNotStartControlPlane() {
+        controller = buildController(
+            onRequestReattach = { sessionId, _, remoteModuleId ->
+                reattachCalls++
+                controller.registerReattachTransportNonce(sessionId, remoteModuleId, "nonce-42")
+                ReattachDispatchOutcome.SENT
+            }
+        )
+        controller.onIceStateChanged(
+            sessionId = "sess-1",
+            channelId = "CH-1",
+            remoteModuleId = "M02",
+            iceState = "DISCONNECTED",
+            eligibility = eligible(),
+            initiatesReattach = true
+        )
+        Thread.sleep(80)
+        val attemptId = controller.attemptLineageObservation("sess-1", "M02")!!.attemptId
+        val obligationGen = controller.obligationGeneration("sess-1", "M02")!!
+        assertTrue(
+            controller.onRecoveryReattachReceipt(
+                sessionId = "sess-1",
+                remoteModuleId = "M02",
+                nonce = "nonce-42",
+                attemptId = attemptId,
+                obligationGeneration = obligationGen
+            )
+        )
+        assertTrue(decisionLogs.any { it.contains("RECOVERY_REATTACH_RECEIPT") })
+        assertFalse(controller.isControlPlaneStarted("sess-1", "M02"))
     }
 }

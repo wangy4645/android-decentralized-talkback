@@ -49,7 +49,7 @@ class EdgeReachabilitySnapshotTest {
     }
 
     @Test
-    fun capability_participant_routeDown_allowsDispatchNotComplete() {
+    fun capability_participant_routeDown_waitsForRouteBeforeDispatch() {
         val snap = EdgeReachabilitySnapshot(
             linkReady = true,
             peerDiscovered = true,
@@ -61,9 +61,9 @@ class EdgeReachabilitySnapshotTest {
             initiatesReattach = true,
             controlPlaneStarted = false
         )
-        assertTrue(RecoveryAction.DISPATCH_REATTACH in signature.permittedActions)
-        assertFalse(RecoveryAction.COMPLETE_EDGE in signature.permittedActions)
-        assertEquals("DISPATCH_REATTACH", signature.formatCapabilityLabel())
+        assertFalse(RecoveryAction.DISPATCH_REATTACH in signature.permittedActions)
+        assertEquals(RecoveryWaitingReason.WAITING_FOR_ROUTE, signature.waitingReason)
+        assertEquals("WAITING_FOR_ROUTE", signature.formatCapabilityLabel())
     }
 
     @Test
@@ -78,6 +78,7 @@ class EdgeReachabilitySnapshotTest {
             initiatesReattach = true,
             controlPlaneStarted = false
         )
+        assertEquals(RecoveryWaitingReason.WAITING_FOR_ROUTE, blocked.waitingReason)
         val converged = projectRecoveryCapabilitySignature(
             EdgeReachabilitySnapshot(
                 linkReady = true,
@@ -89,7 +90,7 @@ class EdgeReachabilitySnapshotTest {
             controlPlaneStarted = false
         )
         assertTrue(converged.isMaterialChangeFrom(blocked))
-        assertEquals("DISPATCH_REATTACH", blocked.formatCapabilityLabel())
+        assertEquals("WAITING_FOR_ROUTE", blocked.formatCapabilityLabel())
         assertEquals("DISPATCH_REATTACH", converged.formatCapabilityLabel())
     }
 

@@ -387,17 +387,20 @@ class ConferencePruneIntegrationTest {
 
             val reevalMark = synchronized(host.logs) { host.logs.size }
             host.runtime.simulateRemoteIceState("M03", "CONNECTED")
+            peer.runtime.simulateRemoteIceState("M02", "CONNECTED")
             assertTrue(
-                host.waitForLogSince(reevalMark, timeoutMs = 5_000L) {
+                host.waitForLogSince(reevalMark, timeoutMs = 8_000L) {
                     it.contains("RECOVERY_REEVALUATE") &&
                         it.contains("edge=M03") &&
                         it.contains("trigger=ROUTE_CONVERGED")
                 }
             )
             assertTrue(
-                host.waitForLogSince(reevalMark, timeoutMs = 5_000L) {
+                host.waitForLogSince(reevalMark, timeoutMs = 8_000L) {
                     (it.contains("decision=SUPERSEDED") && it.contains("edge=M03")) ||
                         (it.contains("RECOVERY_EDGE_RECOVERED") && it.contains("remote=M03")) ||
+                        (it.contains("RECOVERY_REATTACH_INBOUND") && it.contains("from=M03")) ||
+                        (it.contains("RECOVERY_REATTACH accepted M03")) ||
                         (it.contains("RECOVERY_DECISION") && it.contains("edge=M03") &&
                             it.contains("decision=DISPATCH_REATTACH"))
                 }

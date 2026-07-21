@@ -8,7 +8,13 @@ data class ConferenceRejoinPayload(
     val hostSessionId: String,
     val membershipEpoch: Long = 0L,
     val endpointId: String = "",
-    val intent: ConferenceJoinIntent = ConferenceJoinIntent.USER_REJOIN
+    val intent: ConferenceJoinIntent = ConferenceJoinIntent.USER_REJOIN,
+    /** Recovery Controller attempt id (ADR-0022 Appendix D). */
+    val recoveryAttemptId: Long = 0L,
+    /** Recovery obligation episode id (ADR-0022 Appendix D). */
+    val obligationGeneration: Long = 0L,
+    /** Envelope nonce of the originating REATTACH request (receipt correlation). */
+    val requestNonce: String = ""
 ) {
     fun encode(): String = JSONObject()
         .put("channelId", channelId)
@@ -16,6 +22,9 @@ data class ConferenceRejoinPayload(
         .put("membershipEpoch", membershipEpoch)
         .put("endpointId", endpointId)
         .put("intent", intent.encode())
+        .put("recoveryAttemptId", recoveryAttemptId)
+        .put("obligationGeneration", obligationGeneration)
+        .put("requestNonce", requestNonce)
         .toString()
 
     companion object {
@@ -31,7 +40,10 @@ data class ConferenceRejoinPayload(
                 } else {
                     // Legacy wire default was recovery; Membership path now sets USER_REJOIN explicitly.
                     ConferenceJoinIntent.RECOVERY_REATTACH
-                }
+                },
+                recoveryAttemptId = json.optLong("recoveryAttemptId", 0L),
+                obligationGeneration = json.optLong("obligationGeneration", 0L),
+                requestNonce = json.optString("requestNonce", "")
             )
         }.getOrNull()
     }

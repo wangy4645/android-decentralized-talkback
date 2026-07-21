@@ -132,6 +132,12 @@ fun projectRecoveryCapabilitySignature(
         )
     }
     if (initiatesReattach) {
+        if (!snapshot.canDispatchRecoverySignal()) {
+            return RecoveryCapabilitySignature(
+                permittedActions = emptySet(),
+                waitingReason = snapshot.dispatchWaitingReason()
+            )
+        }
         val actions = linkedSetOf(RecoveryAction.DISPATCH_REATTACH)
         if (snapshot.canCompleteRecovery()) {
             actions.add(RecoveryAction.COMPLETE_EDGE)

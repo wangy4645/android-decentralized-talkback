@@ -60,6 +60,7 @@ class ConferenceEdgeRecoveryController(
     private val deadlineTimers = ConcurrentHashMap<ConferenceEdgeKey, ScheduledFuture<*>>()
     private val cancelledSessions = ConcurrentHashMap<String, Long>()
     private val cancelledChannels = ConcurrentHashMap<String, Long>()
+    private val pendingTransportNonce = ConcurrentHashMap<ConferenceEdgeKey, String>()
     private var attemptSeq = 0L
 
     fun factsForSession(sessionId: String): EdgeRecoveryFacts {
@@ -190,6 +191,172 @@ class ConferenceEdgeRecoveryController(
 
     fun obligationGeneration(sessionId: String, remoteModuleId: String): Long? =
         edges[ConferenceEdgeKey(sessionId, remoteModuleId)]?.obligationGeneration
+
+    /** Lineage material for outbound REATTACH wire encoding (ADR-0022 Appendix D). */
+    fun reattachDispatchLineage(sessionId: String, remoteModuleId: String): ReattachDispatchLineage? {
+        val record = edges[ConferenceEdgeKey(sessionId, remoteModuleId)] ?: return null
+        return ReattachDispatchLineage(
+            attemptId = record.recoveryAttemptId,
+            obligationGeneration = record.obligationGeneration
+        )
+    }
+
+    /** Coordinator registers envelope nonce after transport send, before dispatch outcome apply. */
+    fun registerReattachTransportNonce(sessionId: String, remoteModuleId: String, nonce: String) {
+        pendingTransportNonce[ConferenceEdgeKey(sessionId, remoteModuleId)] = nonce
+    }
+
+    fun evaluateInboundReattachLineage(
+        sessionId: String,
+        remoteModuleId: String,
+        senderAttemptId: Long,
+        senderObligationGeneration: Long
+    ): InboundReattachLineageVerdict {
+        val record = edges[ConferenceEdgeKey(sessionId, remoteModuleId)] ?: return InboundReattachLineageVerdict.ACCEPT
+        if (record.obligationClosedAtMs != null) return InboundReattachLineageVerdict.OBLIGATION_CLOSED
+        if (senderObligationGeneration > 0L &&
+            record.obligationGeneration > 0L &&
+            senderObligationGeneration < record.obligationGeneration
+        ) {
+            return InboundReattachLineageVerdict.STALE_OBLIGATION_GENERATION
+        }
+        if (senderAttemptId > 0L &&
+            record.recoveryAttemptId > 0L &&
+            senderAttemptId < record.recoveryAttemptId
+        ) {
+            return InboundReattachLineageVerdict.STALE_OBLIGATION_GENERATION
+        }
+        return InboundReattachLineageVerdict.ACCEPT
+    }
+
+    fun onRecoveryReattachReceipt(
+        sessionId: String,
+        remoteModuleId: String,
+        nonce: String,
+        attemptId: Long,
+        obligationGeneration: Long
+    ): Boolean {
+        val key = ConferenceEdgeKey(sessionId, remoteModuleId)
+        val record = edges[key] ?: return false
+        if (record.obligationClosedAtMs != null) return false
+        if (obligationGeneration > 0L &&
+            record.obligationGeneration > 0L &&
+            obligationGeneration != record.obligationGeneration
+        ) {
+            onLog(
+                "RECOVERY_REATTACH_RECEIPT_REJECTED session=$sessionId remote=$remoteModuleId " +
+                    "reason=stale_obligation_generation receiptGen=$obligationGeneration " +
+                    "currentGen=${record.obligationGeneration} attempt=$attemptId"
+            )
+            return false
+        }
+        if (attemptId > 0L &&
+            record.recoveryAttemptId > 0L &&
+            attemptId != record.recoveryAttemptId
+        ) {
+            if (record.reattachNonce == nonce &&
+                record.reattachDeliveryState == ReattachDeliveryState.REMOTE_RECEIPT_ACKED
+            ) {
+                return true
+            }
+            onLog(
+                "RECOVERY_REATTACH_RECEIPT_REJECTED session=$sessionId remote=$remoteModuleId " +
+                    "reason=stale_attempt receiptAttempt=$attemptId currentAttempt=${record.recoveryAttemptId}"
+            )
+            return false
+        }
+        if (record.reattachNonce == nonce &&
+            record.reattachDeliveryState == ReattachDeliveryState.REMOTE_RECEIPT_ACKED
+        ) {
+            return true
+        }
+        record.reattachDeliveryState = ReattachDeliveryState.REMOTE_RECEIPT_ACKED
+        onLog(
+            "RECOVERY_REATTACH_RECEIPT session=$sessionId remote=$remoteModuleId " +
+                "nonce=$nonce attempt=$attemptId obligationGen=$obligationGeneration " +
+                "deliveryState=REMOTE_RECEIPT_ACKED controlPlaneStarted=${record.controlPlaneStarted()}"
+        )
+        notifyChanged(sessionId)
+        return true
+    }
+
+    fun onRecoveryReattachInboundReceived(
+        sessionId: String,
+        channelId: String,
+        remoteModuleId: String,
+        senderAttemptId: Long,
+        senderObligationGeneration: Long,
+        nonce: String
+    ): InboundReattachLineageVerdict {
+        val verdict = evaluateInboundReattachLineage(
+            sessionId,
+            remoteModuleId,
+            senderAttemptId,
+            senderObligationGeneration
+        )
+        if (verdict != InboundReattachLineageVerdict.ACCEPT) {
+            onLog(
+                "RECOVERY_REATTACH_INBOUND_REJECTED session=$sessionId remote=$remoteModuleId " +
+                    "reason=$verdict senderAttempt=$senderAttemptId senderObligationGen=$senderObligationGeneration " +
+                    "nonce=$nonce"
+            )
+            return verdict
+        }
+        val key = ConferenceEdgeKey(sessionId, remoteModuleId)
+        val record = edges[key] ?: upsertEdge(
+            key,
+            channelId,
+            EdgeRecoveryPhase.RECOVERY_PENDING,
+            initiatesReattach = false,
+            newAttempt = true,
+            attemptOpenTrigger = "INBOUND_REATTACH"
+        )
+        record.channelId = channelId
+        record.reattachDeliveryState = ReattachDeliveryState.RECEIVED
+        onLog(
+            "RECOVERY_REATTACH_INBOUND session=$sessionId remote=$remoteModuleId " +
+                "deliveryState=RECEIVED senderAttempt=$senderAttemptId " +
+                "senderObligationGen=$senderObligationGeneration nonce=$nonce"
+        )
+        notifyChanged(sessionId)
+        return InboundReattachLineageVerdict.ACCEPT
+    }
+
+    fun onRecoveryReattachInboundDeferred(
+        sessionId: String,
+        channelId: String,
+        remoteModuleId: String,
+        reason: DeferredReason,
+        trigger: String = "INBOUND_REATTACH"
+    ) {
+        val key = ConferenceEdgeKey(sessionId, remoteModuleId)
+        val record = edges[key] ?: upsertEdge(
+            key,
+            channelId,
+            EdgeRecoveryPhase.RECOVERY_PENDING,
+            initiatesReattach = false,
+            newAttempt = false,
+            attemptOpenTrigger = trigger
+        )
+        record.channelId = channelId
+        record.reattachDeliveryState = ReattachDeliveryState.DEFERRED
+        recordMediaActionDeferred(
+            record = record,
+            owner = MediaActionOwner.HOST_RESTART,
+            reason = reason,
+            wakeupBinding = WakeupBinding(
+                sourceType = WakeupSourceType.ROUTE_CONVERGED,
+                sourceKey = edgeWakeupKey(sessionId, remoteModuleId)
+            ),
+            trigger = trigger
+        )
+        onLog(
+            "RECOVERY_REATTACH_INBOUND_DEFERRED session=$sessionId remote=$remoteModuleId " +
+                "deliveryState=DEFERRED deferredReason=$reason trigger=$trigger " +
+                "attempt=${record.recoveryAttemptId} obligationGen=${record.obligationGeneration}"
+        )
+        notifyChanged(sessionId)
+    }
 
     private fun notifyAttemptLineageObservation(
         record: EdgeRecoveryRecord,
@@ -779,6 +946,7 @@ class ConferenceEdgeRecoveryController(
         }
         record.phase = EdgeRecoveryPhase.REATTACH_ACCEPTED
         record.recoveryViaInboundReattach = true
+        record.reattachDeliveryState = ReattachDeliveryState.ACCEPTED
         logPhaseTransition(record, existing?.phase, record.phase, "REATTACH_ACCEPTED")
         logRecoveryDecision(
             sessionId = sessionId,
@@ -1500,6 +1668,14 @@ class ConferenceEdgeRecoveryController(
                     )
                     return
                 }
+                record.phase == EdgeRecoveryPhase.REATTACH_REQUESTED -> {
+                    onLog(
+                        "RECOVERY_DECISION session=${record.key.sessionId} edge=${record.key.remoteModuleId} " +
+                            "attempt=${record.recoveryAttemptId} trigger=$trigger " +
+                            "decision=DISPATCH_REATTACH approved=false rejectReason=transport_in_flight"
+                    )
+                    return
+                }
                 else -> {
                     applyReattachDispatchOutcome(
                         record = record,
@@ -1576,15 +1752,24 @@ class ConferenceEdgeRecoveryController(
             ReattachDispatchOutcome.SENT -> {
                 cancelDebounce(key)
                 record.phase = EdgeRecoveryPhase.REATTACH_REQUESTED
+                record.reattachDeliveryState = ReattachDeliveryState.TRANSPORT_SENT
+                record.reattachNonce = pendingTransportNonce.remove(key) ?: record.reattachNonce
                 assignMediaActionOwner(record, MediaActionOwner.HOST_RESTART)
+                val noncePart = record.reattachNonce?.let { " nonce=$it" } ?: ""
+                onLog(
+                    "RECOVERY_REATTACH_SENT session=${key.sessionId} remote=${key.remoteModuleId} " +
+                        "attempt=${record.recoveryAttemptId}$noncePart transportResult=SENT " +
+                        "deliveryState=TRANSPORT_SENT controlPlaneStarted=${record.controlPlaneStarted()}"
+                )
                 onLog(
                     "RECOVERY_REATTACH_REQUESTED session=${key.sessionId} remote=${key.remoteModuleId} " +
-                        "attempt=${record.recoveryAttemptId}"
+                        "attempt=${record.recoveryAttemptId} deliveryState=TRANSPORT_SENT " +
+                        "controlPlaneStarted=${record.controlPlaneStarted()}"
                 )
                 onLog(
                     "RECOVERY_DECISION session=${key.sessionId} edge=${key.remoteModuleId} " +
                         "attempt=${record.recoveryAttemptId}$triggerPart " +
-                        "decision=DISPATCH_REATTACH approved=true"
+                        "decision=DISPATCH_REATTACH approved=true outcome=TRANSPORT_SENT"
                 )
             }
             ReattachDispatchOutcome.DEFERRED -> {
@@ -1706,6 +1891,8 @@ class ConferenceEdgeRecoveryController(
         record.mediaRestored = false
         record.epochRefreshUsed = false
         record.recoveryViaInboundReattach = false
+        record.reattachDeliveryState = ReattachDeliveryState.QUEUED
+        record.reattachNonce = null
         record.recoveryStartedAtMs = clock()
         record.mediaActionOwner = MediaActionOwner.PENDING
         clearMediaActionDeferral(record)
