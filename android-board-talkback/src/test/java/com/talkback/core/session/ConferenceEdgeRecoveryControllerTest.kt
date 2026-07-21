@@ -119,7 +119,7 @@ class ConferenceEdgeRecoveryControllerTest {
     }
 
     @Test
-    fun gC2_5_deferredReattach_timeout_emitsOwnerBlockedNotNoOwner() {
+    fun gC2_5_deferredReattach_capabilityBlocked_doesNotTimeout() {
         controller = buildController(
             onRequestReattach = { _, _, _ ->
                 reattachCalls++
@@ -135,7 +135,10 @@ class ConferenceEdgeRecoveryControllerTest {
             initiatesReattach = true
         )
         Thread.sleep(350)
-        assertTrue(
+        assertTrue(controller.factsForSession("sess-1").anyRecovering)
+        assertFalse(controller.factsForSession("sess-1").anyFailedMediaRecovery)
+        assertTrue(decisionLogs.any { it.contains("RECOVERY_WATCHDOG_DEFERRED") })
+        assertFalse(
             decisionLogs.any {
                 it.contains("EXPLICIT_RECOVERY_ABORT") && it.contains("reason=OWNER_BLOCKED")
             }
@@ -580,6 +583,59 @@ class ConferenceEdgeRecoveryControllerTest {
         )
         assertEquals(1, iceRestartCalls)
         assertTrue(decisionLogs.any { it.contains("RECOVERY_ICE_RESTART_DISPATCHED") })
+    }
+
+    @Test
+    fun r28k_routeBlocked_watchdogDeferred_noAttemptTimeoutUntilDispatchReady() {
+        var routeReady = false
+        controller = buildController(
+            canDispatchRecoveryMediaAction = { _, _ -> routeReady }
+        )
+        controller.onIceStateChanged(
+            sessionId = "sess-1",
+            channelId = "CH-1",
+            remoteModuleId = "M01",
+            iceState = "DISCONNECTED",
+            eligibility = eligible(),
+            initiatesReattach = false
+        )
+        val attemptAtStart = decisionLogs
+            .last { it.contains("RECOVERY_ATTEMPT_OPENED") && it.contains("remote=M01") }
+            .substringAfter("attemptId=")
+            .substringBefore(' ')
+            .toLong()
+        Thread.sleep(350)
+        assertTrue(controller.isEdgeRecovering("sess-1", "M01"))
+        assertFalse(decisionLogs.any { it.contains("RECOVERY_ATTEMPT_TIMEOUT") && it.contains("remote=M01") })
+        assertFalse(decisionLogs.any { it.contains("OWNER_BLOCKED") && it.contains("remote=M01") })
+        assertTrue(decisionLogs.any { it.contains("RECOVERY_WATCHDOG_DEFERRED") && it.contains("edge=M01") })
+
+        routeReady = true
+        val snapshot = EdgeReachabilitySnapshot(
+            linkReady = true,
+            peerDiscovered = true,
+            routeConverged = true,
+            authorityReachable = true
+        )
+        val after = projectRecoveryCapabilitySignature(
+            snapshot,
+            initiatesReattach = false,
+            controlPlaneStarted = false
+        )
+        controller.onRecoveryReachabilityChanged(
+            sessionId = "sess-1",
+            channelId = "CH-1",
+            remoteModuleId = "M01",
+            snapshot = snapshot,
+            signature = after,
+            capabilityBefore = RecoveryCapabilitySignature(
+                permittedActions = emptySet(),
+                waitingReason = RecoveryWaitingReason.WAITING_FOR_ROUTE
+            ),
+            trigger = RecoveryReevaluateTrigger.ROUTE_CONVERGED
+        )
+        assertTrue(decisionLogs.any { it.contains("RECOVERY_ICE_RESTART_DISPATCHED") && it.contains("remote=M01") })
+        assertTrue(decisionLogs.any { it.contains("RECOVERY_WATCHDOG_STARTED") && it.contains("attempt=$attemptAtStart") })
     }
 
     @Test
@@ -1206,7 +1262,7 @@ class ConferenceEdgeRecoveryControllerTest {
     }
 
     @Test
-    fun failedMediaRecovery_iceCheckingResurrection_supersedesWithoutIceRestart() {
+    fun r28k_capabilityBlocked_iceChecking_staysOnSameAttempt() {
         controller = buildController(
             canDispatchRecoveryMediaAction = { _, _ -> false }
         )
@@ -1219,19 +1275,10 @@ class ConferenceEdgeRecoveryControllerTest {
             initiatesReattach = false
         )
         Thread.sleep(600)
-        assertTrue(controller.factsForSession("sess-1").anyFailedMediaRecovery)
-        assertTrue(
-            decisionLogs.any {
-                it.contains("EXPLICIT_RECOVERY_ABORT") && it.contains("reason=OWNER_BLOCKED")
-            }
-        )
-        val failedAttemptId = decisionLogs
-            .last {
-                (it.contains("FAILED_MEDIA_RECOVERY") || it.contains("EXPLICIT_RECOVERY_ABORT")) &&
-                    it.contains("remote=M02") &&
-                    (it.contains("attempt_timeout") || it.contains("ice_restart_failed") ||
-                        it.contains("NO_MEDIA_ACTION_OWNER") || it.contains("OWNER_BLOCKED"))
-            }
+        assertTrue(controller.factsForSession("sess-1").anyRecovering)
+        assertFalse(controller.factsForSession("sess-1").anyFailedMediaRecovery)
+        val priorAttemptId = decisionLogs
+            .last { it.contains("RECOVERY_MEDIA_ACTION_DEFERRED") && it.contains("remote=M02") }
             .substringAfter("attempt=")
             .substringBefore(' ')
             .toLong()
@@ -1259,16 +1306,11 @@ class ConferenceEdgeRecoveryControllerTest {
             trigger = RecoveryReevaluateTrigger.ICE_CHECKING
         )
         assertTrue(decisionLogs.any { it.contains("RECOVERY_REEVALUATE") && it.contains("ICE_CHECKING") })
-        assertTrue(decisionLogs.any { it.contains("decision=SUPERSEDED") && it.contains("edge=M02") })
-        val newAttemptId = decisionLogs
-            .last { it.contains("decision=SUPERSEDED") && it.contains("edge=M02") }
-            .substringAfter("attempt=")
-            .substringBefore(' ')
-            .toLong()
-        assertTrue(newAttemptId > failedAttemptId)
+        assertFalse(decisionLogs.any { it.contains("decision=SUPERSEDED") && it.contains("edge=M02") })
+        assertTrue(decisionLogs.any { it.contains("attempt=$priorAttemptId") })
         assertEquals(0, iceRestartCalls)
+        assertTrue(controller.isEdgeRecovering("sess-1", "M02"))
         assertTrue(controller.edgeObligationOpen("sess-1", "M02"))
-        assertFalse(controller.factsForSession("sess-1").anyFailedMediaRecovery)
     }
 
     @Test
@@ -1411,7 +1453,7 @@ class ConferenceEdgeRecoveryControllerTest {
         controller = buildController(
             onRequestReattach = { _, _, _ ->
                 reattachCalls++
-                ReattachDispatchOutcome.DEFERRED
+                ReattachDispatchOutcome.SEND_FAILED
             }
         )
         controller.onIceStateChanged(
@@ -1483,11 +1525,12 @@ class ConferenceEdgeRecoveryControllerTest {
                 it.contains("NO_MEDIA_ACTION_OWNER") && it.contains("attempt=$newAttempt")
             }
         )
-        assertTrue(
+        assertFalse(
             decisionLogs.any {
                 it.contains("OWNER_BLOCKED") && it.contains("attempt=$newAttempt")
             }
         )
+        assertTrue(controller.isEdgeRecovering("sess-1", "M02"))
     }
 
     @Test

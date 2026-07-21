@@ -213,13 +213,7 @@ class ConferencePruneIntegrationTest {
             assertTrue(baselineKeys.any { it.startsWith("M03") })
 
             val degradeMark = synchronized(participant.logs) { participant.logs.size }
-            participant.runtime.simulateRemoteIceState("M03", "DISCONNECTED")
-            assertTrue(
-                participant.waitForLogSince(degradeMark, timeoutMs = 8_000L) {
-                    (it.contains("FAILED_MEDIA_RECOVERY") || it.contains("EXPLICIT_RECOVERY_ABORT")) &&
-                        it.contains("remote=M03")
-                }
-            )
+            participant.triggerAttemptTerminalMediaFailure("M03", degradeMark)
             participant.runtime.testRunConferenceHealthCleanup(channelId)
 
             val after = participant.runtime.sessionSnapshots().first { it.sessionId == sessionId }
@@ -293,13 +287,7 @@ class ConferencePruneIntegrationTest {
             assertTrue(baseline.memberKeys.any { it.startsWith("M03") })
 
             val pruneMark = synchronized(host.logs) { host.logs.size }
-            host.runtime.simulateRemoteIceState("M03", "DISCONNECTED")
-            assertTrue(
-                host.waitForLogSince(pruneMark, timeoutMs = 8_000L) {
-                    (it.contains("FAILED_MEDIA_RECOVERY") || it.contains("EXPLICIT_RECOVERY_ABORT")) &&
-                        it.contains("remote=M03")
-                }
-            )
+            host.triggerAttemptTerminalMediaFailure("M03", pruneMark)
             assertTrue(host.runtime.testEdgeObligationOpen(sessionId!!, "M03"))
             assertFalse(host.runtime.testEdgeObligationClosed(sessionId, "M03"))
             assertFalse(host.runtime.testIsEdgeRecovering(sessionId, "M03"))
@@ -366,13 +354,7 @@ class ConferencePruneIntegrationTest {
             Thread.sleep(500L)
 
             val failMark = synchronized(host.logs) { host.logs.size }
-            host.runtime.simulateRemoteIceState("M03", "DISCONNECTED")
-            assertTrue(
-                host.waitForLogSince(failMark, timeoutMs = 8_000L) {
-                    (it.contains("FAILED_MEDIA_RECOVERY") || it.contains("EXPLICIT_RECOVERY_ABORT")) &&
-                        it.contains("remote=M03")
-                }
-            )
+            host.triggerAttemptTerminalMediaFailure("M03", failMark)
             assertTrue(host.runtime.testEdgeObligationOpen(sessionId!!, "M03"))
             val failedAttemptId = synchronized(host.logs) {
                 host.logs.drop(failMark)
@@ -499,13 +481,7 @@ class ConferencePruneIntegrationTest {
             assertTrue(baseline.memberKeys.any { it.startsWith("M03") })
 
             val failMark = synchronized(host.logs) { host.logs.size }
-            host.runtime.simulateRemoteIceState("M03", "DISCONNECTED")
-            assertTrue(
-                host.waitForLogSince(failMark, timeoutMs = 8_000L) {
-                    (it.contains("FAILED_MEDIA_RECOVERY") || it.contains("EXPLICIT_RECOVERY_ABORT")) &&
-                        it.contains("remote=M03")
-                }
-            )
+            host.triggerAttemptTerminalMediaFailure("M03", failMark)
             assertNotNull(host.runtime.testObligationDeadlineAt(sessionId!!, "M03"))
             assertTrue(host.runtime.testEdgeObligationOpen(sessionId, "M03"))
 
@@ -595,13 +571,7 @@ class ConferencePruneIntegrationTest {
 
             val failMark = synchronized(host.logs) { host.logs.size }
             val participantMark = synchronized(participant.logs) { participant.logs.size }
-            host.runtime.simulateRemoteIceState("M03", "DISCONNECTED")
-            assertTrue(
-                host.waitForLogSince(failMark, timeoutMs = 8_000L) {
-                    (it.contains("FAILED_MEDIA_RECOVERY") || it.contains("EXPLICIT_RECOVERY_ABORT")) &&
-                        it.contains("remote=M03")
-                }
-            )
+            host.triggerAttemptTerminalMediaFailure("M03", failMark)
             assertTrue(
                 host.waitForLogSince(failMark, timeoutMs = 5_000L) {
                     it.contains("RECOVERY_OBLIGATION_CLOSED") &&
@@ -792,13 +762,7 @@ class ConferencePruneIntegrationTest {
             Thread.sleep(500L)
 
             val failMark = synchronized(host.logs) { host.logs.size }
-            host.runtime.simulateRemoteIceState("M02", "DISCONNECTED")
-            assertTrue(
-                host.waitForLogSince(failMark, timeoutMs = 12_000L) {
-                    (it.contains("FAILED_MEDIA_RECOVERY") || it.contains("EXPLICIT_RECOVERY_ABORT")) &&
-                        it.contains("remote=M02")
-                }
-            )
+            host.triggerAttemptTerminalMediaFailure("M02", failMark)
             assertTrue(host.runtime.testEdgeObligationOpen(sessionId!!, "M02"))
             assertFalse(host.runtime.testEdgeObligationClosed(sessionId, "M02"))
             val failedAttemptId = synchronized(host.logs) {
@@ -856,4 +820,22 @@ class ConferencePruneIntegrationTest {
             peerM03.stop()
         }
     }
+}
+
+/**
+ * R28-K: DISCONNECTED with route not dispatch-ready defers the attempt watchdog.
+ * FAILED uses immediate recovery dispatch so prune/deadline tests can still reach attempt terminal.
+ */
+private fun TestTalkbackNode.triggerAttemptTerminalMediaFailure(
+    remoteModuleId: String,
+    logMark: Int,
+    timeoutMs: Long = 8_000L
+) {
+    runtime.simulateRemoteIceState(remoteModuleId, "FAILED")
+    assertTrue(
+        waitForLogSince(logMark, timeoutMs = timeoutMs) {
+            (it.contains("FAILED_MEDIA_RECOVERY") || it.contains("EXPLICIT_RECOVERY_ABORT")) &&
+                it.contains("remote=$remoteModuleId")
+        }
+    )
 }

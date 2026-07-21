@@ -588,6 +588,30 @@ class ConferenceEdgeRecoveryController(
             record.mediaActionOwner.isAssigned()
 
     /**
+     * ADR-0022 R28-K / INV-REC-001: attempt failure timers MUST NOT run while required
+     * recovery capability is unavailable (route, media dispatch gate, deferred action).
+     */
+    private fun isCapabilityBlockingAttemptClock(record: EdgeRecoveryRecord): Boolean {
+        if (hasDeferredMediaAction(record)) {
+            when (record.deferredReason) {
+                DeferredReason.ROUTE_NOT_READY,
+                DeferredReason.MEDIA_NOT_READY,
+                DeferredReason.AUTHORITY_NOT_READY -> return true
+                null -> Unit
+            }
+        }
+        if (
+            !record.initiatesReattach &&
+            !record.iceRestartIssued &&
+            (record.mediaActionOwner == MediaActionOwner.PENDING || hasDeferredMediaAction(record)) &&
+            !canDispatchRecoveryMediaAction(record.key.sessionId, record.key.remoteModuleId)
+        ) {
+            return true
+        }
+        return false
+    }
+
+    /**
      * Appendix C-2: recovery authority claims media action when no participant handoff owns it.
      * Invoked after EDGE_STARTED and on material re-evaluate when still PENDING or DEFERRED.
      */
@@ -1352,6 +1376,15 @@ class ConferenceEdgeRecoveryController(
         val attemptId = record.recoveryAttemptId
         val obligationGen = record.obligationGeneration
         cancelWatchdog(key)
+        if (isCapabilityBlockingAttemptClock(record)) {
+            onLog(
+                "RECOVERY_WATCHDOG_DEFERRED session=${key.sessionId} edge=${key.remoteModuleId} " +
+                    "obligationGen=$obligationGen attempt=$attemptId " +
+                    "reason=CAPABILITY_UNAVAILABLE " +
+                    "deferredReason=${record.deferredReason ?: "dispatch_gate"}"
+            )
+            return
+        }
         val budgetMs = minOf(attemptBudgetMs, iceRestartTimeoutMs + debounceMs)
         onLog(
             "RECOVERY_WATCHDOG_STARTED session=${key.sessionId} edge=${key.remoteModuleId} " +
@@ -1381,6 +1414,15 @@ class ConferenceEdgeRecoveryController(
             if (still.recoveryAttemptId != attemptId) return@schedule
             if (still.obligationGeneration != obligationGen) return@schedule
             if (!still.phase.isActivelyRecovering()) return@schedule
+            if (isCapabilityBlockingAttemptClock(still)) {
+                onLog(
+                    "RECOVERY_WATCHDOG_DEFERRED session=${key.sessionId} edge=${key.remoteModuleId} " +
+                        "obligationGen=${still.obligationGeneration} attempt=${still.recoveryAttemptId} " +
+                        "reason=CAPABILITY_UNAVAILABLE_AT_FIRE " +
+                        "deferredReason=${still.deferredReason ?: "dispatch_gate"}"
+                )
+                return@schedule
+            }
             val abortReason = when {
                 hasDeferredMediaAction(still) -> {
                     assignMediaActionOwner(still, MediaActionOwner.ABORTED)
