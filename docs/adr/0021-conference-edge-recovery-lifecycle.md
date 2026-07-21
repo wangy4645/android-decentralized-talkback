@@ -4,7 +4,7 @@
 
 **Draft** (2026-07-10) — depends on #72 Recovery Admission Foundation; implemented by #73 Edge Recovery Lifecycle. **R24** frozen from Gate-R1 soak (owner vacuum after `attempt_timeout`).
 
-Supersedes implicit “ICE event → action” recovery behavior. Complements ADR-0018 (media ownership), ADR-0019 (signaling/media separation), ADR-0020 (runtime projection).
+Supersedes implicit “ICE event → action” recovery behavior. Complements ADR-0018 (media ownership), ADR-0019 (signaling/media separation), ADR-0020 (runtime projection). **Terminology note (2026-07-20):** obligation episode vs Edge Lifecycle (record lifetime) and `obligationGeneration` are frozen in **ADR-0022 R28-J**; this ADR’s “edge lifecycle” language refers to recovery FSM / edge-scoped behavior, not R28-J’s Edge Lifecycle identity.
 
 ## Summary
 
@@ -639,6 +639,7 @@ Integration: `conference_s18_recoveryWindow_preservesMembershipState`.
 - [ADR-0018](./0018-conference-media-lifecycle-ownership.md) — Media session ownership
 - [ADR-0019](./0019-conference-signaling-media-separation.md) — Signaling/media separation
 - [ADR-0020](./0020-conference-runtime-projection-contract.md) — Runtime projection contract
+- [ADR-0022](./0022-recovery-completion-ownership.md) — R28-J Obligation Episode vs Edge Lifecycle (normative for obligation / generation terms)
 - PR #72 Recovery Admission Foundation
 - Issue/PR #73 checklist: `docs/issue-73-edge-recovery-lifecycle-checklist.md`
 - Soak: `scripts/soak-tcc-hard-gates.ps1`, `scripts/soak-conference-p0-p1.ps1`

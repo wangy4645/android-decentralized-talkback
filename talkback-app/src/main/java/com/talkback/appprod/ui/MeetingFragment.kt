@@ -16,7 +16,6 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.talkback.appprod.R
-import com.talkback.core.session.ConferenceRuntimePhase
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -130,7 +129,7 @@ class MeetingFragment : Fragment() {
 
     private fun maybeHandlePendingNavigation(state: TalkUiState) {
         if (navigationHandled || pendingNavigation == MeetingNavigation.MAIN) return
-        if (!state.conferenceActive || state.meeting.runtimePhase != ConferenceRuntimePhase.ACTIVE) return
+        if (!state.conferenceDisplay.live) return
         navigationHandled = true
         when (pendingNavigation) {
             MeetingNavigation.MEMBERS -> showSubPage(MeetingMembersFragment())
@@ -142,14 +141,8 @@ class MeetingFragment : Fragment() {
 
     fun handleMeetingBack() {
         val state = viewModel.uiState.value
-        val awaitingRejoin = state.conferenceMode && !state.conferenceActive
-        val runtimePhase = state.meeting.runtimePhase
-        val connecting = awaitingRejoin ||
-            (state.conferenceActive &&
-                (runtimePhase == ConferenceRuntimePhase.CONNECTING ||
-                    runtimePhase == ConferenceRuntimePhase.IDLE ||
-                    runtimePhase == null))
-        if (connecting && !viewModel.isConferenceHost() && state.conferenceActive) {
+        val display = state.conferenceDisplay
+        if (display.mediaConnecting && !viewModel.isConferenceHost() && state.conferenceActive) {
             leaveMeeting()
         } else {
             minimizeMeeting()
@@ -203,18 +196,13 @@ class MeetingFragment : Fragment() {
         view.findViewById<TextView>(R.id.txtMeetingHeader).text =
             getString(R.string.meeting_channel_title, state.channelTitle)
         view.findViewById<TextView>(R.id.txtMeetingSubtitle).text = state.channelSubtitle
-        val awaitingRejoin = state.conferenceMode && !state.conferenceActive
-        val runtimePhase = state.meeting.runtimePhase
-        val connecting = awaitingRejoin ||
-            (state.conferenceActive &&
-                (runtimePhase == ConferenceRuntimePhase.CONNECTING ||
-                    runtimePhase == ConferenceRuntimePhase.IDLE ||
-                    runtimePhase == null))
-        val recovering = state.conferenceActive && runtimePhase == ConferenceRuntimePhase.RECOVERING
-        val live = state.conferenceActive && runtimePhase == ConferenceRuntimePhase.ACTIVE
+        val display = state.conferenceDisplay
+        val live = display.live
+        val connecting = display.showConnectingPanel
+        val recovering = display.recovering
         val muted = state.conferenceMuted
 
-        view.findViewById<View>(R.id.panelMeetingConnecting).isVisible = connecting || recovering
+        view.findViewById<View>(R.id.panelMeetingConnecting).isVisible = connecting
         view.findViewById<View>(R.id.panelMeetingLive).isVisible = live
         view.findViewById<View>(R.id.rowMeetingControls).isVisible = live
         view.findViewById<View>(R.id.btnMeetingLeave).isVisible = live
@@ -223,13 +211,13 @@ class MeetingFragment : Fragment() {
         view.findViewById<TextView>(R.id.txtMeetingParticipantCount).isVisible = live
         if (live) {
             view.findViewById<TextView>(R.id.txtMeetingParticipantCount).text =
-                getString(R.string.meeting_participants_presence, state.meeting.participantCountLabel)
+                state.meeting.participantCountLabel
         }
 
-        bindStatusPill(view.findViewById(R.id.txtMeetingStatusPill), connecting, recovering, live, muted, state)
+        bindStatusPill(view.findViewById(R.id.txtMeetingStatusPill), display)
 
         val txtTimer = view.findViewById<TextView>(R.id.txtMeetingTimer)
-        if (connecting || recovering) {
+        if (connecting) {
             if (connectingStartedAtMs == null) {
                 connectingStartedAtMs = System.currentTimeMillis()
             }
@@ -237,7 +225,7 @@ class MeetingFragment : Fragment() {
         } else {
             connectingStartedAtMs = null
             val startedAt = state.meeting.startedAtMs
-            if (live && startedAt != null) {
+            if (display.timerEligible && startedAt != null) {
                 startElapsedTimer(txtTimer, startedAt)
             } else {
                 timerJob?.cancel()
@@ -309,58 +297,47 @@ class MeetingFragment : Fragment() {
 
     private fun bindStatusPill(
         statusPill: TextView,
-        connecting: Boolean,
-        recovering: Boolean,
-        live: Boolean,
-        muted: Boolean,
-        state: TalkUiState
+        display: ConferenceDisplayState
     ) {
         val ctx = requireContext()
-        val poorNetwork = state.meeting.networkLabel == "Poor" || state.networkLabel == "Poor"
-        when {
-            state.conferenceReconnectFailed && (connecting || recovering) -> {
+        when (display.statusPill) {
+            ConferenceStatusPillKind.RECONNECT_FAILED -> {
                 statusPill.setCompoundDrawablesWithIntrinsicBounds(R.drawable.dot_meeting_connecting, 0, 0, 0)
                 statusPill.text = getString(R.string.meeting_reconnect_failed)
                 statusPill.setBackgroundResource(R.drawable.bg_meeting_connecting_pill)
                 statusPill.setTextColor(ContextCompat.getColor(ctx, R.color.tb_meeting_connecting))
             }
-            state.conferenceReconnecting && (connecting || recovering) -> {
+            ConferenceStatusPillKind.RECOVERING -> {
                 statusPill.setCompoundDrawablesWithIntrinsicBounds(R.drawable.dot_meeting_connecting, 0, 0, 0)
                 statusPill.text = getString(R.string.meeting_reconnecting)
                 statusPill.setBackgroundResource(R.drawable.bg_meeting_connecting_pill)
                 statusPill.setTextColor(ContextCompat.getColor(ctx, R.color.tb_meeting_connecting))
             }
-            connecting -> {
+            ConferenceStatusPillKind.CONNECTING -> {
                 statusPill.setCompoundDrawablesWithIntrinsicBounds(R.drawable.dot_meeting_connecting, 0, 0, 0)
                 statusPill.text = getString(R.string.meeting_status_connecting)
                 statusPill.setBackgroundResource(R.drawable.bg_meeting_connecting_pill)
                 statusPill.setTextColor(ContextCompat.getColor(ctx, R.color.tb_meeting_connecting))
             }
-            muted -> {
+            ConferenceStatusPillKind.MUTED -> {
                 statusPill.setCompoundDrawablesWithIntrinsicBounds(0, 0, 0, 0)
                 statusPill.text = getString(R.string.conference_status_muted)
                 statusPill.setBackgroundResource(R.drawable.bg_status_pill)
                 statusPill.setTextColor(ContextCompat.getColor(ctx, R.color.tb_danger))
             }
-            poorNetwork && live -> {
+            ConferenceStatusPillKind.POOR_NETWORK -> {
                 statusPill.setCompoundDrawablesWithIntrinsicBounds(0, 0, 0, 0)
                 statusPill.text = getString(R.string.meeting_poor_network)
                 statusPill.setBackgroundResource(R.drawable.bg_status_pill)
                 statusPill.setTextColor(ContextCompat.getColor(ctx, R.color.tb_warning))
             }
-            live && isWaitingAlone(state) -> {
-                statusPill.setCompoundDrawablesWithIntrinsicBounds(R.drawable.dot_meeting_connecting, 0, 0, 0)
-                statusPill.text = getString(R.string.meeting_status_waiting)
-                statusPill.setBackgroundResource(R.drawable.bg_meeting_connecting_pill)
-                statusPill.setTextColor(ContextCompat.getColor(ctx, R.color.tb_meeting_connecting))
-            }
-            live -> {
+            ConferenceStatusPillKind.LIVE -> {
                 statusPill.setCompoundDrawablesWithIntrinsicBounds(R.drawable.dot_online, 0, 0, 0)
                 statusPill.text = getString(R.string.conference_status_live)
                 statusPill.setBackgroundResource(R.drawable.bg_call_online_pill)
                 statusPill.setTextColor(ContextCompat.getColor(ctx, R.color.tb_success))
             }
-            else -> {
+            ConferenceStatusPillKind.INACTIVE -> {
                 statusPill.setCompoundDrawablesWithIntrinsicBounds(0, 0, 0, 0)
                 statusPill.text = getString(R.string.conference_status_connecting)
                 statusPill.setBackgroundResource(R.drawable.bg_status_pill)
@@ -368,14 +345,6 @@ class MeetingFragment : Fragment() {
             }
         }
     }
-
-    private fun isWaitingAlone(state: TalkUiState): Boolean =
-        state.conferenceActive &&
-            state.meeting.runtimePhase == ConferenceRuntimePhase.ACTIVE &&
-            (
-                state.meeting.awaitingAdditionalParticipants ||
-                    (viewModel.isConferenceHost() && state.meeting.visibleParticipantCount <= 1)
-                )
 
     private fun startVolumeMeterPolling(meter: MeetingVolumeMeterView) {
         meter.isVisible = true
@@ -410,12 +379,29 @@ class MeetingFragment : Fragment() {
             val frame = chip.findViewById<View>(R.id.frameChipAvatar)
             val label = chip.findViewById<TextView>(R.id.txtChipLabel)
             label.text = item.displayLabel
+            label.maxLines = 1
             val isSpeaking = item.status == EndpointStatus.SPEAKING
+            val isReconnecting = item.status == EndpointStatus.RECONNECTING
+            val isConnecting = item.status == EndpointStatus.CONNECTING
             when {
                 isSpeaking -> {
                     frame.setBackgroundResource(R.drawable.bg_meeting_chip_speaking)
                     chip.alpha = 1f
                     label.setTextColor(primary)
+                }
+                isReconnecting -> {
+                    frame.setBackgroundResource(R.drawable.bg_meeting_chip_reconnecting)
+                    chip.alpha = 0.55f
+                    label.setTextColor(secondary)
+                    label.text = "${item.displayLabel}\n${ctx.getString(R.string.status_reconnecting)}"
+                    label.maxLines = 2
+                }
+                isConnecting -> {
+                    frame.setBackgroundResource(R.drawable.bg_meeting_chip_connecting)
+                    chip.alpha = 0.7f
+                    label.setTextColor(primary)
+                    label.text = "${item.displayLabel}\n${ctx.getString(R.string.status_joining)}"
+                    label.maxLines = 2
                 }
                 item.isLocal -> {
                     frame.setBackgroundResource(R.drawable.bg_meeting_chip_local)

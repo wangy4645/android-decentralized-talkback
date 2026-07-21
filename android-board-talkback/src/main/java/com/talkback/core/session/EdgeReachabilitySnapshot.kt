@@ -11,12 +11,32 @@ data class EdgeReachabilitySnapshot(
     val routeConverged: Boolean,
     val authorityReachable: Boolean
 ) {
+    /**
+     * Recovery initiation permission (ADR-0022 P0).
+     * Does not require [routeConverged] — recovery actions exist to establish the route.
+     */
+    fun canAttemptRecovery(): Boolean =
+        linkReady && peerDiscovered
+
+    /**
+     * Requires established route.
+     * Used only for completion / route-dependent operations.
+     * Do not use for recovery initiation.
+     */
     fun canDispatchRecoverySignal(): Boolean =
         linkReady && peerDiscovered && routeConverged
 
     fun canCompleteRecovery(): Boolean =
         canDispatchRecoverySignal() && authorityReachable
 
+    /** Why recovery initiation is blocked (link / peer discovery only). */
+    fun attemptWaitingReason(): RecoveryWaitingReason? = when {
+        !linkReady -> RecoveryWaitingReason.WAITING_FOR_LINK
+        !peerDiscovered -> RecoveryWaitingReason.WAITING_FOR_DISCOVERY
+        else -> null
+    }
+
+    /** Why route-dependent dispatch / completion is blocked. */
     fun dispatchWaitingReason(): RecoveryWaitingReason? = when {
         !linkReady -> RecoveryWaitingReason.WAITING_FOR_LINK
         !peerDiscovered -> RecoveryWaitingReason.WAITING_FOR_DISCOVERY
@@ -40,7 +60,7 @@ enum class RecoveryWaitingReason {
 
 enum class ReattachDispatchOutcome {
     SENT,
-    /** Gate blocked: [EdgeReachabilitySnapshot.canDispatchRecoverySignal] false. */
+    /** Gate blocked: [EdgeReachabilitySnapshot.canAttemptRecovery] false. */
     DEFERRED,
     SEND_FAILED,
     PEER_UNREACHABLE,
@@ -86,10 +106,14 @@ enum class RecoveryReevaluateTrigger {
     LINK_LOST,
     PEER_DISCOVERED,
     PEER_LOST,
+    /** HELLO / module rediscovery (ADR-0022 Appendix C-3.2 C-13). */
+    REMOTE_MODULE_RECOVERED,
     AUTHORITY_REACHABLE,
     AUTHORITY_LOST,
     /** ICE CONNECTED / equivalent media restoration (ADR-0022 R28-E / #83). */
-    ICE_RESTORED
+    ICE_RESTORED,
+    /** ICE CHECKING — early resurrection signal while obligation OPEN (ADR-0022). */
+    ICE_CHECKING
 }
 
 /**
@@ -101,10 +125,10 @@ fun projectRecoveryCapabilitySignature(
     initiatesReattach: Boolean,
     controlPlaneStarted: Boolean
 ): RecoveryCapabilitySignature {
-    if (!snapshot.canDispatchRecoverySignal()) {
+    if (!snapshot.canAttemptRecovery()) {
         return RecoveryCapabilitySignature(
             permittedActions = emptySet(),
-            waitingReason = snapshot.dispatchWaitingReason()
+            waitingReason = snapshot.attemptWaitingReason()
         )
     }
     if (initiatesReattach) {
@@ -118,6 +142,12 @@ fun projectRecoveryCapabilitySignature(
             null
         }
         return RecoveryCapabilitySignature(actions, waiting)
+    }
+    if (!snapshot.canDispatchRecoverySignal()) {
+        return RecoveryCapabilitySignature(
+            permittedActions = emptySet(),
+            waitingReason = snapshot.dispatchWaitingReason()
+        )
     }
     if (controlPlaneStarted) {
         return RecoveryCapabilitySignature(

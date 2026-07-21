@@ -67,6 +67,10 @@ import com.talkback.core.session.ConferenceEdgeRecoveryController
 import com.talkback.core.session.ConferenceBootstrapDeferral
 import com.talkback.core.session.ConferenceEdgeKey
 import com.talkback.core.session.ConferenceHostEndpointResolver
+import com.talkback.core.session.ConferenceIceConnectedSideEffects
+import com.talkback.core.session.ConferenceBarrierDiagnostics
+import com.talkback.core.session.ConferenceMediaTransmitGate
+import com.talkback.core.session.ConferenceReceivePlaybackPolicy
 import com.talkback.core.session.ConferenceParticipantManager
 import com.talkback.core.session.EdgeReachabilitySnapshot
 import com.talkback.core.session.EdgeRecoveryEligibility
@@ -82,9 +86,11 @@ import com.talkback.core.session.ConferenceParticipantProjector
 import com.talkback.core.session.ConferenceRuntimeProjectionLogger
 import com.talkback.core.session.ConferenceNetworkIndicator
 import com.talkback.core.session.ConferenceNetworkIndicatorProjector
+import com.talkback.core.session.ConferenceJoinLatencyTracker
 import com.talkback.core.session.ConferencePresenceProjector
 import com.talkback.core.session.ConferencePresenceProjection
 import com.talkback.core.session.ConferenceMembershipLifecycle
+import com.talkback.core.session.ConferenceMemberDecisionTrace
 import com.talkback.core.session.ConferenceRejoinEligibility
 import com.talkback.core.session.ConferenceRuntimeProjector
 import com.talkback.core.session.ConferenceRuntimeState
@@ -129,7 +135,10 @@ import com.talkback.core.signaling.SignalingChannel
 import com.talkback.core.sync.RemoteModuleState
 import com.talkback.core.sync.StateSyncManager
 import com.talkback.core.util.ConferenceAuditTimelineLog
+import com.talkback.core.util.ConferenceRecoveryOwnershipLog
+import com.talkback.core.util.MediaRecoveryCausalTrace
 import com.talkback.core.util.FloorTrace
+import com.talkback.core.util.GroupTransitionReadinessLog
 import com.talkback.core.util.MeetingRecoveryLog
 import com.talkback.core.util.PttTimingLog
 import com.talkback.core.util.TalkbackLog
@@ -151,8 +160,11 @@ import com.talkback.governance.transition.MeetingStartDeclarationWindow
 import com.talkback.governance.transition.MeetingMode
 import com.talkback.governance.transition.PolicyConfigurationException
 import com.talkback.governance.transition.TransitionPolicy
+import com.talkback.governance.transition.TransitionRecord
+import com.talkback.governance.transition.TransitionTerminalState
 import com.talkback.governance.transition.TransitionTrigger
 import com.talkback.core.webrtc.ConferenceAudioBus
+import com.talkback.core.webrtc.ReceivePathLivenessObserver
 import com.talkback.core.webrtc.MediaBearerScope
 import com.talkback.core.webrtc.SessionMediaRegistry
 import com.talkback.core.webrtc.ProgramAudioBus
@@ -286,8 +298,14 @@ class TalkbackCoordinator(
     private val moduleMixer: ModuleAudioMixer = ModuleAudioMixer(),
     private val onLog: ((String) -> Unit)? = null
 ) {
+    private val receivePathLivenessObserver = ReceivePathLivenessObserver()
     private val programAudioBus = ProgramAudioBus(mediaRegistry::getGroup)
-    private val conferenceAudioBus = ConferenceAudioBus(mediaRegistry::getGroup)
+    private val conferenceAudioBus = ConferenceAudioBus(
+        mediaRegistry::getGroup,
+        onInboundPcm = { sessionId, sourceModuleId ->
+            receivePathLivenessObserver.onInboundPcm(sessionId, sourceModuleId)
+        }
+    )
     private val conferenceRecoveryController: ConferenceRecoveryController by lazy {
         ConferenceRecoveryController(
             sessionManager = mediaRegistry.sessionManager,
@@ -297,6 +315,7 @@ class TalkbackCoordinator(
     }
     private val conferenceEdgeRecoveryController: ConferenceEdgeRecoveryController by lazy {
         ConferenceEdgeRecoveryController(
+            localModuleId = localModuleId.value,
             scheduler = scheduler,
             onLog = { message -> log(message) },
             onRequestReattach = { sessionId, channelId, remoteModuleId ->
@@ -312,20 +331,66 @@ class TalkbackCoordinator(
                 outcome
             },
             onIceRestart = { sessionId, remoteModuleId ->
-                var restarted = false
-                runOnCoordinatorSync {
-                    val session = sessions[sessionId] ?: return@runOnCoordinatorSync
-                    val remote = meshRoster(session).firstOrNull { it.moduleId.value == remoteModuleId }
-                        ?: resolveConferenceHostEndpoint(session, remoteModuleId)
-                    restarted = attemptConferencePeerIceRestart(session, remoteModuleId, remote)
+                if (onCoordinatorThread.get()) {
+                    val session = sessions[sessionId]
+                    if (session == null) {
+                        false
+                    } else {
+                        val remote = meshRoster(session).firstOrNull { it.moduleId.value == remoteModuleId }
+                            ?: resolveConferenceHostEndpoint(session, remoteModuleId)
+                        attemptConferencePeerIceRestart(session, remoteModuleId, remote)
+                    }
+                } else {
+                    // Recovery scheduler thread must not block on coordinatorExecutor.get()
+                    // while coordinator may be waiting on inbound signal work.
+                    coordinatorExecutor.execute {
+                        if (stopped) return@execute
+                        onCoordinatorThread.set(true)
+                        try {
+                            val session = sessions[sessionId] ?: return@execute
+                            val remote = meshRoster(session).firstOrNull { it.moduleId.value == remoteModuleId }
+                                ?: resolveConferenceHostEndpoint(session, remoteModuleId)
+                            attemptConferencePeerIceRestart(session, remoteModuleId, remote)
+                        } finally {
+                            onCoordinatorThread.set(false)
+                        }
+                    }
+                    true
                 }
-                restarted
             },
             isIceConnected = { _, remoteModuleId ->
                 qosMonitor.isGroupConnected(remoteModuleId)
             },
+            canDispatchRecoveryMediaAction = { sessionId, remoteModuleId ->
+                var ready = false
+                runOnCoordinatorSync {
+                    val session = sessions[sessionId] ?: return@runOnCoordinatorSync
+                    val channelId = session.channelId ?: return@runOnCoordinatorSync
+                    ready = buildRecoveryEdgeReachabilitySnapshot(channelId, session, remoteModuleId)
+                        .canDispatchRecoverySignal()
+                }
+                ready
+            },
             onRecoveryStateChanged = { sessionId ->
-                sessions[sessionId]?.let { emitConferenceRuntimeProjection(it) }
+                runOnCoordinatorSync {
+                    val session = sessions[sessionId] ?: return@runOnCoordinatorSync
+                    applyConferenceTransmitBarrier(session, "recovery_state_changed")
+                    if (session.type == SessionType.CONFERENCE && session.accepted) {
+                        refreshConferenceReceivePlayback(session, "recovery_state_changed")
+                    }
+                    emitConferenceRuntimeProjection(session)
+                }
+            },
+            onAttemptLineageObservation = { sessionId, remoteModuleId, trigger, supersededFromAttempt ->
+                runOnCoordinatorSync {
+                    val session = sessions[sessionId] ?: return@runOnCoordinatorSync
+                    emitConferenceRecoveryOwnership(
+                        reason = trigger,
+                        session = session,
+                        participantId = remoteModuleId,
+                        supersededFromAttempt = supersededFromAttempt
+                    )
+                }
             },
             attemptBudgetMs = config.edgeRecoveryAttemptBudgetMs,
             observationWindowMs = config.edgeRecoveryObservationWindowMs
@@ -333,6 +398,7 @@ class TalkbackCoordinator(
     }
     private val groupMeshReconciler = GroupMeshReconciler()
     private val conferenceParticipantManager = ConferenceParticipantManager()
+    private val conferenceJoinLatencyTracker = ConferenceJoinLatencyTracker()
     private val reachabilityView: ReachabilityView = object : ReachabilityView {
         override fun snapshot(sessionId: String): ReachabilitySnapshot {
             val session = sessions[sessionId] ?: return ReachabilitySnapshot.EMPTY
@@ -361,6 +427,9 @@ class TalkbackCoordinator(
     private var invariantF1BreakCount = 0
 
     private val channelGovernance: ChannelGovernanceRuntime by lazy {
+        GovernanceObservabilityLog.transitionTerminalObserver = { record ->
+            runOnCoordinator { onGovernanceTransitionTerminal(record) }
+        }
         ChannelGovernanceRuntime(TalkbackChannelGovernanceHost(this))
     }
 
@@ -414,9 +483,7 @@ class TalkbackCoordinator(
 
     private fun markMeshLinkCompleted(session: TalkbackSession, moduleId: String) {
         session.meshCompletedModules.add(moduleId)
-        if (isConferenceSession(session)) {
-            conferenceParticipantManager.onMediaConnected(session.id, moduleId)
-        }
+        // everConnected + media CONNECTED are owned by ICE CONNECTED (ADR-0025 R30-H).
     }
 
     private fun conferenceSnapshot(session: TalkbackSession): ConferenceSnapshot =
@@ -431,6 +498,7 @@ class TalkbackCoordinator(
 
     private fun disposeConferenceParticipantState(sessionId: String) {
         conferenceParticipantManager.removeSession(sessionId)
+        conferenceJoinLatencyTracker.removeSession(sessionId)
     }
 
     private fun getMeshEngine(moduleId: String): WebRtcAudioEngine? = mediaRegistry.getGroup(moduleId)
@@ -441,8 +509,49 @@ class TalkbackCoordinator(
             else -> mediaRegistry.getGroup(moduleId)
         }
 
-    private fun getOrCreateMeshEngine(session: TalkbackSession, moduleId: String): WebRtcAudioEngine =
-        meshEngineForSession(session, moduleId) ?: meshEngineFor(session, moduleId)
+    private fun mediaBearerScopeFor(session: TalkbackSession): MediaBearerScope =
+        when (session.type) {
+            SessionType.CONFERENCE -> MediaBearerScope.CONFERENCE
+            SessionType.UNICAST -> MediaBearerScope.UNICAST
+            else -> MediaBearerScope.GROUP
+        }
+
+    private fun mediaRecoveryTraceContext(
+        session: TalkbackSession,
+        remoteModuleId: String,
+        remoteEndpointId: String? = null,
+        iceRestart: Boolean = false
+    ): MediaRecoveryCausalTrace.Context {
+        val mediaState = mediaRegistry.meshSessionState(remoteModuleId)
+        val generation = mediaState?.generation
+        val conferenceGen = if (session.type == SessionType.CONFERENCE) session.rosterEpoch else null
+        val attemptId = if (session.type == SessionType.CONFERENCE) {
+            conferenceEdgeRecoveryController.attemptLineageObservation(session.id, remoteModuleId)?.attemptId
+        } else {
+            null
+        }
+        return MediaRecoveryCausalTrace.Context(
+            sessionId = session.id,
+            sessionTraceId = session.traceId,
+            scope = mediaState?.scope ?: mediaBearerScopeFor(session),
+            remoteModuleId = remoteModuleId,
+            remoteEndpointId = remoteEndpointId,
+            recoveryAttemptId = attemptId,
+            conferenceGeneration = conferenceGen,
+            pcGeneration = generation,
+            transportGeneration = generation,
+            iceRestart = iceRestart
+        )
+    }
+
+    private fun getOrCreateMeshEngine(session: TalkbackSession, moduleId: String): WebRtcAudioEngine {
+        val existing = meshEngineForSession(session, moduleId)
+        if (existing != null) return existing
+        if (isConferenceSession(session)) {
+            conferenceJoinLatencyTracker.onPeerConnectionCreated(session.id, moduleId)
+        }
+        return meshEngineFor(session, moduleId)
+    }
 
     /**
      * Conference / fresh mesh invites must not inherit a wedged GROUP peer connection.
@@ -463,6 +572,9 @@ class TalkbackCoordinator(
         if (existing != null) {
             qosMonitor.resetGroup(moduleId)
             session.meshCompletedModules.remove(moduleId)
+        }
+        if (isConferenceSession(session)) {
+            conferenceJoinLatencyTracker.onPeerConnectionCreated(session.id, moduleId)
         }
         return meshEngineFor(session, moduleId)
     }
@@ -522,6 +634,7 @@ class TalkbackCoordinator(
     }
     private val hostRejoinAttemptByChannel = ConcurrentHashMap<String, Int>()
     private val conferenceReconnectStartedAtBySession = ConcurrentHashMap<String, Long>()
+    private val lastConferenceBarrierCanPublishBySession = ConcurrentHashMap<String, Boolean>()
     private val lastGroupMeshReconnectMsByPeer = ConcurrentHashMap<String, Long>()
     private val lastSeenAuthorityDigestByChannel = ConcurrentHashMap<String, TopologyDigest>()
     /** Last HELLO floor snapshot from the session floor authority (diagnostics only). */
@@ -610,6 +723,20 @@ class TalkbackCoordinator(
         log("Conference channel released for GROUP PTT ch=$channelId reason=$reason")
         MeetingRecoveryLog.onConferenceReleased(channelId, reason)
         channelGovernance.beginTransition(TransitionTrigger.MEETING_END, channelId)
+        val meetingEndBaseline = (dialableRemoteModuleIds().map { it.value } + localModuleId.value)
+            .distinct()
+            .sorted()
+        val meetingEndSnapshot = buildGroupTransitionReadinessSnapshot(
+            channelId = channelId,
+            meshRecoveryState = "conference_released"
+        )
+        GroupTransitionReadinessLog.onMeetingEndBegin(
+            channelId = channelId,
+            moduleId = localModuleId.value,
+            reason = reason,
+            membershipBaseline = meetingEndBaseline,
+            snapshot = meetingEndSnapshot
+        )
         onChannelLifecycleEvent(channelId, ChannelLifecycleEvent.ConferenceEnded)
         emitGroupTopologyForChannel(TopologySnapshotReason.CONFERENCE_END, channelId)
     }
@@ -1010,6 +1137,9 @@ class TalkbackCoordinator(
     fun sendConferenceInvites(sessionId: String, invitees: List<EndpointAddress>): Int =
         runOnCoordinatorSync { sendConferenceInvitesInternal(sessionId, invitees) }
 
+    fun sendConferenceRejoinInvites(sessionId: String, invitees: List<EndpointAddress>): Int =
+        runOnCoordinatorSync { sendConferenceInvitesInternal(sessionId, invitees, rejoin = true) }
+
     /**
      * Internal (coordinator-thread) variant of sendConferenceInvites — call this when already
      * running on the coordinator executor to avoid a re-entrancy deadlock.
@@ -1097,6 +1227,18 @@ class TalkbackCoordinator(
             )
         }
         session.channelId?.let { maybeEvaluateMeetingStartCompletion(it) }
+        if (rejoin && sent > 0) {
+            inviteTargets.forEach { remote ->
+                ConferenceRecoveryOwnershipLog.emitMembershipMutationDecision(
+                    session = session,
+                    localModuleId = localModuleId.value,
+                    participantId = remote.moduleId.value,
+                    controller = conferenceEdgeRecoveryController,
+                    type = ConferenceRecoveryOwnershipLog.MembershipMutationDecisionType.REJOIN_REQUIRED,
+                    reason = "conference_rejoin_invite_sent"
+                )
+            }
+        }
         return sent
     }
 
@@ -1506,6 +1648,13 @@ class TalkbackCoordinator(
             SessionType.GROUP -> GroupRoomId.forChannel(channelId)
             else -> UUID.randomUUID().toString()
         }
+        if (sessionType == SessionType.CONFERENCE) {
+            conferenceJoinLatencyTracker.onInviteAccepted(
+                sessionId = sessionId,
+                channelId = channelId,
+                role = "host"
+            )
+        }
         val session = TalkbackSession(sessionId, sessionType, local, channelId)
         freezeChannelMemberSnapshot(session)
         session.localInitiated = true
@@ -1714,7 +1863,11 @@ class TalkbackCoordinator(
     fun hangup(sessionId: String) = runOnCoordinatorSync { hangupInternal(sessionId) }
 
     /** Leave a conference locally without ending it for remaining participants. */
-    fun leaveConference(sessionId: String) = runOnCoordinator { leaveConferenceInternal(sessionId) }
+    fun leaveConference(
+        sessionId: String,
+        reason: String = "UNSPECIFIED",
+        caller: String = "UNKNOWN"
+    ) = runOnCoordinator { leaveConferenceInternal(sessionId, reason, caller) }
 
     /** User left meeting UI: kick GROUP mesh recovery (event-driven). */
     fun clearConferencePttCooldown(channelId: String) = runOnCoordinator {
@@ -1751,21 +1904,35 @@ class TalkbackCoordinator(
         }
     }
 
-    fun setCallMuted(sessionId: String, muted: Boolean) = runOnCoordinatorSync {
-        val session = sessions[sessionId] ?: return@runOnCoordinatorSync
-        if (session.type != SessionType.UNICAST && session.type != SessionType.CONFERENCE) {
-            return@runOnCoordinatorSync
-        }
-        session.muted = muted
-        sessionMediaEngines(session).forEach { it.setMuted(muted) }
-        if (session.type == SessionType.CONFERENCE && session.accepted && isSessionTransmitReady(session)) {
+    fun setCallMuted(sessionId: String, muted: Boolean, reason: String = "unspecified") =
+        runOnCoordinatorSync {
+            val session = sessions[sessionId] ?: return@runOnCoordinatorSync
+            if (session.type != SessionType.UNICAST && session.type != SessionType.CONFERENCE) {
+                return@runOnCoordinatorSync
+            }
+            val old = session.muted
+            if (old != muted) {
+                logCallMuteChanged(
+                    session = session,
+                    old = old,
+                    new = muted,
+                    reason = reason,
+                    caller = callMuteMutationCaller()
+                )
+            }
+            session.muted = muted
             if (muted) {
-                stopSessionCapture(session)
-            } else {
-                ensureConferenceDuplex(session)
+                session.conferenceTransmitSuspendedByBarrier = false
+            }
+            sessionMediaEngines(session).forEach { it.setMuted(muted) }
+            if (session.type == SessionType.CONFERENCE && session.accepted && isSessionTransmitReady(session)) {
+                if (muted) {
+                    stopSessionCapture(session)
+                } else {
+                    ensureConferenceDuplex(session)
+                }
             }
         }
-    }
 
     fun activeUnicastSession(): TalkbackSessionSnapshot? = runOnCoordinatorSync {
         sessions.values.firstOrNull { it.type == SessionType.UNICAST }?.let { toSessionSnapshot(it) }
@@ -1990,6 +2157,12 @@ class TalkbackCoordinator(
         } else {
             null
         }
+        if (isConferenceSession(session) && presenceState != null) {
+            val joined = presenceState.joinedCount
+            val connected = presenceState.connectedCount
+            conferenceJoinLatencyTracker.onJoinedCountChanged(session.id, joined, session.channelId)
+            conferenceJoinLatencyTracker.onFullMeshReached(session.id, joined, connected)
+        }
         return TalkbackSessionSnapshot(
         sessionId = session.id,
         type = session.type,
@@ -2008,6 +2181,10 @@ class TalkbackCoordinator(
         awaitingAdditionalParticipants = projection?.awaitingAdditionalParticipants ?: false,
         conferenceRuntimeState = runtimeState,
         conferencePresenceProjection = presenceState,
+        conferenceEverConnectedModuleIds = conferenceSnap?.everConnectedModules
+            ?.map { it.value }
+            ?.toSet()
+            ?: emptySet(),
         meshConnectedPeerCount = countConnectedRemotes(session),
         connectedRemoteCount = countConnectedRemotes(session),
         callPhase = session.unicastPhase,
@@ -2197,6 +2374,9 @@ class TalkbackCoordinator(
             writer = writer,
             cause = cause
         )
+        if (event == "SESSION_CREATED") {
+            conferenceJoinLatencyTracker.onSessionCreated(session.id)
+        }
     }
 
     private fun maybeAuditAuthorityTransition(session: TalkbackSession, authorityReachable: Boolean) {
@@ -2281,7 +2461,28 @@ class TalkbackCoordinator(
         )
         val edgeKey = ConferenceEdgeKey(session.id, remoteModuleId)
         val before = lastRecoveryCapabilityByEdge[edgeKey]
-        if (!signature.isMaterialChangeFrom(before)) return
+        val failedResidency =
+            remoteModuleId in conferenceEdgeRecoveryController.factsForSession(session.id).failedRemoteModuleIds
+        val failedResidencyReevaluate = failedResidency && when (trigger) {
+            RecoveryReevaluateTrigger.ICE_CHECKING,
+            RecoveryReevaluateTrigger.PEER_DISCOVERED,
+            RecoveryReevaluateTrigger.REMOTE_MODULE_RECOVERED,
+            RecoveryReevaluateTrigger.ROUTE_CONVERGED,
+            RecoveryReevaluateTrigger.AUTHORITY_REACHABLE -> true
+            else -> false
+        }
+        val deferredWakeupMatch = conferenceEdgeRecoveryController.hasDeferredWakeupForTrigger(
+            session.id,
+            remoteModuleId,
+            trigger
+        )
+        if (
+            !signature.isMaterialChangeFrom(before) &&
+            !failedResidencyReevaluate &&
+            !deferredWakeupMatch
+        ) {
+            return
+        }
         lastRecoveryCapabilityByEdge[edgeKey] = signature
         conferenceEdgeRecoveryController.onRecoveryReachabilityChanged(
             sessionId = session.id,
@@ -2347,6 +2548,7 @@ class TalkbackCoordinator(
             eligibility = buildEdgeRecoveryEligibility(session, remoteModuleId),
             initiatesReattach = initiatesReattach
         )
+        applyConferenceTransmitBarrier(session, "ice_state_changed")
         emitConferenceRuntimeProjection(session)
     }
 
@@ -2392,6 +2594,49 @@ class TalkbackCoordinator(
         ConferenceNetworkIndicatorProjector.project(qosMonitor.all().map { it.iceState })
     }
 
+    fun receivePathLive(sessionId: String, remoteModuleId: String): Boolean = runOnCoordinatorSync {
+        receivePathLivenessObserver.receivePathLive(sessionId, remoteModuleId)
+    }
+
+    fun mediaEverLive(sessionId: String, remoteModuleId: String): Boolean = runOnCoordinatorSync {
+        receivePathLivenessObserver.mediaEverLive(sessionId, remoteModuleId)
+    }
+
+    fun conferenceParticipantRecordExists(sessionId: String, moduleId: String): Boolean =
+        runOnCoordinatorSync {
+            conferenceParticipantManager.containsParticipant(sessionId, moduleId)
+        }
+
+    fun conferenceParticipantMedia(sessionId: String, moduleId: String): MediaState =
+        runOnCoordinatorSync {
+            conferenceParticipantManager.participantMedia(sessionId, moduleId)
+        }
+
+    /** Read-only; probe only. Participant view of host media reachability. */
+    fun conferenceAuthorityReachable(sessionId: String): Boolean = runOnCoordinatorSync {
+        sessions[sessionId]?.let { isConferenceAuthorityReachable(it) } ?: false
+    }
+
+    /** Read-only; probe only. ConferenceEdgeRecoveryController owner state. */
+    fun conferenceEdgeRecoveryLineage(
+        sessionId: String,
+        remoteModuleId: String
+    ): com.talkback.core.session.EdgeAttemptLineageRaw? = runOnCoordinatorSync {
+        conferenceEdgeRecoveryController.attemptLineageObservation(sessionId, remoteModuleId)
+    }
+
+    /** Read-only; ADR-0030 per-peer fact: active recovery attempt on this edge. */
+    fun conferenceEdgeRecovering(sessionId: String, remoteModuleId: String): Boolean =
+        runOnCoordinatorSync {
+            conferenceEdgeRecoveryController.isEdgeRecovering(sessionId, remoteModuleId)
+        }
+
+    /** Read-only; ADR-0030 per-peer fact: failed-media residency (e.g. FAILED_MEDIA_RECOVERY). */
+    fun conferenceMediaUnavailable(sessionId: String, remoteModuleId: String): Boolean =
+        runOnCoordinatorSync {
+            conferenceEdgeRecoveryController.isMediaUnavailable(sessionId, remoteModuleId)
+        }
+
     fun networkQualityLabel(): String = conferenceNetworkIndicator().toQualityLabel()
 
     fun onlineModuleCount(): Int = mergeRemoteModuleViews().size
@@ -2431,9 +2676,46 @@ class TalkbackCoordinator(
 
     internal fun testInvariantF1BreakCount(): Int = runOnCoordinatorSync { invariantF1BreakCount }
 
+    /** Test-only: local authority belief for [channelId], not resolved system authority. */
+    internal fun testAuthorityBeliefModuleId(channelId: String): String? = runOnCoordinatorSync {
+        val session = bestSessionForChannel(channelId) ?: return@runOnCoordinatorSync null
+        session.floorAuthorityModuleId?.value ?: session.initiatorModuleId?.value
+    }
+
     internal fun testIsSessionCapturing(sessionId: String): Boolean = runOnCoordinatorSync {
         val session = sessions[sessionId] ?: return@runOnCoordinatorSync false
         sessionMediaEngines(session).any { it.isCapturing() }
+    }
+
+    internal fun testCanPublishConferenceAudio(sessionId: String): Boolean = runOnCoordinatorSync {
+        val session = sessions[sessionId] ?: return@runOnCoordinatorSync false
+        canPublishAudio(session)
+    }
+
+    internal fun testIsSessionPlaybackEnabled(sessionId: String): Boolean = runOnCoordinatorSync {
+        lastPlaybackEnabledBySession[sessionId] ?: false
+    }
+
+    internal fun testRefreshConferenceReceivePlayback(
+        sessionId: String,
+        reason: String = "test_refresh"
+    ) = runOnCoordinatorSync {
+        val session = sessions[sessionId] ?: return@runOnCoordinatorSync
+        refreshConferenceReceivePlayback(session, reason)
+    }
+
+    internal fun testSetSessionPlaybackEnabled(
+        sessionId: String,
+        enabled: Boolean,
+        reason: String
+    ) = runOnCoordinatorSync {
+        val session = sessions[sessionId] ?: return@runOnCoordinatorSync
+        setPlaybackEnabled(session, enabled, reason)
+    }
+
+    internal fun testConferenceBarrierSnapshot(sessionId: String) = runOnCoordinatorSync {
+        val session = sessions[sessionId] ?: return@runOnCoordinatorSync null
+        conferenceBarrierSnapshot(session)
     }
 
     internal fun testResolverLocalKey(sessionId: String): String? = runOnCoordinatorSync {
@@ -3291,6 +3573,18 @@ class TalkbackCoordinator(
                         "[${session.traceId}] Mesh invite rejected by $rejectorModuleId " +
                             "reason=${signal.payload} (host-owned conference kept)"
                     )
+                    if (isBusyRejectPayload(signal.payload)) {
+                        val remoteHint = if (parseBusyCanonical(signal.payload) != null) "ALIVE" else "UNKNOWN"
+                        ConferenceRecoveryOwnershipLog.emitRejoinResponse(
+                            conferenceId = session.id,
+                            localModuleId = localModuleId.value,
+                            targetParticipantId = rejectorModuleId,
+                            response = "BUSY",
+                            localMembershipBelief = ConferenceRecoveryOwnershipLog.MembershipObservationState.JOINED,
+                            remoteMembershipHint = remoteHint,
+                            observedRosterEpoch = session.rosterEpoch
+                        )
+                    }
                     return
                 }
                 val remainingRemoteIds = when (session.type) {
@@ -3318,6 +3612,18 @@ class TalkbackCoordinator(
                 "[${session.traceId}] Mesh invite rejected by $rejectorModuleId " +
                     "reason=${signal.payload} (session kept)"
             )
+            if (session.type == SessionType.CONFERENCE && isBusyRejectPayload(signal.payload)) {
+                val remoteHint = if (parseBusyCanonical(signal.payload) != null) "ALIVE" else "UNKNOWN"
+                ConferenceRecoveryOwnershipLog.emitRejoinResponse(
+                    conferenceId = session.id,
+                    localModuleId = localModuleId.value,
+                    targetParticipantId = rejectorModuleId,
+                    response = "BUSY",
+                    localMembershipBelief = ConferenceRecoveryOwnershipLog.MembershipObservationState.JOINED,
+                    remoteMembershipHint = remoteHint,
+                    observedRosterEpoch = session.rosterEpoch
+                )
+            }
             return
         }
         sessions.remove(signal.sessionId)
@@ -3483,8 +3789,8 @@ class TalkbackCoordinator(
         val session = sessions[hostSessionId]
         val authorityId = authority.moduleId.value
         val reachability = buildRecoveryEdgeReachabilitySnapshot(channelId, session, authorityId)
-        if (!reachability.canDispatchRecoverySignal()) {
-            val waiting = reachability.dispatchWaitingReason()!!
+        if (!reachability.canAttemptRecovery()) {
+            val waiting = reachability.attemptWaitingReason()!!
             log(
                 "RECOVERY_REATTACH_DEFERRED session=$hostSessionId ch=$channelId to=$authorityId " +
                     "reason=$waiting ${reachability.formatProbeFields()}"
@@ -3945,6 +4251,14 @@ class TalkbackCoordinator(
             yieldLocalGroupSessionsForIncomingInvite(channelId, signal.sessionId)
         }
 
+        if (sessionType == SessionType.CONFERENCE) {
+            conferenceJoinLatencyTracker.onInviteAccepted(
+                sessionId = signal.sessionId,
+                channelId = channelId,
+                role = "participant"
+            )
+        }
+
         val session = TalkbackSession(signal.sessionId, sessionType, callee, channelId)
         populateGroupSessionMetadata(session, payload, members, caller, fromPeer)
         freezeChannelMemberSnapshot(session)
@@ -4279,6 +4593,15 @@ class TalkbackCoordinator(
             session.remotePeersByModule[peerId] = fromPeer
             val engine = getOrCreateMeshEngine(session, peerId)
             wireIceCallback(session, peerId, engine)
+            MediaRecoveryCausalTrace.mediaSignalOfferReceived(
+                mediaRecoveryTraceContext(
+                    session,
+                    peerId,
+                    caller.endpointId.value,
+                    iceRestart = payload.joinIntent == ConferenceJoinIntent.RECOVERY_REATTACH
+                ),
+                joinIntent = payload.joinIntent.name
+            )
             val answer = engine.applyRemoteOffer(payload.sdp, politeForMeshPair(peerId))
             drainPendingIce(session.id, peerId, engine)
             sendSignal(
@@ -4298,7 +4621,11 @@ class TalkbackCoordinator(
                     )
                 }
             }
-            updateSessionReceivePlayback(session)
+            if (session.type == SessionType.CONFERENCE) {
+                notifyConferenceTransportChanged(session, "acceptGroupJoin")
+            } else {
+                updateSessionReceivePlayback(session, "acceptGroupJoin")
+            }
             return
         }
         session.remotePeersByModule[caller.moduleId.value] = fromPeer
@@ -4405,11 +4732,15 @@ class TalkbackCoordinator(
             SessionType.UNICAST -> mediaRegistry.getUnicast(session.id)
             else -> meshEngineForSession(session, moduleId)
         }
+        val traceCtx = mediaRecoveryTraceContext(session, moduleId, signal.from.endpointId.value)
         if (engine == null) {
+            MediaRecoveryCausalTrace.mediaSignalCandidateReceived(traceCtx, queued = true)
             queuePendingIce(signal.sessionId, moduleId, signal.payload)
             return
         }
+        MediaRecoveryCausalTrace.mediaSignalCandidateReceived(traceCtx, queued = false)
         engine.addIceCandidate(signal.payload)
+        MediaRecoveryCausalTrace.mediaIceCandidateApplied(traceCtx)
     }
 
     private fun logFloorRequestRecv(signal: SignalEnvelope, fromPeer: PeerTarget) {
@@ -4935,8 +5266,19 @@ class TalkbackCoordinator(
     }
 
     private fun handleHangup(signal: SignalEnvelope) {
-        clearPendingConferenceInvite(sessionId = signal.sessionId)
-        val removed = sessions.remove(signal.sessionId) ?: return
+        val pendingInvite = findPendingConferenceInviteBySessionId(signal.sessionId)
+        val removed = sessions.remove(signal.sessionId)
+        if (removed == null) {
+            if (pendingInvite != null) {
+                pendingConferenceInvitesByChannel.remove(pendingInvite.channelId)
+                releaseConferenceRuntimeAfterRemoteTermination(
+                    pendingInvite.channelId,
+                    "PENDING_CONFERENCE_ABORT_REMOTE"
+                )
+            }
+            return
+        }
+        clearPendingConferenceInvite(sessionId = signal.sessionId, channelId = removed.channelId)
         val wasUnicast = removed.type == SessionType.UNICAST
         pendingGroupJoinsBySession.remove(signal.sessionId)
         pendingIceBySession.remove(signal.sessionId)
@@ -4963,12 +5305,56 @@ class TalkbackCoordinator(
         }
     }
 
+    private fun membershipDecisionForensics(session: TalkbackSession): Triple<String, String, List<String>> {
+        val conferenceState = if (session.accepted) "ACTIVE" else "PENDING"
+        val recovery = ConferenceMemberDecisionTrace.recoverySummaryForSession(
+            conferenceEdgeRecoveryController,
+            session.id
+        )
+        val pending = conferenceEdgeRecoveryController.pendingForensics(session.id)
+        return Triple(conferenceState, recovery, pending)
+    }
+
+    private fun emitConferenceRecoveryOwnership(
+        reason: String,
+        session: TalkbackSession,
+        participantId: String,
+        supersededFromAttempt: Long? = null,
+        membershipMutationDecision: ConferenceRecoveryOwnershipLog.MembershipMutationDecisionSnapshot? = null
+    ) {
+        if (session.type != SessionType.CONFERENCE) return
+        val leftKeys = conferenceParticipantManager.leftMemberEndpoints(session.id)?.keys ?: emptySet()
+        ConferenceRecoveryOwnershipLog.emitFromSession(
+            reason = reason,
+            session = session,
+            localModuleId = localModuleId.value,
+            participantId = participantId,
+            controller = conferenceEdgeRecoveryController,
+            leftMemberModuleIds = leftKeys,
+            supersededFromAttempt = supersededFromAttempt,
+            membershipMutationDecision = membershipMutationDecision
+        )
+    }
+
     private fun handleGroupLeave(signal: SignalEnvelope) {
         val session = sessions[signal.sessionId] ?: return
         if (session.type != SessionType.CONFERENCE) return
         val leavingModuleId = signal.from.moduleId.value
         if (leavingModuleId == localModuleId.value) return
-        if (leavingModuleId == session.initiatorModuleId?.value) {
+        val (conferenceState, recoverySummary, pendingActions) = membershipDecisionForensics(session)
+        val isHostLeave = leavingModuleId == session.initiatorModuleId?.value
+        ConferenceMemberDecisionTrace.groupLeaveReceived(
+            sessionId = session.id,
+            fromModule = leavingModuleId,
+            localModule = localModuleId.value,
+            isHostLeave = isHostLeave,
+            conferenceState = conferenceState,
+            recoverySummary = recoverySummary,
+            pendingActions = pendingActions,
+            rosterEpoch = session.rosterEpoch,
+            signalTsMs = signal.timestampMs
+        )
+        if (isHostLeave) {
             log("[${session.traceId}] Conference host left via GROUP_LEAVE, ending session")
             hangupInternal(session.id)
             session.channelId?.let { channelId ->
@@ -4996,9 +5382,22 @@ class TalkbackCoordinator(
         )
     }
 
-    private fun leaveConferenceInternal(sessionId: String) {
+    private fun leaveConferenceInternal(sessionId: String, reason: String, caller: String) {
         val active = sessions[sessionId] ?: return
-        if (active.initiatorModuleId == localModuleId) {
+        val (conferenceState, recoverySummary, pendingActions) = membershipDecisionForensics(active)
+        val isHost = active.initiatorModuleId == localModuleId
+        ConferenceMemberDecisionTrace.localLeaveRequest(
+            sessionId = sessionId,
+            participant = localModuleId.value,
+            caller = caller,
+            reason = reason,
+            conferenceState = conferenceState,
+            recoverySummary = recoverySummary,
+            pendingActions = pendingActions,
+            rosterEpoch = active.rosterEpoch,
+            isHost = isHost
+        )
+        if (isHost) {
             log("[${active.traceId}] Conference host leaving, ending for all")
             hangupInternal(sessionId)
             return
@@ -5020,7 +5419,19 @@ class TalkbackCoordinator(
             floorAuthorityModuleId = session.floorAuthorityModuleId?.value ?: session.local.moduleId.value,
             sessionMode = MeshSessionMode.CONFERENCE
         ).encode()
-        targetsForSession(session).forEach { (peer, remote) ->
+        val targets = targetsForSession(session)
+        ConferenceMemberDecisionTrace.groupLeaveSent(
+            sessionId = session.id,
+            fromModule = session.local.moduleId.value,
+            caller = caller,
+            reason = reason,
+            targetCount = targets.size,
+            conferenceState = conferenceState,
+            recoverySummary = recoverySummary,
+            pendingActions = pendingActions,
+            rosterEpoch = session.rosterEpoch
+        )
+        targets.forEach { (peer, remote) ->
             sendSignal(
                 peer,
                 buildSignedEnvelope(
@@ -5063,6 +5474,35 @@ class TalkbackCoordinator(
         moduleId: String,
         source: AuthorityMembershipMutationSource
     ) {
+        val wasJoined = session.memberModules.any { it.value == moduleId }
+        val (conferenceState, recoverySummary, pendingActions) = membershipDecisionForensics(session)
+        ConferenceMemberDecisionTrace.authorityMemberDecision(
+            sessionId = session.id,
+            participant = moduleId,
+            decision = "REMOVE",
+            source = source,
+            oldMembership = if (wasJoined) "JOINED" else "UNKNOWN",
+            conferenceState = conferenceState,
+            recoverySummary = recoverySummary,
+            pendingActions = pendingActions,
+            rosterEpoch = session.rosterEpoch,
+            remaining = session.groupMembers.size
+        )
+        val pruneReason = when (source) {
+            AuthorityMembershipMutationSource.AUTHORITY_PRUNE -> "AUTHORITY_PRUNE"
+            AuthorityMembershipMutationSource.AUTHORITY_GROUP_LEAVE -> "AUTHORITY_GROUP_LEAVE"
+            AuthorityMembershipMutationSource.USER_LEAVE -> "USER_LEAVE"
+            AuthorityMembershipMutationSource.HOST_TERMINATE -> "HOST_TERMINATE"
+        }
+        ConferenceRecoveryOwnershipLog.emitMembershipMutationDecision(
+            session = session,
+            localModuleId = localModuleId.value,
+            participantId = moduleId,
+            controller = conferenceEdgeRecoveryController,
+            type = ConferenceRecoveryOwnershipLog.MembershipMutationDecisionType.PRUNE,
+            reason = pruneReason,
+            source = source
+        )
         if (source == AuthorityMembershipMutationSource.AUTHORITY_PRUNE) {
             commitAuthorityPrune(session, moduleId)
             return
@@ -5187,6 +5627,16 @@ class TalkbackCoordinator(
             log(
                 "[${session.traceId}] Ignoring $signalPayload from connected peer $moduleId " +
                     "(duplicate invite)"
+            )
+            return false
+        }
+        if (session.type == SessionType.CONFERENCE &&
+            isBusyRejectPayload(signalPayload) &&
+            shouldPreserveMembershipOnConferenceBusyReject(session, moduleId)
+        ) {
+            log(
+                "[${session.traceId}] Ignoring BUSY from established member $moduleId " +
+                    "(INV-MEM-001: invite rejection does not imply departure)"
             )
             return false
         }
@@ -5335,6 +5785,7 @@ class TalkbackCoordinator(
             lastRecoveryCapabilityByEdge.keys.removeIf { it.sessionId == sessionId }
             lastConferenceRuntimeDecisionBySession.remove(sessionId)
             lastConferenceRuntimeMissingByPeer.clear()
+            lastConferenceBarrierCanPublishBySession.remove(sessionId)
         }
         val wasUnicast = session.type == SessionType.UNICAST
         if (session.type == SessionType.CONFERENCE) {
@@ -5387,6 +5838,7 @@ class TalkbackCoordinator(
         stopSessionCapture(session)
         programAudioBus.clear(session.id)
         conferenceAudioBus.clear(session.id)
+        receivePathLivenessObserver.clearSession(session.id)
         if (isConferenceSession(session)) {
             val recoveryModules = linkedSetOf<String>()
             recoveryModules.addAll(meshMediaModuleIds(session))
@@ -5479,7 +5931,78 @@ class TalkbackCoordinator(
         ensureConferenceDuplex(session)
     }
 
+    private fun canPublishAudio(session: TalkbackSession): Boolean {
+        if (session.type != SessionType.CONFERENCE) return true
+        return ConferenceMediaTransmitGate.canPublishConferenceAudio(
+            ConferenceMediaTransmitGate.Input(
+                localConferenceActive = session.accepted,
+                localMuted = session.muted,
+                localPublisherReady = connectedConferencePeerIds(session).isNotEmpty()
+            )
+        )
+    }
+
+    private fun connectedConferencePeerIds(session: TalkbackSession): Set<String> =
+        conferenceMemberRemoteIds(session).filter { isPeerMediaConnected(it) }.toSet()
+
+    private fun conferenceBarrierSnapshot(session: TalkbackSession) =
+        ConferenceBarrierDiagnostics.snapshot(
+            sessionId = session.id,
+            joinedPeers = conferenceMemberRemoteIds(session),
+            connectedPeers = connectedConferencePeerIds(session),
+            controller = conferenceEdgeRecoveryController,
+            isIceConnected = { qosMonitor.isGroupConnected(it) },
+            gateInput = ConferenceMediaTransmitGate.Input(
+                localConferenceActive = session.accepted,
+                localMuted = session.muted,
+                localPublisherReady = connectedConferencePeerIds(session).isNotEmpty()
+            )
+        )
+
+    private fun logConferenceBarrierSnapshot(session: TalkbackSession, action: String) {
+        if (session.type != SessionType.CONFERENCE) return
+        log(ConferenceBarrierDiagnostics.formatLog(action, conferenceBarrierSnapshot(session)))
+    }
+
+    private fun applyConferenceTransmitBarrier(session: TalkbackSession, cause: String) {
+        if (session.type != SessionType.CONFERENCE || !session.accepted) return
+        val canPublish = canPublishAudio(session)
+        val previous = lastConferenceBarrierCanPublishBySession[session.id]
+        if (previous == false && canPublish) {
+            maybeResumeConferenceTransmitAfterBarrierUnblock(session, cause)
+        }
+        if (!canPublish && sessionMediaEngines(session).any { it.isCapturing() }) {
+            if (!session.muted) {
+                session.conferenceTransmitSuspendedByBarrier = true
+            }
+            lastConferenceBarrierCanPublishBySession[session.id] = false
+            logConferenceBarrierSnapshot(session, "stop_capture")
+            stopSessionCapture(session)
+            return
+        }
+        val shouldLog = !canPublish || previous != null && previous != canPublish
+        lastConferenceBarrierCanPublishBySession[session.id] = canPublish
+        if (shouldLog) {
+            logConferenceBarrierSnapshot(session, cause)
+        }
+    }
+
+    private fun maybeResumeConferenceTransmitAfterBarrierUnblock(
+        session: TalkbackSession,
+        cause: String
+    ) {
+        if (session.muted || !session.conferenceTransmitSuspendedByBarrier) return
+        session.conferenceTransmitSuspendedByBarrier = false
+        logConferenceBarrierSnapshot(session, "resume_transmit_$cause")
+        tryEnsureConferenceDuplex(session)
+    }
+
     private fun startSessionCapture(session: TalkbackSession) {
+        if (!canPublishAudio(session)) {
+            lastConferenceBarrierCanPublishBySession[session.id] = false
+            logConferenceBarrierSnapshot(session, "block_capture")
+            return
+        }
         if (session.type == SessionType.GROUP) {
             val floorOwner = session.floor.owner()
             val localIdentity = groupLocalIdentity(session)
@@ -5748,6 +6271,18 @@ class TalkbackCoordinator(
             channelId != null -> pendingConferenceInvitesByChannel.remove(channelId)
             sessionId != null -> pendingConferenceInvitesByChannel.entries.removeIf { it.value.signal.sessionId == sessionId }
         }
+    }
+
+    private data class PendingConferenceInviteMatch(
+        val channelId: String,
+        val pending: PendingConferenceInvite
+    )
+
+    private fun findPendingConferenceInviteBySessionId(sessionId: String): PendingConferenceInviteMatch? {
+        val entry = pendingConferenceInvitesByChannel.entries.firstOrNull { (_, pending) ->
+            pending.signal.sessionId == sessionId
+        } ?: return null
+        return PendingConferenceInviteMatch(channelId = entry.key, pending = entry.value)
     }
 
     private fun populateGroupSessionMetadata(
@@ -6460,9 +6995,16 @@ class TalkbackCoordinator(
         )
     }
 
-    private fun syncConferenceRelay(session: TalkbackSession) {
+    private fun syncConferenceRelay(session: TalkbackSession, reason: String) {
         if (session.type != SessionType.CONFERENCE) return
+        log(
+            "${sessionTag(session)} receive-path sync reason=$reason " +
+                "topology=${session.mediaTopology.name} accepted=${session.accepted}"
+        )
         conferenceAudioBus.updateParticipants(session, localModuleId)
+        receivePathLivenessObserver.syncMeshSession(session, localModuleId) { remoteModuleId ->
+            meshEngineForSession(session, remoteModuleId)
+        }
     }
 
     private fun releaseFloorIfHolderUnavailable(session: TalkbackSession, moduleId: String) {
@@ -6507,7 +7049,17 @@ class TalkbackCoordinator(
         val remote = endpointForModule(session, targetModuleId)
         val engine = getOrCreateMeshEngine(session, peerId)
         wireIceCallback(session, peerId, engine)
+        val traceCtx = mediaRecoveryTraceContext(
+            session,
+            peerId,
+            remote.endpointId.value,
+            iceRestart = meshPeer
+        )
+        if (meshPeer) {
+            MediaRecoveryCausalTrace.recoveryIceRestartDispatched(traceCtx)
+        }
         val offer = engine.createOffer(iceRestart = meshPeer)
+        MediaRecoveryCausalTrace.mediaSignalOfferSent(traceCtx)
         drainPendingIce(session.id, peerId, engine)
         sendSignal(
             peer,
@@ -6710,6 +7262,13 @@ class TalkbackCoordinator(
             log(
                 "remoteTrackAttached session=${session.id} ice=$ice playback=$playback peer=$remoteModuleId"
             )
+            if (session.type == SessionType.CONFERENCE && session.accepted) {
+                runOnCoordinator {
+                    val live = sessions[session.id] ?: return@runOnCoordinator
+                    if (!live.accepted || live.type != SessionType.CONFERENCE) return@runOnCoordinator
+                    syncConferenceRelay(live, "remote_track_attached")
+                }
+            }
         }
         engine.setOnLocalIceCandidate { candidate ->
             runOnCoordinator {
@@ -6723,6 +7282,12 @@ class TalkbackCoordinator(
                 val peer = session.remotePeersByModule[remoteModuleId] ?: return@runOnCoordinator
                 val remote = session.remote?.takeIf { it.moduleId.value == remoteModuleId }
                     ?: EndpointAddress(ModuleId(remoteModuleId), session.local.endpointId)
+                val traceCtx = mediaRecoveryTraceContext(
+                    session,
+                    remoteModuleId,
+                    remote.endpointId.value
+                )
+                MediaRecoveryCausalTrace.mediaIceCandidateGenerated(traceCtx)
                 sendSignal(
                     peer,
                     buildSignedEnvelope(
@@ -6733,6 +7298,7 @@ class TalkbackCoordinator(
                         candidate
                     )
                 )
+                MediaRecoveryCausalTrace.mediaSignalCandidateSent(traceCtx)
             }
         }
     }
@@ -6747,7 +7313,16 @@ class TalkbackCoordinator(
     private fun drainPendingIce(sessionId: String, moduleId: String, engine: WebRtcAudioEngine) {
         val moduleMap = pendingIceBySession[sessionId] ?: return
         val pending = moduleMap.remove(moduleId) ?: return
-        pending.forEach { engine.addIceCandidate(it) }
+        val session = sessions[sessionId]
+        pending.forEach { candidate ->
+            engine.addIceCandidate(candidate)
+            session?.let {
+                MediaRecoveryCausalTrace.mediaIceCandidateApplied(
+                    mediaRecoveryTraceContext(it, moduleId),
+                    queued = true
+                )
+            }
+        }
         if (moduleMap.isEmpty()) {
             pendingIceBySession.remove(sessionId)
         }
@@ -6797,6 +7372,15 @@ class TalkbackCoordinator(
             qosMonitor.updateIceState(remoteModuleId, state)
             log("ICE $remoteModuleId state=$state ${qosMonitor.formatSummary()}")
             maybeEmitIceTopologySnapshot(remoteModuleId)
+            if (state == "CHECKING") {
+                sessions.values
+                    .filter { isConferenceSession(it) && it.accepted }
+                    .forEach { session ->
+                        if (conferenceParticipantManager.containsParticipant(session.id, remoteModuleId)) {
+                            conferenceJoinLatencyTracker.onPeerIceChecking(session.id, remoteModuleId)
+                        }
+                    }
+            }
             if (IceConnectivity.isConnected(state)) {
                 // Gate-R1: ICE up must yield DECISION (session alive) or MISSING (session gone).
                 maybeLogConferenceRuntimeMissing(remoteModuleId, state)
@@ -6819,6 +7403,7 @@ class TalkbackCoordinator(
                     }
                     if (tracked) {
                         if (isConferenceSession(session)) {
+                            conferenceJoinLatencyTracker.onPeerIceConnected(session.id, remoteModuleId)
                             conferenceParticipantManager.onMediaConnected(session.id, remoteModuleId)
                             maybeNotifyRecoveryReachabilityChanged(session, remoteModuleId, routeTrigger)
                             // #83 / ADR-0022: ICE restoration always feeds completion evaluation.
@@ -6893,14 +7478,17 @@ class TalkbackCoordinator(
                         updateSessionReceivePlayback(it, "ice_$state")
                         tryEnsureConferenceDuplex(it)
                     }
-                sessions.values
-                    .filter {
-                        it.mediaTopology == GroupMediaTopology.ANCHOR &&
-                            it.accepted &&
-                            (it.type == SessionType.GROUP || it.type == SessionType.CONFERENCE)
-                    }
+                // Receive-path observers are required for all accepted conference sessions.
+                // MESH conferences do not participate in backup-standby maintenance,
+                // so this bootstrap path is intentionally separate.
+                ConferenceIceConnectedSideEffects
+                    .sessionsForReceivePathBootstrap(sessions.values)
                     .forEach { session ->
-                        syncConferenceRelay(session)
+                        syncConferenceRelay(session, "ice_connected")
+                    }
+                ConferenceIceConnectedSideEffects
+                    .sessionsForBackupStandbyMaintenance(sessions.values)
+                    .forEach { session ->
                         maintainBackupStandby(session)
                     }
             }
@@ -6911,6 +7499,19 @@ class TalkbackCoordinator(
                         if (remoteModuleId in session.remotePeersByModule) {
                             groupMeshReconciler.markIceChecking(session.channelId!!, remoteModuleId)
                         }
+                    }
+                sessions.values
+                    .filter {
+                        it.accepted &&
+                            isConferenceSession(it) &&
+                            conferenceParticipantManager.containsParticipant(it.id, remoteModuleId)
+                    }
+                    .forEach { session ->
+                        maybeNotifyRecoveryReachabilityChanged(
+                            session,
+                            remoteModuleId,
+                            RecoveryReevaluateTrigger.ICE_CHECKING
+                        )
                     }
                 tryRecoverStuckCheckingPeer(remoteModuleId)
                 tryRecoverStuckCheckingConferencePeer(remoteModuleId)
@@ -7473,7 +8074,17 @@ class TalkbackCoordinator(
             return false
         }
         wireIceCallback(session, remoteModuleId, engine)
+        val traceCtx = mediaRecoveryTraceContext(
+            session,
+            remoteModuleId,
+            remote.endpointId.value,
+            iceRestart = iceRestart
+        )
+        if (iceRestart) {
+            MediaRecoveryCausalTrace.recoveryIceRestartDispatched(traceCtx)
+        }
         val offer = engine.createOffer(iceRestart = iceRestart)
+        MediaRecoveryCausalTrace.mediaSignalOfferSent(traceCtx)
         drainPendingIce(session.id, remoteModuleId, engine)
         sendSignal(
             peer,
@@ -7626,6 +8237,7 @@ class TalkbackCoordinator(
         session.backupAnchorModuleId = electAnchorRoles(remainingForBackup)?.primary
         programAudioBus.clear(session.id)
         conferenceAudioBus.clear(session.id)
+        receivePathLivenessObserver.clearSession(session.id)
         if (session.floor.owner()?.moduleId == current) {
             session.floor.owner()?.let { session.floor.release(it) }
             session.ptt.onEvent(PttEvent.Release)
@@ -7642,7 +8254,7 @@ class TalkbackCoordinator(
             completeGroupMesh(session)
             drainPendingGroupJoins(session.id)
             scheduleGroupMeshRetries(session.id)
-            syncConferenceRelay(session)
+            syncConferenceRelay(session, "anchor_failover_host")
         } else {
             val hadStandby = session.backupStandbyPeers.contains(next.value) &&
                 qosMonitor.isGroupConnected(next.value)
@@ -7656,7 +8268,7 @@ class TalkbackCoordinator(
         session.channelId?.let { reconcileGroupMeshInternal(it) }
         maintainBackupStandby(session)
         updateSessionReceivePlayback(session, "anchor_failover")
-        syncConferenceRelay(session)
+        syncConferenceRelay(session, "anchor_failover")
         scheduleReconcile("anchor_failover")
     }
 
@@ -7718,6 +8330,10 @@ class TalkbackCoordinator(
 
     private fun onRemoteModuleRecovered(moduleId: String) {
         log("Remote module recovered: $moduleId")
+        maybeNotifyRecoveryReachabilityForRemote(
+            moduleId,
+            RecoveryReevaluateTrigger.REMOTE_MODULE_RECOVERED
+        )
         cleanupUnhealthySessions()
         if (tryHostReinviteConferencePeer(moduleId)) return
         if (tryReinviteGroupPeerPairwise(moduleId)) return
@@ -7910,12 +8526,24 @@ class TalkbackCoordinator(
             val primary = resolveBootstrapPrimary(allModules)
             if (primary != null && localModuleId != primary) {
                 log("Waiting for primary ${primary.value} to bootstrap GROUP on $channelId")
+                observeGroupTransitionBootstrapAttempt(
+                    channelId = channelId,
+                    resolvedPrimary = primary.value,
+                    waitingForPrimary = true,
+                    meshRecoveryState = "waiting_primary"
+                )
                 return
             }
             val inviteModuleIds = GroupMeshPlanner.inviteTargets(localModuleId, allModules)
             if (inviteModuleIds.isEmpty()) return
             val inviteEndpoints = inviteModuleIds.mapNotNull { endpointForDialableModule(it) }
             if (inviteEndpoints.isEmpty()) return
+            observeGroupTransitionBootstrapAttempt(
+                channelId = channelId,
+                resolvedPrimary = primary?.value,
+                waitingForPrimary = false,
+                meshRecoveryState = "mesh_create"
+            )
             runCatching {
                 meshCallInternal(
                     local,
@@ -7932,6 +8560,7 @@ class TalkbackCoordinator(
         if (!session.accepted || session.isForegroundSuspended()) return
 
         val primary = resolveBootstrapPrimary(allModules)
+        observeGroupTransitionPrimaryResolve(channelId, primary?.value)
         val missingPeers = dialable
             .filter { it != localModuleId && it !in session.memberModules }
             .filter { isGroupMemberReconnectEligible(session, it.value) }
@@ -8130,6 +8759,7 @@ class TalkbackCoordinator(
         if (session.anchorModuleId == localModuleId) {
             programAudioBus.clear(session.id)
             conferenceAudioBus.clear(session.id)
+            receivePathLivenessObserver.clearSession(session.id)
         }
         session.anchorModuleId = winnerPrimary
         session.backupAnchorModuleId = null
@@ -8138,7 +8768,7 @@ class TalkbackCoordinator(
         }
         maintainBackupStandby(session)
         updateSessionReceivePlayback(session, "split_brain_recovery")
-        syncConferenceRelay(session)
+        syncConferenceRelay(session, "split_brain_recovery")
     }
 
     private fun maintainBackupStandby(session: TalkbackSession) {
@@ -8210,7 +8840,13 @@ class TalkbackCoordinator(
                 if (!SessionDispositionTransitions.beginResume(session)) return@forEach
                 val playbackAfterResume = when {
                     session.type == SessionType.GROUP -> shouldEnableGroupReceivePlayback(session)
-                    session.type == SessionType.CONFERENCE -> session.accepted && !session.muted
+                    session.type == SessionType.CONFERENCE ->
+                        ConferenceReceivePlaybackPolicy.shouldEnableReceivePlayback(
+                            ConferenceReceivePlaybackPolicy.Input(
+                                accepted = session.accepted,
+                                foregroundSuspended = session.isForegroundSuspended()
+                            )
+                        )
                     else -> false
                 }
                 log("${sessionTag(session)} Resuming ${session.type.name} session after unicast disposition=${session.disposition}")
@@ -8228,7 +8864,7 @@ class TalkbackCoordinator(
                     completeGroupMesh(session)
                     maintainBackupStandby(session)
                     tryEnsureConferenceDuplex(session)
-                    syncConferenceRelay(session)
+                    syncConferenceRelay(session, "foreground_resume")
                 }
                 SessionDispositionTransitions.markActive(session)
             }
@@ -8302,6 +8938,25 @@ class TalkbackCoordinator(
     private fun isConferenceRejoinEligible(session: TalkbackSession, moduleId: String): Boolean {
         val lifecycle = resolveConferenceMembershipLifecycle(session, moduleId) ?: return false
         return ConferenceRejoinEligibility.isEligible(lifecycle)
+    }
+
+    /**
+     * INV-MEM-001: rejoin / duplicate invite BUSY must not remove established roster membership.
+     * Uses membership plane only — MUST NOT read recovery obligation or edge facts.
+     */
+    private fun shouldPreserveMembershipOnConferenceBusyReject(
+        session: TalkbackSession,
+        moduleId: String
+    ): Boolean {
+        if (!isConferenceSession(session)) return false
+        val sessionId = session.id
+        if (!conferenceParticipantManager.containsParticipant(sessionId, moduleId)) {
+            return false
+        }
+        if (conferenceParticipantManager.wasEverConnected(sessionId, moduleId)) {
+            return true
+        }
+        return conferenceParticipantManager.participant(sessionId, moduleId).invite == InviteState.ACCEPTED
     }
 
     /**
@@ -8594,6 +9249,22 @@ class TalkbackCoordinator(
             fromPeer,
             buildSignedEnvelope(SignalType.CALL_REJECT, callee, caller, invitedSessionId, payload)
         )
+        if (holdingSession?.type == SessionType.CONFERENCE && holdingSession.accepted) {
+            val belief = ConferenceRecoveryOwnershipLog.observeParticipantMembership(
+                session = holdingSession,
+                participantId = localModuleId.value,
+                rosterOwner = holdingSession.initiatorModuleId?.value ?: localModuleId.value
+            ).observedMembershipState
+            ConferenceRecoveryOwnershipLog.emitRejoinResponse(
+                conferenceId = holdingSession.id,
+                localModuleId = localModuleId.value,
+                targetParticipantId = caller.moduleId.value,
+                response = "BUSY",
+                localMembershipBelief = belief,
+                remoteMembershipHint = "ALIVE",
+                observedRosterEpoch = holdingSession.rosterEpoch
+            )
+        }
     }
 
     private fun isPoliteNegotiator(remoteModuleId: String): Boolean =
@@ -8807,9 +9478,7 @@ class TalkbackCoordinator(
                     )
                 )
             }
-            if (sessions.values.none { it.channelId == channelId && it.type == SessionType.CONFERENCE }) {
-                leaveChannelMode(channelId)
-            }
+            releaseConferenceRuntimeAfterRemoteTermination(channelId, "PENDING_CONFERENCE_ABORT_TIMEOUT")
             log("Conference invite expired ch=$channelId from=${signal.from.key}")
         }
     }
@@ -8891,16 +9560,142 @@ class TalkbackCoordinator(
     private fun isMeshRepairSuppressed(channelId: String): Boolean =
         System.currentTimeMillis() < (suppressMeshRepairUntilMsByChannel[channelId] ?: 0L)
 
+    private fun notifyConferenceTransportChanged(
+        session: TalkbackSession,
+        reason: String = "transport_changed"
+    ) {
+        if (session.type != SessionType.CONFERENCE) return
+        refreshConferenceReceivePlayback(session, reason)
+    }
+
+    private fun refreshConferenceReceivePlayback(session: TalkbackSession, reason: String) {
+        if (session.type != SessionType.CONFERENCE || !session.accepted) return
+        updateSessionReceivePlayback(session, reason)
+    }
+
     private fun updateSessionReceivePlayback(session: TalkbackSession, reason: String = "refreshPlaybackState") {
+        val foregroundSuspended = session.isForegroundSuspended()
         val enabled = when {
-            session.isForegroundSuspended() -> false
+            foregroundSuspended -> false
             session.type == SessionType.UNICAST -> session.accepted
             session.type == SessionType.GROUP -> shouldEnableGroupReceivePlayback(session)
-            session.type == SessionType.CONFERENCE -> session.accepted && !session.muted
+            session.type == SessionType.CONFERENCE ->
+                ConferenceReceivePlaybackPolicy.shouldEnableReceivePlayback(
+                    ConferenceReceivePlaybackPolicy.Input(
+                        accepted = session.accepted,
+                        foregroundSuspended = foregroundSuspended
+                    )
+                )
             else -> false
+        }
+        if (session.type == SessionType.CONFERENCE) {
+            logConferencePlaybackDecision(
+                session = session,
+                reason = reason,
+                accepted = session.accepted,
+                muted = session.muted,
+                foregroundSuspended = foregroundSuspended,
+                enabled = enabled,
+                caller = playbackMutationCaller()
+            )
         }
         setPlaybackEnabled(session, enabled, reason)
         verifyGroupPlaybackInvariant(session, enabled)
+    }
+
+    private fun conferencePlaybackLifecycleLabel(session: TalkbackSession): String =
+        when {
+            session.disposition == SessionDisposition.TERMINATED -> "TERMINATED"
+            !session.accepted -> "JOINING"
+            isConferenceUiReady(session) -> "ESTABLISHED"
+            else -> "CONNECTING"
+        }
+
+    private fun playbackMutationCaller(): String {
+        val skip = setOf(
+            "updateSessionReceivePlayback",
+            "updateSessionReceivePlayback\$default",
+            "refreshConferenceReceivePlayback",
+            "notifyConferenceTransportChanged",
+            "setPlaybackEnabled",
+            "logConferencePlaybackDecision",
+            "playbackMutationCaller"
+        )
+        return Thread.currentThread().stackTrace
+            .asSequence()
+            .drop(2)
+            .firstOrNull { frame ->
+                frame.className.contains("TalkbackCoordinator") &&
+                    frame.methodName !in skip &&
+                    !frame.methodName.startsWith("access$")
+            }
+            ?.methodName
+            ?: "unknown"
+    }
+
+    private fun callMuteMutationCaller(): String {
+        val skipMethods = setOf(
+            "setCallMuted",
+            "logCallMuteChanged",
+            "callMuteMutationCaller"
+        )
+        return Thread.currentThread().stackTrace
+            .asSequence()
+            .drop(2)
+            .firstOrNull { frame ->
+                frame.className.startsWith("com.talkback") &&
+                    !frame.className.contains("TalkbackCoordinator") &&
+                    frame.methodName !in skipMethods &&
+                    !frame.methodName.startsWith("access$")
+            }
+            ?.let { "${it.className.substringAfterLast('.')}#${it.methodName}" }
+            ?: "unknown"
+    }
+
+    private fun logCallMuteChanged(
+        session: TalkbackSession,
+        old: Boolean,
+        new: Boolean,
+        reason: String,
+        caller: String
+    ) {
+        val stack = Thread.currentThread().stackTrace
+            .drop(2)
+            .take(10)
+            .joinToString(" <- ") { "${it.fileName}:${it.lineNumber}#${it.methodName}" }
+        log(
+            "CALL_MUTE_CHANGED\n" +
+                "session=${session.id}\n" +
+                "type=${session.type}\n" +
+                "old=$old\n" +
+                "new=$new\n" +
+                "reason=$reason\n" +
+                "caller=$caller\n" +
+                "stack=$stack"
+        )
+    }
+
+    private fun logConferencePlaybackDecision(
+        session: TalkbackSession,
+        reason: String,
+        accepted: Boolean,
+        muted: Boolean,
+        foregroundSuspended: Boolean,
+        enabled: Boolean,
+        caller: String
+    ) {
+        log(
+            "PLAYBACK_DECISION\n" +
+                "session=${session.id}\n" +
+                "type=CONFERENCE\n" +
+                "reason=$reason\n" +
+                "accepted=$accepted\n" +
+                "muted=$muted\n" +
+                "foregroundSuspended=$foregroundSuspended\n" +
+                "lifecycle=${conferencePlaybackLifecycleLabel(session)}\n" +
+                "enabled=$enabled\n" +
+                "caller=$caller"
+        )
     }
 
     private fun refreshGroupReceivePlaybackAll() {
@@ -9252,6 +10047,209 @@ class TalkbackCoordinator(
             }
     }
 
+    private fun onGovernanceTransitionTerminal(record: TransitionRecord) {
+        if (record.trigger != TransitionTrigger.MEETING_END) return
+        if (record.terminal != TransitionTerminalState.READY) return
+        val snapshot = buildGroupTransitionReadinessSnapshot(
+            channelId = record.channelId,
+            meshRecoveryState = "transition_terminal_ready"
+        )
+        GroupTransitionReadinessLog.onTransitionTerminalReady(
+            channelId = record.channelId,
+            moduleId = localModuleId.value,
+            record = record,
+            snapshot = snapshot
+        )
+    }
+
+    private fun observeGroupTransitionBootstrapAttempt(
+        channelId: String,
+        resolvedPrimary: String?,
+        waitingForPrimary: Boolean,
+        meshRecoveryState: String
+    ) {
+        val attemptId = GroupTransitionReadinessLog.bootstrapAttemptCount(channelId) + 1
+        val snapshot = buildGroupTransitionReadinessSnapshot(
+            channelId = channelId,
+            waitingForPrimary = waitingForPrimary,
+            meshRecoveryState = meshRecoveryState
+        )
+        GroupTransitionReadinessLog.onBootstrapAttempt(
+            channelId = channelId,
+            moduleId = localModuleId.value,
+            attemptId = attemptId,
+            resolvedPrimary = resolvedPrimary,
+            waitingForPrimary = waitingForPrimary,
+            snapshot = snapshot
+        )
+    }
+
+    private fun observeGroupTransitionPrimaryResolve(channelId: String, resolvedPrimary: String?) {
+        val snapshot = buildGroupTransitionReadinessSnapshot(
+            channelId = channelId,
+            meshRecoveryState = "primary_resolve"
+        )
+        GroupTransitionReadinessLog.onPrimaryResolve(
+            channelId = channelId,
+            moduleId = localModuleId.value,
+            resolvedPrimary = resolvedPrimary,
+            snapshot = snapshot
+        )
+    }
+
+    private fun observeGroupTransitionReadinessChanged(channelId: String, meshRecoveryState: String) {
+        val snapshot = buildGroupTransitionReadinessSnapshot(
+            channelId = channelId,
+            meshRecoveryState = meshRecoveryState
+        )
+        GroupTransitionReadinessLog.onReadinessChanged(snapshot)
+    }
+
+    private fun buildGroupTransitionReadinessSnapshot(
+        channelId: String,
+        waitingForPrimary: Boolean = false,
+        meshRecoveryState: String? = null
+    ): GroupTransitionReadinessLog.Snapshot {
+        val nowMs = System.currentTimeMillis()
+        val groupSession = sessions.values.firstOrNull {
+            it.channelId == channelId && it.type == SessionType.GROUP && it.accepted
+        } ?: sessions.values.firstOrNull {
+            it.channelId == channelId && it.type == SessionType.GROUP
+        }
+        val dialable = dialableRemoteModuleIds()
+        val allModules = dialable + localModuleId
+        val resolvedPrimary = resolveBootstrapPrimary(allModules)?.value
+        val primaryMeshAdmission = GroupTransitionReadinessLog.computePrimaryMeshAdmissionObserved(
+            groupSession = groupSession,
+            resolvedBootstrapPrimaryModuleId = resolvedPrimary,
+            localModuleId = localModuleId.value
+        )
+        val orphanBelief = GroupTransitionReadinessLog.computeOrphanBelief(
+            localModuleId = localModuleId.value,
+            groupSession = groupSession,
+            resolvedBootstrapPrimaryModuleId = resolvedPrimary,
+            primaryMeshAdmissionObserved = primaryMeshAdmission
+        )
+        val health = groupSession?.let {
+            GroupRuntimeHealthProjector.project(buildGroupRuntimeHealthInput(it))
+        }
+        val activeTransition = channelGovernance.activeTransition(channelId)
+        val terminalReady = when {
+            activeTransition == null -> true
+            activeTransition.isActive -> false
+            activeTransition.terminal == TransitionTerminalState.READY -> true
+            else -> false
+        }
+        val transitionState = when {
+            activeTransition == null -> "IDLE"
+            activeTransition.isActive -> activeTransition.phase.name
+            else -> "TERMINAL_${activeTransition.terminal?.name ?: "UNKNOWN"}"
+        }
+        val joinedMembers = groupSession?.let {
+            GroupMembershipSupport.canonicalMemberModuleIds(it).map { member -> member.value }.sorted()
+        }.orEmpty()
+        val activeMembers = groupSession?.let {
+            activeMemberModuleIds(it).map { member -> member.value }.sorted()
+        }.orEmpty()
+        val peerIceStates = linkedMapOf<String, String>()
+        dialable.forEach { moduleId ->
+            peerIceStates[moduleId.value] = iceStateForModule(moduleId.value) ?: "UNKNOWN"
+        }
+        val bootstrapAttemptCount = GroupTransitionReadinessLog.bootstrapAttemptCount(channelId)
+        return GroupTransitionReadinessLog.Snapshot(
+            channelId = channelId,
+            moduleId = localModuleId.value,
+            timestampMs = nowMs,
+            transition = GroupTransitionReadinessLog.TransitionObservation(
+                state = transitionState,
+                trigger = activeTransition?.trigger?.name,
+                transitionId = activeTransition?.id?.raw?.toString(),
+                startedAtMs = activeTransition?.startedAtMs,
+                terminalReady = terminalReady
+            ),
+            session = GroupTransitionReadinessLog.SessionIdentityObservation(
+                sessionLineageId = GroupTransitionReadinessLog.sessionLineageId(channelId),
+                sessionTraceId = groupSession?.traceId,
+                parentTraceId = GroupTransitionReadinessLog.parentTraceId(channelId),
+                localSessionId = groupSession?.id,
+                initiatorModuleId = groupSession?.initiatorModuleId?.value,
+                anchorModuleId = groupSession?.anchorModuleId?.value,
+                floorAuthorityModuleId = groupSession?.floorAuthorityModuleId?.value,
+                resolvedBootstrapPrimaryModuleId = resolvedPrimary,
+                membershipEpoch = groupSession?.rosterEpoch,
+                baselineMembers = GroupTransitionReadinessLog.baselineMembers(channelId),
+                orphanBelief = orphanBelief,
+                sessionRole = GroupTransitionReadinessLog.sessionRole(groupSession, localModuleId.value)
+            ),
+            bootstrap = GroupTransitionReadinessLog.BootstrapObservation(
+                waitingForPrimary = waitingForPrimary,
+                resolvedPrimary = resolvedPrimary,
+                bootstrapAttemptCount = bootstrapAttemptCount,
+                meshRecoveryState = meshRecoveryState
+            ),
+            readiness = GroupTransitionReadinessLog.ReadinessObservation(
+                membershipReady = health?.membershipReconciled == true,
+                transmitReady = health?.transmitMissingPeers?.isEmpty() == true,
+                terminalReady = terminalReady,
+                joinedMembers = joinedMembers,
+                activeMembers = activeMembers,
+                transmitRequiredPeers = health?.transmitRequiredPeers.orEmpty(),
+                transmitConnectedPeers = health?.transmitReadyPeers.orEmpty(),
+                peerIceStates = peerIceStates
+            ),
+            receive = buildGroupTransitionReceiveObservation(groupSession)
+        )
+    }
+
+    private fun buildGroupTransitionReceiveObservation(
+        groupSession: TalkbackSession?
+    ): GroupTransitionReadinessLog.ReceiveCapabilityObservation {
+        if (groupSession == null) {
+            return GroupTransitionReadinessLog.ReceiveCapabilityObservation(
+                sampled = false,
+                floorHolder = null,
+                holderAudioReachable = null,
+                holderMediaConnected = null,
+                failureReason = null
+            )
+        }
+        if (groupSession.floorAuthorityModuleId == null) {
+            return GroupTransitionReadinessLog.ReceiveCapabilityObservation(
+                sampled = false,
+                floorHolder = null,
+                holderAudioReachable = null,
+                holderMediaConnected = null,
+                failureReason = null
+            )
+        }
+        val floorOwner = groupSession.floor.owner() ?: return GroupTransitionReadinessLog.ReceiveCapabilityObservation(
+            sampled = false,
+            floorHolder = null,
+            holderAudioReachable = null,
+            holderMediaConnected = null,
+            failureReason = null
+        )
+        if (isLocalIdentity(groupSession, floorOwner)) {
+            return GroupTransitionReadinessLog.ReceiveCapabilityObservation(
+                sampled = false,
+                floorHolder = floorOwner.key,
+                holderAudioReachable = null,
+                holderMediaConnected = null,
+                failureReason = null
+            )
+        }
+        val holderModuleId = floorOwner.moduleId.value
+        val reachable = isFloorHolderAudioReachable(groupSession, holderModuleId)
+        val mediaConnected = isPeerMediaConnected(holderModuleId)
+        return GroupTransitionReadinessLog.ReceiveCapabilityObservation(
+            sampled = true,
+            floorHolder = floorOwner.key,
+            holderAudioReachable = reachable,
+            holderMediaConnected = mediaConnected,
+            failureReason = if (!reachable) "HOLDER_AUDIO_UNREACHABLE" else null
+        )
+    }
+
     private fun onGroupConvergenceBoundary(session: TalkbackSession) {
         if (session.type != SessionType.GROUP || !session.accepted) return
         val health = GroupRuntimeHealthProjector.project(buildGroupRuntimeHealthInput(session))
@@ -9262,6 +10260,12 @@ class TalkbackCoordinator(
         )
         if (previous != health.groupTopologyReadiness) {
             log(TopologySnapshotLogger.format(TopologySnapshotReason.READINESS_CHANGED, health))
+            session.channelId?.let { channelId ->
+                observeGroupTransitionReadinessChanged(
+                    channelId = channelId,
+                    meshRecoveryState = health.groupTopologyReadiness.name
+                )
+            }
             if (health.groupTopologyReadiness == GroupTopologyReadiness.OPERATIONAL) {
                 session.channelId?.let { channelId ->
                     MeetingRecoveryLog.onMeshOperational(channelId)

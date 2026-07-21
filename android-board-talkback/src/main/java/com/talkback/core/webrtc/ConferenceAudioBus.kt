@@ -12,7 +12,8 @@ import java.util.concurrent.ConcurrentHashMap
  * Anchor-side SFU-lite for conference: tap each participant inbound PCM and fan out to others.
  */
 class ConferenceAudioBus(
-    private val engineLookup: (String) -> WebRtcAudioEngine?
+    private val engineLookup: (String) -> WebRtcAudioEngine?,
+    private val onInboundPcm: ((sessionId: String, sourceModuleId: String) -> Unit)? = null
 ) {
     private val tapsBySession = ConcurrentHashMap<String, MutableList<InboundAudioTap>>()
 
@@ -44,6 +45,7 @@ class ConferenceAudioBus(
         remoteIds.forEach { sourceId ->
             val sourceEngine = engineLookup(sourceId) ?: return@forEach
             val tap = InboundAudioTap(sourceEngine) { buffer, bits, rate, channels, frames ->
+                onInboundPcm?.invoke(session.id, sourceId)
                 remoteIds.forEach { targetId ->
                     if (targetId == sourceId) return@forEach
                     engineLookup(targetId)?.feedProgramPcm(buffer, bits, rate, channels, frames)

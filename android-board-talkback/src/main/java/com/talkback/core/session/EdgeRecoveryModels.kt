@@ -49,6 +49,17 @@ data class EdgeRecoveryEligibility(
         lifecycleEstablished && localJoined && remoteJoined && !conferenceTerminated
 }
 
+/** Read-only attempt lineage for conference recovery ownership observation (ADR-0022). */
+data class EdgeAttemptLineageRaw(
+    val attemptId: Long,
+    val attemptStartedAtMs: Long,
+    val phase: EdgeRecoveryPhase,
+    val mediaRestored: Boolean,
+    val obligationOpen: Boolean,
+    val pendingCompletion: Boolean,
+    val obligationGeneration: Long = 0L
+)
+
 data class EdgeRecoveryFacts(
     val recoveringRemoteModuleIds: Set<String> = emptySet(),
     val anyRecovering: Boolean = false,
@@ -75,17 +86,103 @@ enum class ObligationCloseReason {
     fun isPruneEligible(): Boolean = this == OBLIGATION_DEADLINE
 }
 
+/** Media-action ownership sub-state on an attempt (ADR-0022 Appendix C / C-2). */
+internal enum class MediaActionOwner {
+    UNASSIGNED,
+    PENDING,
+    HOST_RESTART,
+    PARTICIPANT_REATTACH,
+    ABORTED;
+
+    fun isAssigned(): Boolean = this != UNASSIGNED && this != PENDING
+
+    fun logLabel(): String = when (this) {
+        HOST_RESTART -> "HOST_RESTART"
+        PARTICIPANT_REATTACH -> "PARTICIPANT_REATTACH"
+        ABORTED -> "ABORTED"
+        else -> name
+    }
+}
+
+/** Closed enum — do not add SENT/DISPATCHING/COMPLETED (those live in [EdgeRecoveryPhase]). */
+internal enum class MediaActionDisposition {
+    UNASSIGNED,
+    ACTIVE,
+    DEFERRED,
+    ABORTED
+}
+
+internal enum class DeferredReason {
+    ROUTE_NOT_READY,
+    AUTHORITY_NOT_READY,
+    MEDIA_NOT_READY,
+}
+
+internal enum class WakeupSourceType {
+    ROUTE_CONVERGED,
+    PEER_DISCOVERED,
+    AUTHORITY_REACHABLE,
+}
+
+internal data class WakeupBinding(
+    val sourceType: WakeupSourceType,
+    val sourceKey: String
+) {
+    fun logLabel(): String = "${sourceType.name}/$sourceKey"
+
+    /**
+     * Appendix C-3.2 (C-12): whether an external fact trigger matches this deferred wakeup binding.
+     */
+    fun matchesTrigger(
+        trigger: RecoveryReevaluateTrigger,
+        sessionId: String,
+        remoteModuleId: String
+    ): Boolean {
+        val edgeKey = edgeWakeupKey(sessionId, remoteModuleId)
+        if (sourceKey != edgeKey && sourceKey != moduleWakeupKey(remoteModuleId)) return false
+        return when (sourceType) {
+            WakeupSourceType.ROUTE_CONVERGED -> when (trigger) {
+                RecoveryReevaluateTrigger.ROUTE_CONVERGED,
+                RecoveryReevaluateTrigger.PEER_DISCOVERED,
+                RecoveryReevaluateTrigger.REMOTE_MODULE_RECOVERED,
+                RecoveryReevaluateTrigger.ICE_CHECKING,
+                RecoveryReevaluateTrigger.ICE_RESTORED -> true
+                else -> false
+            }
+            WakeupSourceType.PEER_DISCOVERED -> trigger == RecoveryReevaluateTrigger.PEER_DISCOVERED ||
+                trigger == RecoveryReevaluateTrigger.REMOTE_MODULE_RECOVERED
+            WakeupSourceType.AUTHORITY_REACHABLE ->
+                trigger == RecoveryReevaluateTrigger.AUTHORITY_REACHABLE
+        }
+    }
+}
+
+internal fun edgeWakeupKey(sessionId: String, remoteModuleId: String): String =
+    "edge($sessionId,$remoteModuleId)"
+
+internal fun moduleWakeupKey(moduleId: String): String = "module($moduleId)"
+
 internal data class EdgeRecoveryRecord(
     val key: ConferenceEdgeKey,
     var phase: EdgeRecoveryPhase,
     var channelId: String,
     var recoveryAttemptId: Long,
     var recoveryStartedAtMs: Long,
+    /** Appendix C: owner must be assigned before attempt deadline without silent FAILED. */
+    var mediaActionOwner: MediaActionOwner = MediaActionOwner.UNASSIGNED,
+    /** Appendix C-2: orthogonal to [mediaActionOwner] and [EdgeRecoveryPhase]. */
+    var mediaActionDisposition: MediaActionDisposition = MediaActionDisposition.UNASSIGNED,
+    var deferredReason: DeferredReason? = null,
+    var wakeupBinding: WakeupBinding? = null,
+    /** True when current attempt crossed inbound [onRecoveryReattachAccepted] (C-1.1 handoff guard). */
+    var recoveryViaInboundReattach: Boolean = false,
     var epochRefreshUsed: Boolean = false,
     var iceRestartIssued: Boolean = false,
     /** Media-plane ICE restored fact for current attempt (ADR-0022 R28-E). */
     var mediaRestored: Boolean = false,
     var initiatesReattach: Boolean = false,
+    /** Failure episode id on this edge; independent of [recoveryAttemptId] (ADR-0022 P1). */
+    var obligationGeneration: Long = 0L,
     /** Single-writer obligation facts (ADR-0022 R28-H.1). */
     var obligationOpenedAtMs: Long? = null,
     var obligationDeadlineAtMs: Long? = null,
@@ -93,6 +190,9 @@ internal data class EdgeRecoveryRecord(
     var obligationCloseReason: ObligationCloseReason? = null,
     var hasPendingCompletionDecision: Boolean = false
 ) {
+    /** True while this record owns an active recovery attempt (ADR-0022 P0.5). */
+    fun hasActiveAttempt(): Boolean = phase.isActivelyRecovering()
+
     /** True once attempt crossed the control-plane boundary (ADR-0022 R28-E). */
     fun controlPlaneStarted(): Boolean = when (phase) {
         EdgeRecoveryPhase.REATTACH_REQUESTED,

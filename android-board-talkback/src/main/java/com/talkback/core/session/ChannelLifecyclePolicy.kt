@@ -17,11 +17,10 @@ object ChannelLifecyclePolicy {
         val meetingPreferredOnChannel: Boolean
     )
 
-    /** Block creating or accepting GROUP mesh while conference still owns the channel. */
+    /** Block creating or accepting GROUP mesh while conference lifecycle owns the channel. */
     fun blocksNewGroupMesh(state: ChannelGateState): Boolean =
         state.channelMode == ChannelMode.CONFERENCE ||
-            state.pendingConferenceInvite ||
-            state.meetingPreferredOnChannel
+            state.pendingConferenceInvite
 
     /** Existing GROUP PTT playback: suppress only while channel mode is still CONFERENCE. */
     fun blocksGroupReceivePlayback(state: ChannelGateState): Boolean =

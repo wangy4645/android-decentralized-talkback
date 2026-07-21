@@ -20,7 +20,6 @@ import com.talkback.core.model.EndpointId
 import com.talkback.core.model.ModuleId
 import com.talkback.core.ptt.PttEmitTracer
 import com.talkback.core.ptt.PttState
-import com.talkback.core.session.ConferenceParticipantDisplayState
 import com.talkback.core.session.ConferenceParticipantViewState
 import com.talkback.core.session.SessionType
 import com.talkback.core.util.ChannelObservabilityLog
@@ -65,12 +64,9 @@ class TalkViewModel(
     private var conferenceEndReason: ConferenceEndReason = ConferenceEndReason.NONE
     @Volatile
     private var lastSyncedMeetingPreferred: Boolean? = null
-    /** Last seen rejoin host session id; used to detect remote meeting termination clearing the hint. */
+    /** Talk page PTT/Meeting tab selection — navigation only; does not drive input binding. */
     @Volatile
-    private var lastRejoinHintSessionId: String? = null
-    /** Talk page PTT/Meeting tab — not persisted; home defaults to PTT. */
-    @Volatile
-    private var talkTabMode: ChannelMode = ChannelMode.GROUP_PTT
+    private var userSelectedTab: UserSelectedTab = UserSelectedTab.PTT
 
     private val _openMeetingEvents = MutableSharedFlow<MeetingNavigation>(extraBufferCapacity = 1)
     val openMeetingEvents: SharedFlow<MeetingNavigation> = _openMeetingEvents.asSharedFlow()
@@ -79,6 +75,8 @@ class TalkViewModel(
     val toastMessageRes: SharedFlow<Int> = _toastMessageRes.asSharedFlow()
 
     init {
+        MeetingPresenceDisplay.receivePathLivenessProvider =
+            RuntimeReceivePathLivenessProvider { manager.getRuntime() }
         taskProfileManager.ensureInitialized()
         val config = configStore.load()
         if (config.isConferenceMode()) {
@@ -151,29 +149,10 @@ class TalkViewModel(
         }
         manager.applyMeetingAutoJoinPolicy(config.meetingAutoJoin)
         val conferenceActive = activeSession?.type == SessionType.CONFERENCE
-        if (!conferenceActive && serviceRunning && manager.getRuntime() != null) {
-            val rejoinHint = manager.rejoinableConference(config)
-            val rejoinSessionId = rejoinHint?.hostSessionId
-            if (
-                rejoinSessionId == null &&
-                lastRejoinHintSessionId != null &&
-                talkTabMode == ChannelMode.CONFERENCE &&
-                manager.pendingConferenceInvite(config.defaultChannelId) == null
-            ) {
-                talkTabMode = ChannelMode.GROUP_PTT
-                lastSyncedMeetingPreferred = false
-            }
-            lastRejoinHintSessionId = rejoinSessionId
-        }
         syncMeetingPreferredToCoordinator(
             config,
-            talkTabMode == ChannelMode.CONFERENCE || conferenceActive
+            userSelectedTab == UserSelectedTab.MEETING || conferenceActive
         )
-        if (conferenceActive && talkTabMode != ChannelMode.CONFERENCE) {
-            // If we accepted/joined a meeting via invite path, keep the Talk tab in Meeting mode.
-            // Otherwise, a later timeout can accidentally auto-start GROUP_PTT on the same channel.
-            talkTabMode = ChannelMode.CONFERENCE
-        }
         if (serviceRunning && manager.getRuntime() != null && manager.activeUnicastSession() == null) {
             val channelId = config.defaultChannelId
             when (activeSession?.type) {
@@ -182,11 +161,11 @@ class TalkViewModel(
                 else -> Unit
             }
             activeSession = manager.activeChannelSession(config)
-            val meetingPreferred = talkTabMode == ChannelMode.CONFERENCE || conferenceActive
+            val meetingPreferred = userSelectedTab == UserSelectedTab.MEETING || conferenceActive
             if (ChannelWarmupPolicy.shouldWarmup(
                     config,
                     manager,
-                    talkTabMode,
+                    userSelectedTab == UserSelectedTab.PTT,
                     meetingPreferred,
                     manager.activeUnicastSession() != null,
                     activeSession
@@ -194,7 +173,7 @@ class TalkViewModel(
             ) {
                 runCatching { manager.warmupChannel(config) }
             } else if (
-                talkTabMode == ChannelMode.GROUP_PTT &&
+                userSelectedTab == UserSelectedTab.PTT &&
                 !meetingPreferred &&
                 activeSession == null &&
                 manager.hasReachableTeammates(config)
@@ -224,11 +203,17 @@ class TalkViewModel(
         } else {
             ConferenceEndReason.NONE
         }
+        val displayState = if (endReason == ConferenceEndReason.REMOTE_ENDED) {
+            returnTabToPttAfterRemoteMeetingEnd(config)
+            buildState(config)
+        } else {
+            state
+        }
         if (state.conferenceActive && !wasConferenceActive && config.meetingAutoJoin) {
             _openMeetingEvents.emit(MeetingNavigation.MAIN)
         }
         wasConferenceActive = state.conferenceActive
-        _uiState.value = state.copy(conferenceEndReason = endReason)
+        _uiState.value = displayState.copy(conferenceEndReason = endReason)
     }
 
     fun isConferenceHost(): Boolean {
@@ -248,7 +233,7 @@ class TalkViewModel(
             return PttDownResult.ServiceStopped
         }
         val beforeSession = manager.activeChannelSession(config)
-        if (beforeSession?.type == SessionType.CONFERENCE || talkTabMode == ChannelMode.CONFERENCE) {
+        if (beforeSession?.type == SessionType.CONFERENCE) {
             PttEmitTracer.recordBlocked(
                 beforeSession?.sessionId ?: initialSessionId,
                 local,
@@ -325,26 +310,33 @@ class TalkViewModel(
         val session = manager.activeChannelSession(config) ?: return PttDownResult.NoPeers
         if (session.type != SessionType.CONFERENCE) return PttDownResult.NoPeers
         val nextMuted = !session.muted
-        manager.setCallMuted(session.sessionId, nextMuted)
+        manager.setCallMuted(session.sessionId, nextMuted, "toggleMeetingMute")
         refreshInternal()
         return if (manager.isChannelMediaReady(config)) PttDownResult.Ok else PttDownResult.Connecting
     }
 
     fun resetTalkTabToPtt() {
-        if (talkTabMode == ChannelMode.GROUP_PTT) return
-        talkTabMode = ChannelMode.GROUP_PTT
+        if (userSelectedTab == UserSelectedTab.PTT) return
+        userSelectedTab = UserSelectedTab.PTT
         viewModelScope.launch(Dispatchers.Default) { refreshInternal() }
+    }
+
+    private fun returnTabToPttAfterRemoteMeetingEnd(config: AppConfig) {
+        if (userSelectedTab == UserSelectedTab.PTT) return
+        userSelectedTab = UserSelectedTab.PTT
+        lastSyncedMeetingPreferred = false
+        manager.setMeetingPreferred(false, config.defaultChannelId)
     }
 
     fun selectPttMode() {
         viewModelScope.launch(Dispatchers.Default) {
-            if (talkTabMode == ChannelMode.GROUP_PTT) {
+            if (userSelectedTab == UserSelectedTab.PTT) {
                 refreshInternal()
                 return@launch
             }
             val config = configStore.load()
             val active = manager.activeChannelSession(config)
-            talkTabMode = ChannelMode.GROUP_PTT
+            userSelectedTab = UserSelectedTab.PTT
             lastSyncedMeetingPreferred = false
             manager.setMeetingPreferred(false, config.defaultChannelId)
             if (active?.type == SessionType.CONFERENCE) {
@@ -353,9 +345,6 @@ class TalkViewModel(
                 return@launch
             }
             manager.refreshStaleGroupSession(config.defaultChannelId)
-            if (manager.activeChannelSession(config) != null) {
-                manager.leaveChannelSession(config)
-            }
             refreshInternal()
         }
     }
@@ -363,7 +352,7 @@ class TalkViewModel(
     fun selectMeetingMode() {
         viewModelScope.launch(Dispatchers.Default) {
             val config = configStore.load()
-            talkTabMode = ChannelMode.CONFERENCE
+            userSelectedTab = UserSelectedTab.MEETING
             lastSyncedMeetingPreferred = true
             manager.setMeetingPreferred(true, config.defaultChannelId)
             refreshInternal()
@@ -389,7 +378,7 @@ class TalkViewModel(
         ChannelObservabilityLog.joinMeetingTrace(
             reason = reason,
             channelId = config.defaultChannelId,
-            talkTabMode = talkTabMode.name,
+            talkTabMode = userSelectedTab.name,
             meetingPreferred = lastSyncedMeetingPreferred,
             coordinatorChannelMode = manager.getRuntime()?.channelMode(config.defaultChannelId)?.name,
             configChannelMode = config.channelMode.name,
@@ -399,13 +388,16 @@ class TalkViewModel(
             return PttDownResult.ServiceStopped
         }
         val meetingConfig = meetingSessionConfig(config)
-        talkTabMode = ChannelMode.CONFERENCE
         lastSyncedMeetingPreferred = true
         manager.setMeetingPreferred(true, meetingConfig.defaultChannelId)
         manager.prioritizeNextMeshCall()
         var existing = manager.activeChannelSession(config)
         if (existing != null && existing.type != SessionType.CONFERENCE) {
-            manager.leaveChannelSession(config)
+            manager.leaveChannelSession(
+                config,
+                reason = "SWITCH_TO_CONFERENCE",
+                caller = "TalkViewModel.joinMeeting"
+            )
             existing = manager.activeChannelSession(config)
         }
         if (existing?.type == SessionType.CONFERENCE) {
@@ -477,9 +469,12 @@ class TalkViewModel(
         conferenceEndReason = ConferenceEndReason.USER_LEFT
         viewModelScope.launch(Dispatchers.Default) {
             val config = configStore.load()
-            manager.leaveChannelSession(config)
+            manager.leaveChannelSession(
+                config,
+                reason = "USER_LEAVE_MEETING",
+                caller = "TalkViewModel.leaveMeeting"
+            )
             manager.clearConferencePttCooldown(config.defaultChannelId)
-            talkTabMode = ChannelMode.GROUP_PTT
             lastSyncedMeetingPreferred = false
             manager.setMeetingPreferred(false, config.defaultChannelId)
             manager.prioritizeNextMeshCall()
@@ -492,7 +487,7 @@ class TalkViewModel(
         viewModelScope.launch(Dispatchers.Default) {
             val config = configStore.load()
             val meetingConfig = meetingSessionConfig(config)
-            talkTabMode = ChannelMode.CONFERENCE
+            userSelectedTab = UserSelectedTab.MEETING
             lastSyncedMeetingPreferred = true
             manager.setMeetingPreferred(true, meetingConfig.defaultChannelId)
             if (!acceptPendingOrRejoinConference(meetingConfig)) {
@@ -532,7 +527,6 @@ class TalkViewModel(
             val config = configStore.load()
             manager.endMeetingForAll(config)
             manager.clearConferencePttCooldown(config.defaultChannelId)
-            talkTabMode = ChannelMode.GROUP_PTT
             lastSyncedMeetingPreferred = false
             manager.setMeetingPreferred(false, config.defaultChannelId)
             manager.prioritizeNextMeshCall()
@@ -658,7 +652,7 @@ class TalkViewModel(
     fun toggleCallMute() {
         val session = manager.activeUnicastSession() ?: return
         viewModelScope.launch(Dispatchers.Default) {
-            runCatching { manager.setCallMuted(session.sessionId, !session.muted) }
+            runCatching { manager.setCallMuted(session.sessionId, !session.muted, "toggleCallMute") }
             refreshInternal()
         }
     }
@@ -699,7 +693,7 @@ class TalkViewModel(
     }
 
     private fun conferenceModePreferred(config: AppConfig): Boolean =
-        talkTabMode == ChannelMode.CONFERENCE ||
+        userSelectedTab == UserSelectedTab.MEETING ||
             manager.pendingConferenceInvite(config.defaultChannelId) != null
 
     private fun localEndpointKey(config: AppConfig): String = EndpointAddress(
@@ -786,7 +780,7 @@ class TalkViewModel(
 
         val session = manager.activeChannelSession(config)
         val conferenceActive = session?.type == SessionType.CONFERENCE
-        val conferenceMode = talkTabMode == ChannelMode.CONFERENCE
+        val conferenceMode = userSelectedTab == UserSelectedTab.MEETING
         val conferenceMuted = session?.muted == true
         val localRawKey = EndpointAddress(
             ModuleId(config.moduleId),
@@ -828,7 +822,13 @@ class TalkViewModel(
             else -> null
         }
         val localLanOnline = serviceRunning && LocalNetworkHelper.hasLanLink(appContext)
-        val endpoints = buildEndpointList(config, localRawKey, speakingModuleId, localLanOnline)
+        val endpoints = buildEndpointList(
+            config,
+            localRawKey,
+            speakingModuleId,
+            localLanOnline,
+            conferenceMuted
+        )
 
         val unicast = manager.activeUnicastSession()
         val callState = if (unicast != null) {
@@ -862,10 +862,9 @@ class TalkViewModel(
             channelReadiness == ChannelReadiness.AWAITING_PRIMARY && session == null
 
         val runtimePhase = session?.conferenceRuntimeState?.phase
-        val conferenceRuntimeActive =
-            conferenceActive && runtimePhase == ConferenceRuntimePhase.ACTIVE
+        val conferenceMediaLive = conferenceActive && channelReady
 
-        if (conferenceRuntimeActive) {
+        if (conferenceMediaLive) {
             if (meetingStartedAtMs == null) {
                 meetingStartedAtMs = System.currentTimeMillis()
             }
@@ -899,17 +898,32 @@ class TalkViewModel(
         val conferenceReconnectFailed = conferenceActive &&
             runtimePhase == ConferenceRuntimePhase.RECOVERING &&
             manager.isConferenceReconnectFailed(config)
+        val effectiveInteractionMode = EffectiveInteractionModeResolver.resolve(
+            conferenceActive = conferenceActive,
+            runtimePhase = runtimePhase,
+            hasPendingInvite = pendingInvite != null
+        )
+        val primaryInteractionAction = PrimaryInteractionActionResolver.resolve(
+            userSelectedTab = userSelectedTab,
+            effectiveInteractionMode = effectiveInteractionMode
+        )
 
-        if (conferenceRuntimeActive) {
+        if (conferenceMediaLive) {
             val presence = session?.conferencePresenceProjection
             val connected = presence?.connectedCount ?: session?.visibleParticipantCount ?: 0
             val joined = presence?.joinedCount ?: session?.joinedParticipantCount ?: 0
             val recovering = presence?.recoveringPeers?.joinToString(",") ?: ""
             val awaiting = session?.awaitingAdditionalParticipants == true
-            val display = MeetingPresenceDisplay.participantCountLabel(connected, joined)
+            val display = MeetingPresenceDisplay.participantCountLabel(joined)
+            val connectingHint = meetingAvailabilityHint(session, speakingModuleId, conferenceMuted)
             TalkbackLog.i(
-                "Meeting pill: display=$display connected=$connected joined=$joined recovering=[$recovering] awaiting=$awaiting phase=$runtimePhase"
+                "Meeting pill: display=$display connected=$connected joined=$joined " +
+                    "connectingHint=$connectingHint recovering=[$recovering] awaiting=$awaiting " +
+                    "phase=$runtimePhase channelReady=$channelReady"
             )
+        }
+        if (conferenceActive && session != null) {
+            logReachabilityProbe(session, speakingModuleId, conferenceMuted, localRawKey)
         }
 
         val conferencePresence = session?.conferencePresenceProjection
@@ -920,9 +934,35 @@ class TalkViewModel(
             ?: session?.joinedParticipantCount
             ?: 0
         val meetingRecoveringPeers = conferencePresence?.recoveringPeers ?: emptySet()
-        val meetingParticipantLabel = MeetingPresenceDisplay.participantCountLabel(
-            connectedCount = meetingConnectedCount,
-            joinedCount = meetingJoinedCount
+        val meetingParticipantLabel = MeetingPresenceDisplay.participantCountLabel(meetingJoinedCount)
+        val awaitingAdditionalParticipants = session?.awaitingAdditionalParticipants == true
+        val connectingParticipantHint = if (conferenceMediaLive && awaitingAdditionalParticipants) {
+            meetingAvailabilityHint(session, speakingModuleId, conferenceMuted)
+        } else {
+            null
+        }
+        val meetingNetworkLabel = meetingQos?.networkLabel
+            ?: runtime.conferenceNetworkIndicator().toQualityLabel()
+        val conferenceDisplay = ConferenceDisplayStateResolver.resolve(
+            lifecycle = ConferenceLifecycleFacts(
+                conferenceActive = conferenceActive,
+                conferenceMode = conferenceMode,
+                sessionActive = session != null,
+                runtimePhase = runtimePhase
+            ),
+            connectivity = ConferenceConnectivityFacts(
+                channelReady = channelReady,
+                channelConnecting = channelConnecting,
+                reconnecting = conferenceReconnecting,
+                reconnectFailed = conferenceReconnectFailed,
+                awaitingRejoin = conferenceMode && !conferenceActive
+            ),
+            membership = ConferenceMembershipFacts(
+                awaitingAdditionalParticipants = awaitingAdditionalParticipants,
+                connectingParticipantHint = connectingParticipantHint
+            ),
+            muted = conferenceMuted,
+            poorNetwork = meetingNetworkLabel == "Poor" || runtime.conferenceNetworkIndicator().toQualityLabel() == "Poor"
         )
 
         return TalkUiState(
@@ -933,7 +973,7 @@ class TalkViewModel(
             channelTitle = config.channelTitle(),
             channelSubtitle = if (taskName.isNotBlank()) taskName else config.channelDisplayName,
             onlineCount = if (conferenceActive) {
-                meetingConnectedCount.coerceAtLeast(1)
+                meetingJoinedCount.coerceAtLeast(1)
             } else {
                 endpoints.count { it.status != EndpointStatus.OFFLINE }
             },
@@ -954,6 +994,9 @@ class TalkViewModel(
             channelConnecting = channelConnecting,
             channelReadiness = channelReadiness,
             channelAwaitingHost = channelAwaitingHost,
+            userSelectedTab = userSelectedTab,
+            effectiveInteractionMode = effectiveInteractionMode,
+            primaryInteractionAction = primaryInteractionAction,
             conferenceMode = conferenceMode,
             conferenceActive = conferenceActive,
             conferenceMuted = conferenceMuted,
@@ -974,17 +1017,18 @@ class TalkViewModel(
                 connectedParticipantCount = meetingConnectedCount,
                 recoveringPeers = meetingRecoveringPeers,
                 participantCountLabel = meetingParticipantLabel,
-                awaitingAdditionalParticipants = session?.awaitingAdditionalParticipants == true,
+                connectingParticipantHint = connectingParticipantHint,
+                awaitingAdditionalParticipants = awaitingAdditionalParticipants,
                 runtimePhase = runtimePhase,
                 startedAtMs = meetingStartedAtMs,
-                networkLabel = meetingQos?.networkLabel
-                    ?: runtime.conferenceNetworkIndicator().toQualityLabel(),
+                networkLabel = meetingNetworkLabel,
                 rttMs = meetingQos?.rttMs,
                 packetLossPercent = meetingQos?.packetLossPercent,
                 autoGain = config.meetingAutoGain,
                 noiseSuppression = config.meetingNoiseSuppression,
                 locked = config.meetingLocked
-            )
+            ),
+            conferenceDisplay = conferenceDisplay
         )
     }
 
@@ -992,7 +1036,8 @@ class TalkViewModel(
         config: AppConfig,
         localRawKey: String,
         speakingModuleId: String?,
-        localLanOnline: Boolean
+        localLanOnline: Boolean,
+        conferenceMuted: Boolean
     ): List<EndpointUiItem> {
         val runtime = manager.getRuntime() ?: return emptyList()
         val items = mutableListOf<EndpointUiItem>()
@@ -1022,8 +1067,11 @@ class TalkViewModel(
             addItem(endpointItem(displayKey, online, speakingModuleId, localRawKey))
         }
 
+        val recoveringPeers = session?.conferencePresenceProjection?.recoveringPeers.orEmpty()
+
         if (conferenceActive) {
             val visible = session?.visibleParticipants.orEmpty()
+            val sessionId = session?.sessionId.orEmpty()
             if (visible.isNotEmpty()) {
                 visible.forEach { participant ->
                     val moduleId = participant.moduleId
@@ -1034,11 +1082,13 @@ class TalkViewModel(
                         ?: participant.key
                     addItem(
                         conferenceVisibleEndpointItem(
+                            sessionId,
                             displayKey,
                             participant,
                             speakingModuleId,
-                            rosterOnlineByModule[moduleId] == true,
-                            localRawKey
+                            edgeRecoveringPeer(runtime, sessionId, moduleId),
+                            edgeMediaUnavailablePeer(runtime, sessionId, moduleId),
+                            conferenceMuted
                         )
                     )
                 }
@@ -1164,34 +1214,184 @@ class TalkViewModel(
         return "$module / $endpoint"
     }
 
-    private fun conferenceVisibleEndpointItem(
-        key: String,
-        viewState: ConferenceParticipantViewState,
+    // [DEBUG-rprobe] Diagnostic instrumentation — see logReachabilityProbe.
+
+    companion object {
+        /**
+         * [DEBUG-rprobe] Reachability probe switch — ADR-0030 reference instrument.
+         * Resident diagnostic for presence projection issues (mesh pruning, anchor
+         * failover, backup standby). Keep OFF in normal builds; flip to true when
+         * diagnosing presence/reachability regressions.
+         */
+        private const val ENABLE_REACHABILITY_PROBE = true
+    }
+
+    /**
+     * [DEBUG-rprobe] REACHABILITY_PROBE — temporary instrumentation to split Bug B fork A
+     * (media staleness: ICE lost but receivePathLive still true) from fork B (projection
+     * drops the module from visibleParticipants). Iterates the canonical roster, NOT
+     * visibleParticipants, so a dropped module still gets a probe line with visible=false.
+     * Read-only; no behavior change. Remove via grep DEBUG-rprobe.
+     */
+    private fun logReachabilityProbe(
+        session: TalkbackSessionSnapshot,
         speakingModuleId: String?,
-        rosterOnline: Boolean,
-        @Suppress("UNUSED_PARAMETER") localRawKey: String
+        conferenceMuted: Boolean,
+        localRawKey: String
+    ) {
+        if (!ENABLE_REACHABILITY_PROBE) return
+        val runtime = manager.getRuntime() ?: return
+        val localModuleId = moduleIdFromKey(localRawKey)
+        val presence = session.conferencePresenceProjection
+        val recoveringPeers = presence?.recoveringPeers.orEmpty()
+        val everConnectedModules = session.conferenceEverConnectedModuleIds
+        val visibleByModule = session.visibleParticipants.associateBy { it.moduleId }
+        val rosterModules = session.memberKeys.map(::moduleIdFromKey).toSet()
+        // Canonical iteration domain: roster ∪ visible ∪ recovering ∪ transportEverConnected,
+        // so no layer can hide a module from the probe.
+        val allModules = rosterModules + visibleByModule.keys + recoveringPeers + everConnectedModules
+        val authorityId = session.channelId?.let { runtime.conferenceAuthorityModuleId(it) }
+        val authorityReachable = runtime.conferenceAuthorityReachable(session.sessionId)
+        val hostIce = authorityId?.let { runtime.qosSnapshotForModule(it)?.iceState } ?: "-"
+        allModules.sorted().forEach { moduleId ->
+            if (moduleId == localModuleId) return@forEach
+            val rosterContains = moduleId in rosterModules
+            val participantRecordExists =
+                runtime.conferenceParticipantRecordExists(session.sessionId, moduleId)
+            val rawMedia = runtime.conferenceParticipantMedia(session.sessionId, moduleId)
+            val iceConnectionState = runtime.qosSnapshotForModule(moduleId)?.iceState ?: "UNKNOWN"
+            val sessionEdgeRecovering = session.conferenceRuntimeState?.edgeRecovering == true
+            val recoveringPeer = edgeRecoveringPeer(runtime, session.sessionId, moduleId)
+            val mediaUnavailablePeer = edgeMediaUnavailablePeer(runtime, session.sessionId, moduleId)
+            val transportEverConnected = moduleId in everConnectedModules
+            val mediaEverLive = runtime.mediaEverLive(session.sessionId, moduleId)
+            val receivePathLive = runtime.receivePathLive(session.sessionId, moduleId)
+            val edgeLineage = runtime.conferenceEdgeRecoveryLineage(session.sessionId, moduleId)
+            val edgeRecoveryPhase = edgeLineage?.phase?.name ?: "-"
+            val obligationOpen = edgeLineage?.obligationOpen ?: false
+            val viewState = visibleByModule[moduleId]
+            val finalPresence = if (viewState != null) {
+                MeetingPresenceDisplay.resolveParticipantPresentation(
+                    participantPresentationFacts(
+                        session.sessionId,
+                        viewState,
+                        speakingModuleId,
+                        recoveringPeer,
+                        mediaUnavailablePeer,
+                        conferenceMuted
+                    )
+                ).endpointStatus.name
+            } else {
+                "NOT_PROJECTED"
+            }
+            TalkbackLog.i(
+                "[DEBUG-rprobe] REACHABILITY_PROBE session=${session.sessionId}" +
+                    " authorityId=${authorityId ?: "-"}" +
+                    " authorityReachable=$authorityReachable" +
+                    " hostIce=$hostIce" +
+                    " module=$moduleId" +
+                    " rosterContains=$rosterContains" +
+                    " participantRecordExists=$participantRecordExists" +
+                    " media=$rawMedia" +
+                    " sessionEdgeRecovering=$sessionEdgeRecovering" +
+                    " mediaUnavailable=$mediaUnavailablePeer" +
+                    " iceConnectionState=$iceConnectionState" +
+                    " inRecoveringPeers=${moduleId in recoveringPeers}" +
+                    " edgeRecoveryPhase=$edgeRecoveryPhase" +
+                    " obligationOpen=$obligationOpen" +
+                    " controllerEdgeRecovering=$recoveringPeer" +
+                    " transportEverConnected=$transportEverConnected" +
+                    " mediaEverLive=$mediaEverLive" +
+                    " receivePathLive=$receivePathLive" +
+                    " visible=${viewState != null}" +
+                    " displayState=${viewState?.displayState?.name ?: "-"}" +
+                    " finalPresence=$finalPresence"
+            )
+        }
+    }
+
+    private fun meetingAvailabilityHint(
+        session: com.talkback.app.TalkbackSessionSnapshot?,
+        speakingModuleId: String?,
+        conferenceMuted: Boolean
+    ): String? {
+        if (session == null) return null
+        val runtime = manager.getRuntime() ?: return null
+        val states = session.visibleParticipants.map { participant ->
+            MeetingPresenceDisplay.resolveParticipantPresentation(
+                participantPresentationFacts(
+                    session.sessionId,
+                    participant,
+                    speakingModuleId,
+                    edgeRecoveringPeer(runtime, session.sessionId, participant.moduleId),
+                    edgeMediaUnavailablePeer(runtime, session.sessionId, participant.moduleId),
+                    conferenceMuted
+                )
+            )
+        }
+        return MeetingPresenceDisplay.aggregateAvailabilityHint(states, conferenceMuted)
+    }
+
+    private fun edgeRecoveringPeer(
+        runtime: com.talkback.app.TalkbackRuntime,
+        sessionId: String,
+        moduleId: String
+    ): Boolean = runtime.conferenceEdgeRecovering(sessionId, moduleId)
+
+    /** ADR-0030 per-peer fact; live controller read (not presence aggregate snapshot). */
+    private fun edgeMediaUnavailablePeer(
+        runtime: com.talkback.app.TalkbackRuntime,
+        sessionId: String,
+        moduleId: String
+    ): Boolean = runtime.conferenceMediaUnavailable(sessionId, moduleId)
+
+    private fun participantPresentationFacts(
+        sessionId: String,
+        viewState: com.talkback.core.session.ConferenceParticipantViewState,
+        speakingModuleId: String?,
+        isRecoveringPeer: Boolean,
+        mediaUnavailablePeer: Boolean,
+        conferenceMuted: Boolean
+    ): MeetingPresenceDisplay.ParticipantPresentationFacts {
+        val moduleId = viewState.moduleId
+        val speaking = speakingModuleId != null &&
+            speakingModuleId.equals(moduleId, ignoreCase = true)
+        return MeetingPresenceDisplay.ParticipantPresentationFacts(
+            sessionId = sessionId,
+            moduleId = moduleId,
+            isLocal = viewState.isLocal,
+            displayState = viewState.displayState,
+            isRecoveringPeer = isRecoveringPeer,
+            mediaUnavailablePeer = mediaUnavailablePeer,
+            speaking = speaking,
+            captureBlocked = viewState.isLocal && conferenceMuted
+        )
+    }
+
+    private fun conferenceVisibleEndpointItem(
+        sessionId: String,
+        key: String,
+        viewState: com.talkback.core.session.ConferenceParticipantViewState,
+        speakingModuleId: String?,
+        isRecoveringPeer: Boolean,
+        mediaUnavailablePeer: Boolean,
+        conferenceMuted: Boolean
     ): EndpointUiItem {
-        val speaking = speakingModuleId == moduleIdFromKey(key)
-        val status = when (viewState.displayState) {
-            ConferenceParticipantDisplayState.VISIBLE_LOCAL,
-            ConferenceParticipantDisplayState.VISIBLE_CONNECTED ->
-                if (speaking) EndpointStatus.SPEAKING else EndpointStatus.ONLINE
-            ConferenceParticipantDisplayState.VISIBLE_CONNECTING,
-            ConferenceParticipantDisplayState.VISIBLE_RECONNECTING ->
-                EndpointStatus.CONNECTING
-            ConferenceParticipantDisplayState.VISIBLE_FAILED ->
-                if (!rosterOnline) EndpointStatus.OFFLINE else EndpointStatus.CONNECTING
-        }
-        val bars = when (status) {
-            EndpointStatus.OFFLINE -> 0
-            EndpointStatus.CONNECTING -> 1
-            else -> 3
-        }
+        val presentation = MeetingPresenceDisplay.resolveParticipantPresentation(
+            participantPresentationFacts(
+                sessionId,
+                viewState,
+                speakingModuleId,
+                isRecoveringPeer,
+                mediaUnavailablePeer,
+                conferenceMuted
+            )
+        )
         return EndpointUiItem(
             key = key,
             displayLabel = if (viewState.isLocal) localYouLabel(key) else moduleLabel(key),
-            status = status,
-            signalBars = bars,
+            status = presentation.endpointStatus,
+            signalBars = ConferenceEndpointStatusMapper.signalBarsFor(presentation.endpointStatus),
             isLocal = viewState.isLocal
         )
     }

@@ -687,28 +687,20 @@ class TalkbackCoordinatorIntegrationTest {
         nodeM01.runtime.simulateRemoteIceState("M02", "DISCONNECTED")
         assertTrue(
             nodeM01.waitForLogSince(m01LogMark, timeoutMs = 8_000L) {
-                it.contains("RECOVERY_REATTACH_DEFERRED") &&
+                it.contains("decision=DISPATCH_REATTACH") &&
                     it.contains("session=$sessionId") &&
-                    it.contains("ch=$channelId") &&
-                    it.contains("reason=WAITING_FOR_ROUTE") &&
-                    it.contains("routeConverged=false")
-            }
-        )
-        assertTrue(
-            nodeM01.waitForLogSince(m01LogMark, timeoutMs = 3_000L) {
-                it.contains("RECOVERY_WAITING") &&
-                    it.contains("session=$sessionId") &&
-                    it.contains("reason=WAITING_FOR_ROUTE") &&
-                    it.contains("routeConverged=false")
+                    it.contains("edge=M02")
             }
         )
         val logsDuringDisconnect = synchronized(nodeM01.logs) {
             nodeM01.logs.drop(m01LogMark)
         }
         assertFalse(
-            "reattach must not send while route is not converged (R28-D1)",
+            "participant reattach must not be blocked by route gate while ICE is down",
             logsDuringDisconnect.any {
-                it.contains("RECOVERY_REATTACH_SENT") && it.contains("to=M02")
+                it.contains("RECOVERY_REATTACH_DEFERRED") &&
+                    it.contains("reason=WAITING_FOR_ROUTE") &&
+                    it.contains("routeConverged=false")
             }
         )
 
@@ -717,21 +709,11 @@ class TalkbackCoordinatorIntegrationTest {
             nodeM01.waitForLogSince(m01LogMark, timeoutMs = 5_000L) {
                 it.contains("RECOVERY_REEVALUATE") &&
                     it.contains("session=$sessionId") &&
-                    it.contains("edge=M02") &&
-                    it.contains("controlPlaneStarted=false")
+                    it.contains("edge=M02")
             }
         )
-        val logsAfterReconnect = synchronized(nodeM01.logs) {
-            nodeM01.logs.drop(m01LogMark)
-        }
-        assertFalse(
-            "ICE reconnect before control-plane MUST NOT shortcut to RECOVERED (R28-E)",
-            logsAfterReconnect.any {
-                it.contains("RECOVERY_EDGE_RECOVERED") &&
-                    it.contains("session=$sessionId") &&
-                    it.contains("remote=M02")
-            }
-        )
+        // R28-E no-shortcut (ICE alone before control-plane) is unit-tested.
+        // Post P0, outbound reattach may start control-plane before ICE reconnects.
     }
 
     @Test

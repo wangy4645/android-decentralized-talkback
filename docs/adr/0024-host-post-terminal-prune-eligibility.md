@@ -2,16 +2,17 @@
 
 ## Status
 
-**Accepted** (2026-07-13) — freezes **R29-E**. Depends on **ADR-0022 R28-H / R28-H.1** and **ADR-0023 R29**. Does **not** redefine obligation lifetime.
+**Accepted** (2026-07-13) — freezes **R29-E**. Depends on **ADR-0022 R28-H / R28-H.1 / R28-J** and **ADR-0023 R29**. Does **not** redefine obligation lifetime.
 
 ## Summary
 
 Authority ownership grants the **right** to prune, **not** the right to prune immediately after `FAILED_MEDIA_RECOVERY`.
 
 ```text
-ADR-0022 R28-H  →  when Recovery truly ends (obligation CLOSED)
+ADR-0022 R28-H  →  when the current obligation episode ends (episode CLOSED)
+ADR-0022 R28-J  →  Edge Lifecycle vs episode scope (`CLOSED(RECOVERED)` ≠ lifecycle end)
 ADR-0023 R29    →  who may mutate membership
-ADR-0024 R29-E  →  after obligation CLOSED, when Membership MAY AUTHORITY_PRUNE
+ADR-0024 R29-E  →  after episode CLOSED (prune-eligible), when Membership MAY AUTHORITY_PRUNE
 ```
 
 This ADR answers one question:
@@ -39,7 +40,8 @@ Participant side (R29-A) held: M01/M03 kept `joined=3`. Split was **authority po
 | Concept | Domain | Terminal by `FAILED_MEDIA_RECOVERY`? |
 |---------|--------|--------------------------------------|
 | Attempt | Recovery execution | Yes |
-| Obligation | Recovery ownership | **No** (R28-H) |
+| Obligation episode | Recovery ownership (R28-H; per `obligationGeneration`) | **No** — episode stays OPEN until close set |
+| Edge Lifecycle | Observer edge record lifetime (R28-J) | **No** — `CLOSED(RECOVERED)` does not remove record |
 | Membership | Conference authority | **No** — only `LEFT` / `TERMINATED` / `AUTHORITY_PRUNE` |
 
 ## Decision
@@ -189,7 +191,7 @@ even when prune timing is correct. Wire form **MAY** reuse existing leave broadc
 
 ## References
 
-- ADR-0022 — Recovery Completion Ownership (R28-H / R28-H.1)
+- ADR-0022 — Recovery Completion Ownership (R28-H / R28-H.1 / R28-J)
 - ADR-0023 — Conference Membership Mutation Authority Boundary (R29)
 - R29 soak `logs-r29-soak-20260713-112015` (session `647484ef`)
 - `docs/audit/ro-m3-recovery-write-matrix.md`

@@ -1,5 +1,6 @@
 package com.talkback.core.webrtc
 
+import java.nio.ByteBuffer
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -16,6 +17,8 @@ class StubWebRtcAudioEngine : WebRtcAudioEngine {
     private var remotePlaybackEnabled = false
     @Volatile
     private var iceConnectionStateName = "NEW"
+    @Volatile
+    private var inboundPcmSink: InboundPcmSink? = null
     override var playbackDiagnosticTag: String? = null
     override var remoteTrackDiagnosticLogger: ((Boolean) -> Unit)? = null
 
@@ -55,11 +58,27 @@ class StubWebRtcAudioEngine : WebRtcAudioEngine {
 
     override fun isRemotePlaybackEnabled(): Boolean = remotePlaybackEnabled
 
+    override fun setInboundPcmSink(sink: InboundPcmSink?) {
+        inboundPcmSink = sink
+    }
+
+    fun simulateInboundPcm(
+        frames: Int = 160,
+        sampleRate: Int = 48_000,
+        channels: Int = 1,
+        bitsPerSample: Int = 16
+    ) {
+        val bytesPerFrame = bitsPerSample / 8 * channels
+        val buffer = ByteBuffer.allocate(bytesPerFrame * frames)
+        inboundPcmSink?.onPcm(buffer, bitsPerSample, sampleRate, channels, frames)
+    }
+
     override fun release() {
         capturing.set(false)
         remoteOffer = null
         remoteAnswer = null
         iceConnectionStateName = "CLOSED"
+        inboundPcmSink = null
     }
 
     override fun iceConnectionState(): String = iceConnectionStateName
