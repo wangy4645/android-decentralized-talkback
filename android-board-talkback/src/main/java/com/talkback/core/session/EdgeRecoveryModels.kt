@@ -56,7 +56,8 @@ data class EdgeAttemptLineageRaw(
     val phase: EdgeRecoveryPhase,
     val mediaRestored: Boolean,
     val obligationOpen: Boolean,
-    val pendingCompletion: Boolean
+    val pendingCompletion: Boolean,
+    val obligationGeneration: Long = 0L
 )
 
 data class EdgeRecoveryFacts(
@@ -180,6 +181,8 @@ internal data class EdgeRecoveryRecord(
     /** Media-plane ICE restored fact for current attempt (ADR-0022 R28-E). */
     var mediaRestored: Boolean = false,
     var initiatesReattach: Boolean = false,
+    /** Failure episode id on this edge; independent of [recoveryAttemptId] (ADR-0022 P1). */
+    var obligationGeneration: Long = 0L,
     /** Single-writer obligation facts (ADR-0022 R28-H.1). */
     var obligationOpenedAtMs: Long? = null,
     var obligationDeadlineAtMs: Long? = null,
@@ -187,6 +190,9 @@ internal data class EdgeRecoveryRecord(
     var obligationCloseReason: ObligationCloseReason? = null,
     var hasPendingCompletionDecision: Boolean = false
 ) {
+    /** True while this record owns an active recovery attempt (ADR-0022 P0.5). */
+    fun hasActiveAttempt(): Boolean = phase.isActivelyRecovering()
+
     /** True once attempt crossed the control-plane boundary (ADR-0022 R28-E). */
     fun controlPlaneStarted(): Boolean = when (phase) {
         EdgeRecoveryPhase.REATTACH_REQUESTED,
