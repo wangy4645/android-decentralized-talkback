@@ -85,7 +85,9 @@ data class HelloPayload(
     val rosterEpoch: Long = 0L,
     val meshGeneration: Long = 0L,
     val memberHash: Int = 0,
-    val floorSnapshot: FloorSnapshotDigest? = null
+    val floorSnapshot: FloorSnapshotDigest? = null,
+    /** PRR re-announce only: local transport epoch at send time. */
+    val transportEpoch: Long = 0L
 ) {
     fun encode(): String {
         val arr = JSONArray()
@@ -122,6 +124,9 @@ data class HelloPayload(
         if (floorSnapshot != null) {
             json.put("floorSnapshot", floorSnapshot.encodeJson())
         }
+        if (transportEpoch > 0L) {
+            json.put("transportEpoch", transportEpoch)
+        }
         return json.toString()
     }
 
@@ -147,7 +152,8 @@ data class HelloPayload(
                 memberHash = json.optInt("memberHash", 0),
                 floorSnapshot = json.optJSONObject("floorSnapshot")?.let {
                     FloorSnapshotDigest.decodeJson(it)
-                }
+                },
+                transportEpoch = json.optLong("transportEpoch", 0L)
             )
         }.getOrNull()
     }
