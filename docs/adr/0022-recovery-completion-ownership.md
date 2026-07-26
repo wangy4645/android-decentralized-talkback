@@ -2,7 +2,7 @@
 
 ## Status
 
-**Partial Accepted** (2026-07-10; **R28-H / R28-H.1 Accepted 2026-07-13**; **R28-H.2 Accepted 2026-07-13**; **R28-I Accepted 2026-07-14**; **R28-J Accepted 2026-07-20**; **R28-K Accepted 2026-07-21**; **R28-L Accepted 2026-07-21**; **Appendix C Accepted 2026-07-16**; **Appendix C-2 Accepted 2026-07-16**; **Appendix C-3.1 Accepted 2026-07-16**; **Appendix C-3.2 Accepted 2026-07-16**) — **Accepted:** R27′-A/B, R28-D/D1 (gate), **R28-E/F/G** (P2-A completion re-evaluate seam, frozen `/grill-with-docs` 2026-07-10), **R28-H / R28-H.1** (Recovery Edge Obligation Lifetime + deadline / pending-decision single writer; soak `647484ef`; **scope per Obligation Episode — see R28-J**), **R28-H.2** (DISCONNECTED_DEBOUNCING reconnect clears suspicion without starting recovery), **R28-I** (WAITING ownership; soak `ea6466f1` M03→M02 participant edge), **R28-J** (Obligation Episode Generation within Edge Lifecycle; soak `obligation-p1-clean-20260720-125309` session `8f1bcfdc` M02→M01 **PASS**), **R28-K** (Recovery Capability vs Attempt Lifetime; soak `obs-matrix-ms1-20260721-120208` session `faaf8579` M-S1 second flap **motivation**), **R28-L** (Recovery Completion Ownership & Convergence; soak `obs-matrix-ms1-r28k-20260721-132235` session `f498ab74` M-S1 post-R28-K **motivation**), **Appendix C** (Recovery Attempt Media Action Ownership; causal trace soak `103003` / `125859`), **Appendix C-2** (Deferred Media Action Ownership; soak `112433` **PASS**), **Appendix C-3.1** (Supersede Admission Closure; soak `114047` **PASS**), **Appendix C-3.2** (Recovery Fact Consumption; soak `120053` **PASS**). **Accepted companion:** ADR-0024 R29-E (host prune eligibility consumes R28-H; does not redefine obligation). **Draft:** P2-B re-evaluate action decision tree, full S13 completion. Complements ADR-0021 (R24–R26) and ADR-0023 (R29).
+**Partial Accepted** (2026-07-10; **R28-H / R28-H.1 Accepted 2026-07-13**; **R28-H.2 Accepted 2026-07-13**; **R28-I Accepted 2026-07-14**; **R28-J Accepted 2026-07-20**; **R28-K Accepted 2026-07-21**; **R28-L Accepted 2026-07-21**; **R28-L.1.4 Accepted 2026-07-26**; **R28 Frozen 2026-07-26**; **Appendix C Accepted 2026-07-16**; **Appendix C-2 Accepted 2026-07-16**; **Appendix C-3.1 Accepted 2026-07-16**; **Appendix C-3.2 Accepted 2026-07-16**; **R28-M Draft 2026-07-25**; **R28-PRR Accepted 2026-07-26**) — **Accepted:** R27′-A/B, R28-D/D1 (gate), **R28-E/F/G** (P2-A completion re-evaluate seam, frozen `/grill-with-docs` 2026-07-10), **R28-H / R28-H.1** (Recovery Edge Obligation Lifetime + deadline / pending-decision single writer; soak `647484ef`; **scope per Obligation Episode — see R28-J**), **R28-H.2** (DISCONNECTED_DEBOUNCING reconnect clears suspicion without starting recovery), **R28-I** (WAITING ownership; soak `ea6466f1` M03→M02 participant edge), **R28-J** (Obligation Episode Generation within Edge Lifecycle; soak `obligation-p1-clean-20260720-125309` session `8f1bcfdc` M02→M01 **PASS**), **R28-K** (Recovery Capability vs Attempt Lifetime; soak `obs-matrix-ms1-20260721-120208` session `faaf8579` M-S1 second flap **motivation**), **R28-L** (Recovery Completion Ownership & Convergence; soak `obs-matrix-ms1-r28k-20260721-132235` session `f498ab74` M-S1 post-R28-K **motivation**), **R28-L.1.4** (Link Qualification Transport Repair; soak `obs-r28l1-4-repair-20260726-170329` G-L4-1 **PASS**; post-repair peer path gap documented), **R28-PRR** (Peer Reachability Re-establishment v1; frozen `/grill-with-docs` 2026-07-26; Case B motivation), **Appendix C** (Recovery Attempt Media Action Ownership; causal trace soak `103003` / `125859`), **Appendix C-2** (Deferred Media Action Ownership; soak `112433` **PASS**), **Appendix C-3.1** (Supersede Admission Closure; soak `114047` **PASS**), **Appendix C-3.2** (Recovery Fact Consumption; soak `120053` **PASS**). **R28 freeze (2026-07-26):** scope ends at **Recovery Architecture & Eligibility** (R28-A through R28-L.1.4); no further R28 feature slices. **R28-M** remains Draft (implementation seam), not freeze expansion. Next evolution line: **Peer Reachability Re-establishment (PRR)** — see § R28-PRR. **Accepted companion:** ADR-0024 R29-E (host prune eligibility consumes R28-H; does not redefine obligation). **Draft:** P2-B re-evaluate action decision tree, full S13 completion, **R28-M**. Complements ADR-0021 (R24–R26) and ADR-0023 (R29).
 
 ## Summary
 
@@ -23,6 +23,19 @@ This ADR freezes:
 11. **Recovery Fact Reconciliation** (Appendix C-3: C-3.1 supersede admission **PASS** soak `114047`; C-3.2 fact consumption **PASS** soak `120053`)
 12. **Recovery Capability vs Attempt Lifetime** (R28-K: capability unavailable MUST NOT produce attempt failure; timers scoped to capability lifecycle; resume/supersede lineage; soak `obs-matrix-ms1-20260721-120208`)
 13. **Recovery Completion Ownership & Convergence** (R28-L: completion fact layer; media ≠ edge recovered; REATTACH reject → reevaluate; rejoin lineage boundary; soak `obs-matrix-ms1-r28k-20260721-132235`)
+14. **Recovery Architecture & Eligibility** (R28-L.1.1–L.1.4: link qualification → recovery eligibility gate → transport repair; terminal R28 feature slice)
+15. **Recovery Episode Lifecycle Implementation** (R28-M **Draft**: post-`FAILED_MEDIA_RECOVERY` continuation; fact-driven re-evaluate; same-generation attempt supersede; unified lifecycle soak — **not** a new feature slice; **outside R28 freeze**; closes implementation gap between R28-E/F/G/H/J and C-3.2)
+
+```text
+ADR-0022 layering (normative roles):
+
+  R28-H / R28-J     — What (episode + generation rules)
+  R28-I / Appendix C — What (recovery actions + ownership)
+  R28-L.1           — What (qualification + eligibility + repair; R28 freeze terminal)
+  R28-O.x           — Observe (producer / projector / consumer trace evidence)
+  R28-M             — How (post-FAILED continuation implementation; Draft, not freeze expansion)
+  R28-PRR           — Peer reachability re-establishment (Accepted 2026-07-26)
+```
 
 ```text
 ReachabilitySnapshot  →  Recovery Controller  →  EdgeRecoveryFacts
@@ -2313,6 +2326,1211 @@ New: `RECOVERY_REATTACH_RECEIPT` (REMOTE_RECEIPT_ACKED), `RECOVERY_REATTACH_INBO
 
 MembershipEviction, tombstone/roster replay, R28-J obligation episode semantics, fail-closed prune guard (ADR-0024).
 
+## R28-M — Recovery Episode Lifecycle Implementation (Draft 2026-07-25)
+
+**Outside R28 freeze:** R28-M is an implementation chapter under frozen rules. It does **not** extend R28 scope (see § R28 Freeze).
+
+**Role:** Implementation chapter — **not** a new feature. R28-M closes the gap between frozen rules (R28-E/F/G/H/J, Appendix C-3) and runtime behavior observed in R28-O.x soaks.
+
+**Does not redefine:** episode admission (R28-J), obligation deadline (R28-H), media action ownership (Appendix C), completion taxonomy (R28-L), or transport delivery (Appendix D).
+
+**Motivation (soak `obs-r28o7-ownership-20260725-195227`, session `3388926c`, M02 host, M03 WiFi flap):**
+
+| Observation | Implication |
+|-------------|-------------|
+| `RECOVERY_ACTION_OWNERSHIP_DISPATCH outcome=ISSUED owner=HOST_RESTART` on M01/M02 for M03 | **Not** `NO_MEDIA_ACTION_OWNER` — action layer executed |
+| `WATCHDOG_ABORT attempt_timeout` with `controlPlaneStarted=true iceRestartIssued=true` | Completion gate timeout — separate from ownership |
+| M03→M02 `REATTACH_REQUESTED` with `authorityReachable=false controlPlaneStarted=false` | Recovery **strategy** gap (Appendix M-A) — not episode lifecycle per se |
+| `REMOTE_MODULE_RECOVERED` / `ICE_CONNECTED` → `processingDecision=REJECT processingReason=STALE_ATTEMPT` while `phase=FAILED_MEDIA_RECOVERY attemptId=1` | **Implementation gap:** ADR requires post-FAILED re-evaluate; code rejects facts as stale |
+| Zero `RECOVERED` for M03 edges after WiFi restore | Lifecycle chain broken at supersede admission after attempt terminal |
+
+**Diagnosis (one sentence):** ADR says `FAILED → wait for RecoveryFact → re-evaluate`; implementation does `FAILED → RecoveryFact → STALE`.
+
+This is **not** a design change. Design already allows continuation (R28-F § material transition after attempt terminal; R28-J § `FAILED_MEDIA_RECOVERY` does **not** advance `obligationGeneration`). R28-M freezes **how** to implement that seam.
+
+### Governance: R28-O.x vs R28-M
+
+| Layer | Role | Status |
+|-------|------|--------|
+| **R28-O.x** | Observability — prove whether producer / projector / consumer executed frozen rules | Evidence chain (e.g. O.3 producer, O.4 projector, O.5 consumer, O.6/O.7 ownership trace). **Stop expanding** unless a new independent observability gap appears |
+| **R28-M** | Implementation — make the lifecycle chain complete end-to-end | **Active** — code + UT + unified soak |
+
+O.x answers *"where did the chain break?"* M answers *"fix the chain."*
+
+### M-1 — Episode persists; attempts supersede (first principle)
+
+Within one **Obligation Episode** (`obligationGeneration` unchanged):
+
+```text
+ATTEMPT_TIMEOUT / FAILED_MEDIA_RECOVERY
+    → attempt terminal (R28-F)
+    → obligation episode STILL OPEN (R28-H)
+    → controller retains completion duty until CLOSED(RECOVERED) or CLOSED(OBLIGATION_DEADLINE)
+```
+
+**MUST NOT** conflate:
+
+```text
+attempt terminal     ≠  obligation episode closed
+attempt supersede    ≠  obligationGeneration advance
+```
+
+A subsequent recovery need after attempt terminal **MUST** be expressed as **`SUPERSEDED(nextAttemptId)` within the same `obligationGeneration`**, not as a new episode, unless R28-J episode terminal already occurred (`CLOSED(RECOVERED)` or `CLOSED(OBLIGATION_DEADLINE)`).
+
+**Anti-pattern (observed):** treating `FAILED_MEDIA_RECOVERY` as a lineage freeze — facts that would admit supersede are rejected as `STALE_ATTEMPT` because `attemptId` / phase still reflect the failed attempt.
+
+### M-2 — RecoveryFact drives re-evaluate (not `beginRecovery` storm)
+
+Post attempt-terminal residency, external signals **MUST NOT** call `beginRecovery()` directly (R28-F anti attempt-storm).
+
+Required path (aligns with Appendix C-3.2 producer / consumer split):
+
+```text
+RecoveryFact observed
+    → binding / materiality check (Coordinator or controller admission)
+    → RECOVERY_REEVALUATE(session, edge, attempt, trigger=<FACT>)
+    → Recovery Completion Decision (R28-C)
+        → SUPERSEDED(nextAttemptId) | WAITING(reason) | DISPATCH_* | RECOVERED | CANCELLED(reason)
+```
+
+**Eligible fact families** (non-exhaustive; must be wired consistently post-FAILED):
+
+```text
+ICE_CONNECTED
+REMOTE_MODULE_RECOVERED
+ROUTE_CONVERGED
+NETWORK_CHANGED          — when material per R28-G signature
+HELLO / peer rediscovery — when bound to deferred attempt (C-3.2)
+```
+
+**Forbidden post-FAILED:**
+
+```text
+RecoveryFact → silent drop
+RecoveryFact → STALE_ATTEMPT without re-evaluate
+RecoveryFact → beginRecovery() bypassing decision emission
+```
+
+### M-3 — Same-generation supersede; FAILED must not freeze lineage
+
+**Core implementation principle:** `FAILED_MEDIA_RECOVERY` **MUST NOT** freeze lineage for facts that arrive **after** attempt terminal while obligation remains OPEN.
+
+Expected chain (unified lifecycle):
+
+```text
+attempt=1
+    → FAILED_MEDIA_RECOVERY (attempt terminal; obligation OPEN)
+
+RecoveryFact (post-terminal, same obligationGeneration)
+    → RECOVERY_REEVALUATE
+    → decision=SUPERSEDED(attempt=2)
+    → new attempt opened with supersede lineage (Appendix C-3.1)
+
+attempt=2
+    → media / control-plane recovery actions
+    → RECOVERED | next terminal outcome
+```
+
+**Contrast (soak `3388926c` failure mode):**
+
+```text
+attempt=1 FAILED
+    → ICE_CONNECTED / REMOTE_MODULE_RECOVERED
+    → REJECT reason=STALE_ATTEMPT
+    → (no SUPERSEDED, no attempt=2)
+    → permanent FAILED residency until obligationDeadline
+```
+
+**Lineage rules (extends Appendix D + C-3.1):**
+
+| Situation | Required behavior |
+|-----------|-------------------|
+| Fact arrives while `phase=FAILED_MEDIA_RECOVERY`, same `obligationGeneration`, obligation OPEN | **MUST** enter M-2 re-evaluate path; **MAY** `SUPERSEDED(attemptId+1)` |
+| Fact references **superseded** attempt after supersede committed | REJECT `STALE_ATTEMPT` (valid) |
+| Fact references closed obligation episode | REJECT per R28-J no-reopen |
+| Duplicate fact same attempt after terminal | Idempotent re-evaluate or reject **after** at least one re-evaluate for that terminal boundary |
+
+**Invariant:**
+
+```text
+INV-REC-009 — Post-terminal fact admission
+
+FAILED_MEDIA_RECOVERY freezes the **current attempt**, but MUST NOT freeze the
+logical edge lineage while the obligation episode remains OPEN.
+
+While obligation episode is OPEN and phase is attempt-terminal
+(FAILED_MEDIA_RECOVERY or FAILED_REQUIRES_USER_ACTION), a material
+RecoveryFact for that edge MUST NOT be rejected solely because the
+current attempt is terminal. Rejection is permitted only after
+re-evaluate emits an explicit decision (including SUPERSEDED).
+
+STALE_ATTEMPT applies only when the fact references a **superseded**
+attempt id (fact.attemptId < currentAttemptId). Obligation closed or
+generation mismatch uses STALE_OBLIGATION_GENERATION, not STALE_ATTEMPT.
+```
+
+### M-4 — Unified lifecycle soak (normative acceptance)
+
+All post-R28-M soak runs **MUST** validate the **same** chain — not per-trace-point PASS/FAIL matrices:
+
+```text
+WiFi flap (or controlled reachability loss)
+    → attempt=1 executes recovery action (ICE_RESTART | REATTACH per role)
+    → ATTEMPT_TIMEOUT → FAILED_MEDIA_RECOVERY (allowed intermediate)
+    → RecoveryFact after terminal (ICE_CONNECTED | REMOTE_MODULE_RECOVERED | ROUTE_CONVERGED | NETWORK_CHANGED)
+    → RECOVERY_REEVALUATE
+    → SUPERSEDED(attempt+1)   [same obligationGeneration]
+    → attempt=2 recovery action
+    → media + control-plane convergence (R28-L)
+    → RECOVERED
+    → obligation CLOSED(RECOVERED)
+```
+
+**Required log gates (G-R28-M):**
+
+| Gate | PASS criterion |
+|------|----------------|
+| **G-R28-M-1** | After first `FAILED_MEDIA_RECOVERY`, obligation facts show `obligationOpen=true` until `RECOVERED` or `OBLIGATION_DEADLINE` |
+| **G-R28-M-2** | Post-terminal `RecoveryFact` emits `RECOVERY_REEVALUATE` with `trigger=<FACT>` (not silent) |
+| **G-R28-M-3** | Re-evaluate emits `SUPERSEDED(attemptId+1)` with same `obligationGeneration` before second recovery action |
+| **G-R28-M-4** | Session ends with `RECOVERY_EDGE_RECOVERED` / `CLOSED(RECOVERED)` for the flapped edge on all observers that had an open obligation |
+| **G-R28-M-5** | Duplicate post-terminal fact (e.g. repeated HELLO / same trigger on same failed attempt) → `decision=IGNORE`; `attemptId` MUST NOT increase |
+
+**NOT required for early implementation slices:** `connected==N` on all devices simultaneously; zero intermediate `FAILED` (first-attempt success is informational only).
+
+**Soak `3388926c` result:** G-R28-M-1 **PASS**; G-R28-M-2 **FAIL** (`STALE_ATTEMPT`); G-R28-M-3 **FAIL**; G-R28-M-4 **FAIL**.
+
+### Relationship to adjacent sections
+
+| Section | Relationship |
+|---------|--------------|
+| **R28-F / R28-E / R28-G** | Upstream rules M-2 implements |
+| **R28-H / R28-J** | M-1 episode vs attempt vs generation boundaries |
+| **Appendix C-3.1** | Supersede admission — M-3 extends to post-`FAILED_MEDIA_RECOVERY` |
+| **Appendix C-3.2** | Fact → re-evaluate — M-2/M-3 extend consumption past deferred-only path |
+| **R28-L** | Downstream completion taxonomy after attempt=2 succeeds |
+| **R28-O.x** | Diagnostic evidence; **not** implementation owner |
+
+### Implementation order (non-normative)
+
+1. **M-3 / INV-REC-009** — post-terminal fact admission + supersede (closes `STALE_ATTEMPT` freeze)
+2. **M-2** — coordinator materiality for `NETWORK_CHANGED` after FAILED
+3. **G-R28-M soak** — three-device WiFi flap
+4. **Appendix M-A** — recovery action selection (REATTACH fallback) if G-R28-M-4 still fails on participant→host edges
+
+### Appendix M-A — Recovery Action Selection (Draft; out of M lifecycle core)
+
+**Scope:** Strategy for **which** recovery action to dispatch after re-evaluate admits a new attempt. **Not** episode lifecycle — kept separate so M-1..M-3 can land without conflating "when to supersede" with "what to dispatch."
+
+**Observed gap (soak `3388926c`, M03→M02):**
+
+```text
+authorityReachable=false
+    → REATTACH_REQUESTED
+    → controlPlaneStarted=false
+    → attempt_timeout → FAILED_MEDIA_RECOVERY
+```
+
+**Decision sketch (v1):**
+
+```text
+role=participant edge to host
+    authorityReachable=true  → REATTACH (preferred initiator path, R28-I)
+    authorityReachable=false → WAITING_FOR_AUTHORITY
+                              OR ICE_RESTART (when capability permits, R28-G signature)
+                              — MUST emit explicit WAITING or dispatch decision; no silent timeout
+```
+
+**Does not amend:** Appendix D delivery contract; R28-I WAITING taxonomy; host accept/reject semantics.
+
+**Soak gate (informational until M core passes):** participant edge after host path loss **MUST NOT** sit in `REATTACH_REQUESTED` with `iceRestartIssued=false` for full watchdog budget when `authorityReachable=false` without a logged `WAITING_FOR_AUTHORITY` or strategy fallback.
+
+### Appendix M-B — Pending Wakeup Contract (M-B.1 Accepted)
+
+**Status:** Accepted M-B.1 (2026-07-26); observe-only traces from 2026-07-25 retained below.
+
+**Scope:** Observe-only trace for `RECOVERY_PENDING` + deferred media action wakeup lifecycle. **Does not** amend `MEDIA_NOT_READY`, `canDispatchRecoveryMediaAction()`, M-3 continuation, or lineage admission.
+
+**Motivation (soak `obs-r28m-20260725-211705`):** WiFi flap on M03 produced `RECOVERY_MEDIA_ACTION_DEFERRED` with `wakeup=PEER_DISCOVERED`, but recovery never progressed to `FAILED_MEDIA_RECOVERY` — M-3 continuation was never exercised. Root gap is **pending wakeup availability**, not post-FAILED semantics.
+
+**Pending stage (left branch):**
+
+```text
+RECOVERY_PENDING
+        |
+        +-- PEER_DISCOVERED (wakeup producer)
+        +-- CONTROL_PLANE_READY
+        +-- MEDIA_READY
+        +-- obligation deadline -> RECOVERY_WAKEUP_EXPIRED
+```
+
+**Hypotheses under test:**
+
+| ID | Hypothesis | Observe |
+|----|------------|---------|
+| **H1** | Transport: WiFi restore but zero `HELLO` inbound | `SIGNAL_NETWORK_CHANGED`, `SIGNAL_SOCKET_REBIND`, `SIGNAL_DATAGRAM_RECEIVED` HELLO |
+| **H2** | Discovery: `HELLO` + `SIGNAL_PEER_OBSERVED` but no `PEER_DISCOVERED` | `PEER_DISCOVERED_SKIPPED reason=count_not_increased` |
+
+**Required observe-only log chain:**
+
+```text
+Network restore -> Transport rebound -> HELLO inbound -> SIGNAL_PEER_OBSERVED
+    -> PEER_DISCOVERED / PEER_DISCOVERED_SKIPPED
+    -> RECOVERY_WAKEUP_ARMED -> RECOVERY_WAKEUP_FIRED / RECOVERY_WAKEUP_SKIPPED / RECOVERY_WAKEUP_EXPIRED
+    -> RECOVERY_REEVALUATE -> MEDIA_ACTION_ISSUED -> FAILED / RECOVERED
+```
+
+**Trace tags:**
+
+| Tag | Meaning |
+|-----|---------|
+| `RECOVERY_WAKEUP_ARMED` | Deferred action registered with wakeup binding |
+| `RECOVERY_WAKEUP_FIRED` | Matching trigger consumed deferred wakeup |
+| `RECOVERY_WAKEUP_SKIPPED` | Trigger arrived but materiality gate blocked re-evaluate |
+| `RECOVERY_WAKEUP_EXPIRED` | Obligation closed while wakeup still armed |
+| `PEER_DISCOVERED` | Dialable count increased; recovery notify fired |
+| `PEER_DISCOVERED_SKIPPED` | Peer observed but dialable count did not increase |
+| `SIGNAL_PEER_OBSERVED` | `rememberSignalPeer` after inbound signal |
+
+**Non-goals:** Relax `MEDIA_NOT_READY`; force `FAILED` for soak; amend M-3 / INV-REC-009.
+
+**Promotion:** Accept appendix only after Phase 2 Case A proves which link breaks (transport vs discovery contract).
+
+#### Phase 2 soak finding (`obs-r28m-phase2-20260726-085554`)
+
+**Finding:** Pending wakeup correctness depends on two independent contracts:
+
+1. **Transport reachability restoration** — peer signaling path must deliver inbound datagrams again.
+2. **Existing-peer reachability notification** — recovery must observe that a known peer became reachable again (not only that dialable count increased).
+
+Current soak failure occurred **before** recovery continuation (M-3 never exercised).
+
+**Observed chain (M01, edge M03):**
+
+```text
+08:56:59  M03 WiFi lost (networkId 111)
+08:57:04  RECOVERY_PENDING + RECOVERY_WAKEUP_ARMED (PEER_DISCOVERED)
+08:57:12  M03 WiFi restored (networkId 112, socket rebind)
+08:57:12..08:58:34  M01: zero M03 inbound (~88s); M01 outbound to M03 continues
+08:57:17  M02: ROUTE_CONVERGED -> EDGE_RECOVERED (M02<->M03 path OK)
+08:58:33  RECOVERY_WAKEUP_EXPIRED (MEMBERSHIP_LEFT)
+08:58:34  M03 HELLO inbound on M01 (1s after obligation closed)
+```
+
+**Hypothesis adjudication:**
+
+| ID | Result | Evidence |
+|----|--------|----------|
+| **H1** | **Confirmed (primary)** | M03 `SIGNAL_DATAGRAM_SENT dst=192.168.31.110` from 08:57:12; M01 `SIGNAL_DATAGRAM_RECEIVED` from M03 = 0 until 08:58:34. M02 receives M03 at 08:57:17. Asymmetric path M01<->M03, not M03 global outage. Stale dst IP ruled out (correct IP in SENT logs). |
+| **H2** | **Confirmed (secondary)** | `PEER_DISCOVERED_SKIPPED reason=count_not_increased` throughout; `PEER_DISCOVERED` never fired. M02 bypassed via `ROUTE_CONVERGED`, not `PEER_DISCOVERED` wakeup. |
+
+**Pending wakeup = transport restoration AND reachability notification.** Both failed on M01 for M03 in this soak.
+
+**Next observe-only tags (Step 1-2):**
+
+| Tag | Meaning |
+|-----|---------|
+| `SIGNAL_PATH_ASYMMETRY` | Outbound to peer IP while inbound silence exceeds threshold |
+| `SIGNAL_INBOUND_RESUMED` | First inbound after prolonged silence from peer IP |
+| `PEER_REACHABLE_RESTORED` | Known peer observed again after `moduleStaleMs` silence |
+
+**Non-goals (unchanged):** Do not amend M-3, `MEDIA_NOT_READY`, or wakeup consumption until M01<->M03 path failure is explained.
+
+#### R28-L Link Qualification Finding (`obs-r28m-receive-20260726-093619`)
+
+**Status:** Observe-only contract (2026-07-26)
+
+**Observation:**
+
+`TRANSPORT_READY` currently indicates socket lifecycle readiness (bound socket + receive loop marked active), not bidirectional peer reachability.
+
+Soak session `e33bb696` (M03 WiFi flap, 09:51 force-restart):
+
+```text
+09:53:53  M03 SOCKET_REBIND socketId=4 + RECEIVE_LOOP_STARTED + TRANSPORT_READY
+09:53:54+ M03 FIRST_OUTBOUND (HELLO/HEARTBEAT/ICE to M01/M02)
+          M01 zero inbound from 190 (last inbound 09:52:53)
+          M03 zero inbound from M01/M02
+09:54:07  PATH_ASYMMETRY lastInboundAgeMs=73192
+```
+
+M02 on M01: signaling bidirectional resumed 09:53:54, ICE/media CONNECTED, but `edgeRecoveryPhase=REATTACH_REQUESTED` — separate R28-M completion consumption gap.
+
+**Decision:**
+
+Recovery eligibility requires a qualified link state, not `TRANSPORT_READY` alone.
+
+Proposed observe-only qualification ladder (v1):
+
+```text
+BOUND
+  -> RECEIVE_READY (first inbound after rebind)
+  -> BIDIRECTIONAL_READY (outbound + inbound after rebind)
+  -> RECOVERY_ELIGIBLE (future gate; not implemented)
+```
+
+**Trace acceptance matrix (observe-only):**
+
+| Path | Expected chain |
+|------|----------------|
+| Failure | `SOCKET_REBIND` -> `RECEIVE_LOOP_STARTED` -> `FIRST_OUTBOUND_AFTER_REBIND` -> (no `FIRST_INBOUND_AFTER_REBIND`) -> (no `BIDIRECTIONAL_CONFIRMED`) |
+| Success | `SOCKET_REBIND` -> `FIRST_OUTBOUND_AFTER_REBIND` -> `FIRST_INBOUND_AFTER_REBIND` -> `BIDIRECTIONAL_CONFIRMED` -> `EDGE_RECOVERED` |
+
+**Soak adjudication (three outcomes only):**
+
+| Result | Meaning |
+|--------|---------|
+| REBIND + no `FIRST_INBOUND` | L2/transport path problem (Case 2) |
+| `FIRST_INBOUND` but no `BIDIRECTIONAL_CONFIRMED` | Trace hook or transport contract bug |
+| `BIDIRECTIONAL_CONFIRMED` but no `EDGE_RECOVERED` | R28-M completion consumption |
+
+**Implementation note:** Round-1 trace hooks (`FIRST_INBOUND_AFTER_REBIND`, `RECEIVE_LOOP_BLOCKING`, `SOCKET_BOUND`) were defined but not wired on the actual `UdpSignalingChannel.receive()` success path; round-2 wires hooks on the same path as `SIGNAL_DATAGRAM_RECEIVED` and adds `FIRST_OUTBOUND_AFTER_REBIND` + `BIDIRECTIONAL_CONFIRMED`.
+
+**Non-goals:**
+
+- No recovery behavior change
+- No retry policy change
+- No ICE policy change
+- No RTT/sequence/heartbeat-window link quality (deferred)
+
+#### R28-L Trace Contract Fix (`obs-r28l-qualification-20260726-101302`)
+
+**Status:** Observe-only trace fix (2026-07-26)
+
+**Observation:**
+
+Soak session `71f7c454` (M03 WiFi flap) showed link qualification traces working on the real receive/send path:
+
+```text
+10:14:31  SOCKET_REBIND socketId=4
+10:14:31  FIRST_OUTBOUND_AFTER_REBIND socketId=4
+10:14:32  FIRST_INBOUND_AFTER_REBIND socketId=4 sourceAddress=192.168.31.110:50000
+10:14:29  EDGE_RECOVERED (ICE_RESTORED, before formal WiFi restore)
+```
+
+`socketId` was consistent across rebind/outbound/inbound (no send/receive epoch split). Missing `BIDIRECTIONAL_CONFIRMED` was caused by trace generation initialization: `qualificationRebindGeneration` and `bidirectionalConfirmedForGeneration` both defaulted to `0`, so dedup returned early (`0 == 0`).
+
+**Decision:**
+
+Trace generation uses non-zero monotonic `rebindGeneration` epoch (`+= 1` on each rebind). `bidirectionalConfirmedGeneration` is nullable (`Long?`); unset means not yet confirmed for current epoch.
+
+**Behavior impact:** None. Recovery behavior unchanged.
+
+#### R28-L Diagnostic Freeze (`obs-r28l-qualification-20260726-102139`)
+
+**Status:** **PASS (diagnostic layer)** — Frozen (2026-07-26)
+
+**Verdict:** Observe-only link qualification contract is sufficient to adjudicate transport vs recovery. No further Recovery/M-3/wakeup soak required for R28-L diagnosis.
+
+**Failure sample** (session `467cc536`, M03 WiFi flap ~29s):
+
+```text
+10:29:07  SOCKET_REBIND socketId=4 rebindGeneration=4 + RECEIVE_LOOP_STARTED/BLOCKING
+10:29:07  FIRST_OUTBOUND_AFTER_REBIND socketId=4
+          (no FIRST_INBOUND_AFTER_REBIND, no BIDIRECTIONAL_CONFIRMED)
+10:28:34  M01 last inbound from 190; zero inbound after rebind
+10:29:47  RECOVERY_WAKEUP_EXPIRED; no EDGE_RECOVERED
+```
+
+**Success sample** (session `71f7c454`, same flap protocol):
+
+```text
+SOCKET_REBIND -> FIRST_OUTBOUND -> FIRST_INBOUND (~1s) -> EDGE_RECOVERED
+```
+
+**Hypothesis adjudication (frozen):**
+
+| Hypothesis | Result |
+|------------|--------|
+| Socket rebind failed | Rejected |
+| Receive loop not started | Rejected |
+| Socket epoch split (send vs receive) | Rejected |
+| Trace contract incomplete | Rejected (post trace-gen fix) |
+| Recovery not consuming evidence | Not primary in failure samples |
+| **Transport qualification not met (intermittent)** | **Confirmed** |
+
+**Root cause (one line):** After Android WiFi network switch, UDP transport can enter a half-connected state: socket bound, send OK, receive loop alive, but peer return path absent. `Network available` ≠ `path to peer available`. Failure is intermittent (timing/L2/route), not deterministic application bug.
+
+**Architectural decision (frozen):**
+
+```text
+TRANSPORT_READY  ≠  RECOVERY_ELIGIBLE
+
+BOUND -> RECEIVE_READY -> BIDIRECTIONAL_READY -> RECOVERY_ELIGIBLE
+```
+
+Industry pattern: do not trust `onAvailable()`; confirm path with active bidirectional probe (current `FIRST_OUTBOUND` / `FIRST_INBOUND` / `BIDIRECTIONAL_CONFIRMED` traces are the observe-only v0).
+
+**Non-goals (R28-L frozen):** Do not amend Recovery, M-3, wakeup, ICE timeout, or REATTACH policy under R28-L diagnostic scope.
+
+#### R28-L.1 Link Qualification Runtime (Proposed)
+
+**Status:** Proposed — implementation not started
+
+**Scope:** Introduce link qualification runtime states; gate recovery continuation on qualified link. **Does not** attempt to fix Android WiFi/L2 intermittency.
+
+**States (v1):**
+
+```text
+LINK_BOUND
+LINK_RECEIVE_READY
+LINK_BIDIRECTIONAL_READY
+LINK_UNQUALIFIED
+```
+
+**Gate (conceptual):**
+
+```text
+recovery media action eligible  iff  linkQualification == BIDIRECTIONAL_READY
+(not transportReady alone)
+```
+
+**Failure path (conceptual):**
+
+```text
+REBIND -> OUTBOUND -> (no inbound within budget) -> LINK_UNQUALIFIED -> retry rebind / validation
+```
+
+**In scope:** Link qualification module, promotion of observe traces to runtime state, recovery eligibility gate seam.
+
+**Out of scope:** Recovery state machine rewrite, M-3 continuation semantics, wakeup consumption, ICE policy, guaranteed WiFi flap recovery.
+
+**Principle:** Link qualification is a prerequisite, not a recovery outcome.
+
+#### R28-L.1.1 Link Qualification Runtime (Landed)
+
+**Status:** Landed (2026-07-26); repair wired via L.1.4
+
+| Component | Role |
+|-----------|------|
+| `LinkQualificationState` | Transport-owned qualification enum |
+| `LinkQualificationTracker` | Aggregates facts → state |
+| `LinkQualificationFactSink` | Facts from `UdpSignalingChannel` |
+| `TransportCapabilitySnapshot` | `SignalingTransportManager.linkQualificationSnapshot()` |
+
+**State machine (v1):** `BOUND` → `RECEIVE_READY` → `BIDIRECTIONAL_READY`; timeout after outbound without inbound → `UNQUALIFIED`.
+
+**Landed:** inbound timeout scheduler (`LinkQualificationTracker`, 30s default).
+
+**Wired (L.1.4):** qualification repair / retry rebind on `UNQUALIFIED` via `QualificationRepairCoordinator` (see R28-L.1.4).
+
+#### R28-L.1.2 Runtime Observation Contract (Accepted)
+
+**Status:** Accepted (2026-07-26)
+
+Observe-only traces: `LINK_FACT_RECEIVED`, `LINK_QUALIFICATION_STATE_CHANGED`, `LINK_QUALIFICATION_SNAPSHOT_READ`. Soak script `scripts/soak-r28l1-link-qualification.ps1`. Case B (transport bound, no inbound) validated on device.
+
+#### R28-L.1.3 Recovery Eligibility Gate (Accepted)
+
+**Status:** Accepted (2026-07-26)
+
+**Purpose:** Prevent recovery execution on transport states that are bound but not bidirectionally validated.
+
+**Non-goals:**
+
+- transport repair
+- ICE strategy
+- recovery lifecycle changes
+- episode management
+
+**Gate placement:** Recovery continuation entry (`resolveMediaActionOwner` / `issueBoundedIceRestart`), not Transport / ICE / REATTACH / wakeup.
+
+**Semantics:** `WAIT_LINK_QUALIFICATION` — link qualification does not decide recovery success/failure; it only gates media action execution. No `failRecovery`, no obligation close, no `attempt++`.
+
+**Trace:** `RECOVERY_MEDIA_ACTION_BLOCKED reason=WAIT_LINK_QUALIFICATION qualification=... socketId=... generation=... remoteKey=... attempt=...`
+
+**Components:** `RecoveryEligibilityGate`, `ConferenceEdgeRecoveryController.linkQualificationSnapshot`, `onRecoveryLinkQualificationChanged`.
+
+**UT:** `RecoveryEligibilityGateTest`, `ConferenceEdgeRecoveryControllerTest` (`gR28L3_1/2/3`).
+
+#### R28-L.1.4 Link Qualification Repair (Accepted)
+
+**Status:** Accepted (2026-07-26); implementation landed per L.1.4.9; soak `obs-r28l1-4-repair-20260726-170329` adjudicated. **Does not** amend `RecoveryEligibilityGate`, M-B wakeup, or recovery lineage.
+
+**One line:**
+
+> When link qualification fails, transport repairs eligibility itself; Recovery only consumes qualification results and does not repair transport.
+
+**Recovery boundary (frozen):**
+
+> Recovery consumes transport capability; it does not repair transport connectivity.
+>
+> Recovery never initiates transport repair; it only reacts to transport capability transitions.
+>
+> Peer Reachability is the sole owner of post-repair signaling path establishment.
+
+**Motivation:**
+
+Two-week soak chain converged to a single missing layer:
+
+```text
+Recovery Episode
+      |
+      | waits
+      v
+Recovery Eligibility Gate (L.1.3 Accepted)
+      |
+      | requires
+      v
+Link Qualification (L.1.1/L.1.2 Accepted)
+      |
+      | missing
+      v
+Transport Repair  <-- L.1.4 (Accepted)
+      |
+      | may still lack
+      v
+Peer Reachability Re-establishment  <-- next layer (not L.1.4)
+```
+
+Failure sample `467cc536` and post-M-B.1 soak `obs-r28m-mb1-20260726-154359` (session `182d7fa0`): `TRANSPORT_READY` + outbound HELLO/HEARTBEAT, zero inbound after rebind → `UNQUALIFIED` (or pre-L.1.1: no `BIDIRECTIONAL_READY`) → L.1.3 `WAIT_LINK_QUALIFICATION` → `WAKEUP_EXPIRED`. M-B.1 wakeup producer cannot fire without inbound (`PEER_REACHABLE_RESTORED` = 0). Pre-L.1.4 root gap was **transport path repair**; post-L.1.4 soak shows repair executes but **post-repair peer-to-peer signaling path establishment is not guaranteed** (see L.1.4.10).
+
+**Non-goals:**
+
+- Recovery state machine rewrite
+- M-3 continuation semantics
+- Wakeup binding changes (M-B.1 frozen)
+- `PEER_DISCOVERED` / dialable-count semantics
+- Discovery port 51999 self-healing (M-C frozen)
+- ICE restart policy
+- New Recovery phases
+
+**Boundary (invariant):**
+
+```text
+RecoveryController  MUST NOT call  repair() | rebind() | socket ops
+RecoveryController  MUST NOT broadcast HELLO | refresh discovery | mutate transport epoch
+```
+
+Transport repair is transport-owned. Recovery reads `TransportCapabilitySnapshot` via L.1.3 gate only. Post-repair peer signaling path is PRR-owned (§ R28-PRR).
+
+**Boundary violations (normative):** Recovery-initiated socket rebind, HELLO broadcast, or discovery refresh → **violates R28 freeze**; route to PRR or transport layer.
+
+##### L.1.4.0 Design constraints (frozen)
+
+**Constraint 1 — Repair idempotency:** Same socket epoch MUST NOT spawn duplicate repairs. Coordinator owns `TransportRepairState`:
+
+```text
+IDLE -> REPAIR_REQUESTED -> REPAIR_IN_PROGRESS -> QUALIFICATION_WAIT
+                                                      |
+                                    (cap) -> REPAIR_EXHAUSTED -> UNQUALIFIED_STABLE
+```
+
+While `REPAIR_REQUESTED` / `REPAIR_IN_PROGRESS` / `QUALIFICATION_WAIT` for generation *G*, duplicate timeout / network jitter / recovery wakeup MUST be rejected. Recovery does not read `TransportRepairState`; it reads qualification snapshot only.
+
+**Constraint 2 — Repair does not mutate recovery lineage:** Transport repair may change `socketId` and `qualificationGeneration`, but MUST NOT change recovery `attempt`, episode, obligation, or lineage generation. Allowed:
+
+```text
+FAILED_MEDIA_RECOVERY attempt=3 -> transport repair -> BIDIRECTIONAL_READY -> continue attempt=3
+```
+
+Forbidden: `transport repair -> new recovery episode -> attempt++`.
+
+##### L.1.4.1 `UNQUALIFIED` ≠ DEAD
+
+Current ladder:
+
+```text
+BOUND -> RECEIVE_READY -> (30s outbound, no inbound) -> UNQUALIFIED
+```
+
+`UNQUALIFIED` means:
+
+```text
+current transport epoch does not satisfy recovery eligibility
+= transport repair is permitted
+```
+
+`UNQUALIFIED` is **not** `FAILED` / `CLOSED` / `DROP`. Socket may remain bound; receive loop may be active; outbound may succeed. Only bidirectional qualification for the current `rebindGeneration` is absent.
+
+##### L.1.4.2 Repair lifecycle
+
+Add transport-internal repair phase. **Do not** add Recovery phases.
+
+```text
+                +----------------+
+                |
+                v
+        BIDIRECTIONAL_READY
+                ^
+                | FIRST_INBOUND_AFTER_REBIND
+                |
+        RECEIVE_READY
+                ^
+                | rebind (new generation)
+                |
+        QUALIFICATION_REPAIRING  (transport-only, in-flight repair)
+                ^
+                | rebind (new generation)
+                |
+        UNQUALIFIED  (stable: qualification failed, repair permitted)
+                |
+                | repairCap reached
+                v
+        UNQUALIFIED_STABLE  (terminal until external restart)
+```
+
+`UNQUALIFIED` is a **stable** qualification failure state (not in-flight repair). `QUALIFICATION_REPAIRING` signals active repair for UI/debug.
+
+`UNQUALIFIED_STABLE`: no further automatic repair until `network_changed`, `socket_error`, or `manual_reconnect`.
+
+State enum: add `QUALIFICATION_REPAIRING`, `UNQUALIFIED_STABLE` to `LinkQualificationState` (transport package only). Coordinator also exposes `TransportRepairState` (not visible to Recovery).
+
+##### L.1.4.3 Single repair entry point
+
+**Only** allowed trigger:
+
+```text
+LinkQualificationTracker.onQualificationTimeout()
+        |
+        v
+TransportRepairRequester.requestQualificationRepair(...)
+```
+
+**Forbidden:**
+
+```text
+RecoveryController -> repair() | rebind() | socket()
+ConferenceEdgeRecoveryController -> transport mutation
+```
+
+`qualificationRetryRequested = true` (existing snapshot flag) becomes the handoff signal from tracker to repair coordinator; repair coordinator owns retry scheduling and cap.
+
+##### L.1.4.4 API (proposed)
+
+```kotlin
+interface TransportRepairRequester {
+    fun requestQualificationRepair(
+        reason: QualificationFailureReason
+    )
+}
+
+enum class QualificationFailureReason {
+    QUALIFICATION_TIMEOUT,
+    SOCKET_ERROR,      // future
+    NETWORK_CHANGED    // restart stable repair
+}
+```
+
+v1 scope: **local signaling socket** repair only (not per-remote `EndpointKey`). Link qualification is local-transport epoch scoped (`LinkQualificationTracker` is not per-peer today). Per-peer asymmetry (M02 receives M03, M01 does not) is observed via inbound facts; repair action is rebind local signaling + probe refresh.
+
+Implementation sketch:
+
+```text
+requestQualificationRepair
+        |
+        +--> SignalingTransportBinding.rebindBinding(networkId, "qualification_repair")
+        |
+        +--> optional HELLO / heartbeat refresh (coordinator seam, transport-initiated)
+        |
+        +--> qualification ladder restart (facts -> BOUND -> RECEIVE_READY -> ...)
+```
+
+##### L.1.4.5 Trace contract
+
+| Tag | When |
+|-----|------|
+| `LINK_QUALIFICATION_REPAIR_REQUESTED` | Coordinator accepts handoff; schedules repair |
+| `LINK_QUALIFICATION_REPAIR_STARTED` | Rebind executing |
+| `LINK_QUALIFICATION_REPAIR_SUCCEEDED` | Epoch reaches `BIDIRECTIONAL_READY` after repair |
+| `LINK_QUALIFICATION_REPAIR_EXHAUSTED` | `repairCap` reached → `UNQUALIFIED_STABLE` |
+
+All repair traces MUST include: `reason`, `oldSocketId`, `newSocketId`, `qualificationGeneration`, `repairAttempt`.
+
+Example (request):
+
+```text
+LINK_QUALIFICATION_REPAIR_REQUESTED reason=QUALIFICATION_TIMEOUT
+    generation=4 attempt=1 socketId=4 networkId=112
+```
+
+Example (success):
+
+```text
+LINK_QUALIFICATION_REPAIR_SUCCEEDED generation=5 socketId=5
+```
+
+Example (exhausted):
+
+```text
+LINK_QUALIFICATION_REPAIR_EXHAUSTED retryCount=3 generation=4
+    nextRestart=network_changed|socket_error|manual
+```
+
+Keep existing: `LINK_QUALIFICATION_STATE_CHANGED` (`RECEIVE_READY` → `BIDIRECTIONAL_READY`), `LINK_FACT_RECEIVED`, `RECOVERY_MEDIA_ACTION_BLOCKED reason=WAIT_LINK_QUALIFICATION`.
+
+##### L.1.4.6 Retry policy
+
+```text
+repairCap = 3
+backoff: 1s, 5s, 15s  (attempts 1..3)
+on exhaust: UNQUALIFIED_STABLE (no further auto-rebind)
+restart triggers: network_changed | socket_error | manual_reconnect
+```
+
+**Forbidden:** infinite rebind loop from `UNQUALIFIED`; ICE restart storm; Recovery `attempt++` driven by transport repair.
+
+##### L.1.4.7 Acceptance gates (G-R28-L.1.4)
+
+| Gate | Scenario | Required | Forbidden |
+|------|----------|----------|-----------|
+| **G-L4-1** | Black hole: `TRANSPORT_READY` → `RECEIVE_READY` → timeout → `UNQUALIFIED` | `LINK_QUALIFICATION_REPAIR_REQUESTED` | silent stall |
+| **G-L4-2** | Repair success: `UNQUALIFIED` → repair → `FIRST_INBOUND` → `BIDIRECTIONAL_READY` | `RECOVERY_CONTINUE` (L.1.3 unblocks) | — |
+| **G-L4-3** | Repair fail: cap exhausted → `UNQUALIFIED_STABLE` | `LINK_QUALIFICATION_REPAIR_EXHAUSTED` | ICE restart storm; `episode++`; `attempt++` |
+| **G-L4-4** | Recovery isolation | — | `ConferenceEdgeRecoveryController` / `RecoveryController` calls `repair` / `rebind` / socket APIs |
+| **G-L4-5** | `UNQUALIFIED_STABLE` after cap | `LINK_QUALIFICATION_REPAIR_EXHAUSTED` | recovery episode mutation; `attempt++`; obligation close |
+
+Call chain (frozen):
+
+```text
+LinkQualificationTracker.onQualificationTimeout()
+        -> QualificationRepairCoordinator (via SignalingTransportManager)
+        -> UdpSignalingChannel.rebindBinding()
+```
+
+NOT: `RecoveryController -> repair`.
+
+Soak target: replay `467cc536` protocol (M03 WiFi flap ~29s). Observed chain (`obs-r28l1-4-repair-20260726-170329`):
+
+```text
+UNQUALIFIED -> REPAIR -> FIRST_OUTBOUND_AFTER_REPAIR -> (no inbound) -> WAIT_LINK_QUALIFICATION persists
+```
+
+Full success chain (not observed in acceptance soak):
+
+```text
+UNQUALIFIED -> REPAIR -> BIDIRECTIONAL_READY -> RECOVERY_CONTINUE -> EDGE_RECOVERED
+```
+
+(pre-fix chain ended at `WAKEUP_EXPIRED` with zero inbound; post-L.1.4 repair executes but peer path may remain asymmetric — L.1.4.10)
+
+##### L.1.4.8 Existing capability scan (Step 2 — no new code)
+
+| Capability | Location | Reuse for L.1.4 |
+|------------|----------|-----------------|
+| Signaling rebind | `UdpSignalingChannel.rebindBinding` | **Yes** — close socket, new `socketId`, `qualificationRebindGeneration += 1`, emits `onSocketBound` / `onReceiveLoopStarted` facts |
+| Network-triggered rebind | `SignalingTransportManager.onNetworkAvailable` → all bindings | **Yes** — also **restart trigger** for `UNQUALIFIED_STABLE` |
+| Lazy recover rebind | `UdpSignalingChannel.ensureSocketBound` (`recover_$reason`) | **Pattern only** — private; repair should call `rebindBinding` with `reason=qualification_repair` |
+| Qualification timeout | `LinkQualificationTracker.onQualificationTimeout` | **Yes** — already transitions to `UNQUALIFIED`, sets `qualificationRetryRequested=true`; **missing**: callback to repair coordinator |
+| Inbound timeout scheduler | `LinkQualificationTracker.scheduleInboundTimeoutIfNeeded` (30s default) | **Yes** — landed; update L.1.1 note |
+| Socket / generation trace | `TransportCapabilityTrace`, `qualificationRebindGeneration` | **Yes** — no new epoch model |
+| HELLO / heartbeat probe | `TalkbackCoordinator.broadcastHello`, `heartbeatIntervalMs=2000` | **Seam** — repair may call `rebroadcastHello()` via thin transport-initiated callback; not owned by Recovery |
+| Discovery rebind retry | `DiscoveryUdpSocket` (M-C, port 51999) | **No** — wrong transport; do not couple |
+| Recovery gate consumer | `RecoveryEligibilityGate`, `onRecoveryLinkQualificationChanged` | **Read-only** — extend to notify on `BIDIRECTIONAL_READY` only (existing `TalkbackRuntimeFactory` wiring) |
+| Per-remote qualification | — | **Not present** — v1 remains local epoch; per-peer asymmetry is diagnostic only |
+
+**Gap to implement:** `TransportRepairRequester` + `QualificationRepairCoordinator` (name TBD) wiring timeout → rebind → cap/backoff → `UNQUALIFIED_STABLE`; traces in `LinkQualificationTrace`.
+
+##### L.1.4.9 Implementation change list (Step 3 — landed)
+
+| # | File / component | Change | Status |
+|---|------------------|--------|--------|
+| 1 | `LinkQualificationState.kt` | Add `QUALIFICATION_REPAIRING`, `UNQUALIFIED_STABLE` | landed |
+| 2 | `LinkQualificationTracker.kt` | On timeout: invoke repair callback; handle repair-enter/exit transitions; cancel timeout during repair | landed |
+| 3 | `LinkQualificationTrace.kt` | Add `repairRequested`, `repairSucceeded`, `repairExhausted`; observe-only `LINK_REPAIR_SOCKET_CONTEXT`, `LINK_FIRST_OUTBOUND/INBOUND_AFTER_REPAIR`, `REMOTE_RECEIVE_OBSERVED` | landed |
+| 4 | `TransportRepairRequester.kt` (new) | Interface + `QualificationFailureReason` | landed |
+| 5 | `QualificationRepairCoordinator.kt` (new) | Cap/backoff, call `SignalingTransportBinding.rebindBinding`, manage `UNQUALIFIED_STABLE` | landed |
+| 6 | `SignalingTransportManager.kt` | Register repair coordinator; expose `requestQualificationRepair` seam; `onNetworkAvailable` restarts stable repair | landed |
+| 7 | `UdpSignalingChannel.kt` | Accept `qualification_repair` reason; `REMOTE_RECEIVE_OBSERVED` peer evidence | landed |
+| 8 | `TalkbackRuntimeFactory.kt` | Wire tracker timeout → repair coordinator; optional `rebroadcastHello` callback | landed |
+| 9 | `TransportCapabilitySnapshot.kt` | Optional: `repairAttempt`, `repairStable` fields for gate diagnostics | landed |
+| 10 | `LinkQualificationTrackerTest.kt` | Timeout → repair requested; cap → `UNQUALIFIED_STABLE`; restart on network | landed |
+| 11 | `QualificationRepairCoordinatorTest.kt` (new) | Backoff, cap, trace emission | landed |
+| 12 | `ConferenceEdgeRecoveryControllerTest.kt` | G-L4-4: assert no transport repair imports/calls | landed |
+| 13 | `scripts/soak-r28l1-link-qualification.ps1` | Extend grep matrix for repair traces + G-L4-1..3 | landed |
+
+**Explicitly unchanged:** `ConferenceEdgeRecoveryController` recovery logic, M-B.1 wakeup, M-3, `PEER_DISCOVERED`, `DiscoveryUdpSocket`, ICE policy.
+
+##### L.1.4.10 Soak adjudication (`obs-r28l1-4-repair-20260726-170329`)
+
+**Scenario:** M02 host, M03 WiFi flap (~30s), three-device mesh. Observe-only completion traces (`RECOVERY_OBLIGATION_CLOSE_REQUESTED`, `RECOVERY_COMPLETION_EVIDENCE_ACCEPTED`) deployed; recovery logic unchanged.
+
+**G-L4-1 PASS — transport repair executes:**
+
+```text
+17:06:02  LINK_QUALIFICATION_STATE_CHANGED -> UNQUALIFIED (QUALIFICATION_TIMEOUT)
+17:06:03  LINK_QUALIFICATION_REPAIR_STARTED socketId 5 -> 6, generation 5 -> 6, networkId=129
+17:06:05  LINK_FIRST_OUTBOUND_AFTER_REPAIR socketId=6
+```
+
+**Case B — post-repair peer signaling path not established:**
+
+| Observation | Implication |
+|-------------|-------------|
+| No `LINK_FIRST_INBOUND_AFTER_REPAIR` | Local qualification ladder stalls after outbound |
+| No `BIDIRECTIONAL_READY` / `WAKEUP_FIRED` / `REATTACH_SENT` | L.1.3 gate never unblocks; recovery never reaches completion path |
+| M02: zero `REMOTE_RECEIVE_OBSERVED remote=M03` after repair | Peer did not observe M03 signaling after repair |
+| M03: no `HELLO from M02` after flap; `SIGNAL_PATH_ASYMMETRY lastInboundAgeMs≈96s` | Asymmetric peer path persists post-repair |
+| `17:06:35` second timeout → `REPAIR_DUPLICATE_REJECTED (QUALIFICATION_WAIT)` | Second repair blocked by idempotency (→ L.1.5) |
+
+**Frozen gap statement:**
+
+> Post-repair peer-to-peer signaling path establishment is not guaranteed (observed in WiFi flap soak).
+
+Do **not** attribute this gap to Android/L2 alone; do **not** fold it into Recovery completion ownership.
+
+**Excluded hypotheses (this soak):**
+
+- Completion ownership bug — zero `COMPLETION_EVIDENCE_ACCEPTED` / `OBLIGATION_CLOSE_REQUESTED` (expected: gate never cleared)
+- Qualification timeout scheduling failure — timeout fired at 30s as designed
+- Repair did not rebind socket — Case A ruled out (socket 5→6, generation incremented)
+
+**Architecture closure (frozen):**
+
+```text
+Recovery / Qualification / Repair     — in scope, L.1.4 Accepted
+Peer Reachability Re-establishment    — out of scope for L.1.4; next layer
+```
+
+**Next layer name:** `Peer Reachability Re-establishment` (discovery refresh, endpoint re-announce, peer path convergence — transport-initiated, not `ConferenceEdgeRecoveryController`).
+
+Companion soak `obs-r28m-completion-20260726-164948` (session `8792302b`): same WiFi flap protocol; zero completion traces — confirms diagnosis stalled at qualification/repair boundary, not completion convergence.
+
+##### L.1.4.11 Acceptance summary
+
+| Gate | Result | Evidence |
+|------|--------|----------|
+| **G-L4-1** | **PASS** | Timeout → `UNQUALIFIED` → `REPAIR_STARTED` → new socket epoch |
+| **G-L4-2** | **PARTIAL** | Outbound after repair; no inbound → no `BIDIRECTIONAL_READY` |
+| **G-L4-3** | not exercised | Cap not reached (second repair rejected — L.1.5) |
+| **G-L4-4** | **PASS** | No recovery controller transport mutation |
+| **G-L4-5** | not exercised | — |
+
+#### R28-L.1.5 Qualification Repair Retry Policy (Future Work)
+
+**Status:** Future Work (2026-07-26) — **not** in L.1.4 scope.
+
+**Problem:** After first repair enters `QUALIFICATION_WAIT`, a second `QUALIFICATION_TIMEOUT` while still waiting is rejected as `REPAIR_DUPLICATE_REJECTED`. Repair cap/backoff never advances; peer path may remain black-holed indefinitely until `network_changed` / `socket_error` / `manual_reconnect`.
+
+**Non-goals:** Recovery episode mutation; obligation close; ICE restart policy.
+
+**Candidate scope:** Allow bounded re-repair while `QUALIFICATION_WAIT` exceeds inbound budget; distinguish duplicate jitter from genuine second failure; align with L.1.4.6 backoff without violating G-L4-4.
+
+## R28 Freeze — Recovery Architecture & Eligibility (2026-07-26)
+
+**Status:** Frozen
+
+**Accepted terminal scope (no further R28 feature slices):**
+
+```text
+R28-A .. R28-L     Episode, evidence, lineage, completion
+R28-L.1.1–L.1.4   Link qualification, eligibility gate, transport repair
+```
+
+**Explicitly outside R28 freeze:**
+
+| Item | Role |
+|------|------|
+| **R28-M** (Draft) | Post-`FAILED_MEDIA_RECOVERY` implementation seam; consumes frozen rules |
+| **R28-L.1.5** | Repair retry robustness (Future Work) |
+| **R28-PRR** | Peer reachability re-establishment (**Accepted 2026-07-26**, v1) |
+
+**Principle:** Network recovery problems MUST NOT default back into `ConferenceEdgeRecoveryController`. Recovery reacts to `BIDIRECTIONAL_READY`; it does not build the path.
+
+## R28-PRR — Peer Reachability Re-establishment (v1)
+
+**Status:** Accepted (2026-07-26) — frozen `/grill-with-docs`. **Not** part of R28 freeze scope; next evolution line after R28-L.1.4.
+
+**Abbreviation:** PRR
+
+**One line:**
+
+> PRR is the component responsible for re-announcing a new local signaling epoch after a transport epoch transition, allowing peer signaling paths to be re-established.
+
+**Positioning:** PRR is **not** another transport repair mechanism. L.1.4 transport repair rebinds the local signaling socket; PRR does not repair anything — it **announces** the new epoch so peers can update their reachability view. Misreading PRR as "PRR repair → Recovery" violates this section.
+
+```text
+Transport Repair (L.1.4)
+        │
+        ▼
+Transport Epoch Changed
+        │
+        ▼
+PRR Announcement (re-announce only)
+        │
+        ▼
+Peer Updates Reachability
+        │
+        ▼
+Qualification observes inbound → BIDIRECTIONAL_READY
+```
+
+**Motivation:** Soak `obs-r28l1-4-repair-20260726-170329` Case B — L.1.4 transport repair executes (G-L4-1 **PASS**), but post-repair peer-to-peer signaling path is not established: `LINK_FIRST_OUTBOUND_AFTER_REPAIR` without `LINK_FIRST_INBOUND_AFTER_REPAIR`, no `BIDIRECTIONAL_READY`, M02 zero `REMOTE_RECEIVE_OBSERVED` after repair, M03 no HELLO from repair side after WiFi flap.
+
+**Non-goals:**
+
+- R28 freeze expansion (no L.1.5/L.1.6 under PRR)
+- Recovery controller logic changes
+- `REPAIR_DUPLICATE_REJECTED` fix (L.1.5 Future Work)
+- Android/L2 root-cause attribution in Recovery
+- Per-peer `LinkQualificationState`
+- Callable Roster / dialable-count semantics change (L.1.4 non-goal inheritance)
+- Discovery transport lifecycle (M-C owns port `51999`)
+- Transport repair / socket rebind (L.1.4 owns repair; PRR is announcement only)
+
+##### PRR.1 Owner & placement
+
+| Item | Owner |
+|------|-------|
+| PRR episode lifecycle | **Signaling Transport** (`SignalingTransportManager` seam) |
+| `PRR_REANNOUNCE` action | Signaling Transport |
+| Discovery transport rebind | **M-C** (`DiscoveryUdpSocket`) — not PRR |
+| `LinkQualificationState` / `BIDIRECTIONAL_READY` | **`LinkQualificationTracker`** — sole writer |
+| Recovery continuation | **`ConferenceEdgeRecoveryController`** — reads qualification snapshot only |
+
+**Forbidden owners:** `ConferenceEdgeRecoveryController`, `ConferenceRecoveryCoordinator`, `LinkQualificationTracker` (for network actions), Discovery layer (for signaling re-announce).
+
+##### PRR.2 Layering & scope
+
+```text
+Transport Epoch Changed
+        │
+        ▼
+PRR Episode (epoch scoped)          ← 1 epoch = 1 episode
+        │
+        │ emit Facts
+        ▼
+Peer Observation (per-peer facts)   ← PRR_FACT_OBSERVED
+        │
+        ▼
+Link Qualification (transport scoped)
+        │
+        │ aggregate → BIDIRECTIONAL_READY
+        ▼
+Recovery Eligibility Gate
+        │
+        ▼
+Recovery Controller (per-edge)
+```
+
+| Layer | Scope |
+|-------|-------|
+| PRR Episode | Transport epoch |
+| PRR Facts | Per-peer observations (facts, not state machines) |
+| Link Qualification | Local transport / socket epoch |
+| Recovery | Per edge `(sessionId, remoteModuleId)` |
+
+**Responsibility chain (normative):**
+
+```text
+Transport Repair / Network Rebind / Socket Re-created
+        │
+        ▼
+Peer Reachability Re-establishment (PRR)
+        │
+        ▼
+Link Qualification
+        │
+        ▼
+Recovery Eligibility
+        │
+        ▼
+Recovery Controller   (reacts to capability transitions only)
+```
+
+##### PRR.3 Inputs & outputs
+
+**Input facts (candidates — PRR consumes, does not own):**
+
+| Fact | Source | Role |
+|------|--------|------|
+| Transport epoch transition | Repair coordinator, network rebind, socket recreate | **PRR episode trigger** |
+| Network available | Connectivity layer | May coincide with epoch transition |
+| Socket rebound / repair completed | L.1.4 `QualificationRepairCoordinator` | Common epoch transition cause |
+| Route change | Transport binding | May produce epoch transition |
+
+**Output facts (PRR emits — PRR does not emit capability state):**
+
+| Fact | When |
+|------|------|
+| `PRR_EPISODE_STARTED` | Local transport epoch transition |
+| `PRR_HELLO_SENT` | After `PRR_REANNOUNCE` (signaling reachability) |
+| `PRR_ENDPOINT_REANNOUNCED` | Same send as HELLO; proves endpoint payload |
+| `PRR_DISCOVERY_REFRESHED` | Optional fallback only (see PRR.5) |
+| `PRR_FACT_OBSERVED` | Remote peer received a PRR fact (peer-side observation) |
+
+**Downstream (not PRR-owned):**
+
+| Capability | Owner |
+|------------|-------|
+| `BOUND` → `RECEIVE_READY` → `BIDIRECTIONAL_READY` | `LinkQualificationTracker` |
+| Recovery media action eligible | `RecoveryEligibilityGate` |
+
+Recovery **ONLY reads** `TransportCapabilitySnapshot` / `BIDIRECTIONAL_READY`. Recovery MUST NOT read PRR state.
+
+##### PRR.4 Episode lifecycle
+
+**Trigger:** local transport epoch transition — repair rebind, network rebind, socket re-created, or any operation that advances local signaling transport epoch. Qualification repair is one valid cause; not the only cause.
+
+**Rule:** whoever produces a new local transport epoch runs a local PRR episode. Episodes are **not** peer-coordinated.
+
+```text
+Transport Epoch++
+        │
+        ▼
+PRR_EPISODE_STARTED reason=TRANSPORT_EPOCH_CHANGED transportEpoch=N
+        │
+        ▼
+PRR_REANNOUNCE (single runtime action: HELLO + endpoint information, one UDP send)
+        │
+        ├── trace: PRR_HELLO_SENT
+        └── trace: PRR_ENDPOINT_REANNOUNCED
+        │
+        ▼
+Peer Effect? ──no (within budget)──► PRR_DISCOVERY_REFRESHED (optional fallback)
+        │
+        yes
+        ▼
+PRR_FACT_OBSERVED remote=<peer>  (≥1 peer)
+        │
+        ▼
+(socket facts) FIRST_INBOUND → LinkQualificationTracker → BIDIRECTIONAL_READY
+```
+
+**PRR MUST NOT:** mutate recovery episode, obligation, `attempt`, or lineage generation.
+
+##### PRR.5 Signaling re-announce vs discovery
+
+**Required (v1):** signaling reachability re-announcement via `PRR_REANNOUNCE` (HELLO + endpoint information in one send; two trace facts).
+
+**Optional fallback:** discovery refresh when peer effect is not established within budget. Discovery refresh is **not** an inherent episode action; it is a degradation path when re-announce alone is insufficient.
+
+**M-C boundary:** PRR owns signaling re-announcement on port `50000`. M-C owns discovery transport lifecycle on port `51999`. PRR MUST NOT own discovery socket rebind.
+
+##### PRR.6 Invariants
+
+| ID | Invariant |
+|----|-----------|
+| **INV-PRR-001** | PRR MUST NOT mutate `LinkQualificationState` directly. PRR may only emit transport observations (facts). `LinkQualificationTracker` is the sole authority that derives capability state, including `BIDIRECTIONAL_READY`. |
+| **INV-PRR-002** | A PRR episode MUST be initiated by a **local transport epoch transition**. Transport repair, network rebind, or any operation that creates a new transport epoch MAY initiate PRR. Recovery, Qualification, and remote peer state MUST NOT initiate PRR. |
+| **INV-PRR-003** | PRR episode is **local-transport epoch scoped** (one episode per epoch transition). Peer observations are recorded as **per-peer facts** (`PRR_FACT_OBSERVED`) for effect verification only. PRR MUST NOT maintain per-peer reachability state machines. |
+| **INV-PRR-004** | Link Qualification remains **local-transport epoch scoped** in PRR v1. Per-peer path asymmetry is observable via `PRR_FACT_OBSERVED` and `REMOTE_RECEIVE_OBSERVED`; it does not promote to per-peer `LinkQualificationState` without a separate ADR. |
+| **INV-PRR-005** | PRR success indicates that the new transport epoch has been observed by at least one peer. It does **not** imply that every peer, or the recovery target peer, has established signaling reachability. |
+| **INV-PRR-006** | PRR owns **signaling reachability re-announcement** only. Discovery transport lifecycle remains owned by M-C. Discovery refresh is an optional optimization and MUST NOT be required for PRR correctness. |
+| **INV-PRR-007** | Qualification MUST NOT emit network actions (HELLO / discovery / reannounce); it only emits state. PRR is the sole owner of signaling re-announcement after epoch transition. |
+| **INV-PRR-008** | PRR MUST be idempotent. Repeated PRR episodes within the same transport epoch SHALL NOT change runtime semantics. Duplicate triggers (network callback jitter, link flaps, roaming) MAY emit additional HELLO; they MUST NOT advance epoch, mutate recovery lineage, or re-enter qualification repair. |
+| **INV-PRR-009** | PRR success MUST NOT imply Link Qualification success. `PRR_EFFECT_ESTABLISHED` (peer informed) does not entail `BIDIRECTIONAL_READY` (inbound observed on local socket). G-PRR PASS and G-L4-2 PASS are independent layers. |
+| **INV-PRR-010** | PRR MUST remain stateless beyond the current transport epoch. PRR episodes MUST derive all emitted announcements from the current transport epoch and endpoint snapshot only. PRR MUST NOT maintain independent peer reachability history, retry lineage, or recovery context. |
+
+##### PRR.7 Boundary violations
+
+| Violation | Route to |
+|-----------|----------|
+| Recovery initiates socket rebind, HELLO, or discovery refresh | **Violates R28 freeze** → PRR or Signaling Transport |
+| PRR directly sets `BIDIRECTIONAL_READY` | **Violates INV-PRR-001** → Link Qualification only |
+| `ConferenceRecoveryCoordinator.startPrr()` or equivalent | **Violates owner** → Signaling Transport |
+| Qualification timeout → `sendHello()` in tracker | **Violates INV-PRR-007** → PRR episode |
+| PRR maintains `PeerReachabilityState` enum | **Violates INV-PRR-003** → facts only |
+| PRR maintains peer reachability history / retry lineage / recovery context | **Violates INV-PRR-010** → epoch + endpoint snapshot only |
+| PRR owns discovery port `51999` rebind | **Violates INV-PRR-006** → M-C |
+| Recovery reads `prrState` / `peerReachability` | **Violates R28 freeze** → `readLinkQualificationSnapshot()` only |
+| PRR performs socket rebind / transport repair | **Violates positioning** → L.1.4 repair only; PRR is announcement |
+
+##### PRR.8 Acceptance gates (G-PRR)
+
+Three independent PASS layers (role-agnostic; do not bind gates to host/participant/repair-side):
+
+```text
+G-PRR PASS          Peer received my PRR facts
+G-L4-2 PASS         FIRST_INBOUND → BIDIRECTIONAL_READY
+G-R28 PASS          Eligibility → Recovery Continue → EDGE_RECOVERED
+```
+
+| Gate | Layer | Required | Forbidden |
+|------|-------|----------|-----------|
+| **G-PRR-1** | PRR Episode | `PRR_EPISODE_STARTED` with `reason=TRANSPORT_EPOCH_CHANGED` and `transportEpoch` | Recovery / Qualification timeout directly starting PRR |
+| **G-PRR-2** | PRR Announcement | `PRR_HELLO_SENT` + `PRR_ENDPOINT_REANNOUNCED` after episode start | Recovery path emitting PRR traces |
+| **G-PRR-3** | PRR Effect | `∃ peer : PRR_FACT_OBSERVED(remote=peer)` | — |
+
+**G-PRR-3 note:** Architecture gate uses **∃ peer** only. Scenario scripts MAY assert `PRR_FACT_OBSERVED(remote=<expectedRecoveryPeer>)` as a **scenario assertion**, not a gate change.
+
+**Downstream gates (unchanged, verified in full-chain soak):**
+
+| Gate | Required |
+|------|----------|
+| **G-L4-2** | `LINK_FIRST_INBOUND_AFTER_REPAIR` → `LINK_QUALIFICATION_STATE_CHANGED newState=BIDIRECTIONAL_READY` |
+| **G-L4-4** | No recovery controller transport mutation |
+| **G-R28** (full Case B) | `RECOVERY_CONTINUE` / `EDGE_RECOVERED` after `BIDIRECTIONAL_READY` |
+
+**Case B failure delta (current → target):**
+
+| Observation (FAIL) | Target (PASS) |
+|--------------------|---------------|
+| No `LINK_FIRST_INBOUND_AFTER_REPAIR` | Present after `PRR_HELLO_SENT` |
+| No `BIDIRECTIONAL_READY` | `LINK_QUALIFICATION_STATE_CHANGED → BIDIRECTIONAL_READY` |
+| Zero `REMOTE_RECEIVE_OBSERVED` after repair | `PRR_FACT_OBSERVED` + `REMOTE_RECEIVE_OBSERVED` |
+| Peer: no HELLO after flap | `PRR_FACT_OBSERVED` on peer within budget |
+
+##### PRR.9 Soak script direction
+
+**Script:** `scripts/soak-r28-prr-v1.ps1` (G-PRR); `scripts/soak-r28-prr-caseb.ps1` (future full Case B)
+
+**Protocol:** replay L.1.4 Case B — host + participant WiFi flap ~30s, three-device mesh.
+
+**Parameters:**
+
+```text
+expectedRecoveryPeer=M03   # scenario assertion only, not G-PRR gate
+prrPathBudgetMs=30000       # align with L.1.1 qualification timeout default
+```
+
+**Per-device grep (role-agnostic):**
+
+```text
+G-PRR-1..3 on each node that reports transport epoch transition
+G-L4-2 on each node with qualification tracker
+Scenario: ASSERT PRR_FACT_OBSERVED(remote=$expectedRecoveryPeer)
+FORBIDDEN: PRR traces on RecoveryController code paths
+```
+
+**Extends:** `scripts/soak-r28l1-link-qualification.ps1` repair trace matrix.
+
+##### PRR.10 Evolution timeline
+
+```text
+2026-07-10   R28-E/F/G frozen (completion re-evaluate seam)
+2026-07-21   R28-K/L Accepted (capability vs attempt; completion ownership)
+2026-07-26   R28-L.1.1–L.1.4 Accepted (qualification → gate → transport repair)
+2026-07-26   R28 Freeze (terminal feature scope)
+2026-07-26   L.1.4.10 Case B: repair OK, peer path gap documented
+2026-07-26   R28-PRR v1 Accepted (this section)
+     │       Implementation: Signaling Transport seam TBD
+     ▼
+Future       L.1.5 repair retry robustness (not PRR)
+Future       R28-M implementation seam (consumes frozen rules)
+```
+
+```text
+Frozen R28 stack                    PRR v1 (this ADR)
+─────────────────────              ───────────────────
+Recovery reacts only               PRR re-announces epoch
+BIDIRECTIONAL_READY                Facts → Qualification → READY
+Never repairs transport            Never mutates recovery lineage
+L.1.4 repairs local socket         PRR establishes peer signaling path
+```
+
+**Recovery MUST NOT know:** socket construction, UDP receive path, HELLO refresh, discovery refresh.
+
+**Recovery ONLY reads:** `TransportCapabilitySnapshot` / `BIDIRECTIONAL_READY`.
+
+#### R28-L Appendix M-C: Discovery Transport Self-Healing (Accepted)
+
+**Status:** Accepted (2026-07-26)
+
+**Problem:** WiFi / network flap can leave discovery port `51999` in `EADDRINUSE` after `rebindBinding`; prior behavior failed permanently and gossip sweep continued with `dialableBefore=0`.
+
+**Scope:** `DiscoveryUdpSocket` + `DiscoveryTransportTrace` only. Does not change signaling `50000`, recovery, or L.1.3 gate.
+
+**Behavior:**
+
+1. `close` old socket, short post-close delay (50ms default) before bind
+2. `EADDRINUSE` / `BindException` → exponential backoff retry: 500ms, 1s, 2s, 5s, 10s, cap 30s; no permanent failure
+3. Single pending retry task (cancel superseded retries)
+
+**Traces:** `DISCOVERY_REBIND_REQUESTED`, `DISCOVERY_REBIND_SUCCESS`, `DISCOVERY_REBIND_FAILED`, `DISCOVERY_REBIND_RETRY_SCHEDULED`, `DISCOVERY_READY`
+
+**UT:** `DiscoveryUdpSocketTest` (`d1` close→rebind→ready, `d2` EADDRINUSE once→retry→ready, `d3` ten failures→capped retry, no leak)
+
 ## References
 
 - ADR-0020 — Conference Runtime Projection Contract
@@ -2334,3 +3552,8 @@ MembershipEviction, tombstone/roster replay, R28-J obligation episode semantics,
 - R29 soak `logs-r29-soak-20260713-112015` (session `647484ef`)
 - R28-K motivation soak `logs/obs-matrix-ms1-20260721-120208` (session `faaf8579`, M-S1 WiFi flap; ADR-0024 v2 prune fail-closed **PASS**; attempt lifetime **FAIL** pre-R28-K implementation)
 - R28-L motivation soak `logs/obs-matrix-ms1-r28k-20260721-132235` (session `f498ab74`, M-S1 post-R28-K; G-R28-K **PASS**; G-R28-L1/L2/L3 **FAIL** — completion convergence)
+- R28-O.7 ownership trace soak `logs/obs-r28o7-ownership-20260725-195227` (session `3388926c`, M02 host M03 WiFi flap; closes `NO_MEDIA_ACTION_OWNER` / `PENDING_RESET` hypotheses; motivates R28-M `STALE_ATTEMPT` freeze)
+- R28-L.1.4 motivation soak `logs/obs-r28m-mb1-20260726-154359` (session `182d7fa0`, M02 host M03 WiFi flap; M-B.1 wakeup armed but H1 transport asymmetry confirmed — motivates L.1.4 repair layer)
+- R28-L.1.4 acceptance soak `logs/obs-r28l1-4-repair-20260726-170329` (G-L4-1 **PASS**; Case B post-repair peer path gap; `REPAIR_DUPLICATE_REJECTED` → L.1.5)
+- R28-L completion observe soak `logs/obs-r28m-completion-20260726-164948` (session `8792302b`; zero completion traces — gate never cleared)
+- R28-L diagnostic failure sample `467cc536` (M03 WiFi flap; `FIRST_OUTBOUND` without `FIRST_INBOUND` — L.1.4 soak replay target)
