@@ -4,7 +4,8 @@ import com.talkback.core.util.TalkbackLog
 
 /**
  * R28-PRR: peer reachability re-announcement facts (emit-only).
- * Grep: PRR_EPISODE_STARTED, PRR_EPISODE_SKIPPED, PRR_HELLO_SENT, PRR_ENDPOINT_REANNOUNCED
+ * Grep: PRR_EPISODE_STARTED, PRR_EPISODE_SKIPPED, PRR_HELLO_SENT, PRR_ENDPOINT_REANNOUNCED,
+ *       PRR_FACT_OBSERVED
  */
 object PeerReachabilityReannounceTrace {
 
@@ -53,6 +54,22 @@ object PeerReachabilityReannounceTrace {
         log(
             "PRR_ENDPOINT_REANNOUNCED transportEpoch=$transportEpoch socketId=$socketId " +
                 "networkId=$networkId timestamp=${System.currentTimeMillis()}"
+        )
+    }
+
+    fun factObserved(
+        localEpoch: Long,
+        remoteModuleId: String,
+        fact: String,
+        remoteEpoch: Long,
+        src: String,
+        socketId: Long
+    ) {
+        val remoteEpochPart = if (remoteEpoch > 0L) " remoteEpoch=$remoteEpoch" else ""
+        log(
+            "PRR_FACT_OBSERVED localEpoch=$localEpoch remoteModuleId=$remoteModuleId " +
+                "fact=$fact$remoteEpochPart src=$src socketId=$socketId " +
+                "timestamp=${System.currentTimeMillis()}"
         )
     }
 }
