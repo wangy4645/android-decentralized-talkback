@@ -1,8 +1,8 @@
-﻿# ADR-0032: Recovery Dispatch Eligibility Contract (R28-N) (ADR-CONF-009)
+# ADR-0032: Recovery Dispatch Eligibility Contract (R28-N) (ADR-CONF-009)
 
 ## Status
 
-**Draft** (2026-07-26) 鈥?promote to **Accepted** after the implementation turns the red evidence set in 搂 8 green.
+**Accepted** (2026-07-27). Case B soak ``obs-r28n-caseb-20260727-094332``: G-PRR, G-L4-2, and G-R28-N_DISPATCH PASS. Completion projection gap tracked in [ADR-0033](./0033-recovery-completion-reachability-projection-contract.md).
 
 Complements **ADR-0022** (recovery completion ownership; R28 frozen 2026-07-26). Does **not** reopen the R28 freeze: ADR-0022 froze *who owns completion once recovery has happened*; this ADR freezes *which facts may admit a recovery action in the first place*. Does **not** redefine PRR (ADR-0022 搂 R28-PRR), link qualification (搂 R28-L.1), or discovery transport ownership.
 
@@ -282,7 +282,7 @@ Not every `mediaRouteConnected` read is a violation. These stay:
 
 `authorityReachable` is currently sourced from `isPeerMediaConnected(hostModuleId)`, which is a media fact, and on the host it evaluates the host against itself and is therefore structurally `false`. Combined with 搂 5 this means a host edge can never conclude `RECOVERED` through the capability path.
 
-This is the same class of defect as locks 1鈥? but sits in **completion projection correctness**, not in the dispatch deadlock. It MUST NOT block this ADR's implementation.
+This is the same class of defect as locks 1鈥? but sits in **completion projection correctness**, not in the dispatch deadlock. It MUST NOT block this ADR's implementation. Follow-up: [ADR-0033](./0033-recovery-completion-reachability-projection-contract.md).
 
 ```text
 Known gap: authorityReachable self-authority semantics require a follow-up
