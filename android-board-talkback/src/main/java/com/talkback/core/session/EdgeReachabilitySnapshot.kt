@@ -25,7 +25,7 @@ data class EdgeReachabilitySnapshot(
     val peerSignalingReachable: Boolean,
     /** Media plane: mesh ICE connected. MUST NOT gate recovery initiation. */
     val mediaRouteConnected: Boolean,
-    /** Authority plane: conference authority reachable. */
+    /** Authority plane: conference authority reachable (self-authority is tautological). */
     val authorityReachable: Boolean
 ) {
     /**

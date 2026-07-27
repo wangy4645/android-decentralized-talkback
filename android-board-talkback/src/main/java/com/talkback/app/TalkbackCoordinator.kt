@@ -2369,6 +2369,8 @@ class TalkbackCoordinator(
 
     private fun isConferenceAuthorityReachable(session: TalkbackSession): Boolean {
         val hostModuleId = session.initiatorModuleId?.value ?: return false
+        // ADR-0033 INV-REC-015: self-authority is on the authority plane, not media loopback.
+        if (hostModuleId == localModuleId.value) return true
         return isPeerMediaConnected(hostModuleId)
     }
 
