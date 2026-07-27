@@ -84,6 +84,8 @@ import com.talkback.core.session.RecoveryReason
 import com.talkback.core.session.RecoveryReevaluateTrigger
 import com.talkback.core.session.RecoverySource
 import com.talkback.core.session.projectRecoveryCapabilitySignature
+import com.talkback.core.signaling.link.LinkQualificationState
+import com.talkback.core.signaling.link.TransportCapabilitySnapshot
 import com.talkback.core.session.ConferenceParticipantProjector
 import com.talkback.core.session.ConferenceRuntimeProjectionLogger
 import com.talkback.core.session.ConferenceNetworkIndicator
@@ -298,6 +300,8 @@ class TalkbackCoordinator(
     private val qosMonitor: NetworkQualityMonitor = NetworkQualityMonitor(),
     private val localDeviceHealth: LocalDeviceHealthProvider = DefaultLocalDeviceHealthProvider,
     private val moduleMixer: ModuleAudioMixer = ModuleAudioMixer(),
+    private val linkQualificationSnapshot: () -> TransportCapabilitySnapshot =
+        { TransportCapabilitySnapshot(linkQualification = LinkQualificationState.BIDIRECTIONAL_READY) },
     private val onLog: ((String) -> Unit)? = null
 ) {
     private val receivePathLivenessObserver = ReceivePathLivenessObserver()
@@ -811,6 +815,7 @@ class TalkbackCoordinator(
     }
 
     private var lastDialablePeerCount = 0
+    private val lastPeerObservedAtMs = ConcurrentHashMap<String, Long>()
 
     private fun maybeNotifyDialablePeersChanged() {
         val dialable = countDialableRemoteModules()
@@ -2502,6 +2507,10 @@ class TalkbackCoordinator(
         )
     }
 
+    internal fun onLinkQualificationStateChanged() {
+        // R28-L wiring seam; recovery media-action gate lives in a follow-up line.
+    }
+
     private fun isConferenceAuthorityMediaRecovering(session: TalkbackSession): Boolean {
         val modules = linkedSetOf<String>()
         modules.addAll(conferenceMemberRemoteIds(session))
@@ -3103,6 +3112,19 @@ class TalkbackCoordinator(
         return System.currentTimeMillis() - last <= config.moduleStaleMs
     }
 
+    /**
+     * Signaling-plane reachability for recovery dispatch (ADR-0032).
+     * Any recent inbound signal (HELLO or verified envelope) counts — not ICE/media.
+     */
+    private fun isPeerSignalingReachable(moduleId: String, state: RemoteModuleState?): Boolean {
+        val now = System.currentTimeMillis()
+        val staleMs = config.moduleStaleMs
+        val helloAt = moduleLastHelloMs[moduleId] ?: state?.lastHelloMs?.takeIf { it > 0L }
+        if (helloAt != null && now - helloAt <= staleMs) return true
+        val signalAt = lastPeerObservedAtMs[moduleId] ?: return false
+        return now - signalAt <= staleMs
+    }
+
     private fun isModuleDialable(moduleId: String): Boolean {
         if (moduleId == localModuleId.value) return false
         if (discoveredByModule.containsKey(moduleId)) return true
@@ -3153,6 +3175,7 @@ class TalkbackCoordinator(
 
     private fun rememberSignalPeer(moduleId: String, peer: PeerTarget) {
         if (moduleId == localModuleId.value) return
+        lastPeerObservedAtMs[moduleId] = System.currentTimeMillis()
         signalPeersByModule[moduleId] = peer
         discoveredByModule[moduleId] = peer
         maybeNotifyDialablePeersChanged()
@@ -3867,13 +3890,17 @@ class TalkbackCoordinator(
     ): EdgeReachabilitySnapshot {
         val linkReady = !stopped && resolveChannelReadiness(channelId) == ChannelReadiness.READY
         val peerDiscovered = resolvePeerForModule(remoteModuleId) != null
-        // v1: mesh ICE CONNECTED to remote == signaling/mesh route converged for this edge.
-        val routeConverged = qosMonitor.isGroupConnected(remoteModuleId)
+        val peerSignalingReachable = isPeerSignalingReachable(
+            remoteModuleId,
+            mergeRemoteModuleViews().firstOrNull { it.presence.moduleId.value == remoteModuleId }
+        )
+        val mediaRouteConnected = qosMonitor.isGroupConnected(remoteModuleId)
         val authorityReachable = session?.let { isConferenceAuthorityReachable(it) } ?: false
         return EdgeReachabilitySnapshot(
             linkReady = linkReady,
             peerDiscovered = peerDiscovered,
-            routeConverged = routeConverged,
+            peerSignalingReachable = peerSignalingReachable,
+            mediaRouteConnected = mediaRouteConnected,
             authorityReachable = authorityReachable
         )
     }
