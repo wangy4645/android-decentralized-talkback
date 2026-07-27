@@ -17,21 +17,26 @@ class RecoveryCompletionEligibilityContractTest {
 
     /**
      * Mirrors [com.talkback.app.TalkbackCoordinator.isConferenceAuthorityReachable]:
-     * authority reachability is projected from host peer media connectivity.
-     * ADR-0033 targets replacing this projection for self-authority cases.
+     * remote authority uses host media connectivity; self-authority is tautological.
      */
-    private fun projectAuthorityReachableFromHostMedia(
+    private fun projectAuthorityReachable(
         hostModuleId: String,
+        localModuleId: String,
         isPeerMediaConnected: (String) -> Boolean
-    ): Boolean = isPeerMediaConnected(hostModuleId)
+    ): Boolean {
+        if (hostModuleId == localModuleId) return true
+        return isPeerMediaConnected(hostModuleId)
+    }
 
     @Test
     fun completionContract_hostSelfAuthorityMustNotRequireMediaLoopback() {
         val hostModuleId = "M02"
         // Peer edge media is up; host has no ICE loopback edge to itself.
-        val authorityReachable = projectAuthorityReachableFromHostMedia(hostModuleId) { moduleId ->
-            moduleId != hostModuleId
-        }
+        val authorityReachable = projectAuthorityReachable(
+            hostModuleId = hostModuleId,
+            localModuleId = hostModuleId,
+            isPeerMediaConnected = { moduleId -> moduleId != hostModuleId }
+        )
         val snapshot = EdgeReachabilitySnapshot(
             linkReady = true,
             peerDiscovered = true,
