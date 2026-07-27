@@ -148,6 +148,7 @@ internal data class WakeupBinding(
             WakeupSourceType.ROUTE_CONVERGED -> when (trigger) {
                 RecoveryReevaluateTrigger.ROUTE_CONVERGED,
                 RecoveryReevaluateTrigger.PEER_DISCOVERED,
+                RecoveryReevaluateTrigger.PEER_REACHABILITY_RESTORED,
                 RecoveryReevaluateTrigger.REMOTE_MODULE_RECOVERED,
                 RecoveryReevaluateTrigger.ICE_CHECKING,
                 RecoveryReevaluateTrigger.ICE_RESTORED -> true
