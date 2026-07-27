@@ -1,5 +1,7 @@
 package com.talkback.core.session
 
+import com.talkback.core.signaling.link.LinkQualificationState
+import com.talkback.core.signaling.link.TransportCapabilitySnapshot
 import org.junit.After
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -87,7 +89,8 @@ class ConferenceEdgeRecoveryCompletionTest {
         val checkingSnapshot = EdgeReachabilitySnapshot(
             linkReady = true,
             peerDiscovered = true,
-            routeConverged = false,
+            peerSignalingReachable = true,
+            mediaRouteConnected = false,
             authorityReachable = true
         )
         controller.onRecoveryReachabilityChanged(
@@ -108,7 +111,7 @@ class ConferenceEdgeRecoveryCompletionTest {
             trigger = RecoveryReevaluateTrigger.ICE_CHECKING
         )
 
-        val routeSnapshot = checkingSnapshot.copy(routeConverged = true)
+        val routeSnapshot = checkingSnapshot.copy(mediaRouteConnected = true)
         controller.onRecoveryReachabilityChanged(
             sessionId = sessionId,
             channelId = channelId,

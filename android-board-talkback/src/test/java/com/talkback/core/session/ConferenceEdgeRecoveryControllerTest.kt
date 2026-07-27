@@ -19,14 +19,31 @@ class ConferenceEdgeRecoveryControllerTest {
     private val decisionLogs = mutableListOf<String>()
     private lateinit var controller: ConferenceEdgeRecoveryController
 
+    /**
+     * ADR-0032 INV-REC-013: the media-action gate MUST NOT default to a permissive
+     * constant. The default evaluates the production predicate over these facts, with
+     * the media plane down so the harness exercises the admission path the coordinator
+     * wires. Tests that need the gate closed mutate the transport or signaling planes.
+     */
+    private var harnessReachability = defaultHarnessReachability()
+
     @Before
     fun setUp() {
         nowMs = 0L
         reattachCalls = 0
         iceRestartCalls = 0
         decisionLogs.clear()
+        harnessReachability = defaultHarnessReachability()
         controller = buildController(observationWindowMs = 10_000L)
     }
+
+    private fun defaultHarnessReachability() = EdgeReachabilitySnapshot(
+        linkReady = true,
+        peerDiscovered = true,
+        peerSignalingReachable = true,
+        mediaRouteConnected = false,
+        authorityReachable = true
+    )
 
     private fun buildController(
         observationWindowMs: Long = 10_000L,
@@ -41,7 +58,9 @@ class ConferenceEdgeRecoveryControllerTest {
             true
         },
         isIceConnected: (String, String) -> Boolean = { _, _ -> false },
-        canDispatchRecoveryMediaAction: (String, String) -> Boolean = { _, _ -> true }
+        canDispatchRecoveryMediaAction: (String, String) -> Boolean = { _, _ ->
+            harnessReachability.canDispatchRecoverySignal()
+        }
     ) = ConferenceEdgeRecoveryController(
         debounceMs = debounceMs,
         iceRestartTimeoutMs = 200L,
@@ -113,7 +132,7 @@ class ConferenceEdgeRecoveryControllerTest {
             decisionLogs.any {
                 it.contains("RECOVERY_MEDIA_ACTION_DEFERRED") &&
                     it.contains("disposition=DEFERRED") &&
-                    it.contains("deferredReason=ROUTE_NOT_READY") &&
+                    it.contains("deferredReason=MEDIA_NOT_READY") &&
                     it.contains("wakeupBinding=ROUTE_CONVERGED/edge(sess-1,M01)")
             }
         )
@@ -163,7 +182,7 @@ class ConferenceEdgeRecoveryControllerTest {
         )
         assertEquals(0, reattachCalls)
         nowMs = 60L
-        Thread.sleep(80)
+        Thread.sleep(150)
         assertTrue(controller.factsForSession("sess-1").anyRecovering)
         assertEquals(1, reattachCalls)
     }
@@ -218,7 +237,7 @@ class ConferenceEdgeRecoveryControllerTest {
             initiatesReattach = false
         )
         nowMs = 60L
-        Thread.sleep(80)
+        Thread.sleep(150)
         assertTrue(controller.factsForSession("sess-1").anyRecovering)
         assertEquals(0, reattachCalls)
     }
@@ -453,6 +472,47 @@ class ConferenceEdgeRecoveryControllerTest {
         )
     }
 
+    /**
+     * Recovery Dispatch Eligibility Contract ??mirrors the production wiring where
+     * [canDispatchRecoveryMediaAction] is [EdgeReachabilitySnapshot.canDispatchRecoverySignal].
+     * ICE_DISCONNECTED takes the non-immediate path, so this gate decides whether the host
+     * may restart ICE. Media-plane state MUST NOT block the action that restores it.
+     */
+    @Test
+    fun dispatchContract_host_mediaDown_stillDispatchesIceRestart() {
+        val mediaDown = EdgeReachabilitySnapshot(
+            linkReady = true,
+            peerDiscovered = true,
+            peerSignalingReachable = true,
+            mediaRouteConnected = false,
+            authorityReachable = true
+        )
+        controller = buildController(
+            canDispatchRecoveryMediaAction = { _, _ -> mediaDown.canDispatchRecoverySignal() }
+        )
+        controller.onIceStateChanged(
+            sessionId = "sess-1",
+            channelId = "CH-1",
+            remoteModuleId = "M03",
+            iceState = "DISCONNECTED",
+            eligibility = eligible(),
+            initiatesReattach = false
+        )
+        Thread.sleep(250L)
+        assertFalse(
+            "media-plane state must not defer host media action",
+            decisionLogs.any {
+                it.contains("RECOVERY_MEDIA_ACTION_DEFERRED") &&
+                    it.contains("deferredReason=MEDIA_NOT_READY")
+            }
+        )
+        assertTrue(
+            decisionLogs.any {
+                it.contains("RECOVERY_ICE_RESTART_DISPATCHED") && it.contains("remote=M03")
+            }
+        )
+    }
+
     @Test
     fun gC2_reattachInbound_supersedesThenDispatchesOnNewAttempt() {
         controller.onIceStateChanged(
@@ -529,10 +589,10 @@ class ConferenceEdgeRecoveryControllerTest {
     }
 
     @Test
-    fun gC1_iceRestartOnly_deferredUntilRouteReady_thenDispatches() {
-        var routeReady = false
+    fun gC1_iceRestartOnly_deferredUntilActionGateReady_thenDispatches() {
+        var actionReady = false
         controller = buildController(
-            canDispatchRecoveryMediaAction = { _, _ -> routeReady }
+            canDispatchRecoveryMediaAction = { _, _ -> actionReady }
         )
         controller.onIceStateChanged(
             sessionId = "sess-1",
@@ -557,16 +617,17 @@ class ConferenceEdgeRecoveryControllerTest {
             }
         )
 
-        routeReady = true
+        actionReady = true
         val snapshot = EdgeReachabilitySnapshot(
             linkReady = true,
             peerDiscovered = true,
-            routeConverged = true,
+            peerSignalingReachable = true,
+            mediaRouteConnected = false,
             authorityReachable = false
         )
         val before = RecoveryCapabilitySignature(
             permittedActions = emptySet(),
-            waitingReason = RecoveryWaitingReason.WAITING_FOR_ROUTE
+            waitingReason = RecoveryWaitingReason.WAITING_FOR_DISCOVERY
         )
         val after = projectRecoveryCapabilitySignature(
             snapshot,
@@ -580,17 +641,17 @@ class ConferenceEdgeRecoveryControllerTest {
             snapshot = snapshot,
             signature = after,
             capabilityBefore = before,
-            trigger = RecoveryReevaluateTrigger.ROUTE_CONVERGED
+            trigger = RecoveryReevaluateTrigger.PEER_REACHABILITY_RESTORED
         )
         assertEquals(1, iceRestartCalls)
         assertTrue(decisionLogs.any { it.contains("RECOVERY_ICE_RESTART_DISPATCHED") })
     }
 
     @Test
-    fun r28k_routeBlocked_watchdogDeferred_noAttemptTimeoutUntilDispatchReady() {
-        var routeReady = false
+    fun r28k_actionGateBlocked_watchdogDeferred_noAttemptTimeoutUntilDispatchReady() {
+        var actionReady = false
         controller = buildController(
-            canDispatchRecoveryMediaAction = { _, _ -> routeReady }
+            canDispatchRecoveryMediaAction = { _, _ -> actionReady }
         )
         controller.onIceStateChanged(
             sessionId = "sess-1",
@@ -611,11 +672,12 @@ class ConferenceEdgeRecoveryControllerTest {
         assertFalse(decisionLogs.any { it.contains("OWNER_BLOCKED") && it.contains("remote=M01") })
         assertTrue(decisionLogs.any { it.contains("RECOVERY_WATCHDOG_DEFERRED") && it.contains("edge=M01") })
 
-        routeReady = true
+        actionReady = true
         val snapshot = EdgeReachabilitySnapshot(
             linkReady = true,
             peerDiscovered = true,
-            routeConverged = true,
+            peerSignalingReachable = true,
+            mediaRouteConnected = false,
             authorityReachable = true
         )
         val after = projectRecoveryCapabilitySignature(
@@ -631,9 +693,9 @@ class ConferenceEdgeRecoveryControllerTest {
             signature = after,
             capabilityBefore = RecoveryCapabilitySignature(
                 permittedActions = emptySet(),
-                waitingReason = RecoveryWaitingReason.WAITING_FOR_ROUTE
+                waitingReason = RecoveryWaitingReason.WAITING_FOR_DISCOVERY
             ),
-            trigger = RecoveryReevaluateTrigger.ROUTE_CONVERGED
+            trigger = RecoveryReevaluateTrigger.PEER_REACHABILITY_RESTORED
         )
         assertTrue(decisionLogs.any { it.contains("RECOVERY_ICE_RESTART_DISPATCHED") && it.contains("remote=M01") })
         assertTrue(decisionLogs.any { it.contains("RECOVERY_WATCHDOG_STARTED") && it.contains("attempt=$attemptAtStart") })
@@ -688,7 +750,8 @@ class ConferenceEdgeRecoveryControllerTest {
         val snapshot = EdgeReachabilitySnapshot(
             linkReady = true,
             peerDiscovered = true,
-            routeConverged = true,
+            peerSignalingReachable = true,
+            mediaRouteConnected = true,
             authorityReachable = false
         )
         val before = participantReattachCapabilityBeforeRoute()
@@ -747,7 +810,8 @@ class ConferenceEdgeRecoveryControllerTest {
         val snapshot = EdgeReachabilitySnapshot(
             linkReady = true,
             peerDiscovered = true,
-            routeConverged = true,
+            peerSignalingReachable = true,
+            mediaRouteConnected = true,
             authorityReachable = false
         )
         val before = participantReattachCapabilityBeforeRoute()
@@ -827,7 +891,8 @@ class ConferenceEdgeRecoveryControllerTest {
         val snapshot = EdgeReachabilitySnapshot(
             linkReady = true,
             peerDiscovered = true,
-            routeConverged = true,
+            peerSignalingReachable = true,
+            mediaRouteConnected = true,
             authorityReachable = false
         )
         val before = participantReattachCapabilityBeforeRoute()
@@ -876,7 +941,7 @@ class ConferenceEdgeRecoveryControllerTest {
     }
 
     @Test
-    fun reevaluate_routeConverged_host_dispatchesWhenStillPending() {
+    fun reevaluate_mediaRouteConnected_host_dispatchesWhenStillPending() {
         controller.onIceStateChanged(
             sessionId = "sess-1",
             channelId = "CH-1",
@@ -892,12 +957,13 @@ class ConferenceEdgeRecoveryControllerTest {
         val snapshot = EdgeReachabilitySnapshot(
             linkReady = true,
             peerDiscovered = true,
-            routeConverged = true,
+            peerSignalingReachable = true,
+            mediaRouteConnected = true,
             authorityReachable = false
         )
         val before = RecoveryCapabilitySignature(
             permittedActions = emptySet(),
-            waitingReason = RecoveryWaitingReason.WAITING_FOR_ROUTE
+            waitingReason = RecoveryWaitingReason.WAITING_FOR_INBOUND
         )
         val after = projectRecoveryCapabilitySignature(
             snapshot,
@@ -1002,7 +1068,8 @@ class ConferenceEdgeRecoveryControllerTest {
         val snapshot = EdgeReachabilitySnapshot(
             linkReady = true,
             peerDiscovered = true,
-            routeConverged = true,
+            peerSignalingReachable = true,
+            mediaRouteConnected = true,
             authorityReachable = false
         )
         val before = participantReattachCapabilityBeforeRoute()
@@ -1289,7 +1356,8 @@ class ConferenceEdgeRecoveryControllerTest {
         val snapshot = EdgeReachabilitySnapshot(
             linkReady = true,
             peerDiscovered = true,
-            routeConverged = false,
+            peerSignalingReachable = true,
+            mediaRouteConnected = false,
             authorityReachable = true
         )
         val signature = projectRecoveryCapabilitySignature(
@@ -1331,7 +1399,7 @@ class ConferenceEdgeRecoveryControllerTest {
             initiatesReattach = true
         )
         nowMs = 60L
-        Thread.sleep(80)
+        Thread.sleep(150)
         assertTrue(
             decisionLogs.any {
                 it.contains("RECOVERY_MEDIA_ACTION_DEFERRED") &&
@@ -1356,7 +1424,8 @@ class ConferenceEdgeRecoveryControllerTest {
         val snapshot = EdgeReachabilitySnapshot(
             linkReady = true,
             peerDiscovered = true,
-            routeConverged = true,
+            peerSignalingReachable = true,
+            mediaRouteConnected = true,
             authorityReachable = false
         )
         val signature = projectRecoveryCapabilitySignature(
@@ -1391,7 +1460,7 @@ class ConferenceEdgeRecoveryControllerTest {
     }
 
     @Test
-    fun gC3_2_deferredAttempt_routeConverged_dispatchesReattach() {
+    fun gC3_2_deferredAttempt_peerDiscovered_dispatchesReattach() {
         var dispatchRound = 0
         controller = buildController(
             onRequestReattach = { _, _, _ ->
@@ -1409,25 +1478,27 @@ class ConferenceEdgeRecoveryControllerTest {
             initiatesReattach = true
         )
         nowMs = 60L
-        Thread.sleep(80)
-        val blocked = projectRecoveryCapabilitySignature(
+        Thread.sleep(150)
+        val before = projectRecoveryCapabilitySignature(
             EdgeReachabilitySnapshot(
                 linkReady = true,
-                peerDiscovered = true,
-                routeConverged = false,
+                peerDiscovered = false,
+                peerSignalingReachable = true,
+                mediaRouteConnected = false,
                 authorityReachable = false
             ),
             initiatesReattach = true,
             controlPlaneStarted = false
         )
-        val convergedSnapshot = EdgeReachabilitySnapshot(
+        val readySnapshot = EdgeReachabilitySnapshot(
             linkReady = true,
             peerDiscovered = true,
-            routeConverged = true,
+            peerSignalingReachable = true,
+            mediaRouteConnected = true,
             authorityReachable = false
         )
-        val converged = projectRecoveryCapabilitySignature(
-            convergedSnapshot,
+        val ready = projectRecoveryCapabilitySignature(
+            readySnapshot,
             initiatesReattach = true,
             controlPlaneStarted = false
         )
@@ -1438,12 +1509,12 @@ class ConferenceEdgeRecoveryControllerTest {
             sessionId = "sess-1",
             channelId = "CH-1",
             remoteModuleId = "M02",
-            snapshot = convergedSnapshot,
-            signature = converged,
-            capabilityBefore = blocked,
-            trigger = RecoveryReevaluateTrigger.ROUTE_CONVERGED
+            snapshot = readySnapshot,
+            signature = ready,
+            capabilityBefore = before,
+            trigger = RecoveryReevaluateTrigger.PEER_DISCOVERED
         )
-        assertTrue(decisionLogs.any { it.contains("RECOVERY_REEVALUATE") && it.contains("ROUTE_CONVERGED") })
+        assertTrue(decisionLogs.any { it.contains("RECOVERY_REEVALUATE") && it.contains("PEER_DISCOVERED") })
         assertEquals(1, reattachCalls)
         assertTrue(decisionLogs.any { it.contains("decision=DISPATCH_REATTACH") && it.contains("edge=M02") })
     }
@@ -1451,10 +1522,16 @@ class ConferenceEdgeRecoveryControllerTest {
     @Test
     fun gC3_1_peerDiscoveredSupersedeFromFailed_assignsOwner() {
         // C-3.1: PEER_DISCOVERED supersede from FAILED must not leave attempt without owner.
+        var dispatchRound = 0
         controller = buildController(
             onRequestReattach = { _, _, _ ->
                 reattachCalls++
-                ReattachDispatchOutcome.SEND_FAILED
+                dispatchRound++
+                if (dispatchRound == 1) {
+                    ReattachDispatchOutcome.SEND_FAILED
+                } else {
+                    ReattachDispatchOutcome.DEFERRED
+                }
             }
         )
         controller.onIceStateChanged(
@@ -1480,7 +1557,8 @@ class ConferenceEdgeRecoveryControllerTest {
         val snapshot = EdgeReachabilitySnapshot(
             linkReady = true,
             peerDiscovered = true,
-            routeConverged = false,
+            peerSignalingReachable = true,
+            mediaRouteConnected = false,
             authorityReachable = true
         )
         val signature = projectRecoveryCapabilitySignature(
@@ -1628,7 +1706,8 @@ class ConferenceEdgeRecoveryControllerTest {
         val snapshot = EdgeReachabilitySnapshot(
             linkReady = true,
             peerDiscovered = true,
-            routeConverged = false,
+            peerSignalingReachable = true,
+            mediaRouteConnected = false,
             authorityReachable = true
         )
         val signature = participantReattachCapabilityBeforeRoute()
@@ -1953,7 +2032,7 @@ class ConferenceEdgeRecoveryControllerTest {
             initiatesReattach = true
         )
         nowMs = 60L
-        Thread.sleep(80)
+        Thread.sleep(150)
         assertTrue(controller.isEdgeRecovering("sess-1", "M02"))
         assertFalse(controller.isControlPlaneStarted("sess-1", "M02"))
 
@@ -2151,5 +2230,42 @@ class ConferenceEdgeRecoveryControllerTest {
         assertFalse(controller.factsForSession(oldSessionId).recoveringRemoteModuleIds.contains("M02"))
         assertTrue(controller.factsForSession(newSessionId).recoveringRemoteModuleIds.contains("M02"))
         assertEquals(oldObligationGen, 1L)
+    }
+
+    @Test
+    fun r28m_failedMediaRecovery_iceConnected_supersedesViaContinuation() {
+        controller = buildController(
+            attemptBudgetMs = 120L,
+            isIceConnected = { _, _ -> true },
+            onRequestReattach = { _, _, _ ->
+                reattachCalls++
+                ReattachDispatchOutcome.SENT
+            }
+        )
+        controller.onIceStateChanged(
+            sessionId = "sess-1",
+            channelId = "CH-1",
+            remoteModuleId = "M01",
+            iceState = "FAILED",
+            eligibility = eligible(),
+            initiatesReattach = true
+        )
+        Thread.sleep(200)
+        assertTrue(controller.factsForSession("sess-1").anyFailedMediaRecovery)
+        val failedAttempt = decisionLogs
+            .last { it.contains("FAILED_MEDIA_RECOVERY") && it.contains("remote=M01") }
+            .substringAfter("attempt=")
+            .substringBefore(' ')
+            .toLong()
+
+        controller.onIceConnected("sess-1", "M01")
+        assertTrue(decisionLogs.any { it.contains("decision=SUPERSEDED") })
+        val nextAttempt = decisionLogs
+            .last { it.contains("decision=SUPERSEDED") }
+            .substringAfter("attempt=")
+            .substringBefore(' ')
+            .toLong()
+        assertTrue(nextAttempt > failedAttempt)
+        assertFalse(controller.factsForSession("sess-1").anyFailedMediaRecovery)
     }
 }

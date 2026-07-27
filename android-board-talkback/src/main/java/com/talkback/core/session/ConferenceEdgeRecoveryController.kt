@@ -32,8 +32,9 @@ class ConferenceEdgeRecoveryController(
     ) -> ReattachDispatchOutcome,
     private val onIceRestart: (sessionId: String, remoteModuleId: String) -> Boolean,
     /**
-     * Recovery-internal reachability gate for host ICE restart dispatch (ADR-0022 Appendix C-2).
-     * When false, [resolveMediaActionOwner] defers until route/link facts allow signaling.
+     * Action gate for host ICE restart dispatch (ADR-0032 INV-REC-010).
+     * When false, [resolveMediaActionOwner] defers until transport, discovery and peer
+     * signaling allow initiation. MUST NOT require [EdgeReachabilitySnapshot.mediaRouteConnected].
      */
     private val canDispatchRecoveryMediaAction: (sessionId: String, remoteModuleId: String) -> Boolean =
         { _, _ -> true },
@@ -62,6 +63,9 @@ class ConferenceEdgeRecoveryController(
     private val cancelledChannels = ConcurrentHashMap<String, Long>()
     private val pendingTransportNonce = ConcurrentHashMap<ConferenceEdgeKey, String>()
     private var attemptSeq = 0L
+    /** G-R28-M-5: suppress duplicate post-terminal facts (e.g. repeated HELLO). */
+    private data class TerminalReevaluateKey(val attemptId: Long, val trigger: RecoveryReevaluateTrigger)
+    private val terminalReevaluateDedup = ConcurrentHashMap<ConferenceEdgeKey, TerminalReevaluateKey>()
 
     fun factsForSession(sessionId: String): EdgeRecoveryFacts {
         val sessionEdges = edges.values.filter { it.key.sessionId == sessionId }
@@ -575,6 +579,11 @@ class ConferenceEdgeRecoveryController(
                 "deferredReason=$reason trigger=$trigger " +
                 "wakeupBinding=${wakeupBinding.logLabel()}"
         )
+        onLog(
+            "RECOVERY_WAKEUP_ARMED session=${record.key.sessionId} edge=${record.key.remoteModuleId} " +
+                "attempt=${record.recoveryAttemptId} trigger=${wakeupBinding.sourceType} " +
+                "wakeupBinding=${wakeupBinding.logLabel()} deferredReason=$reason"
+        )
     }
 
     private fun clearMediaActionDeferral(record: EdgeRecoveryRecord) {
@@ -660,8 +669,67 @@ class ConferenceEdgeRecoveryController(
         issueBoundedIceRestart(record, recoveryReason)
     }
 
-    private fun closeObligation(record: EdgeRecoveryRecord, reason: ObligationCloseReason) {
+    private fun logObligationCloseRequested(
+        record: EdgeRecoveryRecord,
+        reason: ObligationCloseReason,
+        closeEvidence: String?
+    ) {
+        val key = record.key
+        val iceConnected = isIceConnected(key.sessionId, key.remoteModuleId)
+        onLog(
+            "RECOVERY_OBLIGATION_CLOSE_REQUESTED session=${key.sessionId} remote=${key.remoteModuleId} " +
+                "attempt=${record.recoveryAttemptId} reason=$reason phase=${record.phase} " +
+                "evidence=${closeEvidence ?: "NONE"} mediaRestored=${record.mediaRestored} " +
+                "mediaReady=${record.mediaRestored || iceConnected} iceConnected=$iceConnected " +
+                "controlPlaneStarted=${record.controlPlaneStarted()}"
+        )
+    }
+
+    private fun logCompletionEvidenceAccepted(
+        record: EdgeRecoveryRecord,
+        evidence: String,
+        snapshot: EdgeReachabilitySnapshot? = null
+    ) {
+        val key = record.key
+        val iceConnected = isIceConnected(key.sessionId, key.remoteModuleId)
+        val mediaReady = record.mediaRestored || iceConnected
+        val snapshotFields = snapshot?.let {
+            " mediaRouteConnected=${it.mediaRouteConnected} authorityReachable=${it.authorityReachable}"
+        } ?: ""
+        onLog(
+            "RECOVERY_COMPLETION_EVIDENCE_ACCEPTED session=${key.sessionId} remote=${key.remoteModuleId} " +
+                "attempt=${record.recoveryAttemptId} evidence=$evidence mediaReady=$mediaReady " +
+                "mediaRestored=${record.mediaRestored} iceConnected=$iceConnected " +
+                "controlPlaneStarted=${record.controlPlaneStarted()} phase=${record.phase}" +
+                snapshotFields
+        )
+    }
+
+    private fun completionEvidenceFromReachability(
+        record: EdgeRecoveryRecord,
+        snapshot: EdgeReachabilitySnapshot,
+        trigger: RecoveryReevaluateTrigger
+    ): String = when {
+        isIceConnected(record.key.sessionId, record.key.remoteModuleId) -> "ICE_CONNECTED"
+        record.mediaRestored -> "MEDIA_RESTORED"
+        snapshot.mediaRouteConnected && snapshot.authorityReachable -> "ROUTE_CONVERGED"
+        else -> trigger.name
+    }
+
+    private fun closeObligation(
+        record: EdgeRecoveryRecord,
+        reason: ObligationCloseReason,
+        closeEvidence: String? = null
+    ) {
         if (record.obligationClosedAtMs != null) return
+        logObligationCloseRequested(record, reason, closeEvidence)
+        if (hasDeferredMediaAction(record) && record.wakeupBinding != null) {
+            onLog(
+                "RECOVERY_WAKEUP_EXPIRED session=${record.key.sessionId} edge=${record.key.remoteModuleId} " +
+                    "attempt=${record.recoveryAttemptId} trigger=${record.wakeupBinding?.sourceType} " +
+                    "wakeupBinding=${record.wakeupBinding?.logLabel()} obligationCloseReason=$reason"
+            )
+        }
         cancelDeadline(record.key)
         record.obligationClosedAtMs = clock()
         record.obligationCloseReason = reason
@@ -725,7 +793,7 @@ class ConferenceEdgeRecoveryController(
             // Only close from failed-media residency. Active Attempt N+1 after SUPERSEDE
             // must not be killed by a stale timer from the prior failed entry.
             if (!current.phase.isFailedMediaRecovery()) return@schedule
-            closeObligation(current, ObligationCloseReason.OBLIGATION_DEADLINE)
+            closeObligation(current, ObligationCloseReason.OBLIGATION_DEADLINE, "OBLIGATION_DEADLINE")
             notifyChanged(key.sessionId)
         }, delayMs, TimeUnit.MILLISECONDS)
         deadlineTimers[key] = future
@@ -751,6 +819,13 @@ class ConferenceEdgeRecoveryController(
         val key = ConferenceEdgeKey(sessionId, remoteModuleId)
         val record = edges[key] ?: return
         if (!record.edgeObligationOpen()) return
+        if (hasDeferredWakeupForTrigger(sessionId, remoteModuleId, trigger)) {
+            onLog(
+                "RECOVERY_WAKEUP_FIRED session=$sessionId edge=$remoteModuleId " +
+                    "attempt=${record.recoveryAttemptId} trigger=$trigger " +
+                    "wakeupBinding=${record.wakeupBinding?.logLabel()}"
+            )
+        }
         val controlPlane = record.controlPlaneStarted()
         onLog(
             "RECOVERY_REEVALUATE session=$sessionId edge=$remoteModuleId " +
@@ -1187,6 +1262,10 @@ class ConferenceEdgeRecoveryController(
             )
             return
         }
+        if (record.phase.isFailedMediaRecovery() && record.edgeObligationOpen()) {
+            reEvaluateContinuationAfterTerminal(record)
+            return
+        }
         // R28-E: before control-plane, keep the fact; do not complete the edge.
         // WAITING is not terminal — schedule control-plane continuation (ADR-0022).
         if (!controlPlane) {
@@ -1194,6 +1273,10 @@ class ConferenceEdgeRecoveryController(
             return
         }
         if (!record.phase.isActivelyRecovering()) {
+            if (record.phase.isFailedMediaRecovery() && record.edgeObligationOpen()) {
+                reEvaluateContinuationAfterTerminal(record)
+                return
+            }
             onLog(
                 "RECOVERY_DECISION session=${key.sessionId} edge=${key.remoteModuleId} " +
                     "attempt=${record.recoveryAttemptId} trigger=${RecoveryReevaluateTrigger.ICE_RESTORED} " +
@@ -1201,7 +1284,13 @@ class ConferenceEdgeRecoveryController(
             )
             return
         }
-        markRecovered(record)
+        val evidence = if (isIceConnected(key.sessionId, key.remoteModuleId)) {
+            "ICE_CONNECTED"
+        } else {
+            "MEDIA_RESTORED"
+        }
+        logCompletionEvidenceAccepted(record, evidence)
+        markRecovered(record, evidence)
         onLog(
             "RECOVERY_DECISION session=${key.sessionId} edge=${key.remoteModuleId} " +
                 "attempt=${record.recoveryAttemptId} trigger=${RecoveryReevaluateTrigger.ICE_RESTORED} " +
@@ -1249,7 +1338,7 @@ class ConferenceEdgeRecoveryController(
         issueBoundedIceRestart(record, RecoveryReason.ICE_DISCONNECTED)
     }
 
-    private fun markRecovered(record: EdgeRecoveryRecord) {
+    private fun markRecovered(record: EdgeRecoveryRecord, closeEvidence: String = "EDGE_RECOVERED") {
         val key = record.key
         cancelDebounce(key)
         cancelWatchdog(key)
@@ -1257,7 +1346,7 @@ class ConferenceEdgeRecoveryController(
         val oldPhase = record.phase
         record.phase = EdgeRecoveryPhase.RECOVERED
         logPhaseTransition(record, oldPhase, record.phase, "EDGE_RECOVERED")
-        closeObligation(record, ObligationCloseReason.RECOVERED)
+        closeObligation(record, ObligationCloseReason.RECOVERED, closeEvidence)
         val durationMs = clock() - record.recoveryStartedAtMs
         onLog(
             "RECOVERY_EDGE_RECOVERED session=${key.sessionId} remote=${key.remoteModuleId} " +
@@ -1293,6 +1382,7 @@ class ConferenceEdgeRecoveryController(
         deadlineTimers.values.forEach { it.cancel(false) }
         deadlineTimers.clear()
         edges.clear()
+        terminalReevaluateDedup.clear()
         cancelledSessions.clear()
         cancelledChannels.clear()
     }
@@ -1525,7 +1615,7 @@ class ConferenceEdgeRecoveryController(
                 ObligationCloseReason.CONFERENCE_TERMINATED
             else -> ObligationCloseReason.MEMBERSHIP_LEFT
         }
-        closeObligation(record, closeReason)
+        closeObligation(record, closeReason, reason)
         onLog(
             "RECOVERY_EDGE_CANCELLED session=${key.sessionId} remote=${key.remoteModuleId} " +
                 "reason=$reason"
@@ -1724,7 +1814,9 @@ class ConferenceEdgeRecoveryController(
         trigger: RecoveryReevaluateTrigger
     ) {
         if (record.controlPlaneStarted() && snapshot.canCompleteRecovery()) {
-            markRecovered(record)
+            val evidence = completionEvidenceFromReachability(record, snapshot, trigger)
+            logCompletionEvidenceAccepted(record, evidence, snapshot)
+            markRecovered(record, evidence)
             onLog(
                 "RECOVERY_DECISION session=${record.key.sessionId} edge=${record.key.remoteModuleId} " +
                     "attempt=${record.recoveryAttemptId} trigger=$trigger decision=RECOVERED approved=true"
@@ -1732,6 +1824,14 @@ class ConferenceEdgeRecoveryController(
             return
         }
         if (record.phase.isFailedMediaRecovery() && hasResurrectionEvidence(snapshot, trigger)) {
+            if (!admitTerminalReevaluate(record, trigger)) {
+                onLog(
+                    "RECOVERY_DECISION session=${record.key.sessionId} edge=${record.key.remoteModuleId} " +
+                        "attempt=${record.recoveryAttemptId} trigger=$trigger decision=IGNORE " +
+                        "approved=true rejectReason=duplicate_post_terminal_fact"
+                )
+                return
+            }
             val priorAttempt = record.recoveryAttemptId
             supersedeFailedResidencyAndAdmit(record, trigger, snapshot, signature)
             onLog(
@@ -1811,8 +1911,7 @@ class ConferenceEdgeRecoveryController(
                     record = record,
                     recoveryReason = RecoveryReason.NETWORK_RECOVERY,
                     immediate = false,
-                    trigger = trigger.name,
-                    mediaReady = snapshot.canDispatchRecoverySignal()
+                    trigger = trigger.name
                 )
                 if (record.iceRestartIssued || record.mediaActionDisposition == MediaActionDisposition.ACTIVE) {
                     notifyChanged(record.key.sessionId)
@@ -1844,11 +1943,51 @@ class ConferenceEdgeRecoveryController(
         return when (trigger) {
             RecoveryReevaluateTrigger.ICE_CHECKING,
             RecoveryReevaluateTrigger.PEER_DISCOVERED,
+            RecoveryReevaluateTrigger.PEER_REACHABILITY_RESTORED,
             RecoveryReevaluateTrigger.REMOTE_MODULE_RECOVERED -> true
-            RecoveryReevaluateTrigger.ROUTE_CONVERGED -> snapshot.routeConverged
+            RecoveryReevaluateTrigger.ROUTE_CONVERGED -> snapshot.mediaRouteConnected
             RecoveryReevaluateTrigger.AUTHORITY_REACHABLE -> snapshot.authorityReachable
+            RecoveryReevaluateTrigger.ICE_RESTORED -> snapshot.linkReady && snapshot.peerDiscovered
             else -> false
         }
+    }
+
+    /**
+     * R28-M: FAILED + obligation OPEN — route ICE restoration through continuation re-evaluate,
+     * not direct supersede / beginRecovery.
+     */
+    private fun reEvaluateContinuationAfterTerminal(record: EdgeRecoveryRecord) {
+        val key = record.key
+        val trigger = RecoveryReevaluateTrigger.ICE_RESTORED
+        // ADR-0032 § 9: ICE may only populate the media plane. Reached only after
+        // mediaRestored, so the non-media planes are known-good for this continuation.
+        val snapshot = EdgeReachabilitySnapshot(
+            linkReady = true,
+            peerDiscovered = true,
+            peerSignalingReachable = true,
+            mediaRouteConnected = isIceConnected(key.sessionId, key.remoteModuleId),
+            authorityReachable = false
+        )
+        val signature = projectRecoveryCapabilitySignature(
+            snapshot,
+            initiatesReattach = record.initiatesReattach,
+            controlPlaneStarted = record.controlPlaneStarted()
+        )
+        runCompletionEvaluationStub(record, snapshot, signature, trigger)
+    }
+
+    private fun admitTerminalReevaluate(
+        record: EdgeRecoveryRecord,
+        trigger: RecoveryReevaluateTrigger
+    ): Boolean {
+        if (!record.phase.isFailedMediaRecovery()) return true
+        val edgeKey = record.key
+        val dedupKey = TerminalReevaluateKey(record.recoveryAttemptId, trigger)
+        val prior = terminalReevaluateDedup.putIfAbsent(edgeKey, dedupKey)
+        if (prior == null) return true
+        if (prior == dedupKey) return false
+        terminalReevaluateDedup[edgeKey] = dedupKey
+        return true
     }
 
     private fun applyReattachDispatchOutcome(
@@ -1885,11 +2024,13 @@ class ConferenceEdgeRecoveryController(
                 )
             }
             ReattachDispatchOutcome.DEFERRED -> {
+                // Coordinator defers only on the action gate (transport/discovery/signaling),
+                // never on the media route (ADR-0032 INV-REC-010).
                 record.phase = EdgeRecoveryPhase.RECOVERY_PENDING
                 recordMediaActionDeferred(
                     record = record,
                     owner = MediaActionOwner.PARTICIPANT_REATTACH,
-                    reason = DeferredReason.ROUTE_NOT_READY,
+                    reason = DeferredReason.MEDIA_NOT_READY,
                     wakeupBinding = WakeupBinding(
                         sourceType = WakeupSourceType.ROUTE_CONVERGED,
                         sourceKey = edgeWakeupKey(key.sessionId, key.remoteModuleId)
@@ -1957,14 +2098,12 @@ class ConferenceEdgeRecoveryController(
                     trigger = trigger
                 )
             } else {
+                // Action gate blocked (transport/discovery/signaling) — never the media
+                // route (ADR-0032 INV-REC-010).
                 recordMediaActionDeferred(
                     record = record,
                     owner = MediaActionOwner.PARTICIPANT_REATTACH,
-                    reason = if (!snapshot.routeConverged) {
-                        DeferredReason.ROUTE_NOT_READY
-                    } else {
-                        DeferredReason.MEDIA_NOT_READY
-                    },
+                    reason = DeferredReason.MEDIA_NOT_READY,
                     wakeupBinding = WakeupBinding(
                         sourceType = WakeupSourceType.ROUTE_CONVERGED,
                         sourceKey = edgeWakeupKey(key.sessionId, key.remoteModuleId)
@@ -1977,8 +2116,7 @@ class ConferenceEdgeRecoveryController(
                 record = record,
                 recoveryReason = recoveryReason,
                 immediate = false,
-                trigger = "SUPERSEDE:$trigger",
-                mediaReady = snapshot.canDispatchRecoverySignal()
+                trigger = "SUPERSEDE:$trigger"
             )
         }
     }
@@ -1992,6 +2130,7 @@ class ConferenceEdgeRecoveryController(
         val previousPhase = record.phase
         val previousObligationOpen = record.obligationClosedAtMs == null &&
             record.obligationOpenedAtMs != null
+        terminalReevaluateDedup.remove(record.key)
         // Drop prior failed-residency deadline; next FAILED stamps a fresh one (R28-H.1).
         // Also cancel the superseded attempt's watchdog so it cannot emit FAILED (#79).
         cancelDeadline(record.key)

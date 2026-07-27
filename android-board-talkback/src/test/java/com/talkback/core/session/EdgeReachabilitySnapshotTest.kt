@@ -9,25 +9,12 @@ import org.junit.Test
 class EdgeReachabilitySnapshotTest {
 
     @Test
-    fun gate_s13bSoak_routeNotConverged_blocksRouteDependentDispatch() {
-        val snap = EdgeReachabilitySnapshot(
-            linkReady = true,
-            peerDiscovered = true,
-            routeConverged = false,
-            authorityReachable = true
-        )
-        assertTrue(snap.canAttemptRecovery())
-        assertFalse(snap.canDispatchRecoverySignal())
-        assertNull(snap.attemptWaitingReason())
-        assertEquals(RecoveryWaitingReason.WAITING_FOR_ROUTE, snap.dispatchWaitingReason())
-    }
-
-    @Test
     fun gate_allFactsReady_allowsDispatch() {
         val snap = EdgeReachabilitySnapshot(
             linkReady = true,
             peerDiscovered = true,
-            routeConverged = true,
+            peerSignalingReachable = true,
+            mediaRouteConnected = true,
             authorityReachable = false
         )
         assertTrue(snap.canAttemptRecovery())
@@ -42,73 +29,41 @@ class EdgeReachabilitySnapshotTest {
         val snap = EdgeReachabilitySnapshot(
             linkReady = true,
             peerDiscovered = true,
-            routeConverged = true,
+            peerSignalingReachable = true,
+            mediaRouteConnected = true,
             authorityReachable = true
         )
         assertTrue(snap.canCompleteRecovery())
     }
 
     @Test
-    fun capability_participant_routeDown_waitsForRouteBeforeDispatch() {
-        val snap = EdgeReachabilitySnapshot(
-            linkReady = true,
-            peerDiscovered = true,
-            routeConverged = false,
-            authorityReachable = true
-        )
-        val signature = projectRecoveryCapabilitySignature(
-            snap,
-            initiatesReattach = true,
-            controlPlaneStarted = false
-        )
-        assertFalse(RecoveryAction.DISPATCH_REATTACH in signature.permittedActions)
-        assertEquals(RecoveryWaitingReason.WAITING_FOR_ROUTE, signature.waitingReason)
-        assertEquals("WAITING_FOR_ROUTE", signature.formatCapabilityLabel())
-    }
-
-    @Test
-    fun capability_participant_routeBlocked_thenConverged_isMaterial() {
+    fun capability_participant_discoveryBlocked_thenResolved_isMaterial() {
         val blocked = projectRecoveryCapabilitySignature(
             EdgeReachabilitySnapshot(
                 linkReady = true,
-                peerDiscovered = true,
-                routeConverged = false,
+                peerDiscovered = false,
+                peerSignalingReachable = true,
+                mediaRouteConnected = true,
                 authorityReachable = true
             ),
             initiatesReattach = true,
             controlPlaneStarted = false
         )
-        assertEquals(RecoveryWaitingReason.WAITING_FOR_ROUTE, blocked.waitingReason)
-        val converged = projectRecoveryCapabilitySignature(
+        assertEquals(RecoveryWaitingReason.WAITING_FOR_DISCOVERY, blocked.waitingReason)
+        val resolved = projectRecoveryCapabilitySignature(
             EdgeReachabilitySnapshot(
                 linkReady = true,
                 peerDiscovered = true,
-                routeConverged = true,
+                peerSignalingReachable = true,
+                mediaRouteConnected = true,
                 authorityReachable = false
             ),
             initiatesReattach = true,
             controlPlaneStarted = false
         )
-        assertTrue(converged.isMaterialChangeFrom(blocked))
-        assertEquals("WAITING_FOR_ROUTE", blocked.formatCapabilityLabel())
-        assertEquals("DISPATCH_REATTACH", converged.formatCapabilityLabel())
-    }
-
-    @Test
-    fun capability_host_routeBlocked_staysWaitingForRoute() {
-        val snapshot = EdgeReachabilitySnapshot(
-            linkReady = true,
-            peerDiscovered = true,
-            routeConverged = false,
-            authorityReachable = true
-        )
-        val signature = projectRecoveryCapabilitySignature(
-            snapshot,
-            initiatesReattach = false,
-            controlPlaneStarted = false
-        )
-        assertTrue(signature.permittedActions.isEmpty())
-        assertEquals(RecoveryWaitingReason.WAITING_FOR_ROUTE, signature.waitingReason)
+        assertTrue(resolved.isMaterialChangeFrom(blocked))
+        assertEquals("WAITING_FOR_DISCOVERY", blocked.formatCapabilityLabel())
+        assertEquals("DISPATCH_REATTACH", resolved.formatCapabilityLabel())
     }
 
     @Test
@@ -116,7 +71,8 @@ class EdgeReachabilitySnapshotTest {
         val snapshot = EdgeReachabilitySnapshot(
             linkReady = true,
             peerDiscovered = true,
-            routeConverged = true,
+            peerSignalingReachable = true,
+            mediaRouteConnected = true,
             authorityReachable = true
         )
         val signature = projectRecoveryCapabilitySignature(
@@ -129,7 +85,7 @@ class EdgeReachabilitySnapshotTest {
     }
 
     @Test
-    fun wakeupBinding_routeConvergedEdge_matchesRemoteRecoveredAndPeerDiscovered() {
+    fun wakeupBinding_mediaRouteConnectedEdge_matchesRemoteRecoveredAndPeerDiscovered() {
         val binding = WakeupBinding(
             sourceType = WakeupSourceType.ROUTE_CONVERGED,
             sourceKey = edgeWakeupKey("sess-1", "M02")
@@ -139,5 +95,19 @@ class EdgeReachabilitySnapshotTest {
         assertTrue(binding.matchesTrigger(RecoveryReevaluateTrigger.PEER_DISCOVERED, "sess-1", "M02"))
         assertFalse(binding.matchesTrigger(RecoveryReevaluateTrigger.REMOTE_MODULE_RECOVERED, "sess-1", "M01"))
         assertFalse(binding.matchesTrigger(RecoveryReevaluateTrigger.AUTHORITY_REACHABLE, "sess-1", "M02"))
+    }
+
+    @Test
+    fun wakeupBinding_routeConverged_matchesPeerReachabilityRestored() {
+        val binding = WakeupBinding(
+            sourceType = WakeupSourceType.ROUTE_CONVERGED,
+            sourceKey = edgeWakeupKey("sess-1", "M02")
+        )
+        assertTrue(
+            binding.matchesTrigger(RecoveryReevaluateTrigger.PEER_REACHABILITY_RESTORED, "sess-1", "M02")
+        )
+        assertTrue(binding.matchesTrigger(RecoveryReevaluateTrigger.REMOTE_MODULE_RECOVERED, "sess-1", "M02"))
+        assertTrue(binding.matchesTrigger(RecoveryReevaluateTrigger.PEER_DISCOVERED, "sess-1", "M02"))
+        assertFalse(binding.matchesTrigger(RecoveryReevaluateTrigger.REMOTE_MODULE_RECOVERED, "sess-1", "M01"))
     }
 }
