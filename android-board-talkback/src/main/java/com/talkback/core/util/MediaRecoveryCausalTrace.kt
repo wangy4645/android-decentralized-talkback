@@ -9,7 +9,7 @@ import com.talkback.core.webrtc.MediaBearerScope
  * Does not gate recovery, membership, floor, or UI.
  *
  * Grep: `MEDIA_SIGNAL_`, `MEDIA_ICE_CANDIDATE_`, `RECOVERY_ICE_RESTART_DISPATCHED`,
- * `RECOVERY_OFFER_SENT`, `RECOVERY_OFFER_RECEIVED`
+ * `RECOVERY_OFFER_SENT`, `RECOVERY_OFFER_RECEIVED`, `WEBRTC_NEGOTIATION`
  */
 object MediaRecoveryCausalTrace {
 
@@ -142,5 +142,30 @@ object MediaRecoveryCausalTrace {
     fun mediaIceCandidateApplied(ctx: Context, queued: Boolean = false) {
         val suffix = if (queued) " queued=false applied=true" else " applied=true"
         log(formatContext("MEDIA_ICE_CANDIDATE_APPLIED", ctx) + suffix)
+    }
+
+    /**
+     * 4.3-E observation: PeerConnection negotiation snapshot at a named seam
+     * (e.g. ICE_RESTART_DISPATCHED_BEFORE_OFFER). Does not change behavior.
+     */
+    fun webrtcNegotiationSnapshot(
+        ctx: Context,
+        reason: String,
+        signalingState: String,
+        iceConnectionState: String,
+        connectionState: String,
+        localDescriptionType: String?,
+        remoteDescriptionType: String?,
+        negotiationRole: String? = null
+    ) {
+        val sb = StringBuilder(formatContext("WEBRTC_NEGOTIATION", ctx))
+        sb.append(" op=SNAPSHOT reason=").append(reason)
+        negotiationRole?.let { sb.append(" role=").append(it) }
+        sb.append(" signalingState=").append(signalingState)
+        sb.append(" iceConnectionState=").append(iceConnectionState)
+        sb.append(" connectionState=").append(connectionState)
+        sb.append(" localDesc=").append(localDescriptionType ?: "NONE")
+        sb.append(" remoteDesc=").append(remoteDescriptionType ?: "NONE")
+        log(sb.toString())
     }
 }

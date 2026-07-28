@@ -4925,6 +4925,13 @@ class TalkbackCoordinator(
             val ice = qosMonitor.snapshot(peerId)?.iceState
             if (IceConnectivity.isConnected(ice)) {
                 log("${sessionTag(session)} GROUP_JOIN duplicate from $peerId ice=$ice")
+                val dupCtx = mediaRecoveryTraceContext(
+                    session,
+                    peerId,
+                    caller.endpointId.value,
+                    iceRestart = payload.joinIntent == ConferenceJoinIntent.RECOVERY_REATTACH
+                )
+                val snap = meshEngineForSession(session, peerId)?.negotiationSnapshot()
                 observeRecoveryOfferIngress(
                     sessionId = session.id,
                     remoteModuleId = peerId,
@@ -4932,7 +4939,11 @@ class TalkbackCoordinator(
                     joinIntent = payload.joinIntent.name,
                     decision = MediaRecoveryCausalTrace.OfferIngressDecision.DROP_DUPLICATE_ICE_CONNECTED,
                     localIceState = ice,
-                    detail = "meshCompleted=true",
+                    detail = "reason=mesh_already_connected meshCompleted=true iceState=$ice " +
+                        "pcGeneration=${dupCtx.pcGeneration ?: "NONE"} " +
+                        "signalingState=${snap?.signalingState ?: "UNKNOWN"} " +
+                        "localDesc=${snap?.localDescriptionType ?: "NONE"} " +
+                        "remoteDesc=${snap?.remoteDescriptionType ?: "NONE"}",
                     session = session
                 )
                 return
@@ -5057,7 +5068,15 @@ class TalkbackCoordinator(
                 media = MediaState.CONNECTED
                 lastMediaChangeMs = System.currentTimeMillis()
             }
-            log("${sessionTag(session)} Group accept duplicate from $moduleId ice=$existingIce")
+            val snap = meshEngineForSession(session, moduleId)?.negotiationSnapshot()
+            val gen = mediaRegistry.meshSessionState(moduleId)?.generation
+            log(
+                "${sessionTag(session)} Group accept duplicate from $moduleId ice=$existingIce " +
+                    "reason=mesh_already_connected pcGeneration=${gen ?: "NONE"} " +
+                    "signalingState=${snap?.signalingState ?: "UNKNOWN"} " +
+                    "localDesc=${snap?.localDescriptionType ?: "NONE"} " +
+                    "remoteDesc=${snap?.remoteDescriptionType ?: "NONE"}"
+            )
             if (session.type == SessionType.CONFERENCE) {
                 completeGroupMesh(session)
                 drainPendingGroupJoins(session.id)
@@ -7639,7 +7658,7 @@ class TalkbackCoordinator(
     }
 
     private fun wireIceCallback(session: TalkbackSession, remoteModuleId: String, engine: WebRtcAudioEngine) {
-        engine.playbackDiagnosticTag = session.id
+        engine.playbackDiagnosticTag = "${session.id}|$remoteModuleId"
         engine.remoteTrackDiagnosticLogger = { playback ->
             val ice = qosMonitor.snapshot(remoteModuleId)?.iceState ?: "UNKNOWN"
             log(
@@ -8465,8 +8484,36 @@ class TalkbackCoordinator(
         )
         if (iceRestart) {
             MediaRecoveryCausalTrace.recoveryIceRestartDispatched(traceCtx)
+            val before = engine.negotiationSnapshot()
+            MediaRecoveryCausalTrace.webrtcNegotiationSnapshot(
+                ctx = traceCtx,
+                reason = "ICE_RESTART_DISPATCHED_BEFORE_OFFER",
+                signalingState = before.signalingState,
+                iceConnectionState = before.iceConnectionState,
+                connectionState = before.connectionState,
+                localDescriptionType = before.localDescriptionType,
+                remoteDescriptionType = before.remoteDescriptionType,
+                negotiationRole = when (before.localDescriptionType) {
+                    "ANSWER" -> "ANSWERER"
+                    "OFFER" -> "OFFERER"
+                    else -> null
+                }
+            )
         }
         val offer = engine.createOffer(iceRestart = iceRestart)
+        if (iceRestart) {
+            val after = engine.negotiationSnapshot()
+            MediaRecoveryCausalTrace.webrtcNegotiationSnapshot(
+                ctx = traceCtx,
+                reason = "ICE_RESTART_DISPATCHED_AFTER_OFFER",
+                signalingState = after.signalingState,
+                iceConnectionState = after.iceConnectionState,
+                connectionState = after.connectionState,
+                localDescriptionType = after.localDescriptionType,
+                remoteDescriptionType = after.remoteDescriptionType,
+                negotiationRole = "OFFERER"
+            )
+        }
         MediaRecoveryCausalTrace.mediaSignalOfferSent(traceCtx)
         drainPendingIce(session.id, remoteModuleId, engine)
         val joinIntent = if (iceRestart) {

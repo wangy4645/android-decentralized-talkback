@@ -83,6 +83,23 @@ class StubWebRtcAudioEngine : WebRtcAudioEngine {
 
     override fun iceConnectionState(): String = iceConnectionStateName
 
+    override fun negotiationSnapshot(): NegotiationPcSnapshot =
+        NegotiationPcSnapshot(
+            signalingState = "STABLE",
+            iceConnectionState = iceConnectionStateName,
+            connectionState = if (iceConnectionStateName == "CONNECTED") "CONNECTED" else "NEW",
+            localDescriptionType = when {
+                remoteAnswer != null -> "OFFER"
+                remoteOffer != null -> "ANSWER"
+                else -> null
+            },
+            remoteDescriptionType = when {
+                remoteAnswer != null -> "ANSWER"
+                remoteOffer != null -> "OFFER"
+                else -> null
+            }
+        )
+
     fun simulateIceState(state: String) {
         iceConnectionStateName = state
     }

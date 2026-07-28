@@ -78,7 +78,12 @@ class RealWebRtcAudioEngine(
             peerConnectionFactory.createPeerConnection(
                 rtcConfig,
                 object : PeerConnection.Observer {
-                    override fun onSignalingChange(state: PeerConnection.SignalingState) = Unit
+                    override fun onSignalingChange(state: PeerConnection.SignalingState) {
+                        logNegotiation(
+                            "op=SIGNALING_STATE signalingState=${state.name} " +
+                                "iceConnectionState=$iceConnectionStateName"
+                        )
+                    }
                     override fun onIceConnectionChange(state: PeerConnection.IceConnectionState) {
                         iceConnectionStateName = state.name
                         TalkbackLog.i("WebRTC ICE -> ${state.name}")
@@ -117,6 +122,11 @@ class RealWebRtcAudioEngine(
     }
 
     override fun createOffer(iceRestart: Boolean): String {
+        val before = negotiationSnapshot()
+        logNegotiation(
+            "op=ROLE role=OFFERER reason=createOffer iceRestart=$iceRestart " +
+                before.formatFields()
+        )
         val constraints = MediaConstraints().apply {
             mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "true"))
             mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "false"))
@@ -126,12 +136,18 @@ class RealWebRtcAudioEngine(
         }
         createLocalDescription(
             createAction = { observer -> peerConnection.createOffer(observer, constraints) },
-            setAction = { observer, desc -> peerConnection.setLocalDescription(observer, desc) }
+            setAction = { observer, desc -> peerConnection.setLocalDescription(observer, desc) },
+            setOp = "SLD"
         )
         return currentLocalSdp()
     }
 
     override fun applyRemoteOffer(sdp: String, polite: Boolean): String {
+        val before = negotiationSnapshot()
+        logNegotiation(
+            "op=ROLE role=ANSWERER reason=applyRemoteOffer polite=$polite " +
+                before.formatFields()
+        )
         val remote = SessionDescription(SessionDescription.Type.OFFER, sdp)
         when (peerConnection.signalingState()) {
             PeerConnection.SignalingState.STABLE -> {
@@ -144,7 +160,10 @@ class RealWebRtcAudioEngine(
             }
             else -> Unit
         }
-        awaitSetDescription { observer -> peerConnection.setRemoteDescription(observer, remote) }
+        awaitSetDescription(
+            op = "SRD",
+            type = "OFFER"
+        ) { observer -> peerConnection.setRemoteDescription(observer, remote) }
         markRemoteDescriptionApplied()
         val constraints = MediaConstraints().apply {
             mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "true"))
@@ -152,12 +171,18 @@ class RealWebRtcAudioEngine(
         }
         createLocalDescription(
             createAction = { observer -> peerConnection.createAnswer(observer, constraints) },
-            setAction = { observer, desc -> peerConnection.setLocalDescription(observer, desc) }
+            setAction = { observer, desc -> peerConnection.setLocalDescription(observer, desc) },
+            setOp = "SLD"
         )
         return currentLocalSdp()
     }
 
     override fun applyRemoteAnswer(sdp: String, polite: Boolean) {
+        val before = negotiationSnapshot()
+        logNegotiation(
+            "op=ROLE role=OFFERER reason=applyRemoteAnswer polite=$polite " +
+                before.formatFields()
+        )
         when (peerConnection.signalingState()) {
             PeerConnection.SignalingState.STABLE -> {
                 if (!polite) return
@@ -173,7 +198,10 @@ class RealWebRtcAudioEngine(
             }
         }
         val remote = SessionDescription(SessionDescription.Type.ANSWER, sdp)
-        awaitSetDescription { observer -> peerConnection.setRemoteDescription(observer, remote) }
+        awaitSetDescription(
+            op = "SRD",
+            type = "ANSWER"
+        ) { observer -> peerConnection.setRemoteDescription(observer, remote) }
         markRemoteDescriptionApplied()
     }
 
@@ -326,6 +354,29 @@ class RealWebRtcAudioEngine(
 
     override fun iceConnectionState(): String = iceConnectionStateName
 
+    override fun negotiationSnapshot(): NegotiationPcSnapshot {
+        if (released) {
+            return NegotiationPcSnapshot(
+                signalingState = "CLOSED",
+                iceConnectionState = iceConnectionStateName,
+                connectionState = "CLOSED"
+            )
+        }
+        return NegotiationPcSnapshot(
+            signalingState = peerConnection.signalingState()?.name ?: "UNKNOWN",
+            iceConnectionState = iceConnectionStateName,
+            connectionState = runCatching { peerConnection.connectionState()?.name }.getOrNull()
+                ?: "UNKNOWN",
+            localDescriptionType = peerConnection.localDescription?.type?.name,
+            remoteDescriptionType = peerConnection.remoteDescription?.type?.name
+        )
+    }
+
+    private fun logNegotiation(fields: String) {
+        val tag = playbackDiagnosticTag ?: "unknown"
+        TalkbackLog.i("WEBRTC_NEGOTIATION tag=$tag $fields")
+    }
+
     private fun applyStatsReport(report: RTCStatsReport) {
         var inbound = 0.0
         var outbound = 0.0
@@ -408,7 +459,8 @@ class RealWebRtcAudioEngine(
 
     private fun createLocalDescription(
         createAction: (SdpObserver) -> Unit,
-        setAction: (SdpObserver, SessionDescription) -> Unit
+        setAction: (SdpObserver, SessionDescription) -> Unit,
+        setOp: String
     ): SessionDescription {
         val created = AtomicReference<SessionDescription>()
         val createLatch = CountDownLatch(1)
@@ -433,11 +485,22 @@ class RealWebRtcAudioEngine(
         createError.get()?.let { error(it) }
         val desc = created.get() ?: error("Missing SDP after create")
 
-        awaitSetDescription { observer -> setAction(observer, desc) }
+        awaitSetDescription(
+            op = setOp,
+            type = desc.type.name
+        ) { observer -> setAction(observer, desc) }
         return desc
     }
 
-    private fun awaitSetDescription(action: (SdpObserver) -> Unit) {
+    private fun awaitSetDescription(
+        op: String,
+        type: String,
+        action: (SdpObserver) -> Unit
+    ) {
+        val before = negotiationSnapshot()
+        logNegotiation(
+            "op=$op type=$type phase=BEFORE ${before.formatFields()}"
+        )
         val latch = CountDownLatch(1)
         val setError = AtomicReference<String>()
         action(object : SdpObserver {
@@ -454,6 +517,10 @@ class RealWebRtcAudioEngine(
         })
         await(latch, "Timed out setting SDP")
         setError.get()?.let { error(it) }
+        val after = negotiationSnapshot()
+        logNegotiation(
+            "op=$op type=$type phase=AFTER ${after.formatFields()}"
+        )
     }
 
     private fun await(latch: CountDownLatch, timeoutMessage: String) {

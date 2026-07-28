@@ -42,6 +42,12 @@ interface WebRtcAudioEngine {
     /** Latest ICE connection state name (PeerConnection.IceConnectionState). */
     fun iceConnectionState(): String = "UNKNOWN"
 
+    /**
+     * Read-only PeerConnection negotiation snapshot (4.3-E observation).
+     * Must not affect signaling / ICE behavior.
+     */
+    fun negotiationSnapshot(): NegotiationPcSnapshot = NegotiationPcSnapshot()
+
     /** Anchor relay: switch outbound between microphone and program track. */
     fun setProgramRelayMode(mode: ProgramRelayMode) = Unit
 
