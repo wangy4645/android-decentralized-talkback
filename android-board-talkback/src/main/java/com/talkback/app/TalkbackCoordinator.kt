@@ -82,6 +82,7 @@ import com.talkback.core.session.ReattachDispatchOutcome
 import com.talkback.core.session.RecoveryCapabilitySignature
 import com.talkback.core.session.RecoveryReason
 import com.talkback.core.session.RecoveryReevaluateTrigger
+import com.talkback.core.session.RecoveryResurrectionEvidence
 import com.talkback.core.session.RecoverySource
 import com.talkback.core.session.projectRecoveryCapabilitySignature
 import com.talkback.core.signaling.link.LinkQualificationState
@@ -2454,6 +2455,10 @@ class TalkbackCoordinator(
     /**
      * Coordinator-owned materiality comparator (ADR-0022 R28-G).
      * Notifies recovery controller only when [RecoveryCapabilitySignature] changes.
+     *
+     * §13.2.4 C2: [REMOTE_MODULE_RECOVERED] carries [RecoveryResurrectionEvidence]; when the
+     * current Obligation Episode is CLOSED, deliver even without a capability material delta so
+     * successor admission can evaluate freshness.
      */
     private fun maybeNotifyRecoveryReachabilityChanged(
         session: TalkbackSession,
@@ -2490,10 +2495,23 @@ class TalkbackCoordinator(
             remoteModuleId,
             trigger
         )
+        val resurrectionEvidence =
+            if (trigger == RecoveryReevaluateTrigger.REMOTE_MODULE_RECOVERED) {
+                RecoveryResurrectionEvidence(
+                    kind = RecoveryReevaluateTrigger.REMOTE_MODULE_RECOVERED,
+                    observedAtMs = System.currentTimeMillis()
+                )
+            } else {
+                null
+            }
+        val successorAdmissionCandidate =
+            resurrectionEvidence != null &&
+                conferenceEdgeRecoveryController.edgeObligationClosed(session.id, remoteModuleId)
         if (
             !signature.isMaterialChangeFrom(before) &&
             !failedResidencyReevaluate &&
-            !deferredWakeupMatch
+            !deferredWakeupMatch &&
+            !successorAdmissionCandidate
         ) {
             return
         }
@@ -2505,7 +2523,8 @@ class TalkbackCoordinator(
             snapshot = snapshot,
             signature = signature,
             capabilityBefore = before,
-            trigger = trigger
+            trigger = trigger,
+            resurrectionEvidence = resurrectionEvidence
         )
     }
 
