@@ -1874,6 +1874,104 @@ class ConferenceEdgeRecoveryControllerTest {
     }
 
     @Test
+    fun reattach_transportSent_mediaAlreadyLive_crossesBoundaryAndRecovers() {
+        // 4.3-D: REATTACH_THEN_ICE_RESTART + E2 (sent + peer reachable + media live)
+        // MUST reuse CONTROL_PLANE_BOUNDARY → ICE_RESTARTING → existing completion (H1/P2).
+        controller = buildController(
+            attemptBudgetMs = 500L,
+            isIceConnected = { _, _ -> true }
+        )
+        controller.onIceStateChanged(
+            sessionId = "sess-1",
+            channelId = "CH-1",
+            remoteModuleId = "M02",
+            iceState = "DISCONNECTED",
+            eligibility = eligible(),
+            initiatesReattach = true
+        )
+        Thread.sleep(80)
+        assertTrue(
+            decisionLogs.any {
+                it.contains("RECOVERY_REATTACH_SENT") && it.contains("deliveryState=TRANSPORT_SENT")
+            }
+        )
+        assertFalse(controller.isControlPlaneStarted("sess-1", "M02"))
+        assertEquals(
+            EdgeRecoveryPhase.REATTACH_REQUESTED,
+            controller.attemptLineageObservation("sess-1", "M02")!!.phase
+        )
+
+        // Media restores without REATTACH_ACCEPTED — missing boundary was the soak gap.
+        controller.onIceConnected("sess-1", "M02")
+
+        assertTrue(
+            decisionLogs.any {
+                it.contains("RECOVERY_CONTROL_PLANE_BOUNDARY") &&
+                    it.contains("reason=REATTACH_MEDIA_ALREADY_LIVE")
+            }
+        )
+        assertTrue(decisionLogs.any { it.contains("RECOVERY_EDGE_RECOVERED") })
+        assertEquals(
+            ObligationCloseReason.RECOVERED,
+            controller.obligationCloseReason("sess-1", "M02")
+        )
+        assertFalse(controller.isEdgeRecovering("sess-1", "M02"))
+        assertFalse(controller.edgeObligationOpen("sess-1", "M02"))
+        assertFalse(
+            decisionLogs.any {
+                it.contains("decision=WAIT_FOR_CONTROL_PLANE") &&
+                    it.contains("trigger=ICE_RESTORED")
+            }
+        )
+    }
+
+    @Test
+    fun reattach_transportSent_mediaRestored_peerUnreachable_keepsWaiting() {
+        controller = buildController(
+            attemptBudgetMs = 500L,
+            isIceConnected = { _, _ -> true }
+        )
+        controller.onIceStateChanged(
+            sessionId = "sess-1",
+            channelId = "CH-1",
+            remoteModuleId = "M02",
+            iceState = "DISCONNECTED",
+            eligibility = eligible(),
+            initiatesReattach = true
+        )
+        Thread.sleep(80)
+        assertTrue(
+            decisionLogs.any {
+                it.contains("RECOVERY_REATTACH_SENT") && it.contains("deliveryState=TRANSPORT_SENT")
+            }
+        )
+        harnessReachability = EdgeReachabilitySnapshot(
+            linkReady = true,
+            peerDiscovered = true,
+            peerSignalingReachable = false,
+            mediaRouteConnected = true,
+            authorityReachable = true
+        )
+
+        controller.onIceConnected("sess-1", "M02")
+
+        assertTrue(
+            decisionLogs.any {
+                it.contains("decision=WAIT_FOR_CONTROL_PLANE") &&
+                    it.contains("trigger=ICE_RESTORED")
+            }
+        )
+        assertFalse(
+            decisionLogs.any {
+                it.contains("RECOVERY_CONTROL_PLANE_BOUNDARY") &&
+                    it.contains("reason=REATTACH_MEDIA_ALREADY_LIVE")
+            }
+        )
+        assertFalse(decisionLogs.any { it.contains("RECOVERY_EDGE_RECOVERED") })
+        assertTrue(controller.edgeObligationOpen("sess-1", "M02"))
+        assertFalse(controller.isControlPlaneStarted("sess-1", "M02"))
+    }
+    @Test
     fun reattach_sent_without_receipt_doesNotStartControlPlane() {
         controller.onIceStateChanged(
             sessionId = "sess-1",

@@ -1478,6 +1478,10 @@ class ConferenceEdgeRecoveryController(
     /**
      * Media path is restored but the attempt has not crossed the control-plane boundary.
      * MUST schedule a next action — never leave obligation OPEN with no owner (soak ea6466f1).
+     *
+     * REATTACH_THEN_ICE_RESTART (initiatesReattach): when E2 equivalent control-plane evidence
+     * is already satisfied (reattach delivery + peer signaling path + media live), reuse the
+     * same CONTROL_PLANE_BOUNDARY exit as ICE_RESTART_ONLY — do not wait forever for accept.
      */
     private fun continueControlPlaneRecoveryAfterMediaRestored(record: EdgeRecoveryRecord) {
         val key = record.key
@@ -1487,6 +1491,13 @@ class ConferenceEdgeRecoveryController(
                 "initiatesReattach=${record.initiatesReattach}"
         )
         if (record.initiatesReattach) {
+            if (reattachMediaAlreadyLiveEvidenceSatisfied(record)) {
+                crossControlPlaneBoundary(
+                    record = record,
+                    reason = "REATTACH_MEDIA_ALREADY_LIVE"
+                )
+                return
+            }
             onLog(
                 "RECOVERY_DECISION session=${key.sessionId} edge=${key.remoteModuleId} " +
                     "attempt=${record.recoveryAttemptId} trigger=${RecoveryReevaluateTrigger.ICE_RESTORED} " +
@@ -1499,12 +1510,10 @@ class ConferenceEdgeRecoveryController(
         }
         // ICE_RESTART_ONLY participant edge: do not flap transport when ICE is already CONNECTED.
         if (isIceConnected(key.sessionId, key.remoteModuleId) && record.mediaRestored) {
-            record.phase = EdgeRecoveryPhase.ICE_RESTARTING
-            onLog(
-                "RECOVERY_CONTROL_PLANE_BOUNDARY session=${key.sessionId} remote=${key.remoteModuleId} " +
-                    "attempt=${record.recoveryAttemptId} reason=media_path_active_without_restart"
+            crossControlPlaneBoundary(
+                record = record,
+                reason = "media_path_active_without_restart"
             )
-            runIceRestorationCompletionEvaluation(record)
             return
         }
         onLog(
@@ -1513,6 +1522,38 @@ class ConferenceEdgeRecoveryController(
                 "decision=WAIT_FOR_CONTROL_PLANE approved=true"
         )
         issueBoundedIceRestart(record, RecoveryReason.ICE_DISCONNECTED)
+    }
+
+    /**
+     * E2 equivalent control-plane convergence for REATTACH_THEN_ICE_RESTART (ADR-0022 4.3-D).
+     * Identity is implicit: [record] is the live edge map entry for the current attempt/gen.
+     * MUST NOT treat ICE_CONNECTED / mediaRestored alone as control-plane started.
+     */
+    private fun reattachMediaAlreadyLiveEvidenceSatisfied(record: EdgeRecoveryRecord): Boolean {
+        if (!record.edgeObligationOpen()) return false
+        if (!record.initiatesReattach) return false
+        if (!hasReattachDeliveryEvidence(record)) return false
+        val key = record.key
+        // Peer signaling path reachable (authority/peer plane via existing action gate).
+        if (!canDispatchRecoveryMediaAction(key.sessionId, key.remoteModuleId)) return false
+        if (!record.mediaRestored) return false
+        if (!isIceConnected(key.sessionId, key.remoteModuleId)) return false
+        return true
+    }
+
+    private fun hasReattachDeliveryEvidence(record: EdgeRecoveryRecord): Boolean =
+        record.reattachDeliveryState == ReattachDeliveryState.TRANSPORT_SENT ||
+            record.reattachDeliveryState == ReattachDeliveryState.REMOTE_RECEIPT_ACKED
+
+    /** Shared CONTROL_PLANE_BOUNDARY exit (H1/H3): phase + log + existing completion evaluator. */
+    private fun crossControlPlaneBoundary(record: EdgeRecoveryRecord, reason: String) {
+        val key = record.key
+        record.phase = EdgeRecoveryPhase.ICE_RESTARTING
+        onLog(
+            "RECOVERY_CONTROL_PLANE_BOUNDARY session=${key.sessionId} remote=${key.remoteModuleId} " +
+                "attempt=${record.recoveryAttemptId} reason=$reason"
+        )
+        runIceRestorationCompletionEvaluation(record)
     }
 
     private fun markRecovered(record: EdgeRecoveryRecord, closeEvidence: String = "EDGE_RECOVERED") {
