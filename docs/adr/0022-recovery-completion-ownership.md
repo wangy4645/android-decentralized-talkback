@@ -3881,6 +3881,23 @@ NEGOTIATION_CAN_EXECUTE → dispatch → EXECUTED
 
 **Reverse proof (2026-07-28):** `phase=RECOVERED` only inside `markRecovered` after `canClose`; `onIceConnected` is fact→evaluate only. Soak analyzer: `scripts/analyze-b31-completion-authority.ps1` / runner `scripts/soak-b31-completion-authority.ps1`.
 
+**Field soak — PASS_B31 (2026-07-28):** `logs/b31-completion-20260728-202439/`
+
+| Gate | Result |
+|------|--------|
+| Gold R1 | DEFER → CAN_EXECUTE → WAKEUP → EXECUTED → DISPATCH |
+| EDGE_RECOVERED | after dispatch |
+| leakEarlyClose | false |
+| HOLD | seen (allowed) |
+
+Counts: deferred=8 baselines=8 gold=1 gap=0 executed=4 completionHeld=4 mediaPathHold=2 edgeRecovered=6.
+
+```text
+B3 Capability              PASS (frozen; unchanged this knife)
+Recovery Completion Auth   PASS_B31 (UT + field gold chain)
+Remaining                  Qualification / signaling — SEPARATE
+```
+
 ### Design freeze confirmation — **ACCEPTED 2026-07-28**
 
 **Reviewer verdict:** Q10–Q14 + INV-REC-026..031 + INV-NEG-016 formally frozen. Further grilling has no ROI for the current bug.
