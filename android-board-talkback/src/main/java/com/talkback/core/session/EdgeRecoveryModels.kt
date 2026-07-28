@@ -129,13 +129,13 @@ enum class DeferredReason {
 }
 
 /**
- * Step A-1 observation: finer gate block under umbrella [DeferredReason.NEGOTIATION_SETTLING].
- * Do not collapse these into a single wakeup — each maps to a different release fact.
+ * Step A-1 / B3: finer gate block under umbrella [DeferredReason.NEGOTIATION_SETTLING].
+ * Diagnostic only — both reasons share wakeup [WakeupSourceType.NEGOTIATION_CAN_EXECUTE] (W-1).
  */
 enum class IceRestartGateBlockReason {
-    /** Waiting Answerer transaction commit → NEGOTIATION_RELEASED(source=ANSWERER_TRANSACTION_COMMITTED). */
+    /** Waiting Answerer transaction commit → capability recompute (P1). */
     ANSWERER_SETTLING,
-    /** Waiting signaling STABLE — release fact TBD (Step A-2 grill; not NEGOTIATION_RELEASED). */
+    /** Waiting signaling STABLE → capability recompute (P2). */
     SIGNALING_NOT_STABLE,
 }
 
@@ -151,7 +151,16 @@ internal enum class WakeupSourceType {
     ROUTE_CONVERGED,
     PEER_DISCOVERED,
     AUTHORITY_REACHABLE,
-    /** Answerer transaction committed → Coordinator routes drain (INV-NEG-005). */
+    /**
+     * B3: edge-local negotiation capability available (INV-NEG-011/012/014).
+     * Sole Recovery wakeup for negotiation deferrals — not an audit event.
+     */
+    NEGOTIATION_CAN_EXECUTE,
+    /**
+     * Audit-only legacy token. MUST NOT be used as Recovery wakeup (INV-NEG-014).
+     * Kept so old logs/scripts remain recognizable.
+     */
+    @Deprecated("Audit only; Recovery binds NEGOTIATION_CAN_EXECUTE")
     NEGOTIATION_RELEASED,
 }
 
@@ -186,6 +195,7 @@ internal data class WakeupBinding(
             WakeupSourceType.AUTHORITY_REACHABLE ->
                 trigger == RecoveryReevaluateTrigger.AUTHORITY_REACHABLE
             // Drain is via Coordinator → drainPendingIceRestart, not R28-G reevaluate.
+            WakeupSourceType.NEGOTIATION_CAN_EXECUTE,
             WakeupSourceType.NEGOTIATION_RELEASED -> false
         }
     }

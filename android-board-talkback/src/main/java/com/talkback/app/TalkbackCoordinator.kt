@@ -388,40 +388,7 @@ class TalkbackCoordinator(
             probeIceRestartGate = { sessionId, remoteModuleId ->
                 var probe = IceRestartGateProbe(executable = true)
                 runOnCoordinatorSync {
-                    val session = sessions[sessionId] ?: return@runOnCoordinatorSync
-                    val engine = meshEngineForSession(session, remoteModuleId)
-                        ?: return@runOnCoordinatorSync
-                    val snap = engine.negotiationSnapshot()
-                    val localRole = when (snap.localDescriptionType) {
-                        "ANSWER" -> "ANSWERER"
-                        "OFFER" -> "OFFERER"
-                        else -> "UNKNOWN"
-                    }
-                    // Settling checked before signalingState (freeze Q / INV-NEG gate).
-                    if (engine.justSettledAsAnswerer()) {
-                        probe = IceRestartGateProbe(
-                            executable = false,
-                            blockReason = IceRestartGateBlockReason.ANSWERER_SETTLING,
-                            signalingState = snap.signalingState,
-                            localRole = localRole
-                        )
-                        return@runOnCoordinatorSync
-                    }
-                    val stable = snap.signalingState.equals("STABLE", ignoreCase = true)
-                    probe = if (stable) {
-                        IceRestartGateProbe(
-                            executable = true,
-                            signalingState = snap.signalingState,
-                            localRole = localRole
-                        )
-                    } else {
-                        IceRestartGateProbe(
-                            executable = false,
-                            blockReason = IceRestartGateBlockReason.SIGNALING_NOT_STABLE,
-                            signalingState = snap.signalingState,
-                            localRole = localRole
-                        )
-                    }
+                    probe = computeIceRestartGateProbe(sessionId, remoteModuleId)
                 }
                 probe
             },
@@ -473,6 +440,11 @@ class TalkbackCoordinator(
     private val lastAuthorityReachableBySession = ConcurrentHashMap<String, Boolean>()
     /** Per-edge last [RecoveryCapabilitySignature] for materiality detection (ADR-0022 R28-G). */
     private val lastRecoveryCapabilityByEdge = ConcurrentHashMap<ConferenceEdgeKey, RecoveryCapabilitySignature>()
+    /**
+     * B3 INV-NEG-011: last [IceRestartGateProbe.executable] per edge for rising-edge
+     * [WakeupSourceType.NEGOTIATION_CAN_EXECUTE] emission (INV-NEG-012 single predicate).
+     */
+    private val lastNegotiationExecutableByEdge = ConcurrentHashMap<ConferenceEdgeKey, Boolean>()
     /** Dedup key for [CONFERENCE_RUNTIME_DECISION] (Issue2 probe). */
     private val lastConferenceRuntimeDecisionBySession = ConcurrentHashMap<String, String>()
     /** Dedup key for [CONFERENCE_RUNTIME_MISSING] (Gate-R1-B). */
@@ -5200,8 +5172,89 @@ class TalkbackCoordinator(
     }
 
     /**
+     * INV-NEG-012: single Capability Truth for gate admission and CAN_EXECUTE rising-edge.
+     * Settling checked before signalingState (freeze Q / INV-NEG gate).
+     */
+    private fun computeIceRestartGateProbe(
+        sessionId: String,
+        remoteModuleId: String
+    ): IceRestartGateProbe {
+        var probe = IceRestartGateProbe(executable = true)
+        val session = sessions[sessionId] ?: return probe
+        val engine = meshEngineForSession(session, remoteModuleId) ?: return probe
+        val snap = engine.negotiationSnapshot()
+        val localRole = when (snap.localDescriptionType) {
+            "ANSWER" -> "ANSWERER"
+            "OFFER" -> "OFFERER"
+            else -> "UNKNOWN"
+        }
+        if (engine.justSettledAsAnswerer()) {
+            return IceRestartGateProbe(
+                executable = false,
+                blockReason = IceRestartGateBlockReason.ANSWERER_SETTLING,
+                signalingState = snap.signalingState,
+                localRole = localRole
+            )
+        }
+        val stable = snap.signalingState.equals("STABLE", ignoreCase = true)
+        return if (stable) {
+            IceRestartGateProbe(
+                executable = true,
+                signalingState = snap.signalingState,
+                localRole = localRole
+            )
+        } else {
+            IceRestartGateProbe(
+                executable = false,
+                blockReason = IceRestartGateBlockReason.SIGNALING_NOT_STABLE,
+                signalingState = snap.signalingState,
+                localRole = localRole
+            )
+        }
+    }
+
+    /**
+     * B3 O-3 / INV-NEG-013: recompute from enumerated negotiation seams only.
+     * INV-NEG-011: emit NEGOTIATION_CAN_EXECUTE only on false→true; INV-REC-025: drain re-probes.
+     */
+    private fun recomputeNegotiationCapability(
+        session: TalkbackSession,
+        remoteModuleId: String,
+        transition: String
+    ) {
+        if (session.type != SessionType.CONFERENCE) return
+        val edge = ConferenceEdgeKey(session.id, remoteModuleId)
+        val probe = computeIceRestartGateProbe(session.id, remoteModuleId)
+        val previous = lastNegotiationExecutableByEdge.put(edge, probe.executable)
+        // INV-NEG-011: unavailable→available (null/false → true). true→true is not a wakeup.
+        val rising = probe.executable && previous != true
+        if (!rising) {
+            log(
+                "NEGOTIATION_CAPABILITY_REEVAL session=${session.id} remote=$remoteModuleId " +
+                    "transition=$transition executable=${probe.executable} " +
+                    "previous=${previous ?: "NONE"} rising=false " +
+                    "signalingState=${probe.signalingState ?: "UNKNOWN"} " +
+                    "block=${probe.blockReason ?: "NONE"}"
+            )
+            return
+        }
+        val pendingIntentId = conferenceEdgeRecoveryController.pendingIceRestartIntentId(
+            session.id,
+            remoteModuleId
+        )
+        log(
+            "NEGOTIATION_CAN_EXECUTE session=${session.id} remote=$remoteModuleId " +
+                "transition=$transition intentId=${pendingIntentId ?: "NONE"} " +
+                "signalingState=${probe.signalingState ?: "UNKNOWN"} " +
+                "localRole=${probe.localRole ?: "UNKNOWN"}"
+        )
+        conferenceEdgeRecoveryController.drainPendingIceRestart(session.id, remoteModuleId)
+    }
+
+    /**
      * INV-NEG-005 / Q9: Coordinator owns one Answerer commit seam for JOIN and INVITE paths:
-     * handoff success → commitAnswererTransaction → NEGOTIATION_RELEASED → Recovery drain.
+     * handoff success → commitAnswererTransaction → audit NEGOTIATION_RELEASED →
+     * recompute capability (P1) → NEGOTIATION_CAN_EXECUTE rising-edge → drain.
      * Engine MUST NOT call Recovery; Recovery MUST NOT call commit.
      */
     private fun commitAnswererTransactionAndDrain(
@@ -5229,15 +5282,19 @@ class TalkbackCoordinator(
             )
             return
         }
+        // INV-NEG-014: audit only — not a Recovery wakeup contract.
         log(
             "NEGOTIATION_RELEASED session=${session.id} remote=$remoteModuleId " +
                 "source=ANSWERER_TRANSACTION_COMMITTED " +
                 "reason=ANSWERER_TRANSACTION_COMMITTED " +
                 "path=$path intentId=${pendingIntentId ?: "NONE"}"
         )
-        if (session.type == SessionType.CONFERENCE) {
-            conferenceEdgeRecoveryController.drainPendingIceRestart(session.id, remoteModuleId)
-        }
+        // P1: ANSWERER_TRANSACTION_COMMITTED → recompute → CAN_EXECUTE rising-edge → drain.
+        recomputeNegotiationCapability(
+            session = session,
+            remoteModuleId = remoteModuleId,
+            transition = "ANSWERER_TRANSACTION_COMMITTED"
+        )
     }
 
     private fun markConferenceParticipantActive(session: TalkbackSession, moduleId: String) {
@@ -5297,6 +5354,12 @@ class TalkbackCoordinator(
         wireIceCallback(session, moduleId, engine)
         engine.applyRemoteAnswer(signal.payload, politeForMeshPair(moduleId))
         drainPendingIce(session.id, moduleId, engine)
+        // P2 (INV-NEG-013): applyRemoteAnswer success may flip probe.executable false→true.
+        recomputeNegotiationCapability(
+            session = session,
+            remoteModuleId = moduleId,
+            transition = "SIGNALING_STABLE_AFTER_REMOTE_ANSWER"
+        )
         markMeshLinkCompleted(session,moduleId)
         meshParticipant(session,moduleId).apply {
             invite = InviteState.ACCEPTED

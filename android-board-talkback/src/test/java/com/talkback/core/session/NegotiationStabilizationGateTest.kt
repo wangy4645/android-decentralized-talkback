@@ -92,7 +92,7 @@ class NegotiationStabilizationGateTest {
         )
         assertTrue(
             decisionLogs.any {
-                it.contains("wakeupBinding=NEGOTIATION_RELEASED/")
+                it.contains("wakeupBinding=NEGOTIATION_CAN_EXECUTE/")
             }
         )
         assertFalse(decisionLogs.any { it.contains("RECOVERY_ICE_RESTART_DISPATCHED") })
@@ -124,7 +124,7 @@ class NegotiationStabilizationGateTest {
         )
         assertTrue(
             decisionLogs.any {
-                it.contains("RECOVERY_WAKEUP_FIRED") && it.contains("trigger=NEGOTIATION_RELEASED")
+                it.contains("RECOVERY_WAKEUP_FIRED") && it.contains("trigger=NEGOTIATION_CAN_EXECUTE")
             }
         )
     }

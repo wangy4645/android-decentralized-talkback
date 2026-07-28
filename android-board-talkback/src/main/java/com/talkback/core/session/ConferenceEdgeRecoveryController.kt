@@ -612,11 +612,11 @@ class ConferenceEdgeRecoveryController(
     private fun isDeferredIceRestartIntent(record: EdgeRecoveryRecord): Boolean =
         hasDeferredMediaAction(record) &&
             record.deferredReason == DeferredReason.NEGOTIATION_SETTLING &&
-            record.wakeupBinding?.sourceType == WakeupSourceType.NEGOTIATION_RELEASED
+            record.wakeupBinding?.sourceType == WakeupSourceType.NEGOTIATION_CAN_EXECUTE
 
     /**
-     * Commit Seam Trace: deferred ICE-restart intent id awaiting NEGOTIATION_RELEASED, if any.
-     * Coordinator stamps the same intentId on NEGOTIATION_RELEASED for lifecycle join.
+     * Commit Seam Trace: deferred ICE-restart intent id awaiting NEGOTIATION_CAN_EXECUTE, if any.
+     * Coordinator stamps the same intentId on capability emission for lifecycle join.
      */
     fun pendingIceRestartIntentId(sessionId: String, remoteModuleId: String): String? {
         val record = edges[ConferenceEdgeKey(sessionId, remoteModuleId)] ?: return null
@@ -675,8 +675,8 @@ class ConferenceEdgeRecoveryController(
     }
 
     /**
-     * INV-NEG-005: Coordinator routes NEGOTIATION_RELEASED here after Answerer transaction commit.
-     * Re-validates attempt/gen/obligation/intent/canExecute before dispatch (INV-NEG-001 safe).
+     * INV-NEG-005 / INV-REC-025: Coordinator routes NEGOTIATION_CAN_EXECUTE here after capability
+     * rising-edge. Re-validates attempt/gen/obligation/intent/gate before dispatch.
      */
     fun drainPendingIceRestart(sessionId: String, remoteModuleId: String) {
         val key = ConferenceEdgeKey(sessionId, remoteModuleId)
@@ -708,7 +708,7 @@ class ConferenceEdgeRecoveryController(
         }
         onLog(
             "RECOVERY_WAKEUP_FIRED session=$sessionId edge=$remoteModuleId " +
-                "attempt=$attemptId intentId=$intentId trigger=NEGOTIATION_RELEASED " +
+                "attempt=$attemptId intentId=$intentId trigger=NEGOTIATION_CAN_EXECUTE " +
                 "wakeupBinding=${record.wakeupBinding?.logLabel()}"
         )
         val still = edges[key] ?: return
@@ -724,7 +724,7 @@ class ConferenceEdgeRecoveryController(
         onLog(
             "RECOVERY_ICE_RESTART_INTENT_TERMINAL session=$sessionId remote=$remoteModuleId " +
                 "attempt=$attemptId intentId=$intentId obligationGen=$obligationGen " +
-                "terminal=EXECUTED reason=DRAIN_AFTER_NEGOTIATION_RELEASED " +
+                "terminal=EXECUTED reason=DRAIN_AFTER_NEGOTIATION_CAN_EXECUTE " +
                 "gateBlock=${still.deferredGateBlockReason ?: "NONE"}"
         )
         clearMediaActionDeferral(still)
@@ -1903,7 +1903,7 @@ class ConferenceEdgeRecoveryController(
                 owner = MediaActionOwner.HOST_RESTART,
                 reason = DeferredReason.NEGOTIATION_SETTLING,
                 wakeupBinding = WakeupBinding(
-                    sourceType = WakeupSourceType.NEGOTIATION_RELEASED,
+                    sourceType = WakeupSourceType.NEGOTIATION_CAN_EXECUTE,
                     sourceKey = edgeWakeupKey(record.key.sessionId, record.key.remoteModuleId)
                 ),
                 trigger = "NEGOTIATION_STABILIZATION_GATE:$block"
@@ -1913,7 +1913,7 @@ class ConferenceEdgeRecoveryController(
                 "ICE_RESTART_DEFERRED session=${record.key.sessionId} " +
                     "remote=${record.key.remoteModuleId} edge=${record.key.remoteModuleId} " +
                     "attempt=${record.recoveryAttemptId} gen=${record.obligationGeneration} " +
-                    "intentId=$intentId reason=$block wakeup=NEGOTIATION_RELEASED"
+                    "intentId=$intentId reason=$block wakeup=NEGOTIATION_CAN_EXECUTE"
             )
             return
         }
