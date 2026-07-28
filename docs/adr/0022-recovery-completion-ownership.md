@@ -3877,7 +3877,9 @@ NEGOTIATION_CAN_EXECUTE → dispatch → EXECUTED
 
 **Fields:** `EdgeRecoveryRecord.restartDispatchAtMs`, `mediaRestoredObservedAtMs` (bool `mediaRestored` retained; freshness via timestamps).
 
-**UT lock:** `RecoveryCompletionAuthorityTest` (defer+ICE / media_path HOLD / pre-dispatch mediaRestored HOLD / post-dispatch CLOSE).
+**UT lock:** `RecoveryCompletionAuthorityTest` (defer+ICE / media_path HOLD / pre-dispatch mediaRestored HOLD / post-dispatch CLOSE / reattach probe freshness).
+
+**Reverse proof (2026-07-28):** `phase=RECOVERED` only inside `markRecovered` after `canClose`; `onIceConnected` is fact→evaluate only. Soak analyzer: `scripts/analyze-b31-completion-authority.ps1` / runner `scripts/soak-b31-completion-authority.ps1`.
 
 ### Design freeze confirmation — **ACCEPTED 2026-07-28**
 

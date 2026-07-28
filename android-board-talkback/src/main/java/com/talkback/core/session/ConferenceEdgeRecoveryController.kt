@@ -1717,12 +1717,13 @@ class ConferenceEdgeRecoveryController(
             "MEDIA_RESTORED"
         }
         logCompletionEvidenceAccepted(record, evidence)
-        markRecovered(record, evidence)
-        onLog(
-            "RECOVERY_DECISION session=${key.sessionId} edge=${key.remoteModuleId} " +
-                "attempt=${record.recoveryAttemptId} trigger=${RecoveryReevaluateTrigger.ICE_RESTORED} " +
-                "decision=RECOVERED approved=true"
-        )
+        if (markRecovered(record, evidence)) {
+            onLog(
+                "RECOVERY_DECISION session=${key.sessionId} edge=${key.remoteModuleId} " +
+                    "attempt=${record.recoveryAttemptId} trigger=${RecoveryReevaluateTrigger.ICE_RESTORED} " +
+                    "decision=RECOVERED approved=true"
+            )
+        }
     }
 
     /**
@@ -1824,9 +1825,13 @@ class ConferenceEdgeRecoveryController(
         runIceRestorationCompletionEvaluation(record)
     }
 
-    private fun markRecovered(record: EdgeRecoveryRecord, closeEvidence: String = "EDGE_RECOVERED") {
+    /**
+     * @return true iff obligation closed as [ObligationCloseReason.RECOVERED]
+     * (callers MUST NOT log decision=RECOVERED on false).
+     */
+    private fun markRecovered(record: EdgeRecoveryRecord, closeEvidence: String = "EDGE_RECOVERED"): Boolean {
         val key = record.key
-        val current = edges[key] ?: return
+        val current = edges[key] ?: return false
         if (
             record.recoveryAttemptId != current.recoveryAttemptId ||
             record.obligationGeneration != current.obligationGeneration
@@ -1837,7 +1842,7 @@ class ConferenceEdgeRecoveryController(
                     "currentAttempt=${current.recoveryAttemptId} currentGen=${current.obligationGeneration} " +
                     "evidence=$closeEvidence"
             )
-            return
+            return false
         }
         // Exclusive close already stamped (e.g. OBLIGATION_DEADLINE on scheduler thread).
         // MUST NOT rewrite phase→RECOVERED; that poisons successor freshness (phase==RECOVERED).
@@ -1848,7 +1853,7 @@ class ConferenceEdgeRecoveryController(
                     "reason=obligation_already_closed closeReason=${current.obligationCloseReason} " +
                     "evidence=$closeEvidence"
             )
-            return
+            return false
         }
         // INV-REC-027/028: do not enter RECOVERED while uncovered deferred / pre-dispatch evidence.
         if (!canClose(record, ObligationCloseReason.RECOVERED, closeEvidence)) {
@@ -1862,7 +1867,7 @@ class ConferenceEdgeRecoveryController(
                     "restartDispatchAtMs=${record.restartDispatchAtMs ?: "NONE"} " +
                     "mediaRestoredObservedAtMs=${record.mediaRestoredObservedAtMs ?: "NONE"}"
             )
-            return
+            return false
         }
         cancelDebounce(key)
         cancelWatchdog(key)
@@ -1878,6 +1883,7 @@ class ConferenceEdgeRecoveryController(
         )
         notifyAttemptLineageObservation(record, "edge_recovered")
         notifyChanged(key.sessionId)
+        return true
     }
 
     fun cancelSession(sessionId: String, reason: String) {
@@ -2378,11 +2384,12 @@ class ConferenceEdgeRecoveryController(
         if (record.controlPlaneStarted() && snapshot.canCompleteRecovery()) {
             val evidence = completionEvidenceFromReachability(record, snapshot, trigger)
             logCompletionEvidenceAccepted(record, evidence, snapshot)
-            markRecovered(record, evidence)
-            onLog(
-                "RECOVERY_DECISION session=${record.key.sessionId} edge=${record.key.remoteModuleId} " +
-                    "attempt=${record.recoveryAttemptId} trigger=$trigger decision=RECOVERED approved=true"
-            )
+            if (markRecovered(record, evidence)) {
+                onLog(
+                    "RECOVERY_DECISION session=${record.key.sessionId} edge=${record.key.remoteModuleId} " +
+                        "attempt=${record.recoveryAttemptId} trigger=$trigger decision=RECOVERED approved=true"
+                )
+            }
             return
         }
         if (record.phase.isFailedMediaRecovery() && hasResurrectionEvidence(snapshot, trigger)) {
