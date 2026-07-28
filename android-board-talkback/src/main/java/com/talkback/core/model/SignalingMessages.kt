@@ -36,5 +36,9 @@ data class SignalEnvelope(
     val timestampMs: Long,
     val payload: String,
     val nonce: String,
-    val signature: String
+    val signature: String,
+    /** Stamped at datagram accept; not on the wire (ADR-0022 Q2 receiveGeneration). */
+    val receiveGeneration: Long? = null,
+    /** Socket that accepted the datagram; not on the wire. */
+    val receiveSocketId: Long? = null
 )

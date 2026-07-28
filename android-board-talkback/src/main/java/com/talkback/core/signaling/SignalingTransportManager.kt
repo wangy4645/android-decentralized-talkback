@@ -5,8 +5,10 @@ import com.talkback.core.signaling.link.LinkQualificationState
 import com.talkback.core.signaling.link.LinkQualificationTrace
 import com.talkback.core.signaling.link.LinkQualificationTracker
 import com.talkback.core.signaling.link.QualificationRepairCoordinator
+import com.talkback.core.signaling.link.SignalingGenerationAuthority
 import com.talkback.core.signaling.link.TransportCapabilitySnapshot
 import com.talkback.core.signaling.link.TransportRepairRequester
+import com.talkback.core.signaling.peer.PeerEdgeSignalingReadiness
 import com.talkback.core.signaling.prr.PeerReachabilityReannounceController
 import com.talkback.core.util.TransportCapabilityTrace
 import java.util.concurrent.CopyOnWriteArrayList
@@ -31,6 +33,7 @@ class SignalingTransportManager(
     private var socketOpen: Boolean = false
     private var receiveLoopActive: Boolean = false
     private var lastNotifiedTransportEpoch: Long = 0L
+    private var peerEdgeSignalingReadiness: PeerEdgeSignalingReadiness? = null
 
     init {
         wireQualificationRepair()
@@ -65,7 +68,20 @@ class SignalingTransportManager(
 
     fun linkQualificationFacts(): LinkQualificationFactSink = linkQualificationTracker
 
+    fun signalingGenerationAuthority(): SignalingGenerationAuthority = linkQualificationTracker
+
     fun qualificationRepairRequester(): TransportRepairRequester = repairCoordinator
+
+    /**
+     * Wire peer-edge readiness invalidate on the same stack as generation++ (Q3/C4).
+     * MUST run before PRR/announce observers see the new epoch.
+     */
+    fun wirePeerEdgeSignalingReadiness(readiness: PeerEdgeSignalingReadiness) {
+        peerEdgeSignalingReadiness = readiness
+        linkQualificationTracker.onSignalingGenerationAdvanced = { prior, _ ->
+            readiness.invalidateGeneration(prior)
+        }
+    }
 
     fun onLinkQualificationStateChanged(
         listener: (LinkQualificationState, LinkQualificationState) -> Unit
@@ -102,6 +118,7 @@ class SignalingTransportManager(
     fun onNetworkLost(networkId: String, interfaceName: String) {
         TransportCapabilityTrace.networkCapabilityLost(interfaceName, networkId)
         linkQualificationTracker.onNetworkLost()
+        peerEdgeSignalingReadiness?.clearAll()
         bindings.forEach { it.invalidateBinding("network_lost") }
         socketOpen = false
         receiveLoopActive = false

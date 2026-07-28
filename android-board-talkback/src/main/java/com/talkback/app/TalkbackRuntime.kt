@@ -60,16 +60,21 @@ class TalkbackRuntime(
     private val coordinator: TalkbackCoordinator,
     private val endpointRegistry: EndpointRegistry,
     private val staticDiscovery: StaticPeerDiscoveryService,
-    private val gossipDiscovery: MeshSweepGossipDiscovery? = null
+    private val gossipDiscovery: MeshSweepGossipDiscovery? = null,
+    private val networkCapabilityObserver: NetworkCapabilityObserver? = null
 ) {
     fun acquireReleaseTimeoutMs(): Long = config.acquireReleaseTimeoutMs
 
     fun start() {
+        // Bind ports first, then attach NetworkCallback. If the observer starts while
+        // localPort is still unset, rebindBinding no-ops and signaling stays null forever.
         coordinator.start(config.signalingPort)
+        networkCapabilityObserver?.start()
     }
 
     fun stop() {
         coordinator.stop()
+        networkCapabilityObserver?.stop()
     }
 
     fun updateStaticPeers(peers: List<StaticPeerEntry>) {

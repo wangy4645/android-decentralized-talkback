@@ -9,8 +9,8 @@ import org.junit.Test
 import java.util.concurrent.Executors
 
 /**
- * 4.3-E Negotiation Stabilization Gate (INV-NEG-001..006).
- * DEFERRED ≠ phase; drain re-validates; CLOSE/SUPERSEDE stale-discards intent.
+ * 4.3-E Negotiation Stabilization Gate (INV-NEG-001..006, INV-NEG-015).
+ * DEFERRED keeps phase; drain re-validates; CLOSE/SUPERSEDE stale-discards intent.
  */
 class NegotiationStabilizationGateTest {
     private val scheduler = Executors.newSingleThreadScheduledExecutor()
@@ -18,6 +18,7 @@ class NegotiationStabilizationGateTest {
     private var iceRestartCalls = 0
     private var canExecute = true
     private val decisionLogs = mutableListOf<String>()
+    private val deferredBaselines = mutableListOf<Pair<String, String>>()
     private lateinit var controller: ConferenceEdgeRecoveryController
 
     private val sessionId = "sess-neg-gate"
@@ -29,6 +30,7 @@ class NegotiationStabilizationGateTest {
         iceRestartCalls = 0
         canExecute = true
         decisionLogs.clear()
+        deferredBaselines.clear()
         controller = buildController()
     }
 
@@ -60,6 +62,9 @@ class NegotiationStabilizationGateTest {
                 signalingState = "STABLE",
                 localRole = "ANSWERER"
             )
+        },
+        onNegotiationGateDeferred = { sid, rid ->
+            deferredBaselines.add(sid to rid)
         }
     )
 
@@ -76,7 +81,7 @@ class NegotiationStabilizationGateTest {
         assertEquals(0, iceRestartCalls)
         val lineage = controller.attemptLineageObservation(sessionId, remoteModuleId)!!
         assertEquals(EdgeRecoveryPhase.REATTACH_ACCEPTED, lineage.phase)
-                assertTrue(decisionLogs.any { it.contains("ICE_RESTART_GATE_BLOCKED") && it.contains("ANSWERER_SETTLING") })
+        assertTrue(decisionLogs.any { it.contains("ICE_RESTART_GATE_BLOCKED") && it.contains("ANSWERER_SETTLING") })
         assertTrue(
             decisionLogs.any {
                 it.contains("ICE_RESTART_DEFERRED") &&
@@ -117,7 +122,7 @@ class NegotiationStabilizationGateTest {
         val lineage = controller.attemptLineageObservation(sessionId, remoteModuleId)!!
         assertEquals(EdgeRecoveryPhase.ICE_RESTARTING, lineage.phase)
         assertTrue(decisionLogs.any { it.contains("RECOVERY_ICE_RESTART_DISPATCHED") })
-                assertTrue(
+        assertTrue(
             decisionLogs.any {
                 it.contains("terminal=EXECUTED") && it.contains("intentId=R")
             }
@@ -235,5 +240,18 @@ class NegotiationStabilizationGateTest {
             controller.attemptLineageObservation(sessionId, remoteModuleId)!!.phase
         )
         assertFalse(decisionLogs.any { it.contains("deferredReason=NEGOTIATION_SETTLING") })
+    }
+
+    @Test
+    fun gateDefer_establishesObservationBaseline_invNeg015() {
+        canExecute = false
+        controller.onRecoveryReattachAccepted(
+            sessionId = sessionId,
+            remoteModuleId = remoteModuleId,
+            recoveryReason = RecoveryReason.NETWORK_RECOVERY,
+            source = RecoverySource.ICE_MONITOR
+        )
+        assertEquals(listOf(sessionId to remoteModuleId), deferredBaselines)
+        assertTrue(decisionLogs.any { it.contains("ICE_RESTART_DEFERRED") })
     }
 }

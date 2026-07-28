@@ -2,6 +2,7 @@ package com.talkback.core.signaling
 
 import com.talkback.core.discovery.NetworkInterfaceSubnetProvider
 import com.talkback.core.signaling.link.LinkQualificationFactSink
+import com.talkback.core.signaling.link.SignalingGenerationAuthority
 import com.talkback.core.signaling.link.LinkQualificationTrace
 import com.talkback.core.signaling.link.QualificationFailureReason
 import com.talkback.core.signaling.prr.PrrInboundFactObserver
@@ -26,6 +27,7 @@ import java.util.concurrent.atomic.AtomicReference
 class UdpSignalingChannel(
     private val lifecycleReporter: SignalingTransportLifecycleReporter? = null,
     private val linkQualificationFacts: LinkQualificationFactSink? = null,
+    private val signalingGeneration: SignalingGenerationAuthority? = null,
     private val socketBinder: SignalingSocketBinder? = null,
     private val localModuleId: String = "LOCAL",
     private val localAddressProbe: NetworkInterfaceSubnetProvider = NetworkInterfaceSubnetProvider()
@@ -132,7 +134,8 @@ class UdpSignalingChannel(
                     socketId = socketId
                 )
                 observeInboundResumed(source.host, source.port)
-                runCatching { listener?.invoke(envelope, source) }.onFailure { error ->
+                val stamped = envelope.copy(receiveGeneration = qualificationRebindGeneration, receiveSocketId = socketId)
+                runCatching { listener?.invoke(stamped, source) }.onFailure { error ->
                     TalkbackLog.e(
                         "SIGNAL_DISPATCH_FAILED type=${envelope.type} " +
                             "from=${envelope.from.moduleId.value} src=${source.host}:${source.port}",
@@ -154,6 +157,14 @@ class UdpSignalingChannel(
     }
 
     override fun send(target: PeerTarget, envelope: SignalEnvelope) {
+        sendInternal(target, envelope, countsAsLocalOutbound = true)
+    }
+
+    override fun sendRepairAnnounce(target: PeerTarget, envelope: SignalEnvelope) {
+        sendInternal(target, envelope, countsAsLocalOutbound = false)
+    }
+
+    private fun sendInternal(target: PeerTarget, envelope: SignalEnvelope, countsAsLocalOutbound: Boolean) {
         ensureSocketBound("send")
         val data = runCatching { encode(envelope).toByteArray() }.getOrElse { byteArrayOf() }
         val dst = "${target.host}:${target.port}"
@@ -186,7 +197,9 @@ class UdpSignalingChannel(
                 nonce = envelope.nonce.takeIf { it.isNotBlank() }
             )
             observePathAsymmetry(dstIp, packet.port, envelope.type.name)
-            observeFirstOutboundAfterRebind(dstIp, packet.port)
+            if (countsAsLocalOutbound) {
+                observeFirstOutboundAfterRebind(dstIp, packet.port)
+            }
         }
         FloorRequestCallsiteTracer.recordUdpWrite(
             sendTarget = target,
@@ -234,8 +247,11 @@ class UdpSignalingChannel(
         socketRef.set(newSocket)
         socketId = newSocketId
         val now = System.currentTimeMillis()
-        rebindGeneration += 1L
-        qualificationRebindGeneration = rebindGeneration
+        qualificationRebindGeneration = signalingGeneration?.advanceRebindGeneration() ?: run {
+            rebindGeneration += 1L
+            rebindGeneration
+        }
+        rebindGeneration = qualificationRebindGeneration
         socketBoundAtMs = now
         rebindAtMs = now
         lastInboundOnCurrentSocketMs = 0L

@@ -20,20 +20,38 @@ class UdpSignalingReannounceSender(
 ) : SignalingReannounceSender {
 
     override fun sendReannounce(snapshot: LocalEndpointSnapshot, transportEpoch: Long) {
+        val envelope = buildReannounceEnvelope(snapshot, transportEpoch)
+        helloTargetProvider.helloTargets().forEach { target ->
+            runCatching {
+                signalingChannel.sendRepairAnnounce(target, envelope)
+            }
+        }
+    }
+
+    override fun sendReannounceToPeer(
+        snapshot: LocalEndpointSnapshot,
+        transportEpoch: Long,
+        target: PeerTarget
+    ) {
+        val envelope = buildReannounceEnvelope(snapshot, transportEpoch)
+        runCatching {
+            signalingChannel.sendRepairAnnounce(target, envelope)
+        }
+    }
+
+    private fun buildReannounceEnvelope(
+        snapshot: LocalEndpointSnapshot,
+        transportEpoch: Long
+    ): SignalEnvelope {
         val payload = HelloPayload(
             moduleId = snapshot.localModuleId,
             endpoints = snapshot.endpoints,
             transportEpoch = transportEpoch
         ).encode()
-        val envelope = buildSignedEnvelope(
+        return buildSignedEnvelope(
             from = snapshot.fromAddress,
             payload = payload
         )
-        helloTargetProvider.helloTargets().forEach { target ->
-            runCatching {
-                signalingChannel.send(target, envelope)
-            }
-        }
     }
 
     private fun buildSignedEnvelope(from: EndpointAddress, payload: String): SignalEnvelope {

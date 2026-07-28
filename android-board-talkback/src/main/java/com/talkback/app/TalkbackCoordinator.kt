@@ -80,6 +80,7 @@ import com.talkback.core.session.DeferredReason
 import com.talkback.core.session.IceRestartGateBlockReason
 import com.talkback.core.session.IceRestartGateProbe
 import com.talkback.core.session.InboundReattachLineageVerdict
+import com.talkback.core.session.NegotiationCapabilityObservation
 import com.talkback.core.session.ReattachDispatchOutcome
 import com.talkback.core.session.RecoveryCapabilitySignature
 import com.talkback.core.session.RecoveryReason
@@ -89,6 +90,9 @@ import com.talkback.core.session.RecoverySource
 import com.talkback.core.session.projectRecoveryCapabilitySignature
 import com.talkback.core.signaling.link.LinkQualificationState
 import com.talkback.core.signaling.link.TransportCapabilitySnapshot
+import com.talkback.core.signaling.peer.PeerControlSignalingAdmission
+import com.talkback.core.signaling.peer.PeerEdgeSignalingReadiness
+import com.talkback.core.signaling.peer.PeerInboundObserved
 import com.talkback.core.session.ConferenceParticipantProjector
 import com.talkback.core.session.ConferenceRuntimeProjectionLogger
 import com.talkback.core.session.ConferenceNetworkIndicator
@@ -305,6 +309,7 @@ class TalkbackCoordinator(
     private val moduleMixer: ModuleAudioMixer = ModuleAudioMixer(),
     private val linkQualificationSnapshot: () -> TransportCapabilitySnapshot =
         { TransportCapabilitySnapshot(linkQualification = LinkQualificationState.BIDIRECTIONAL_READY) },
+    private val peerEdgeSignalingReadiness: PeerEdgeSignalingReadiness? = null,
     private val onLog: ((String) -> Unit)? = null
 ) {
     private val receivePathLivenessObserver = ReceivePathLivenessObserver()
@@ -322,6 +327,11 @@ class TalkbackCoordinator(
             onAfterRecreate = { moduleId -> negotiateConferencePeerAfterRecreate(moduleId) }
         )
     }
+    /**
+     * B3 INV-NEG-011/015: capability observation ledger for rising-edge CAN_EXECUTE.
+     * Truth remains [computeIceRestartGateProbe]; this is transition memory only.
+     */
+    private val negotiationCapabilityObservation = NegotiationCapabilityObservation()
     private val conferenceEdgeRecoveryController: ConferenceEdgeRecoveryController by lazy {
         ConferenceEdgeRecoveryController(
             localModuleId = localModuleId.value,
@@ -392,6 +402,18 @@ class TalkbackCoordinator(
                 }
                 probe
             },
+            onNegotiationGateDeferred = { sessionId, remoteModuleId ->
+                runOnCoordinatorSync {
+                    negotiationCapabilityObservation.establishDeferredBaseline(
+                        sessionId,
+                        remoteModuleId
+                    )
+                    log(
+                        "NEGOTIATION_CAPABILITY_OBSERVATION session=$sessionId " +
+                            "remote=$remoteModuleId baseline=false reason=DEFER_ADMISSION"
+                    )
+                }
+            },
             onRecoveryStateChanged = { sessionId ->
                 runOnCoordinatorSync {
                     val session = sessions[sessionId] ?: return@runOnCoordinatorSync
@@ -440,11 +462,6 @@ class TalkbackCoordinator(
     private val lastAuthorityReachableBySession = ConcurrentHashMap<String, Boolean>()
     /** Per-edge last [RecoveryCapabilitySignature] for materiality detection (ADR-0022 R28-G). */
     private val lastRecoveryCapabilityByEdge = ConcurrentHashMap<ConferenceEdgeKey, RecoveryCapabilitySignature>()
-    /**
-     * B3 INV-NEG-011: last [IceRestartGateProbe.executable] per edge for rising-edge
-     * [WakeupSourceType.NEGOTIATION_CAN_EXECUTE] emission (INV-NEG-012 single predicate).
-     */
-    private val lastNegotiationExecutableByEdge = ConcurrentHashMap<ConferenceEdgeKey, Boolean>()
     /** Dedup key for [CONFERENCE_RUNTIME_DECISION] (Issue2 probe). */
     private val lastConferenceRuntimeDecisionBySession = ConcurrentHashMap<String, String>()
     /** Dedup key for [CONFERENCE_RUNTIME_MISSING] (Gate-R1-B). */
@@ -813,6 +830,9 @@ class TalkbackCoordinator(
      */
     private fun releaseConferenceRuntimeAfterRemoteTermination(channelId: String, reason: String) {
         conferenceEdgeRecoveryController.cancelChannel(channelId, reason)
+        sessions.values
+            .filter { it.channelId == channelId }
+            .forEach { negotiationCapabilityObservation.clearSession(it.id) }
         clearConferenceRejoinState(channelId)
         ConferenceAuditTimelineLog.lifecycle(
             event = "REMOTE_TERMINATION",
@@ -1093,7 +1113,12 @@ class TalkbackCoordinator(
             TimeUnit.MILLISECONDS
         )
         scheduler.scheduleAtFixedRate(
-            { runOnCoordinator { sendSessionHeartbeats() } },
+            {
+                runOnCoordinator {
+                    peerEdgeSignalingReadiness?.evaluateFreshness()
+                    sendSessionHeartbeats()
+                }
+            },
             config.heartbeatIntervalMs,
             config.heartbeatIntervalMs,
             TimeUnit.MILLISECONDS
@@ -3409,6 +3434,7 @@ class TalkbackCoordinator(
 
     private fun handleSignal(signal: SignalEnvelope, fromPeer: PeerTarget) {
         if (!verifyIncomingSignal(signal)) return
+        observePeerInboundAfterAuth(signal)
         callableModuleGate.markVerified(signal.from.moduleId.value)
         rememberSignalPeer(signal.from.moduleId.value, fromPeer)
         touchSession(signal.sessionId)
@@ -5223,16 +5249,17 @@ class TalkbackCoordinator(
         transition: String
     ) {
         if (session.type != SessionType.CONFERENCE) return
-        val edge = ConferenceEdgeKey(session.id, remoteModuleId)
         val probe = computeIceRestartGateProbe(session.id, remoteModuleId)
-        val previous = lastNegotiationExecutableByEdge.put(edge, probe.executable)
-        // INV-NEG-011: unavailable→available (null/false → true). true→true is not a wakeup.
-        val rising = probe.executable && previous != true
-        if (!rising) {
+        val observed = negotiationCapabilityObservation.observeRecompute(
+            session.id,
+            remoteModuleId,
+            probe.executable
+        )
+        if (!observed.risingEdge) {
             log(
                 "NEGOTIATION_CAPABILITY_REEVAL session=${session.id} remote=$remoteModuleId " +
                     "transition=$transition executable=${probe.executable} " +
-                    "previous=${previous ?: "NONE"} rising=false " +
+                    "previous=${observed.previous ?: "NONE"} rising=false " +
                     "signalingState=${probe.signalingState ?: "UNKNOWN"} " +
                     "block=${probe.blockReason ?: "NONE"}"
             )
@@ -6202,6 +6229,7 @@ class TalkbackCoordinator(
 
         releaseFloorIfHolderUnavailable(session, moduleId)
         conferenceEdgeRecoveryController.cancelEdge(session.id, moduleId, "member_left")
+        negotiationCapabilityObservation.clearEdge(session.id, moduleId)
         releaseMeshPeer(session, moduleId)
         if (session.remote?.moduleId?.value == moduleId) {
             val nextRemote = meshRoster(session).firstOrNull { it.moduleId != localModuleId }
@@ -6251,6 +6279,7 @@ class TalkbackCoordinator(
         releaseFloorIfHolderUnavailable(session, moduleId)
         conferenceParticipantManager.applyPrune(session.id, moduleId)
         conferenceEdgeRecoveryController.cancelEdge(session.id, moduleId, "member_left")
+        negotiationCapabilityObservation.clearEdge(session.id, moduleId)
         session.memberModules.remove(ModuleId(moduleId))
         releaseMeshPeer(session, moduleId)
         if (session.remote?.moduleId?.value == moduleId) {
@@ -6461,6 +6490,7 @@ class TalkbackCoordinator(
                 cancelHostRejoinRetry(channelId)
             }
             conferenceEdgeRecoveryController.cancelSession(session.id, "local_hangup")
+            negotiationCapabilityObservation.clearSession(session.id)
             notifySoftLeftParticipantsMeetingEnded(session)
             disposeConferenceParticipantState(session.id)
         }
@@ -10506,13 +10536,44 @@ class TalkbackCoordinator(
     /**
      * Signaling handoff success = local send completed without exception.
      * Not peer ACK; not "sendSignal was invoked".
+     * Q8 Hard gate: new peer-scoped control signaling requires PEER_EDGE_SIGNALING_READY.
      */
     private fun sendSignalHandoff(target: PeerTarget, envelope: SignalEnvelope): Boolean {
+        val peerModuleId = envelope.to?.moduleId?.value
+        if (peerModuleId != null &&
+            !PeerControlSignalingAdmission.maySendNewControl(
+                type = envelope.type,
+                peerEdgeReady = peerEdgeSignalingReadiness?.isReady(peerModuleId) ?: true
+            )
+        ) {
+            log(
+                "PEER_EDGE_CONTROL_BLOCKED type=${envelope.type} peer=$peerModuleId " +
+                    "reason=${peerEdgeSignalingReadiness?.snapshot(peerModuleId)?.reason}"
+            )
+            return false
+        }
         return runCatching {
             signalingChannel.send(target, envelope)
         }.onFailure {
             log("Signal send failed type=${envelope.type} err=${it.message}")
         }.isSuccess
+    }
+
+    /** INV-SIG-006: emit PeerInboundObserved only after authenticated accept + stamped generation. */
+    private fun observePeerInboundAfterAuth(signal: SignalEnvelope) {
+        val readiness = peerEdgeSignalingReadiness ?: return
+        val generation = signal.receiveGeneration ?: return
+        val socketId = signal.receiveSocketId ?: return
+        val remoteModuleId = signal.from.moduleId.value
+        if (remoteModuleId.isBlank()) return
+        readiness.onPeerInboundObserved(
+            PeerInboundObserved(
+                remoteModuleId = remoteModuleId,
+                socketId = socketId,
+                receiveGeneration = generation,
+                observedAtMs = System.currentTimeMillis()
+            )
+        )
     }
 
     private fun buildSignedEnvelope(

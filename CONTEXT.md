@@ -190,19 +190,31 @@ _Avoid_: passive wait, 每次 re-evaluate 必须发包
 
 **Media Edge Restored**:
 本端到远端 Module 的 transport / ICE 连接重新可用；属于 **Connectivity 事实**。不等于 obligation episode 完成。ICE CONNECTED 是 Media Edge Restored 的常见表现，但 recovery controller **不得**将其直接当作 episode terminal。见 ADR-0022 R28-E / R28-J。
-_Avoid_: ICE CONNECTED == RECOVERED, 把 media 恢复当 control-plane 完成
+_Avoid_: ICE CONNECTED == RECOVERED, 把 media 恢复当 control-plane 完成, 用 ICE CONNECTED 关闭 NEGOTIATION deferred intent, ICE_CONNECTED == Peer Edge Signaling Ready
+
+**Local Link Qualification**:
+本端 signaling socket epoch 的本地资格阶梯：`BOUND` → `RECEIVE_READY` → `BIDIRECTIONAL_READY`（由 `LinkQualificationTracker` 拥有）。回答「本节点信令端点是否可收发」；**不是**按 peer 的 edge 资格。见 ADR-0022 R28-L.1。
+_Avoid_: SIGNALING_READY（全局）, 用 BIDIRECTIONAL_READY 推断所有 peer 可达
+
+**Peer Edge Signaling Ready**:
+针对单条 `(local, remoteModuleId)` edge 的**派生投影**（非通用 health gate）：公式见 Q5；仅 **Hard gate 新发往该 peer 的 control signaling**；**Ignore** ICE/media recovery dispatch、已有 RTP、membership/floor；UI 仅 Soft 诊断。PRR announce ≠ ready。见 ADR-0022 Q1–Q8 / INV-SIG-001..020。
+_Avoid_: sticky ready bit, 当全局 health, 接入 B3/completion/obligation, peer stale → 全局 rebind, PeerEdgeSignalingReadiness 调用 repair, PRR/rebind 写 ready, false → 掐媒体/关义务
+
+**PeerInboundObserved**:
+信令收包路径产出的只读事实：验签通过的 signaling envelope（任意有效 `SignalType`，含 HEARTBEAT）+ `from.moduleId` + `socketId` + 收包时 stamp 的 `receiveGeneration` + `observedAtMs`（`source=NETWORK_SIGNAL`）。只陈述「收到来自该 peer 的可信 inbound」，不陈述 ready。PRR announce 本地 send 成功不得产生本事实。RTP/媒体与验签失败不得产生（后者最多 audit）。见 ADR-0022 INV-SIG-006..008 / 015..016。
+_Avoid_: 把 fact 直接当 PEER_EDGE_SIGNALING_READY, 仅 HELLO 才算, 未验签 envelope, RTP 当 signaling evidence, reject 进 qualification pipeline, PRR send success == observed
 
 **Recovery Edge Completed**:
-Recovery Controller **显式宣布** 当前 **Obligation Episode** terminal（如 episode `CLOSED(RECOVERED)`）。Edge Lifecycle **可能继续**（record 仍在）。Membership / conference teardown 才结束 Edge Lifecycle。见 ADR-0022 R28-E / R28-J。
-_Avoid_: 用 ICE 连通推断 recovery 完成, 把 episode RECOVERED 当作删 edge
+Recovery Controller **显式宣布** 当前 **Obligation Episode** terminal（如 episode `CLOSED(RECOVERED)`）。仅当 episode 所拥有的 deferred intents 均被 completion evidence **覆盖**、已执行解消、或 ALL-domain 生命周期终结时，才可宣布。Edge Lifecycle **可能继续**（record 仍在）。见 ADR-0022 R28-E / R28-J / INV-REC-026/027。
+_Avoid_: 用 ICE 连通推断 recovery 完成, 把 episode RECOVERED 当作删 edge, RECOVERED == 某一维（transport）完成即关义务
 
 **Attempt Terminal**:
 当前 **Recovery Attempt** 的结束；含 `RECOVERED`、`FAILED_MEDIA_RECOVERY`、`CANCELLED`、`SUPERSEDED`（含 `ATTEMPT_TIMEOUT` 路径）。**不**终止 **Edge Obligation**。见 ADR-0022 R28-F。
 _Avoid_: attempt_timeout == edge 结束
 
 **Edge Obligation**:
-一个 **Obligation Episode** 内 completion owner 持续 **re-evaluate** 的义务（R28-H 作用域 = 单 episode）。单次 Attempt Terminal **不**自动解除该 episode 的 obligation。Episode terminal：`RECOVERED`、`OBLIGATION_DEADLINE` 等 R28-H close set。Edge Lifecycle terminal（record remove）：Membership `LEFT(remoteModuleId)`、Conference `TERMINATED`、本端 teardown — 与 **Recovery Completion Obligation** 在 episode 级同族，见 ADR-0022 R28-H / R28-J。
-_Avoid_: FAILED_MEDIA_RECOVERY 后撒手, 删 edge record 即无义务, 把 episode CLOSED 当作 edge 结束
+一个 **Obligation Episode** 内 completion owner 持续 **re-evaluate** 的义务（R28-H 作用域 = 单 episode）。单次 Attempt Terminal **不**自动解除该 episode 的 obligation。Episode terminal：`RECOVERED`、`OBLIGATION_DEADLINE` 等 R28-H close set。**只要仍持有未被 evidence 覆盖的 deferred intent，obligation 不得关闭（INV-REC-027 / Q10 R-1）；此时 attempt phase 也不得进入 `RECOVERED`（INV-REC-028 / Q11 P-1）——可记 `mediaRestored`，但保持 actively recovering。** Edge Lifecycle terminal（record remove）：Membership `LEFT(remoteModuleId)`、Conference `TERMINATED`、本端 teardown。见 ADR-0022 R28-H / R28-J。
+_Avoid_: FAILED_MEDIA_RECOVERY 后撒手, 删 edge record 即无义务, 把 episode CLOSED 当作 edge 结束, 关义务后另挂独立 DeferredIntentController, phase=RECOVERED 且 obligation 仍 OPEN
 
 **Superseded Attempt**:
 Material capability 变化后，controller **显式废弃**当前 attempt 并 **MAY** 开启新 attempt（新 watchdog budget）。非每次 material transition 都必须 SUPERSEDE。见 ADR-0022 R28-F。
@@ -213,8 +225,40 @@ _Avoid_: reachability 变化 == 必须新 attempt, 隐式 retry
 _Avoid_: 裸 bool 向量 diff, HELLO 即 re-evaluate, authorityReachable 直接等于可 COMPLETE
 
 **Recovery Control-plane Started**:
-当前 attempt 已越过 control-plane 边界（如 reattach 已请求/已接受、ICE restart 进行中）。此状态下 ICE 恢复 **MAY** 在 completion evaluation 中直接 yield `RECOVERED`；与 `RECOVERY_PENDING` 且未发 reattach 的路径不同。实现字段 `controlPlaneStarted`；见 ADR-0022 R28-E。
-_Avoid_: 用 phase 枚举代替 control-plane 边界
+当前 attempt 已越过 control-plane 边界（如 reattach 已请求/已接受、ICE restart **已 dispatch**）。此状态下 ICE 恢复 **MAY** 进入 completion evaluation；但若仍有 **uncovered NEGOTIATION deferred intent**，不得将 ICE CONNECTED 直接当作 episode `CLOSED(RECOVERED)`（INV-REC-026/027）。与 `RECOVERY_PENDING` 且未发 reattach 的路径不同。实现字段 `controlPlaneStarted`；见 ADR-0022 R28-E。
+_Avoid_: 用 phase 枚举代替 control-plane 边界, deferred-but-not-issued restart 当作已越过 ICE_RESTARTING 完成边界
+
+**Answerer Settlement**:
+PeerConnection 上本端作为 Answerer 完成 remote-offer 收敛后的 negotiation settling 事实；属 WebRTC negotiation 层，**不是** Recovery phase。
+_Avoid_: IceRestartCooldown, stableForMs, 把 ANSWERER_SETTLED 当作 RecoveryController phase
+
+**Answerer Transaction Committed**:
+Answerer settlement 的 ownership boundary：本地 SRD(OFFER)→createAnswer→SLD(ANSWER) 已完成，**且** GROUP_ACCEPT 已成功进入 signaling handoff 之后，由 Coordinator 调用 MeshEngine `commitAnswererTransaction` 所声明的内部 seam（INV-NEG-005）。释放 Answerer Settlement 并产出 `NEGOTIATION_RELEASED` fact；Coordinator 路由该 fact 至 Recovery drain。**不是** SLD 成功即 commit、**不是** `sendSignal` 调用即 commit、**不是**对端 ACK。
+_Avoid_: onGroupAcceptSent, GROUP_ACCEPT sent 即 release, 用 createOffer 清 settlement（INV-NEG-001）, MeshEngine 内嵌调 Recovery drain, Recovery 调用 commit
+
+**Negotiation Stabilization Gate**:
+在 Answerer Settlement（或 signaling 非 STABLE）期间阻止 ICE restart *execution*、同时保留 ICE Restart Intent 的 negotiation contract。不是时间冷却。`MediaActionDisposition.DEFERRED` **不是** `EdgeRecoveryPhase` 转移，也 **不是** Presence 转移（INV-NEG-004）；真正 dispatch 才进入如 `ICE_RESTARTING`。UI / Presence 不解释 settling/defer 原因。**唯一 execution admission 落点**是 `issueBoundedIceRestart()` 入口（INV-NEG-006）；不得放在 `resolveMediaActionOwner` 或 `createOffer` 前。
+_Avoid_: IceRestartDelay, IceRestartCooldown, 丢弃未执行的 restart request, ICE_RESTART_DEFERRED phase, UI「negotiation waiting」态, 在 resolveMediaActionOwner 或 createOffer 处 defer
+
+**ICE Restart Intent**:
+某 Recovery Attempt 上「需要执行 bounded ICE restart」的未完成意图；settling 导致 DEFERRED 时必须保留，否则 watchdog 会误判 media failure。Intent 由创建它的 **Obligation Episode / Attempt** 拥有（INV-NEG-002）——**obligation 是 intent 的唯一生命周期 owner**；不得在 obligation CLOSED 后另存独立 intent（拒 R-2）。Negotiation 层不得 create / persist / retry / cancel。Intent **不得**跨 SUPERSEDE / obligation CLOSE / generation 存活（INV-NEG-003）；失效须进入可审计的 terminal（如 EXPIRED → STALE_DISCARD），不得仅静默清空字段。Successor 若仍需 restart，须经本 episode 的 media action resolve **新建** intent。Deferred 时带 **domain**（ICE restart gate defer → NEGOTIATION）；completion evidence 必须覆盖该 domain 才可随 obligation 关闭（INV-REC-026）。
+_Avoid_: intent == 已 dispatch / iceRestartIssued, 把 intent 放进 PeerConnection settling 状态机, 跨 obligationGeneration 继承 pending restart, close 后仍等 NEGOTIATION_RELEASED 执行, successor 继承 predecessor deferred restart, 关义务后保留 orphan intent
+
+**Deferred Intent Domain**:
+Deferred intent 阻塞所在的恢复子域；决定何种 completion evidence 有权覆盖/关闭它。当前至少：`NEGOTIATION`（gate settling）、`MEDIA`、`TRANSPORT`、`CONTROL`；`SESSION`/`ALL` 仅生命周期终结类 evidence。见 ADR-0022 INV-REC-026。**Cardinality（Q12 M-1）：** 每个 Obligation Episode / 当前 attempt **至多一个** active deferred intent slot（as-built 单字段组）。
+_Avoid_: 所有 deferred 共用一个 RECOVERED 桶, ICE_CONNECTED 覆盖 NEGOTIATION, 本刀引入多 intent 聚合或 per-domain sub-obligation
+
+**Media Path Active Without Restart**:
+Observation fact：当前 ICE/media 路径可用，且**尚未**完成一次成功的 ICE restart transaction。可记日志/诊断；**不是** Completion Evidence，不得单独驱动 `canClose` / episode `RECOVERED`。存在 pending NEGOTIATION deferred ICE-restart intent 时，禁止据此 short-circuit 进入 restart-completed 语义（Q13 B-3+B-1；INV-REC-029/030）。
+_Avoid_: media_path_active_without_restart == control-plane complete, 据此 phase:=ICE_RESTARTING 且 markRecovered, 用它关闭 NEGOTIATION intent
+
+**Deferred Intent Executed**:
+Deferred intent 的动作已被 dispatch / attempt 消化（如 ICE restart `createOffer` 路径已发出）。解消的是 **intent action**，不是 Obligation Episode。见 INV-REC-031 / Q14 C-3。
+_Avoid_: EXECUTED == RECOVERED, EXECUTED 后复用 pre-dispatch mediaRestored 关义务
+
+**Restart-Resolved Evidence**:
+证明 **本轮** ICE restart transaction 已在 **dispatch 之后** 收敛的 completion evidence（须绑定 `restartDispatchAt` / attempt / gen 等 freshness）。不得使用 dispatch 前既有的 transport availability。见 INV-NEG-016 / Q14。
+_Avoid_: 旧 ICE_CONNECTED 冒充本轮 restart 成功
 
 **Edge Reachability Snapshot**:
 Recovery Edge 上、本端对远端 Module 的**只读聚合事实**，由 Conference Edge Recovery Controller 从各域 fact 组装，**不拥有、不回写**下层。四维正交：`linkReady`（Connectivity）、`peerDiscovered`（Discovery）、`routeConverged`（Signaling/Mesh）、`authorityReachable`（Conference Runtime）。Recovery 决策 **MUST NOT** 依赖 `peerReachable` / `transportReady` 等单 bool 塌缩。见 ADR-0022 R28-D。

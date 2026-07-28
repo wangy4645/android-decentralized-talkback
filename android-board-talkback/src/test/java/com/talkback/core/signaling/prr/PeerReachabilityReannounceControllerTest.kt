@@ -25,8 +25,10 @@ class PeerReachabilityReannounceControllerTest {
         sendCalls.clear()
         PeerReachabilityReannounceTrace.resetForTest { lines.add(it) }
         controller = PeerReachabilityReannounceController(
-            sender = SignalingReannounceSender { snapshot, epoch ->
-                sendCalls.add(snapshot to epoch)
+            sender = object : SignalingReannounceSender {
+                override fun sendReannounce(snapshot: LocalEndpointSnapshot, transportEpoch: Long) {
+                    sendCalls.add(snapshot to transportEpoch)
+                }
             },
             endpointSnapshot = { testSnapshot }
         )

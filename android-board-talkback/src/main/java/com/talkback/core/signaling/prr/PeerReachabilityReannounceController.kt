@@ -3,6 +3,7 @@ package com.talkback.core.signaling.prr
 import com.talkback.core.model.EndpointAddress
 import com.talkback.core.model.EndpointId
 import com.talkback.core.model.ModuleId
+import com.talkback.core.signaling.PeerTarget
 
 /**
  * R28-PRR v1: epoch-scoped signaling reachability re-announcement.
@@ -40,5 +41,26 @@ class PeerReachabilityReannounceController(
         sender.sendReannounce(endpointSnapshot(), transportEpoch)
         PeerReachabilityReannounceTrace.helloSent(transportEpoch, socketId, networkId)
         PeerReachabilityReannounceTrace.endpointReannounced(transportEpoch, socketId, networkId)
+    }
+
+    /**
+     * Peer-scoped PRR hint after peer-edge freshness loss (ADR-0022 Q6).
+     * Does not advance lastEpisodeEpoch / global generation.
+     */
+    fun onPeerEdgeSignalingHint(
+        remoteModuleId: String,
+        target: PeerTarget,
+        transportEpoch: Long,
+        socketId: Long,
+        networkId: String
+    ) {
+        PeerReachabilityReannounceTrace.episodeStarted(
+            transportEpoch = transportEpoch,
+            socketId = socketId,
+            reason = "peer_edge_stale:$remoteModuleId",
+            networkId = networkId
+        )
+        sender.sendReannounceToPeer(endpointSnapshot(), transportEpoch, target)
+        PeerReachabilityReannounceTrace.helloSent(transportEpoch, socketId, networkId)
     }
 }

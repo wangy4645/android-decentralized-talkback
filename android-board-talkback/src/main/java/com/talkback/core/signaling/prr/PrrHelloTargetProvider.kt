@@ -5,8 +5,11 @@ import com.talkback.core.model.ModuleId
 import com.talkback.core.signaling.PeerTarget
 
 /** Callable peer targets for PRR re-announce (discovery/static only; not Coordinator). */
-fun interface PrrHelloTargetProvider {
+interface PrrHelloTargetProvider {
     fun helloTargets(): List<PeerTarget>
+
+    fun helloTargetFor(moduleId: String): PeerTarget? =
+        helloTargets().firstOrNull()
 }
 
 /** Tracks latest discovery presence for PRR HELLO targets. */
@@ -27,4 +30,11 @@ class DiscoveryPrrHelloTargetProvider(
             .map { PeerTarget(it.host, it.port) }
             .distinctBy { "${it.host}:${it.port}" }
             .toList()
+
+    override fun helloTargetFor(moduleId: String): PeerTarget? {
+        val presence = presence.firstOrNull {
+            it.moduleId.value == moduleId && it.host.isNotBlank() && it.port > 0
+        } ?: return null
+        return PeerTarget(presence.host, presence.port)
+    }
 }

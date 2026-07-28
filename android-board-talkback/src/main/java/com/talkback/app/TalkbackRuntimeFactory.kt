@@ -17,6 +17,8 @@ import com.talkback.core.signaling.SignalingChannel
 import com.talkback.core.signaling.SignalingTransportManager
 import com.talkback.core.signaling.link.LinkQualificationState
 import com.talkback.core.signaling.UdpSignalingChannel
+import com.talkback.core.signaling.peer.PeerEdgePrrHintCoordinator
+import com.talkback.core.signaling.peer.PeerEdgeSignalingReadiness
 import com.talkback.core.model.EndpointAddress
 import com.talkback.core.model.EndpointId
 import com.talkback.core.model.RemoteEndpointInfo
@@ -26,6 +28,7 @@ import com.talkback.core.signaling.prr.PeerReachabilityReannounceController
 import com.talkback.core.signaling.prr.UdpSignalingReannounceSender
 import com.talkback.core.webrtc.MediaBearerScope
 import com.talkback.core.webrtc.SessionMediaRegistry
+import java.util.concurrent.Executors
 
 enum class AudioEngineMode {
     REAL_WEBRTC,
@@ -83,10 +86,23 @@ object TalkbackRuntimeFactory {
         val resolvedSignalingChannel = signalingChannel ?: UdpSignalingChannel(
             lifecycleReporter = transportManager,
             linkQualificationFacts = transportManager.linkQualificationFacts(),
+            signalingGeneration = transportManager.signalingGenerationAuthority(),
             socketBinder = socketBinder,
             localModuleId = config.localModuleId.value
         ).also {
             transportManager.attachSignalingBinding(it)
+        }
+        // Peer-edge readiness Hard gate requires stamped receiveGeneration (UDP accept path).
+        // Injected InMemory channels used by JVM integration tests do not stamp; keep readiness null.
+        val peerEdgeSignalingReadiness = if (signalingChannel == null) {
+            PeerEdgeSignalingReadiness(
+                moduleStaleMs = config.moduleStaleMs,
+                localSnapshot = { transportManager.linkQualificationSnapshot() }
+            ).also { readiness ->
+                transportManager.wirePeerEdgeSignalingReadiness(readiness)
+            }
+        } else {
+            null
         }
         val prrSender = UdpSignalingReannounceSender(
             signalingChannel = resolvedSignalingChannel,
@@ -115,6 +131,27 @@ object TalkbackRuntimeFactory {
             }
         )
         transportManager.wirePrrController(prrController)
+        if (peerEdgeSignalingReadiness != null) {
+            val peerEdgePrrHintScheduler = Executors.newSingleThreadScheduledExecutor { r ->
+                Thread(r, "peer-edge-prr-hint").apply { isDaemon = true }
+            }
+            val peerEdgePrrHint = PeerEdgePrrHintCoordinator(
+                scheduler = peerEdgePrrHintScheduler,
+                isStillNotReady = { moduleId -> !peerEdgeSignalingReadiness.isReady(moduleId) },
+                announcePeer = { moduleId ->
+                    val target = helloTargetProvider.helloTargetFor(moduleId) ?: return@PeerEdgePrrHintCoordinator
+                    val snap = transportManager.linkQualificationSnapshot()
+                    prrController.onPeerEdgeSignalingHint(
+                        remoteModuleId = moduleId,
+                        target = target,
+                        transportEpoch = snap.rebindGeneration,
+                        socketId = snap.socketId,
+                        networkId = snap.networkId
+                    )
+                }
+            )
+            peerEdgeSignalingReadiness.onPeerEdgeSignalingLost = peerEdgePrrHint::onPeerEdgeSignalingLost
+        }
         val networkObserver = NetworkCapabilityObserver(context, transportManager, socketBinder)
         val staticDiscovery = StaticPeerDiscoveryService(staticPeers)
         val gossip = gossipDiscovery ?: MeshSweepGossipDiscovery(
@@ -183,6 +220,7 @@ object TalkbackRuntimeFactory {
             linkQualificationSnapshot = {
                 transportManager.readLinkQualificationSnapshot("recovery_gate")
             },
+            peerEdgeSignalingReadiness = peerEdgeSignalingReadiness,
             onLog = onLog
         )
         transportManager.onLinkQualificationStateChanged { _, newState ->

@@ -3937,6 +3937,266 @@ old evidence   ≠ fresh (post-dispatch) evidence
 
 **Next workstream:** `QualificationRepairCoordinator` / signaling readiness only — must not mutate frozen B3 capability or completion-authority contracts.
 
+### Qualification / Signaling Readiness — workstream open (2026-07-28)
+
+**Status:** Grill **ACCEPTED 2026-07-28** (Q1–Q8 + INV-SIG-001..020). Next: implementation under three rails below. B3 / Completion Authority remain **CLOSED** — do not reopen.
+
+```text
+CLOSED                         NEW
+─────────────────────          ─────────────────────────────
+B3 Capability                  Link / Signaling Readiness
+NEGOTIATION_CAN_EXECUTE        link qualification
+rising-edge / probe            signaling socket
+Completion Authority           post-rebind inbound
+canClose / freshness           readiness restoration
+```
+
+**Problem restatement (only):**
+
+> After a recovery action completes, why can the edge's signaling path not stably return to a communicable (qualified) state?
+
+**Not:** why recovery did not recover (CLOSED).
+
+**Forbidden modifications (ADR guard for this workstream):**
+
+| Forbidden | Why (already answered elsewhere) |
+|-----------|----------------------------------|
+| `NEGOTIATION_CAN_EXECUTE` producer / rising-edge / probe | When offer may be created — not path health |
+| `closeObligation` / `markRecovered` / `RECOVERED` | When recovery duty completes — not control-plane re-establish |
+| restart freshness / `mediaRestoredObservedAtMs` | Old-evidence pollution — CLOSED |
+
+**Forbidden equalities (new workstream):**
+
+```text
+network reachability  ≠  signaling qualification
+ICE_CONNECTED         ≠  signaling qualification
+socket bound          ≠  bidirectional control path
+outbound OK           ≠  inbound OK
+```
+
+**Existing layers (must not collapse):**
+
+| Layer | Owner today | Answers |
+|-------|-------------|---------|
+| **Link Qualification** (R28-L.1) | transport / `LinkQualificationTracker` | Local socket epoch: BOUND → RECEIVE_READY → `BIDIRECTIONAL_READY` (any inbound after outbound) |
+| **Transport Repair** (R28-L.1.4) | `QualificationRepairCoordinator` | Rebind local signaling when `UNQUALIFIED` |
+| **Peer Reachability (PRR)** | R28-PRR | Post-repair **peer-to-peer** signaling path |
+
+Grill order: Layer1 Qualification Truth → Layer2 Owner → Layer3 Post-rebind inbound.
+
+#### Q1 — Qualification truth (frozen 2026-07-28 — T4 / v1=T2)
+
+```text
+T1 = local qualification prerequisite   (existing BIDIRECTIONAL_READY ladder)
+T2 = peer-edge signaling qualification truth   (THIS workstream v1)
+T3 = diagnostic / optional higher confidence   (HELLO RTT / identity — NOT v1 gate)
+```
+
+**Layers:**
+
+| Layer | Name | Truth | Role |
+|-------|------|-------|------|
+| 0 | Network / transport observation | WiFi/IP/bind/outbound SENT | capability observation only — never qualification |
+| 1 | Local signaling capability | `BOUND` → `RECEIVE_READY` → `BIDIRECTIONAL_READY` | "Am I ready?" — **do not redefine** |
+| 2 | Peer-edge signaling qualification | inbound from `remoteModuleId` on **current signaling generation** | "Is path to this peer restored?" — **v1 contract** |
+| 3 | Control-plane confidence | HELLO RTT / identity / ACK | diagnostics only in v1 |
+
+**Canonical name:** `PEER_EDGE_SIGNALING_READY` (edge-local, peer-specific, generation-aware).  
+**Avoid:** `SIGNALING_READY` / `SIGNALING_QUALIFIED` (global implication).
+
+**v1 contract:**
+
+```text
+peerEdgeSignalingReady(edge) =
+    localQualification >= BIDIRECTIONAL_READY
+    && inboundObserved(remoteModuleId, currentSignalingGeneration)
+```
+
+T1 is necessary; T2 is completion truth for this workstream; T3 does not admit.
+
+**Forbidden:** `ICE_CONNECTED` / outbound-only / rebind-success → peer-edge ready.
+
+#### Q2 — Fact / generation / decision owners (frozen 2026-07-28 — P2)
+
+**Three-way separation (mandatory):**
+
+| Role | Owner | Emits / owns |
+|------|-------|----------------|
+| **Generation sole writer** | `LinkQualificationTracker` | `rebindGeneration` advance on rebind/repair |
+| **Inbound fact producer** | Signaling receive path (`UdpSignalingChannel`) | `PeerInboundObserved` — never announces ready |
+| **Ready decision** | `PeerEdgeSignalingReadiness` (name) | `PEER_EDGE_SIGNALING_READY(edge)` projection |
+
+```text
+UdpSignalingChannel / receive pipeline
+        → PeerInboundObserved(remoteModuleId, socketId, receiveGeneration, observedAtMs)
+        → PeerEdgeSignalingReadiness
+        → PEER_EDGE_SIGNALING_READY(edge)
+
+LinkQualificationTracker remains:
+  currentGeneration + local qualification + BIDIRECTIONAL_READY only
+  MUST NOT grow a per-peer map (that is P1 — rejected)
+```
+
+**Identity:** `remoteModuleId = envelope.from.moduleId` (primary). UDP `srcIp→module` is auxiliary lookup only — not qualification identity.
+
+**Fact MUST stamp `receiveGeneration` at packet-accept time** (bound to the socket epoch that received it). Forbidden: async callback later reading `currentGeneration` (G5 packet attributed to G6).
+
+**Decision owner MUST NOT:** rebind, reconnect, bump generation, `closeObligation` / recovery mutation.
+
+##### INV-SIG-001 — Only transport qualification layer may advance signaling generation
+
+##### INV-SIG-002 — Peer edge readiness MUST derive from peer-scoped inbound facts carrying generation
+
+##### INV-SIG-003 — Local `BIDIRECTIONAL_READY` MUST NOT imply `PEER_EDGE_SIGNALING_READY`
+
+#### Q3 — Generation transition invalidates peer ready (frozen 2026-07-28 — C4)
+
+> Generation transition is a fact boundary; ready is a projection that must be **re-proven** on the new generation.
+
+```text
+advanceRebindGeneration()  // LinkQualificationTracker sole writer
+  → currentGeneration = G_n+1
+  → PeerEdgeSignalingReadiness.invalidateGeneration(G_n)   // SYNC, same call stack
+  → then announce / notify repair listeners (PRR / binder)
+```
+
+**MUST:** invalidate **all** peer ready projections from the prior generation (C1 epoch wipe).  
+**MUST NOT:** inherit G_n ready into G_n+1; async invalidate after announce (stale query window); let repair/rebind/PRR/binder set `PEER_EDGE_SIGNALING_READY=true`.
+
+**Ready returns only via:** `PeerInboundObserved(..., receiveGeneration == current)` + local ≥ `BIDIRECTIONAL_READY`.
+
+C2 (keep same-gen facts across partial migration) deferred — v1 is **one signaling generation = one qualification epoch**.
+
+##### INV-SIG-004 — Peer signaling readiness MUST NOT survive a signaling generation transition
+
+##### INV-SIG-005 — Rebind / repair / announce MUST NOT directly produce `PEER_EDGE_SIGNALING_READY`
+
+#### Q4 — Inbound evidence eligibility (frozen 2026-07-28 — I5)
+
+```text
+PeerInboundObserved iff:
+  datagram → envelope parse OK
+  && signature / HMAC verify OK
+  && from.moduleId present
+  && SignalType valid (any signaling type: HELLO, HEARTBEAT, CONTROL, …)
+  && receiveGeneration stamped at accept
+```
+
+**Not required:** HELLO specifically. **Excluded:** RTP / media / audio.  
+**Bad signature:** drop — **no** `PeerInboundObserved`. Optional `PeerInboundRejected` is **audit/telemetry only** — qualification consumers MUST NOT subscribe (INV-SIG-007).
+
+##### INV-SIG-006 — `PeerInboundObserved` MUST originate only from authenticated signaling envelopes
+
+##### INV-SIG-007 — Rejected inbound traffic MUST NOT affect peer signaling qualification
+
+##### INV-SIG-008 — Media-plane packets MUST NOT satisfy signaling qualification
+
+#### Q5 — Ready is a derived projection with freshness (frozen 2026-07-28 — V3)
+
+```text
+PEER_EDGE_SIGNALING_READY(edge) =
+    localQualification >= BIDIRECTIONAL_READY
+    && edge.observedGeneration == currentGeneration
+    && now - edge.lastPeerInboundObservedAtMs <= moduleStaleMs
+```
+
+**Stored facts:** `lastPeerInboundObservedAtMs` + `observedGeneration` (not a sticky `ready=true` bit).  
+**Freshness window:** reuse `moduleStaleMs` — **no** `SIG_PEER_STALE_MS`.  
+**Refresh:** any I5-valid SignalType (HELLO / HEARTBEAT / CONTROL / …) updates `lastPeerInboundObservedAtMs` only — MUST NOT mutate membership / negotiation / recovery.  
+**Generation invalidate (Q3)** still clears immediately; soft-expire covers silence within the current epoch.
+
+##### INV-SIG-009 — Peer signaling readiness is a derived projection, not a durable fact
+
+##### INV-SIG-010 — Only authenticated signaling inbound observations refresh peer signaling freshness
+
+##### INV-SIG-011 — Media-plane activity MUST NOT refresh signaling freshness
+
+#### Q6 — Action after peer ready=false (frozen 2026-07-28 — R3)
+
+> Qualification projection MUST NOT own repair authority. Observation → hint ≠ observation → rebind.
+
+| Component | Owns |
+|-----------|------|
+| `PeerEdgeSignalingReadiness` | projection only (`ready` / `lastObservedAt` / `generation` / `reason`) |
+| `LinkQualificationTracker` → `QualificationRepairCoordinator` | **local** UNQUALIFIED / inbound-timeout → repair → generation++ (unchanged L.1.4) |
+| Peer-edge stale while local BIDIR | `PeerEdgeSignalingLost` → **PRR hint** (peer-scoped, **per-peer debounce**) |
+
+**MUST NOT:** peer stale alone → `requestQualificationRepair` / `generation++` / invalidate other peers / Recovery / ICE restart.  
+**MUST NOT:** global epoch announce for one peer's freshness expiry.
+
+```text
+M03 freshness expired (local still BIDIR)
+  → PeerEdgeSignalingLost(peer=M03, gen=G6, FRESHNESS_EXPIRED)
+  → debounce(M03)
+  → if still not ready → PRR announce(peer=M03)
+  → M01 ready unchanged; no generation++
+```
+
+##### INV-SIG-012 — Peer edge qualification loss MUST NOT directly initiate transport generation repair
+
+##### INV-SIG-013 — Peer-specific signaling loss MAY emit a peer-scoped PRR hint; MUST NOT advance global signaling epoch
+
+##### INV-SIG-014 — Qualification projection components MUST NOT own repair authority
+
+#### Q7 — Restore after PRR announce (frozen 2026-07-28 — A2)
+
+```text
+announce ≠ ready
+
+PRR announce(peer) = outbound attempt / peer attention request only
+READY restored only by I5 PeerInboundObserved(peer, currentGeneration)
+  → Q5 projection formula
+```
+
+**PRR MUST NOT:** advance generation, mark ready, refresh peer freshness.  
+**PRR outbound MUST NOT** count as L.1 `FIRST_OUTBOUND_AFTER_REBIND` (local qualification outbound vs peer-repair outbound — separate ledgers).  
+**Inbound source:** `source=NETWORK_SIGNAL` (authenticated path). Ready does not care whether PRR triggered the peer's response.
+
+##### INV-SIG-015 — PRR announce completion MUST NOT produce peer signaling readiness
+
+##### INV-SIG-016 — Only authenticated peer inbound observation may restore `PEER_EDGE_SIGNALING_READY`
+
+##### INV-SIG-017 — Peer repair outbound traffic MUST NOT satisfy local signaling qualification evidence
+
+#### Q8 — Business impact matrix (frozen 2026-07-28 — accept recommended table)
+
+`PEER_EDGE_SIGNALING_READY` is a **peer-edge signaling qualification projection**, not a global health gate. It only affects **peer-scoped signaling admission**.
+
+| Domain | Gate | Rule |
+|--------|------|------|
+| ICE restart / media recovery dispatch | **I** | B3 / local L.1.3 / negotiation only — MUST NOT read peer-edge ready |
+| New control signaling to that peer (REATTACH / GROUP_* / offer/answer/control) | **H** | Hard-block assume-reachable when not ready |
+| Existing media (RTP / audio) | **I** | MUST NOT tear media because signaling degraded |
+| Membership / floor / prune | **I** | Other authorities |
+| UI signaling degraded | **S** | Diagnostic only — MUST NOT drive state machines |
+| PRR hint (Q6) | allowed | Hint ≠ readiness |
+
+**Forbidden deadlock:** `PEER_EDGE_SIGNALING_READY=false` → block ICE restart (signaling broken ↔ need restart ↔ requires ready).  
+**Forbidden:** false → `closeObligation` / roll back `RECOVERED` / conference-wide mute.
+
+##### INV-SIG-018 — Peer edge signaling readiness only gates new peer-scoped control signaling admission; MUST NOT gate media continuity or recovery completion
+
+##### INV-SIG-019 — Loss of peer signaling readiness MUST NOT mutate recovery obligation lifecycle
+
+##### INV-SIG-020 — Existing media continuity and peer signaling qualification are independent projections
+
+#### Grill closure — **ACCEPTED 2026-07-28** (Q1–Q8)
+
+```text
+Q1 T4/T2 truth · Q2 P2 three-way owners · Q3 C4 sync invalidate
+Q4 I5 auth inbound · Q5 V3+moduleStaleMs · Q6 R3 PRR hint
+Q7 A2 announce≠ready · Q8 impact matrix
+INV-SIG-001..020
+```
+
+**Implementation may begin.** Three hard rails:
+
+1. `PeerEdgeSignalingReadiness` MUST NOT call repair / rebind / `generation++`
+2. PRR / rebind / binder MUST NOT write `PEER_EDGE_SIGNALING_READY`
+3. `PEER_EDGE_SIGNALING_READY` MUST NOT enter B3 completion / obligation / `NEGOTIATION_CAN_EXECUTE`
+
+**Not in this grill:** concrete class APIs, debounce timings, UT list — implementation design.
+
 ### Design freeze confirmation — **ACCEPTED 2026-07-28**
 
 **Reviewer verdict:** Q10–Q14 + INV-REC-026..031 + INV-NEG-016 formally frozen. Further grilling has no ROI for the current bug.
