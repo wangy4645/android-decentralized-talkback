@@ -39,6 +39,13 @@ class ConferenceEdgeRecoveryController(
     private val canDispatchRecoveryMediaAction: (sessionId: String, remoteModuleId: String) -> Boolean =
         { _, _ -> true },
     /**
+     * Negotiation Stabilization Gate (INV-NEG-006): whether ICE restart *execution* is
+     * permitted. Must check settling before signalingState. Injected by Coordinator;
+     * Recovery MUST NOT read MeshEngine settling directly.
+     */
+    private val canExecuteIceRestart: (sessionId: String, remoteModuleId: String) -> Boolean =
+        { _, _ -> true },
+    /**
      * Probe current ICE connectedness after ACCEPTED / ICE restart (#83).
      * Coordinator wires qosMonitor; tests inject to cover already-CONNECTED soak gap.
      */
@@ -596,6 +603,81 @@ class ConferenceEdgeRecoveryController(
         record.mediaActionDisposition == MediaActionDisposition.DEFERRED &&
             record.mediaActionOwner.isAssigned()
 
+    private fun isDeferredIceRestartIntent(record: EdgeRecoveryRecord): Boolean =
+        hasDeferredMediaAction(record) &&
+            record.deferredReason == DeferredReason.NEGOTIATION_SETTLING &&
+            record.wakeupBinding?.sourceType == WakeupSourceType.NEGOTIATION_RELEASED
+
+    /**
+     * INV-NEG-003: deferred ICE Restart Intent MUST NOT silently vanish across
+     * SUPERSEDE / CLOSE / generation change — emit auditable EXPIRED → STALE_DISCARD.
+     * Caller clears fields (or replaces the record) after this audit.
+     */
+    private fun expireDeferredIceRestartIntent(record: EdgeRecoveryRecord, cause: String) {
+        if (!hasDeferredMediaAction(record)) return
+        val binding = record.wakeupBinding
+        if (binding != null) {
+            onLog(
+                "RECOVERY_WAKEUP_EXPIRED session=${record.key.sessionId} edge=${record.key.remoteModuleId} " +
+                    "attempt=${record.recoveryAttemptId} trigger=${binding.sourceType} " +
+                    "wakeupBinding=${binding.logLabel()} cause=$cause"
+            )
+        }
+        if (!isDeferredIceRestartIntent(record)) return
+        onLog(
+            "RECOVERY_ICE_RESTART_INTENT_EXPIRED session=${record.key.sessionId} " +
+                "remote=${record.key.remoteModuleId} attempt=${record.recoveryAttemptId} " +
+                "obligationGen=${record.obligationGeneration} disposition=EXPIRED " +
+                "terminal=STALE_DISCARD cause=$cause"
+        )
+    }
+
+    /**
+     * INV-NEG-005: Coordinator routes NEGOTIATION_RELEASED here after Answerer transaction commit.
+     * Re-validates attempt/gen/obligation/intent/canExecute before dispatch (INV-NEG-001 safe).
+     */
+    fun drainPendingIceRestart(sessionId: String, remoteModuleId: String) {
+        val key = ConferenceEdgeKey(sessionId, remoteModuleId)
+        val record = edges[key] ?: return
+        if (!isDeferredIceRestartIntent(record)) return
+        if (!record.edgeObligationOpen()) {
+            expireDeferredIceRestartIntent(record, "DRAIN_OBLIGATION_CLOSED")
+            clearMediaActionDeferral(record)
+            return
+        }
+        if (record.iceRestartIssued) {
+            expireDeferredIceRestartIntent(record, "DRAIN_ALREADY_ISSUED")
+            clearMediaActionDeferral(record)
+            return
+        }
+        val attemptId = record.recoveryAttemptId
+        val obligationGen = record.obligationGeneration
+        if (!canExecuteIceRestart(sessionId, remoteModuleId)) {
+            onLog(
+                "RECOVERY_ICE_RESTART_DRAIN_HELD session=$sessionId remote=$remoteModuleId " +
+                    "attempt=$attemptId obligationGen=$obligationGen reason=gate_not_executable"
+            )
+            return
+        }
+        onLog(
+            "RECOVERY_WAKEUP_FIRED session=$sessionId edge=$remoteModuleId " +
+                "attempt=$attemptId trigger=NEGOTIATION_RELEASED " +
+                "wakeupBinding=${record.wakeupBinding?.logLabel()}"
+        )
+        val still = edges[key] ?: return
+        if (still.recoveryAttemptId != attemptId ||
+            still.obligationGeneration != obligationGen ||
+            !still.edgeObligationOpen() ||
+            still.iceRestartIssued
+        ) {
+            expireDeferredIceRestartIntent(still, "DRAIN_STALE_LINEAGE")
+            clearMediaActionDeferral(still)
+            return
+        }
+        clearMediaActionDeferral(still)
+        issueBoundedIceRestart(still, RecoveryReason.NETWORK_RECOVERY)
+    }
+
     /**
      * ADR-0022 R28-K / INV-REC-001: attempt failure timers MUST NOT run while required
      * recovery capability is unavailable (route, media dispatch gate, deferred action).
@@ -605,7 +687,8 @@ class ConferenceEdgeRecoveryController(
             when (record.deferredReason) {
                 DeferredReason.ROUTE_NOT_READY,
                 DeferredReason.MEDIA_NOT_READY,
-                DeferredReason.AUTHORITY_NOT_READY -> return true
+                DeferredReason.AUTHORITY_NOT_READY,
+                DeferredReason.NEGOTIATION_SETTLING -> return true
                 null -> Unit
             }
         }
@@ -723,13 +806,7 @@ class ConferenceEdgeRecoveryController(
     ) {
         if (record.obligationClosedAtMs != null) return
         logObligationCloseRequested(record, reason, closeEvidence)
-        if (hasDeferredMediaAction(record) && record.wakeupBinding != null) {
-            onLog(
-                "RECOVERY_WAKEUP_EXPIRED session=${record.key.sessionId} edge=${record.key.remoteModuleId} " +
-                    "attempt=${record.recoveryAttemptId} trigger=${record.wakeupBinding?.sourceType} " +
-                    "wakeupBinding=${record.wakeupBinding?.logLabel()} obligationCloseReason=$reason"
-            )
-        }
+        expireDeferredIceRestartIntent(record, "OBLIGATION_CLOSE:$reason")
         cancelDeadline(record.key)
         record.obligationClosedAtMs = clock()
         record.obligationCloseReason = reason
@@ -947,6 +1024,8 @@ class ConferenceEdgeRecoveryController(
         val initiatesReattach = record.initiatesReattach
         val previousGen = record.obligationGeneration
         val previousAttempt = record.recoveryAttemptId
+        // INV-NEG-003: audit predecessor intent before record replacement (G2 does not inherit).
+        expireDeferredIceRestartIntent(record, "ADMIT_SUCCESSOR")
         val admitted = openNewRecoveryObligation(
             key = key,
             channelId = channelId.ifBlank { record.channelId },
@@ -1750,6 +1829,21 @@ class ConferenceEdgeRecoveryController(
             )
             return
         }
+        // Negotiation Stabilization Gate (INV-NEG-006): sole execution admission point.
+        // DEFER keeps phase / iceRestartIssued / watchdog unchanged (INV-NEG-004).
+        if (!canExecuteIceRestart(record.key.sessionId, record.key.remoteModuleId)) {
+            recordMediaActionDeferred(
+                record = record,
+                owner = MediaActionOwner.HOST_RESTART,
+                reason = DeferredReason.NEGOTIATION_SETTLING,
+                wakeupBinding = WakeupBinding(
+                    sourceType = WakeupSourceType.NEGOTIATION_RELEASED,
+                    sourceKey = edgeWakeupKey(record.key.sessionId, record.key.remoteModuleId)
+                ),
+                trigger = "NEGOTIATION_STABILIZATION_GATE"
+            )
+            return
+        }
         record.phase = EdgeRecoveryPhase.ICE_RESTARTING
         record.iceRestartIssued = true
         assignMediaActionOwner(record, MediaActionOwner.HOST_RESTART)
@@ -2387,6 +2481,7 @@ class ConferenceEdgeRecoveryController(
         record.reattachDeliveryState = ReattachDeliveryState.QUEUED
         record.reattachNonce = null
         record.recoveryStartedAtMs = clock()
+        expireDeferredIceRestartIntent(record, "SUPERSEDE:$trigger")
         record.mediaActionOwner = MediaActionOwner.PENDING
         clearMediaActionDeferral(record)
         onLog(

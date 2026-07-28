@@ -120,12 +120,16 @@ enum class DeferredReason {
     ROUTE_NOT_READY,
     AUTHORITY_NOT_READY,
     MEDIA_NOT_READY,
+    /** Negotiation Stabilization Gate: Answerer settlement / signaling not executable yet. */
+    NEGOTIATION_SETTLING,
 }
 
 internal enum class WakeupSourceType {
     ROUTE_CONVERGED,
     PEER_DISCOVERED,
     AUTHORITY_REACHABLE,
+    /** Answerer transaction committed → Coordinator routes drain (INV-NEG-005). */
+    NEGOTIATION_RELEASED,
 }
 
 internal data class WakeupBinding(
@@ -158,6 +162,8 @@ internal data class WakeupBinding(
                 trigger == RecoveryReevaluateTrigger.REMOTE_MODULE_RECOVERED
             WakeupSourceType.AUTHORITY_REACHABLE ->
                 trigger == RecoveryReevaluateTrigger.AUTHORITY_REACHABLE
+            // Drain is via Coordinator → drainPendingIceRestart, not R28-G reevaluate.
+            WakeupSourceType.NEGOTIATION_RELEASED -> false
         }
     }
 }

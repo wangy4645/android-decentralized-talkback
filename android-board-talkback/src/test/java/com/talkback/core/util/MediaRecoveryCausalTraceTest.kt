@@ -92,4 +92,47 @@ class MediaRecoveryCausalTraceTest {
         assertTrue(lines[1].contains("localAttempt=5"))
         assertTrue(lines[1].contains("localObligationGen=2"))
     }
+
+    @Test
+    fun iceRestartRequested_shadowDecisionIncludesSettlingAndFutureGate() {
+        MediaRecoveryCausalTrace.iceRestartRequested(
+            ctx = MediaRecoveryCausalTrace.Context(
+                sessionId = "f8ecb518",
+                sessionTraceId = "abc12345",
+                scope = MediaBearerScope.CONFERENCE,
+                remoteModuleId = "M02",
+                remoteEndpointId = "E02",
+                recoveryAttemptId = 4L,
+                obligationGeneration = 2L,
+                conferenceGeneration = 1L,
+                pcGeneration = 8L,
+                transportGeneration = 8L,
+                iceRestart = true
+            ),
+            shouldExecuteToday = true,
+            justSettledAsAnswerer = true,
+            wouldDefer = true,
+            signalingState = "STABLE",
+            localDescriptionType = "ANSWER",
+            remoteDescriptionType = "OFFER",
+            localRole = "ANSWERER",
+            localIceState = "NEW",
+            remoteIceState = "CONNECTED"
+        )
+        val line = lines.single()
+        assertTrue(line.startsWith("ICE_RESTART_REQUESTED"))
+        assertTrue(line.contains("session=f8ecb518"))
+        assertTrue(line.contains("remote=M02"))
+        assertTrue(line.contains("attempt=4"))
+        assertTrue(line.contains("obligationGen=2"))
+        assertTrue(line.contains("shouldExecuteToday=true"))
+        assertTrue(line.contains("justSettledAsAnswerer=true"))
+        assertTrue(line.contains("wouldDefer=true"))
+        assertTrue(line.contains("localRole=ANSWERER"))
+        assertTrue(line.contains("signalingState=STABLE"))
+        assertTrue(line.contains("localDesc=ANSWER"))
+        assertTrue(line.contains("remoteDesc=OFFER"))
+        assertTrue(line.contains("localIce=NEW"))
+        assertTrue(line.contains("remoteIce=CONNECTED"))
+    }
 }

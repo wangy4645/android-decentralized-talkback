@@ -9,7 +9,8 @@ import com.talkback.core.webrtc.MediaBearerScope
  * Does not gate recovery, membership, floor, or UI.
  *
  * Grep: `MEDIA_SIGNAL_`, `MEDIA_ICE_CANDIDATE_`, `RECOVERY_ICE_RESTART_DISPATCHED`,
- * `RECOVERY_OFFER_SENT`, `RECOVERY_OFFER_RECEIVED`, `WEBRTC_NEGOTIATION`
+ * `RECOVERY_OFFER_SENT`, `RECOVERY_OFFER_RECEIVED`, `WEBRTC_NEGOTIATION`,
+ * `ICE_RESTART_REQUESTED`
  */
 object MediaRecoveryCausalTrace {
 
@@ -74,6 +75,36 @@ object MediaRecoveryCausalTrace {
 
     fun recoveryIceRestartDispatched(ctx: Context) {
         log(formatContext("RECOVERY_ICE_RESTART_DISPATCHED", ctx))
+    }
+
+    /**
+     * 4.3-E Step4-A shadow decision: ICE restart was requested and will execute today.
+     * Records whether a future Negotiation Stabilization Gate wouldDefer based on
+     * justSettledAsAnswerer. Does not change execution behavior.
+     */
+    fun iceRestartRequested(
+        ctx: Context,
+        shouldExecuteToday: Boolean,
+        justSettledAsAnswerer: Boolean,
+        wouldDefer: Boolean,
+        signalingState: String,
+        localDescriptionType: String?,
+        remoteDescriptionType: String?,
+        localRole: String,
+        localIceState: String,
+        remoteIceState: String?
+    ) {
+        val sb = StringBuilder(formatContext("ICE_RESTART_REQUESTED", ctx))
+        sb.append(" shouldExecuteToday=").append(shouldExecuteToday)
+        sb.append(" justSettledAsAnswerer=").append(justSettledAsAnswerer)
+        sb.append(" wouldDefer=").append(wouldDefer)
+        sb.append(" localRole=").append(localRole)
+        sb.append(" signalingState=").append(signalingState)
+        sb.append(" localDesc=").append(localDescriptionType ?: "NONE")
+        sb.append(" remoteDesc=").append(remoteDescriptionType ?: "NONE")
+        sb.append(" localIce=").append(localIceState)
+        sb.append(" remoteIce=").append(remoteIceState ?: "UNKNOWN")
+        log(sb.toString())
     }
 
     fun mediaSignalOfferSent(ctx: Context) {

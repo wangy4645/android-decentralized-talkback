@@ -51,6 +51,8 @@ class RealWebRtcAudioEngine(
     @Volatile
     private var iceConnectionStateName = "NEW"
     @Volatile
+    private var negotiationSettlingState = NegotiationSettling.NONE
+    @Volatile
     private var programRelayMode = ProgramRelayMode.MICROPHONE
     private var inboundPcmSink: InboundPcmSink? = null
     private var programAudioSource: org.webrtc.AudioSource? = null
@@ -122,6 +124,8 @@ class RealWebRtcAudioEngine(
     }
 
     override fun createOffer(iceRestart: Boolean): String {
+        // INV-NEG-001: must NOT clear Answerer settling here (createOffer self-lock / skip commit).
+        // Settling clears only via commitAnswererTransaction / rollback / offerer answer path.
         val before = negotiationSnapshot()
         logNegotiation(
             "op=ROLE role=OFFERER reason=createOffer iceRestart=$iceRestart " +
@@ -174,6 +178,8 @@ class RealWebRtcAudioEngine(
             setAction = { observer, desc -> peerConnection.setLocalDescription(observer, desc) },
             setOp = "SLD"
         )
+        // State fact: Answerer remote-offer convergence completed (SRD OFFER + SLD ANSWER).
+        markNegotiationSettledAsAnswerer()
         return currentLocalSdp()
     }
 
@@ -203,6 +209,8 @@ class RealWebRtcAudioEngine(
             type = "ANSWER"
         ) { observer -> peerConnection.setRemoteDescription(observer, remote) }
         markRemoteDescriptionApplied()
+        // Next stable negotiation completion as Offerer clears Answerer settling.
+        clearNegotiationSettling()
     }
 
     override fun rollbackNegotiation() {
@@ -224,6 +232,8 @@ class RealWebRtcAudioEngine(
             }, SessionDescription(SessionDescription.Type.ROLLBACK, ""))
             latch.await(1, TimeUnit.SECONDS)
         }.onFailure { TalkbackLog.w("WebRTC rollback failed: ${it.message}") }
+        // Explicit rollback clears Answerer settling fact.
+        clearNegotiationSettling()
     }
 
     override fun addIceCandidate(candidate: String) {
@@ -326,6 +336,7 @@ class RealWebRtcAudioEngine(
         if (released) return
         released = true
         iceConnectionStateName = "CLOSED"
+        clearNegotiationSettling()
         inboundLevel = 0f
         outboundLevel = 0f
         localAudioTrack.setEnabled(false)
@@ -341,6 +352,26 @@ class RealWebRtcAudioEngine(
         runCatching { peerConnection.close() }
         runCatching { peerConnection.dispose() }
         WebRtcSharedFactory.release()
+    }
+
+    override fun negotiationSettling(): NegotiationSettling = negotiationSettlingState
+
+    override fun commitAnswererTransaction(): Boolean {
+        if (negotiationSettlingState != NegotiationSettling.ANSWERER_SETTLED) return false
+        negotiationSettlingState = NegotiationSettling.NONE
+        logNegotiation("op=SETTLING state=NONE reason=ANSWERER_TRANSACTION_COMMITTED")
+        return true
+    }
+
+    private fun markNegotiationSettledAsAnswerer() {
+        negotiationSettlingState = NegotiationSettling.ANSWERER_SETTLED
+        logNegotiation("op=SETTLING state=ANSWERER_SETTLED reason=applyRemoteOfferComplete")
+    }
+
+    private fun clearNegotiationSettling() {
+        if (negotiationSettlingState == NegotiationSettling.NONE) return
+        negotiationSettlingState = NegotiationSettling.NONE
+        logNegotiation("op=SETTLING state=NONE reason=cleared")
     }
 
     override fun refreshAudioLevel() {

@@ -383,6 +383,22 @@ class TalkbackCoordinator(
                 }
                 ready
             },
+            canExecuteIceRestart = { sessionId, remoteModuleId ->
+                var executable = true
+                runOnCoordinatorSync {
+                    val session = sessions[sessionId] ?: return@runOnCoordinatorSync
+                    val engine = meshEngineForSession(session, remoteModuleId)
+                        ?: return@runOnCoordinatorSync
+                    // Settling checked before signalingState (freeze Q / INV-NEG gate).
+                    if (engine.justSettledAsAnswerer()) {
+                        executable = false
+                        return@runOnCoordinatorSync
+                    }
+                    val signaling = engine.negotiationSnapshot().signalingState
+                    executable = signaling.equals("STABLE", ignoreCase = true)
+                }
+                executable
+            },
             onRecoveryStateChanged = { sessionId ->
                 runOnCoordinatorSync {
                     val session = sessions[sessionId] ?: return@runOnCoordinatorSync
@@ -554,6 +570,43 @@ class TalkbackCoordinator(
             pcGeneration = generation,
             transportGeneration = generation,
             iceRestart = iceRestart
+        )
+    }
+
+    /**
+     * 4.3-E Step4-A: shadow ICE restart decision. Always shouldExecuteToday=true;
+     * wouldDefer mirrors future Negotiation Stabilization Gate (justSettledAsAnswerer).
+     * Does not change createOffer / recovery behavior.
+     */
+    private fun observeIceRestartRequested(
+        session: TalkbackSession,
+        remoteModuleId: String,
+        remoteEndpointId: String?,
+        engine: WebRtcAudioEngine
+    ) {
+        val snap = engine.negotiationSnapshot()
+        val justSettled = engine.justSettledAsAnswerer()
+        val localRole = when (snap.localDescriptionType) {
+            "ANSWER" -> "ANSWERER"
+            "OFFER" -> "OFFERER"
+            else -> "UNKNOWN"
+        }
+        MediaRecoveryCausalTrace.iceRestartRequested(
+            ctx = mediaRecoveryTraceContext(
+                session,
+                remoteModuleId,
+                remoteEndpointId,
+                iceRestart = true
+            ),
+            shouldExecuteToday = true,
+            justSettledAsAnswerer = justSettled,
+            wouldDefer = justSettled,
+            signalingState = snap.signalingState,
+            localDescriptionType = snap.localDescriptionType,
+            remoteDescriptionType = snap.remoteDescriptionType,
+            localRole = localRole,
+            localIceState = snap.iceConnectionState,
+            remoteIceState = qosMonitor.snapshot(remoteModuleId)?.iceState
         )
     }
 
@@ -1379,7 +1432,16 @@ class TalkbackCoordinator(
             if (signalingRetry) {
                 engine.rollbackNegotiation()
             }
-            engine.createOffer(iceRestart = rejoin || signalingRetry)
+            val iceRestart = rejoin || signalingRetry
+            if (iceRestart) {
+                observeIceRestartRequested(
+                    session,
+                    moduleId,
+                    remote.endpointId.value,
+                    engine
+                )
+            }
+            engine.createOffer(iceRestart = iceRestart)
         } catch (e: Exception) {
             log("[${session.traceId}] Conference invite offer failed for $moduleId: ${e.message}")
             return InviteDispatchSendResult.Failed(InviteDispatchError.SDP_BUILD_FAILED)
@@ -1512,6 +1574,12 @@ class TalkbackCoordinator(
             val engine = getOrCreateMeshEngine(session, moduleId)
             wireIceCallback(session, moduleId, engine)
             val payloadBase = groupPayloadBase(session)
+            observeIceRestartRequested(
+                session,
+                moduleId,
+                remote.endpointId.value,
+                engine
+            )
             val offer = engine.createOffer(iceRestart = true)
             drainPendingIce(session.id, moduleId, engine)
             sendSignal(
@@ -4990,22 +5058,32 @@ class TalkbackCoordinator(
             )
             val answer = engine.applyRemoteOffer(payload.sdp, politeForMeshPair(peerId))
             drainPendingIce(session.id, peerId, engine)
-            sendSignal(
+            val handoffOk = sendSignalHandoff(
                 fromPeer,
                 buildSignedEnvelope(SignalType.GROUP_ACCEPT, callee, caller, signal.sessionId, answer)
             )
             log("${sessionTag(session)} Group mesh ICE restart accepted $peerId ice=$ice intent=${payload.joinIntent}")
-            if (session.type == SessionType.CONFERENCE) {
-                markConferenceParticipantActive(session, caller.moduleId.value)
-                // Connectivity Recovery only — USER_REJOIN must not enter RecoveryController.
-                if (payload.joinIntent == ConferenceJoinIntent.RECOVERY_REATTACH) {
-                    conferenceEdgeRecoveryController.onRecoveryReattachAccepted(
-                        session.id,
-                        caller.moduleId.value,
-                        recoveryReason = RecoveryReason.NETWORK_RECOVERY,
-                        source = RecoverySource.ICE_MONITOR
-                    )
+            if (!handoffOk) {
+                log(
+                    "${sessionTag(session)} GROUP_ACCEPT handoff failed peer=$peerId " +
+                        "skip=recovery_accept_and_commit"
+                )
+            } else {
+                if (session.type == SessionType.CONFERENCE) {
+                    markConferenceParticipantActive(session, caller.moduleId.value)
+                    // Connectivity Recovery only — USER_REJOIN must not enter RecoveryController.
+                    // Still ANSWERER_SETTLED here so gate may DEFER; commit/drain follows.
+                    if (payload.joinIntent == ConferenceJoinIntent.RECOVERY_REATTACH) {
+                        conferenceEdgeRecoveryController.onRecoveryReattachAccepted(
+                            session.id,
+                            caller.moduleId.value,
+                            recoveryReason = RecoveryReason.NETWORK_RECOVERY,
+                            source = RecoverySource.ICE_MONITOR
+                        )
+                    }
                 }
+                // ANSWERER_TRANSACTION_COMMITTED: local Answerer SDP done + GROUP_ACCEPT handoff.
+                commitAnswererTransactionAndDrain(session, peerId, engine)
             }
             if (session.type == SessionType.CONFERENCE) {
                 notifyConferenceTransportChanged(session, "acceptGroupJoin")
@@ -5029,13 +5107,35 @@ class TalkbackCoordinator(
         val answer = engine.applyRemoteOffer(payload.sdp, politeForMeshPair(caller.moduleId.value))
         drainPendingIce(session.id, caller.moduleId.value, engine)
         markMeshLinkCompleted(session,caller.moduleId.value)
-        sendSignal(
+        val handoffOk = sendSignalHandoff(
             fromPeer,
             buildSignedEnvelope(SignalType.GROUP_ACCEPT, callee, caller, signal.sessionId, answer)
         )
         log("[${session.traceId}] Group mesh link accepted ${caller.moduleId.value}")
+        if (handoffOk) {
+            commitAnswererTransactionAndDrain(session, caller.moduleId.value, engine)
+        }
         if (session.type == SessionType.CONFERENCE) {
             markConferenceParticipantActive(session, caller.moduleId.value)
+        }
+    }
+
+    /**
+     * INV-NEG-005: Coordinator owns commit → NEGOTIATION_RELEASED → Recovery drain.
+     * Engine MUST NOT call Recovery; Recovery MUST NOT call commit.
+     */
+    private fun commitAnswererTransactionAndDrain(
+        session: TalkbackSession,
+        remoteModuleId: String,
+        engine: WebRtcAudioEngine
+    ) {
+        if (!engine.commitAnswererTransaction()) return
+        log(
+            "NEGOTIATION_RELEASED session=${session.id} remote=$remoteModuleId " +
+                "reason=ANSWERER_TRANSACTION_COMMITTED"
+        )
+        if (session.type == SessionType.CONFERENCE) {
+            conferenceEdgeRecoveryController.drainPendingIceRestart(session.id, remoteModuleId)
         }
     }
 
@@ -7459,6 +7559,12 @@ class TalkbackCoordinator(
         )
         if (meshPeer) {
             MediaRecoveryCausalTrace.recoveryIceRestartDispatched(traceCtx)
+            observeIceRestartRequested(
+                session,
+                peerId,
+                remote.endpointId.value,
+                engine
+            )
         }
         val offer = engine.createOffer(iceRestart = meshPeer)
         MediaRecoveryCausalTrace.mediaSignalOfferSent(traceCtx)
@@ -8484,6 +8590,12 @@ class TalkbackCoordinator(
         )
         if (iceRestart) {
             MediaRecoveryCausalTrace.recoveryIceRestartDispatched(traceCtx)
+            observeIceRestartRequested(
+                session,
+                remoteModuleId,
+                remote.endpointId.value,
+                engine
+            )
             val before = engine.negotiationSnapshot()
             MediaRecoveryCausalTrace.webrtcNegotiationSnapshot(
                 ctx = traceCtx,
@@ -10224,11 +10336,19 @@ class TalkbackCoordinator(
     }
 
     private fun sendSignal(target: PeerTarget, envelope: SignalEnvelope) {
-        runCatching {
+        sendSignalHandoff(target, envelope)
+    }
+
+    /**
+     * Signaling handoff success = local send completed without exception.
+     * Not peer ACK; not "sendSignal was invoked".
+     */
+    private fun sendSignalHandoff(target: PeerTarget, envelope: SignalEnvelope): Boolean {
+        return runCatching {
             signalingChannel.send(target, envelope)
         }.onFailure {
             log("Signal send failed type=${envelope.type} err=${it.message}")
-        }
+        }.isSuccess
     }
 
     private fun buildSignedEnvelope(
