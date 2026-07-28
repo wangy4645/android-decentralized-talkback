@@ -1375,8 +1375,18 @@ class ConferenceEdgeRecoveryController(
             notifyChanged(sessionId)
             return
         }
+        // Terminal monotonicity: late ICE after CLOSED(RECOVERED) must not reopen / rewrite phase
+        // (soak gap2-casea: RECOVERED → controlPlaneStarted=false → ICE_RESTARTING poisoned UI).
+        if (record.phase == EdgeRecoveryPhase.RECOVERED && !record.edgeObligationOpen()) {
+            onLog(
+                "IGNORE_LATE_ICE_AFTER_RECOVERED session=$sessionId remote=$remoteModuleId " +
+                    "attempt=${record.recoveryAttemptId} obligationGen=${record.obligationGeneration} " +
+                    "closeReason=${record.obligationCloseReason}"
+            )
+            return
+        }
         // No open recovery obligation: idle CONNECTED bookkeeping only.
-        if (!record.edgeObligationOpen() && record.phase != EdgeRecoveryPhase.RECOVERED) {
+        if (!record.edgeObligationOpen()) {
             record.phase = EdgeRecoveryPhase.CONNECTED
             return
         }
