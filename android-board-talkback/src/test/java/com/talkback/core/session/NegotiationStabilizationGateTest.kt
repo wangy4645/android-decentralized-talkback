@@ -52,7 +52,15 @@ class NegotiationStabilizationGateTest {
             iceRestartCalls++
             true
         },
-        canExecuteIceRestart = { _, _ -> canExecute }
+        probeIceRestartGate = { _, _ ->
+            if (canExecute) IceRestartGateProbe(executable = true)
+            else IceRestartGateProbe(
+                executable = false,
+                blockReason = IceRestartGateBlockReason.ANSWERER_SETTLING,
+                signalingState = "STABLE",
+                localRole = "ANSWERER"
+            )
+        }
     )
 
     @Test
@@ -68,6 +76,14 @@ class NegotiationStabilizationGateTest {
         assertEquals(0, iceRestartCalls)
         val lineage = controller.attemptLineageObservation(sessionId, remoteModuleId)!!
         assertEquals(EdgeRecoveryPhase.REATTACH_ACCEPTED, lineage.phase)
+                assertTrue(decisionLogs.any { it.contains("ICE_RESTART_GATE_BLOCKED") && it.contains("ANSWERER_SETTLING") })
+        assertTrue(
+            decisionLogs.any {
+                it.contains("ICE_RESTART_DEFERRED") &&
+                    it.contains("intentId=R") &&
+                    it.contains("reason=ANSWERER_SETTLING")
+            }
+        )
         assertTrue(
             decisionLogs.any {
                 it.contains("RECOVERY_MEDIA_ACTION_DEFERRED") &&
@@ -101,6 +117,11 @@ class NegotiationStabilizationGateTest {
         val lineage = controller.attemptLineageObservation(sessionId, remoteModuleId)!!
         assertEquals(EdgeRecoveryPhase.ICE_RESTARTING, lineage.phase)
         assertTrue(decisionLogs.any { it.contains("RECOVERY_ICE_RESTART_DISPATCHED") })
+                assertTrue(
+            decisionLogs.any {
+                it.contains("terminal=EXECUTED") && it.contains("intentId=R")
+            }
+        )
         assertTrue(
             decisionLogs.any {
                 it.contains("RECOVERY_WAKEUP_FIRED") && it.contains("trigger=NEGOTIATION_RELEASED")
@@ -141,8 +162,9 @@ class NegotiationStabilizationGateTest {
         controller.cancelSession(sessionId, "session_cancelled")
         assertTrue(
             decisionLogs.any {
-                it.contains("RECOVERY_ICE_RESTART_INTENT_EXPIRED") &&
-                    it.contains("terminal=STALE_DISCARD")
+                it.contains("RECOVERY_ICE_RESTART_INTENT_TERMINAL") &&
+                    it.contains("terminal=STALE_DISCARD") &&
+                    it.contains("reason=OBLIGATION_CLOSED")
             }
         )
 

@@ -120,9 +120,32 @@ enum class DeferredReason {
     ROUTE_NOT_READY,
     AUTHORITY_NOT_READY,
     MEDIA_NOT_READY,
-    /** Negotiation Stabilization Gate: Answerer settlement / signaling not executable yet. */
+    /**
+     * Negotiation Stabilization Gate umbrella disposition (INV-NEG-004).
+     * Step A-1: finer block reason is logged as ICE_RESTART_GATE_BLOCKED
+     * (ANSWERER_SETTLING | SIGNALING_NOT_STABLE) — not collapsed into this enum alone.
+     */
     NEGOTIATION_SETTLING,
 }
+
+/**
+ * Step A-1 observation: finer gate block under umbrella [DeferredReason.NEGOTIATION_SETTLING].
+ * Do not collapse these into a single wakeup — each maps to a different release fact.
+ */
+enum class IceRestartGateBlockReason {
+    /** Waiting Answerer transaction commit → NEGOTIATION_RELEASED(source=ANSWERER_TRANSACTION_COMMITTED). */
+    ANSWERER_SETTLING,
+    /** Waiting signaling STABLE — release fact TBD (Step A-2 grill; not NEGOTIATION_RELEASED). */
+    SIGNALING_NOT_STABLE,
+}
+
+/** Step A-1 observation: Coordinator probe for Negotiation Stabilization Gate. */
+data class IceRestartGateProbe(
+    val executable: Boolean,
+    val blockReason: IceRestartGateBlockReason? = null,
+    val signalingState: String? = null,
+    val localRole: String? = null
+)
 
 internal enum class WakeupSourceType {
     ROUTE_CONVERGED,
@@ -220,6 +243,13 @@ internal data class EdgeRecoveryRecord(
     var mediaActionDisposition: MediaActionDisposition = MediaActionDisposition.UNASSIGNED,
     var deferredReason: DeferredReason? = null,
     var wakeupBinding: WakeupBinding? = null,
+    /** Step A-1: finer gate block when [deferredReason] is NEGOTIATION_SETTLING. */
+    var deferredGateBlockReason: IceRestartGateBlockReason? = null,
+    /**
+     * Commit Seam Trace: stable id for one ICE-restart deferred intent (R1, R2, …).
+     * Distinguishes successor/supersede intents that share edge+attempt+gen.
+     */
+    var iceRestartIntentId: String? = null,
     /** True when current attempt crossed inbound [onRecoveryReattachAccepted] (C-1.1 handoff guard). */
     var recoveryViaInboundReattach: Boolean = false,
     var epochRefreshUsed: Boolean = false,

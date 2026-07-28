@@ -77,6 +77,8 @@ import com.talkback.core.session.EdgeRecoveryEligibility
 import com.talkback.core.session.EdgeRecoveryFacts
 import com.talkback.core.session.ObligationCloseReason
 import com.talkback.core.session.DeferredReason
+import com.talkback.core.session.IceRestartGateBlockReason
+import com.talkback.core.session.IceRestartGateProbe
 import com.talkback.core.session.InboundReattachLineageVerdict
 import com.talkback.core.session.ReattachDispatchOutcome
 import com.talkback.core.session.RecoveryCapabilitySignature
@@ -383,21 +385,45 @@ class TalkbackCoordinator(
                 }
                 ready
             },
-            canExecuteIceRestart = { sessionId, remoteModuleId ->
-                var executable = true
+            probeIceRestartGate = { sessionId, remoteModuleId ->
+                var probe = IceRestartGateProbe(executable = true)
                 runOnCoordinatorSync {
                     val session = sessions[sessionId] ?: return@runOnCoordinatorSync
                     val engine = meshEngineForSession(session, remoteModuleId)
                         ?: return@runOnCoordinatorSync
+                    val snap = engine.negotiationSnapshot()
+                    val localRole = when (snap.localDescriptionType) {
+                        "ANSWER" -> "ANSWERER"
+                        "OFFER" -> "OFFERER"
+                        else -> "UNKNOWN"
+                    }
                     // Settling checked before signalingState (freeze Q / INV-NEG gate).
                     if (engine.justSettledAsAnswerer()) {
-                        executable = false
+                        probe = IceRestartGateProbe(
+                            executable = false,
+                            blockReason = IceRestartGateBlockReason.ANSWERER_SETTLING,
+                            signalingState = snap.signalingState,
+                            localRole = localRole
+                        )
                         return@runOnCoordinatorSync
                     }
-                    val signaling = engine.negotiationSnapshot().signalingState
-                    executable = signaling.equals("STABLE", ignoreCase = true)
+                    val stable = snap.signalingState.equals("STABLE", ignoreCase = true)
+                    probe = if (stable) {
+                        IceRestartGateProbe(
+                            executable = true,
+                            signalingState = snap.signalingState,
+                            localRole = localRole
+                        )
+                    } else {
+                        IceRestartGateProbe(
+                            executable = false,
+                            blockReason = IceRestartGateBlockReason.SIGNALING_NOT_STABLE,
+                            signalingState = snap.signalingState,
+                            localRole = localRole
+                        )
+                    }
                 }
-                executable
+                probe
             },
             onRecoveryStateChanged = { sessionId ->
                 runOnCoordinatorSync {
@@ -4633,10 +4659,28 @@ class TalkbackCoordinator(
             maybeEmitAppStartSnapshot(session)
         }
         markMeshLinkCompleted(session,caller.moduleId.value)
-        sendSignal(
+        val handoffOk = sendSignalHandoff(
             fromPeer,
             buildSignedEnvelope(SignalType.GROUP_ACCEPT, callee, caller, signal.sessionId, answer)
         )
+        // Step B1: same Answerer commit seam as JOIN (Q9) — handoff success → commit → release → drain.
+        if (!handoffOk) {
+            log(
+                "GROUP_ACCEPT_HANDOFF session=${session.id} remote=${caller.moduleId.value} " +
+                    "path=INVITE result=FAIL commit=SKIPPED settled=${engine.justSettledAsAnswerer()}"
+            )
+        } else {
+            log(
+                "GROUP_ACCEPT_HANDOFF session=${session.id} remote=${caller.moduleId.value} " +
+                    "path=INVITE result=SUCCESS commit=PENDING settled=${engine.justSettledAsAnswerer()}"
+            )
+            commitAnswererTransactionAndDrain(
+                session = session,
+                remoteModuleId = caller.moduleId.value,
+                engine = engine,
+                path = "INVITE"
+            )
+        }
         val inviteLabel = if (sessionType == SessionType.CONFERENCE) "Conference" else "Group"
         log("[${session.traceId}] $inviteLabel invite accepted ch=$channelId members=${members.size}")
         if (sessionType == SessionType.CONFERENCE) {
@@ -4705,10 +4749,28 @@ class TalkbackCoordinator(
         drainPendingIce(session.id, caller.moduleId.value, engine)
         session.accepted = true
         markMeshLinkCompleted(session,caller.moduleId.value)
-        sendSignal(
+        val handoffOk = sendSignalHandoff(
             fromPeer,
             buildSignedEnvelope(SignalType.GROUP_ACCEPT, callee, caller, signal.sessionId, answer)
         )
+        // Step B1: reconnect invite reuses the same Answerer commit seam (Q9).
+        if (!handoffOk) {
+            log(
+                "GROUP_ACCEPT_HANDOFF session=${session.id} remote=${caller.moduleId.value} " +
+                    "path=RECONNECT result=FAIL commit=SKIPPED settled=${engine.justSettledAsAnswerer()}"
+            )
+        } else {
+            log(
+                "GROUP_ACCEPT_HANDOFF session=${session.id} remote=${caller.moduleId.value} " +
+                    "path=RECONNECT result=SUCCESS commit=PENDING settled=${engine.justSettledAsAnswerer()}"
+            )
+            commitAnswererTransactionAndDrain(
+                session = session,
+                remoteModuleId = caller.moduleId.value,
+                engine = engine,
+                path = "RECONNECT"
+            )
+        }
         log("${sessionTag(session)} Group invite reconnect accepted from ${caller.moduleId.value}")
         updateSessionReceivePlayback(session)
         emitGroupTopologySnapshot(TopologySnapshotReason.RECONNECT, session)
@@ -5065,10 +5127,18 @@ class TalkbackCoordinator(
             log("${sessionTag(session)} Group mesh ICE restart accepted $peerId ice=$ice intent=${payload.joinIntent}")
             if (!handoffOk) {
                 log(
+                    "GROUP_ACCEPT_HANDOFF session=${session.id} remote=$peerId " +
+                        "path=JOIN result=FAIL commit=SKIPPED"
+                )
+                log(
                     "${sessionTag(session)} GROUP_ACCEPT handoff failed peer=$peerId " +
                         "skip=recovery_accept_and_commit"
                 )
             } else {
+                log(
+                    "GROUP_ACCEPT_HANDOFF session=${session.id} remote=$peerId " +
+                        "path=JOIN result=SUCCESS commit=PENDING"
+                )
                 if (session.type == SessionType.CONFERENCE) {
                     markConferenceParticipantActive(session, caller.moduleId.value)
                     // Connectivity Recovery only — USER_REJOIN must not enter RecoveryController.
@@ -5083,7 +5153,7 @@ class TalkbackCoordinator(
                     }
                 }
                 // ANSWERER_TRANSACTION_COMMITTED: local Answerer SDP done + GROUP_ACCEPT handoff.
-                commitAnswererTransactionAndDrain(session, peerId, engine)
+                commitAnswererTransactionAndDrain(session, peerId, engine, path = "JOIN")
             }
             if (session.type == SessionType.CONFERENCE) {
                 notifyConferenceTransportChanged(session, "acceptGroupJoin")
@@ -5113,7 +5183,16 @@ class TalkbackCoordinator(
         )
         log("[${session.traceId}] Group mesh link accepted ${caller.moduleId.value}")
         if (handoffOk) {
-            commitAnswererTransactionAndDrain(session, caller.moduleId.value, engine)
+            log(
+                "GROUP_ACCEPT_HANDOFF session=${session.id} remote=${caller.moduleId.value} " +
+                    "path=JOIN_FIRST result=SUCCESS commit=PENDING"
+            )
+            commitAnswererTransactionAndDrain(session, caller.moduleId.value, engine, path = "JOIN_FIRST")
+        } else {
+            log(
+                "GROUP_ACCEPT_HANDOFF session=${session.id} remote=${caller.moduleId.value} " +
+                    "path=JOIN_FIRST result=FAIL commit=SKIPPED"
+            )
         }
         if (session.type == SessionType.CONFERENCE) {
             markConferenceParticipantActive(session, caller.moduleId.value)
@@ -5121,18 +5200,40 @@ class TalkbackCoordinator(
     }
 
     /**
-     * INV-NEG-005: Coordinator owns commit → NEGOTIATION_RELEASED → Recovery drain.
+     * INV-NEG-005 / Q9: Coordinator owns one Answerer commit seam for JOIN and INVITE paths:
+     * handoff success → commitAnswererTransaction → NEGOTIATION_RELEASED → Recovery drain.
      * Engine MUST NOT call Recovery; Recovery MUST NOT call commit.
      */
     private fun commitAnswererTransactionAndDrain(
         session: TalkbackSession,
         remoteModuleId: String,
-        engine: WebRtcAudioEngine
+        engine: WebRtcAudioEngine,
+        path: String
     ) {
-        if (!engine.commitAnswererTransaction()) return
+        val wasSettled = engine.justSettledAsAnswerer()
+        val committed = engine.commitAnswererTransaction()
+        val pendingIntentId = conferenceEdgeRecoveryController.pendingIceRestartIntentId(
+            session.id,
+            remoteModuleId
+        )
+        log(
+            "ANSWERER_TRANSACTION_COMMIT " +
+                "session=${session.id} remote=$remoteModuleId path=$path " +
+                "result=${if (committed) "TRUE" else "FALSE"} " +
+                "settledBefore=$wasSettled intentId=${pendingIntentId ?: "NONE"}"
+        )
+        if (!committed) {
+            log(
+                "GROUP_ACCEPT_HANDOFF session=${session.id} remote=$remoteModuleId " +
+                    "path=$path commit=FALSE intentId=${pendingIntentId ?: "NONE"}"
+            )
+            return
+        }
         log(
             "NEGOTIATION_RELEASED session=${session.id} remote=$remoteModuleId " +
-                "reason=ANSWERER_TRANSACTION_COMMITTED"
+                "source=ANSWERER_TRANSACTION_COMMITTED " +
+                "reason=ANSWERER_TRANSACTION_COMMITTED " +
+                "path=$path intentId=${pendingIntentId ?: "NONE"}"
         )
         if (session.type == SessionType.CONFERENCE) {
             conferenceEdgeRecoveryController.drainPendingIceRestart(session.id, remoteModuleId)
