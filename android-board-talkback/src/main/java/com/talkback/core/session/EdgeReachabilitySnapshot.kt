@@ -152,6 +152,22 @@ enum class RecoveryReevaluateTrigger {
 }
 
 /**
+ * Resurrection admission evidence riding the R28-G notify seam (ADR-0022 §13.2.4 C2).
+ * Coordinator stamps [observedAtMs]; Controller MUST NOT invent it.
+ * MUST only accompany [RecoveryReevaluateTrigger.REMOTE_MODULE_RECOVERED].
+ */
+data class RecoveryResurrectionEvidence(
+    val kind: RecoveryReevaluateTrigger,
+    val observedAtMs: Long
+)
+
+/** Result of admitting a Successor Obligation Episode (ADR-0022 §13.2.4). */
+data class SuccessorObligationAdmission(
+    val obligationGeneration: Long,
+    val recoveryAttemptId: Long
+)
+
+/**
  * Projects recovery capability from reachability facts and edge role (ADR-0022 R28-G).
  * [controlPlaneStarted] — attempt crossed REATTACH_REQUESTED / REATTACH_ACCEPTED / ICE_RESTARTING.
  *
