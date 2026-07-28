@@ -3898,6 +3898,45 @@ Recovery Completion Auth   PASS_B31 (UT + field gold chain)
 Remaining                  Qualification / signaling — SEPARATE
 ```
 
+### Lineage closure — **CLOSED 2026-07-28** (architecture review)
+
+**Status:** B3 Capability + Recovery Completion Authority formally **CLOSED**. Move from bug investigation to long-term invariant maintenance. Do **not** reopen Q10–Q14 / INV-REC-026..031 / INV-NEG-015..016 / rising-edge / probe for residual work.
+
+```text
+Protocol capability:     CLOSED
+Completion authority:    CLOSED
+Recovery semantics:      CLOSED
+Qualification/signaling: NEXT WORKSTREAM (SEPARATE)
+```
+
+**Final correct chain (normative):**
+
+```text
+Peer disconnect → obligation OPEN
+  → ICE restart blocked (e.g. SIGNALING_NOT_STABLE)
+  → Deferred intent (domain=NEGOTIATION) + observation baseline=false
+  → NEGOTIATION_CAN_EXECUTE → drain → dispatch → EXECUTED
+  → post-dispatch restart-resolved evidence → canClose=true
+  → closeObligation → RECOVERED
+```
+
+**Forbidden equalities (frozen):**
+
+```text
+ICE_CONNECTED  ≠ RECOVERED
+mediaRestored  ≠ restart completed
+EXECUTED       ≠ obligation complete
+old evidence   ≠ fresh (post-dispatch) evidence
+```
+
+**Regression gold standard (any future Recovery change must preserve):**
+
+1. **Completion authority** — every `RECOVERED` / `closeObligation` answers: which evidence covers which domain?
+2. **Freshness** — every `mediaRestoredObservedAt` / `ICE_CONNECTED` used for close answers: after the current recovery action (`restartDispatchAt`)?
+3. **Capability separation** — Recovery MUST NOT produce `NEGOTIATION_CAN_EXECUTE`; only consume Coordinator negotiation-seam rising-edge.
+
+**Next workstream:** `QualificationRepairCoordinator` / signaling readiness only — must not mutate frozen B3 capability or completion-authority contracts.
+
 ### Design freeze confirmation — **ACCEPTED 2026-07-28**
 
 **Reviewer verdict:** Q10–Q14 + INV-REC-026..031 + INV-NEG-016 formally frozen. Further grilling has no ROI for the current bug.
