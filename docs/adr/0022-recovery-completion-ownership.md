@@ -3553,6 +3553,8 @@ MUST admit successor obligation episode iff:
   AND edge still unhealthy (no media-complete)
 ```
 
+**Unhealthy clarification:** `no media-complete` means `phase != RECOVERED`. Attempt-scoped `mediaRestored=true` (media-plane fact left after incomplete ICE / deadline) MUST NOT deny successor admission.
+
 **Authority (O2′ / C2):**
 
 ```text
@@ -3583,6 +3585,7 @@ Controller (sole obligationGeneration writer):
 | **G-RESURRECT-3** | OPEN obligation → reevaluate, no gen bump |
 | **G-RESURRECT-4** | stale terminal fact → INV-REC-022 reject |
 | **G-RESURRECT-5** | successor execution state clean |
+| **G-RESURRECT-6** | CLOSED + `mediaRestored=true` residual + fresh evidence → still admit gen+1 |
 
 **Out of Gap-2 scope:** Gap-1 (`SIGNAL_INBOUND_RESUMED`), deadline/watchdog extension, carrier / completion predicate / UI, HELLO→`EDGE_RECOVERED`, resurrection-specific owner / `immediate=true`.
 

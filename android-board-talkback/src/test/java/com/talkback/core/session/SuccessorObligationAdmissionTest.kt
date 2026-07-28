@@ -9,7 +9,7 @@ import org.junit.Test
 import java.util.concurrent.Executors
 
 /**
- * G-RESURRECT-0..5 — successor obligation admission (ADR-0022 §13.2.4 Gap-2).
+ * G-RESURRECT-0..5 鈥?successor obligation admission (ADR-0022 搂13.2.4 Gap-2).
  */
 class SuccessorObligationAdmissionTest {
 
@@ -18,6 +18,7 @@ class SuccessorObligationAdmissionTest {
     private val decisionLogs = mutableListOf<String>()
     private var iceRestartCalls = 0
     private var canDispatch = true
+    private var iceConnected = false
     private lateinit var controller: ConferenceEdgeRecoveryController
 
     @Before
@@ -26,6 +27,7 @@ class SuccessorObligationAdmissionTest {
         decisionLogs.clear()
         iceRestartCalls = 0
         canDispatch = true
+        iceConnected = false
         controller = buildController()
     }
 
@@ -52,7 +54,7 @@ class SuccessorObligationAdmissionTest {
             iceRestartCalls++
             false
         },
-        isIceConnected = { _, _ -> false },
+        isIceConnected = { _, _ -> iceConnected },
         canDispatchRecoveryMediaAction = { _, _ -> canDispatch }
     )
 
@@ -83,7 +85,7 @@ class SuccessorObligationAdmissionTest {
         controlPlaneStarted = controlPlaneStarted
     )
 
-    /** Drive host edge to FAILED_MEDIA → OBLIGATION_DEADLINE CLOSED. */
+    /** Drive host edge to FAILED_MEDIA 鈫?OBLIGATION_DEADLINE CLOSED. */
     private fun driveHostObligationDeadlineClosed(remote: String = "M02"): Long {
         controller.onIceStateChanged(
             sessionId = "sess-1",
@@ -308,5 +310,79 @@ class SuccessorObligationAdmissionTest {
             snapshot = reachabilitySnapshot(authorityReachable = true)
         )
         assertEquals(restartsBeforeAdmit + 1, iceRestartCalls)
+    }
+
+    @Test
+    fun gResurrect6_closedWithMediaRestoredResidual_stillAdmits() {
+        // Incomplete ICE restart leaves mediaRestored=true; deadline must not make that permanent.
+        controller = ConferenceEdgeRecoveryController(
+            localModuleId = "LOCAL",
+            debounceMs = 20L,
+            iceRestartTimeoutMs = 200L,
+            attemptBudgetMs = 500L,
+            observationWindowMs = 100L,
+            clock = { nowMs },
+            scheduler = scheduler,
+            onLog = { decisionLogs.add(it) },
+            onRequestReattach = { _, _, _ -> ReattachDispatchOutcome.SENT },
+            onIceRestart = { _, _ ->
+                iceRestartCalls++
+                iceConnected = true
+                false
+            },
+            isIceConnected = { _, _ -> iceConnected },
+            canDispatchRecoveryMediaAction = { _, _ -> canDispatch }
+        )
+        controller.onIceStateChanged(
+            sessionId = "sess-1",
+            channelId = "CH-1",
+            remoteModuleId = "M02",
+            iceState = "FAILED",
+            eligibility = eligible(),
+            initiatesReattach = false
+        )
+        assertTrue(controller.edgeObligationOpen("sess-1", "M02"))
+        val gen1 = controller.obligationGeneration("sess-1", "M02")!!
+        assertTrue(controller.attemptLineageObservation("sess-1", "M02")!!.mediaRestored)
+
+        // Watchdog (~220ms) → FAILED_MEDIA residency, then observation window (~100ms) → CLOSED.
+        Thread.sleep(280)
+        assertTrue(controller.factsForSession("sess-1").anyFailedMediaRecovery)
+        Thread.sleep(150)
+        assertTrue(controller.edgeObligationClosed("sess-1", "M02"))
+        assertEquals(
+            ObligationCloseReason.OBLIGATION_DEADLINE,
+            controller.obligationCloseReason("sess-1", "M02")
+        )
+        assertTrue(controller.attemptLineageObservation("sess-1", "M02")!!.mediaRestored)
+
+        // Closed-edge ICE bookkeeping must not clear residual mediaRestored (bugbot scenario).
+        controller.onIceStateChanged(
+            sessionId = "sess-1",
+            channelId = "CH-1",
+            remoteModuleId = "M02",
+            iceState = "CONNECTED",
+            eligibility = eligible(),
+            initiatesReattach = false
+        )
+        assertTrue(controller.attemptLineageObservation("sess-1", "M02")!!.mediaRestored)
+
+        nowMs += 5L
+        decisionLogs.clear()
+        notifyReachability(
+            trigger = RecoveryReevaluateTrigger.REMOTE_MODULE_RECOVERED,
+            evidence = RecoveryResurrectionEvidence(
+                kind = RecoveryReevaluateTrigger.REMOTE_MODULE_RECOVERED,
+                observedAtMs = nowMs
+            )
+        )
+
+        assertTrue(controller.edgeObligationOpen("sess-1", "M02"))
+        assertEquals(gen1 + 1L, controller.obligationGeneration("sess-1", "M02"))
+        assertTrue(
+            decisionLogs.any {
+                it.contains("RECOVERY_OBLIGATION_OPENED") && it.contains("obligationGen=${gen1 + 1L}")
+            }
+        )
     }
 }

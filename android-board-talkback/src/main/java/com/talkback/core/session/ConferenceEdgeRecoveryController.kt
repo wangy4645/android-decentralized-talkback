@@ -910,9 +910,10 @@ class ConferenceEdgeRecoveryController(
         if (evidence.kind != RecoveryReevaluateTrigger.REMOTE_MODULE_RECOVERED) return false
         val closedAt = record.obligationClosedAtMs ?: return false
         if (evidence.observedAtMs <= closedAt) return false
-        // Edge Lifecycle ACTIVE == record present (caller resolved). Edge still unhealthy.
+        // Edge Lifecycle ACTIVE == record present (caller resolved).
+        // "unhealthy / no media-complete" == not RECOVERED. mediaRestored is attempt-scoped
+        // media-plane evidence and MUST NOT block successor admission after OBLIGATION_DEADLINE.
         if (record.phase == EdgeRecoveryPhase.RECOVERED) return false
-        if (record.mediaRestored) return false
         return true
     }
 
