@@ -52,20 +52,44 @@ class MediaRecoveryCausalTraceTest {
     }
 
     @Test
-    fun mediaSignalCandidateApplied_omitsOptionalAttempt() {
-        MediaRecoveryCausalTrace.mediaIceCandidateApplied(
-            MediaRecoveryCausalTrace.Context(
-                sessionId = "grp:CH-01",
-                sessionTraceId = "trace-1",
-                scope = MediaBearerScope.GROUP,
-                remoteModuleId = "M02",
-                pcGeneration = 3L,
-                transportGeneration = 3L
-            )
+    fun recoveryOfferSentAndReceived_includeLineageAndDecision() {
+        val ctx = MediaRecoveryCausalTrace.Context(
+            sessionId = "sess-1",
+            sessionTraceId = "abc12345",
+            scope = MediaBearerScope.CONFERENCE,
+            remoteModuleId = "M01",
+            remoteEndpointId = "E01",
+            recoveryAttemptId = 4L,
+            obligationGeneration = 2L,
+            conferenceGeneration = 1L,
+            pcGeneration = 8L,
+            transportGeneration = 8L,
+            iceRestart = true
         )
-        val line = lines.single()
-        assertTrue(line.startsWith("MEDIA_ICE_CANDIDATE_APPLIED"))
-        assertTrue(line.contains("scope=GROUP"))
-        assertTrue(!line.contains("attempt="))
+        MediaRecoveryCausalTrace.recoveryOfferSent(
+            ctx = ctx,
+            joinIntent = "RECOVERY_REATTACH",
+            transportOutcome = "SENT",
+            signalingEpoch = 1L
+        )
+        MediaRecoveryCausalTrace.recoveryOfferReceived(
+            ctx = ctx,
+            decision = MediaRecoveryCausalTrace.OfferIngressDecision.DROP_DUPLICATE_ICE_CONNECTED,
+            joinIntent = "RECOVERY_REATTACH",
+            localIceState = "CONNECTED",
+            localAttemptId = 5L,
+            localObligationGen = 2L,
+            detail = "meshCompleted=true"
+        )
+        assertTrue(lines[0].startsWith("RECOVERY_OFFER_SENT"))
+        assertTrue(lines[0].contains("attempt=4"))
+        assertTrue(lines[0].contains("obligationGen=2"))
+        assertTrue(lines[0].contains("transportOutcome=SENT"))
+        assertTrue(lines[0].contains("signalingEpoch=1"))
+        assertTrue(lines[1].startsWith("RECOVERY_OFFER_RECEIVED"))
+        assertTrue(lines[1].contains("decision=DROP_DUPLICATE_ICE_CONNECTED"))
+        assertTrue(lines[1].contains("localIce=CONNECTED"))
+        assertTrue(lines[1].contains("localAttempt=5"))
+        assertTrue(lines[1].contains("localObligationGen=2"))
     }
 }

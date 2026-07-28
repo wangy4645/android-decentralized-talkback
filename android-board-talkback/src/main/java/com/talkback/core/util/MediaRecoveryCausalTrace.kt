@@ -8,9 +8,22 @@ import com.talkback.core.webrtc.MediaBearerScope
  *
  * Does not gate recovery, membership, floor, or UI.
  *
- * Grep: `MEDIA_SIGNAL_`, `MEDIA_ICE_CANDIDATE_`, `RECOVERY_ICE_RESTART_DISPATCHED`
+ * Grep: `MEDIA_SIGNAL_`, `MEDIA_ICE_CANDIDATE_`, `RECOVERY_ICE_RESTART_DISPATCHED`,
+ * `RECOVERY_OFFER_SENT`, `RECOVERY_OFFER_RECEIVED`
  */
 object MediaRecoveryCausalTrace {
+
+    /** Receiver-side ingress decision for recovery / ICE-restart GROUP_JOIN offers (4.3-D-1). */
+    enum class OfferIngressDecision {
+        ACCEPT_ICE_RESTART,
+        ACCEPT_FIRST_MESH,
+        QUEUED_NO_SESSION,
+        DROP_DUPLICATE_ICE_CONNECTED,
+        DROP_ICE_RESTART_THROTTLED,
+        DROP_DECODE_FAILED,
+        DROP_NO_CALLEE,
+        DROP_GROUP_BUSY
+    }
 
     data class Context(
         val sessionId: String,
@@ -19,6 +32,7 @@ object MediaRecoveryCausalTrace {
         val remoteModuleId: String,
         val remoteEndpointId: String? = null,
         val recoveryAttemptId: Long? = null,
+        val obligationGeneration: Long? = null,
         val conferenceGeneration: Long? = null,
         val pcGeneration: Long? = null,
         val transportGeneration: Long? = null,
@@ -48,6 +62,7 @@ object MediaRecoveryCausalTrace {
         sb.append(" remote=").append(ctx.remoteModuleId)
         ctx.remoteEndpointId?.let { sb.append(" remoteEndpoint=").append(it) }
         ctx.recoveryAttemptId?.let { sb.append(" attempt=").append(it) }
+        ctx.obligationGeneration?.let { sb.append(" obligationGen=").append(it) }
         ctx.conferenceGeneration?.let { sb.append(" conferenceGeneration=").append(it) }
         ctx.pcGeneration?.let { sb.append(" pcGeneration=").append(it) }
         ctx.transportGeneration?.let { sb.append(" transportGeneration=").append(it) }
@@ -65,9 +80,49 @@ object MediaRecoveryCausalTrace {
         log(formatContext("MEDIA_SIGNAL_OFFER_SENT", ctx))
     }
 
+    /**
+     * 4.3-D-1 observation: host/peer recovery offer emission with lineage binding.
+     * Does not change send behavior.
+     */
+    fun recoveryOfferSent(
+        ctx: Context,
+        joinIntent: String,
+        transportOutcome: String,
+        signalingEpoch: Long? = null
+    ) {
+        val sb = StringBuilder(formatContext("RECOVERY_OFFER_SENT", ctx))
+        sb.append(" joinIntent=").append(joinIntent)
+        sb.append(" transportOutcome=").append(transportOutcome)
+        signalingEpoch?.let { sb.append(" signalingEpoch=").append(it) }
+        log(sb.toString())
+    }
+
     fun mediaSignalOfferReceived(ctx: Context, joinIntent: String? = null) {
         val suffix = joinIntent?.let { " joinIntent=$it" }.orEmpty()
         log(formatContext("MEDIA_SIGNAL_OFFER_RECEIVED", ctx) + suffix)
+    }
+
+    /**
+     * 4.3-D-1 observation: every GROUP_JOIN offer ingress path must emit a decision
+     * (accept or drop reason). Does not change accept/drop behavior.
+     */
+    fun recoveryOfferReceived(
+        ctx: Context,
+        decision: OfferIngressDecision,
+        joinIntent: String? = null,
+        localIceState: String? = null,
+        localAttemptId: Long? = null,
+        localObligationGen: Long? = null,
+        detail: String? = null
+    ) {
+        val sb = StringBuilder(formatContext("RECOVERY_OFFER_RECEIVED", ctx))
+        sb.append(" decision=").append(decision.name)
+        joinIntent?.let { sb.append(" joinIntent=").append(it) }
+        localIceState?.let { sb.append(" localIce=").append(it) }
+        localAttemptId?.let { sb.append(" localAttempt=").append(it) }
+        localObligationGen?.let { sb.append(" localObligationGen=").append(it) }
+        detail?.let { sb.append(" detail=").append(it) }
+        log(sb.toString())
     }
 
     fun mediaIceCandidateGenerated(ctx: Context, candidateIndex: Int? = null) {
