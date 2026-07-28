@@ -3586,6 +3586,7 @@ Controller (sole obligationGeneration writer):
 | **G-RESURRECT-4** | stale terminal fact → INV-REC-022 reject |
 | **G-RESURRECT-5** | successor execution state clean |
 | **G-RESURRECT-6** | CLOSED + `mediaRestored=true` residual + fresh evidence → still admit gen+1 |
+| **G-RESURRECT-7** | CLOSED(OBLIGATION_DEADLINE) + late `markRecovered` → ignore; fresh evidence still admits |
 
 **Out of Gap-2 scope:** Gap-1 (`SIGNAL_INBOUND_RESUMED`), deadline/watchdog extension, carrier / completion predicate / UI, HELLO→`EDGE_RECOVERED`, resurrection-specific owner / `immediate=true`.
 

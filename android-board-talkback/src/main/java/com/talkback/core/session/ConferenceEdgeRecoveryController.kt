@@ -862,6 +862,8 @@ class ConferenceEdgeRecoveryController(
     /**
      * INV-REC-022: lineage / completion terminal authority is attempt-scoped within the current
      * obligation generation. Historical attempts / closed gens MUST NOT terminate successor state.
+     * An already-closed obligation (e.g. [ObligationCloseReason.OBLIGATION_DEADLINE]) also rejects
+     * late RECOVERED facts so they cannot rewrite [EdgeRecoveryPhase] and poison successor admission.
      */
     fun canMarkLineageRecovered(
         sessionId: String,
@@ -870,8 +872,22 @@ class ConferenceEdgeRecoveryController(
         factObligationGeneration: Long
     ): Boolean {
         val current = edges[ConferenceEdgeKey(sessionId, remoteModuleId)] ?: return false
+        if (current.obligationClosedAtMs != null) return false
         return factAttemptId == current.recoveryAttemptId &&
             factObligationGeneration == current.obligationGeneration
+    }
+
+    /**
+     * Test seam: apply [markRecovered] against the live edge record (same object a racing
+     * completion callback would hold after exclusive close).
+     */
+    internal fun applyMarkRecoveredForTest(
+        sessionId: String,
+        remoteModuleId: String,
+        evidence: String = "ICE_CONNECTED"
+    ) {
+        val record = edges[ConferenceEdgeKey(sessionId, remoteModuleId)] ?: return
+        markRecovered(record, evidence)
     }
 
     private fun reevaluateOpenObligation(
@@ -1500,6 +1516,17 @@ class ConferenceEdgeRecoveryController(
                 "IGNORE_STALE_TERMINAL_FACT session=${key.sessionId} remote=${key.remoteModuleId} " +
                     "factAttempt=${record.recoveryAttemptId} factGen=${record.obligationGeneration} " +
                     "currentAttempt=${current.recoveryAttemptId} currentGen=${current.obligationGeneration} " +
+                    "evidence=$closeEvidence"
+            )
+            return
+        }
+        // Exclusive close already stamped (e.g. OBLIGATION_DEADLINE on scheduler thread).
+        // MUST NOT rewrite phase→RECOVERED; that poisons successor freshness (phase==RECOVERED).
+        if (current.obligationClosedAtMs != null) {
+            onLog(
+                "IGNORE_STALE_TERMINAL_FACT session=${key.sessionId} remote=${key.remoteModuleId} " +
+                    "factAttempt=${record.recoveryAttemptId} factGen=${record.obligationGeneration} " +
+                    "reason=obligation_already_closed closeReason=${current.obligationCloseReason} " +
                     "evidence=$closeEvidence"
             )
             return

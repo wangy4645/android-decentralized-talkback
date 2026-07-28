@@ -385,4 +385,44 @@ class SuccessorObligationAdmissionTest {
             }
         )
     }
+@Test
+    fun gResurrect7_lateMarkRecoveredAfterDeadline_ignored_freshEvidenceStillAdmits() {
+        val gen1 = driveHostObligationDeadlineClosed()
+        val attemptId = controller.attemptLineageObservation("sess-1", "M02")!!.attemptId
+        assertFalse(
+            controller.canMarkLineageRecovered(
+                sessionId = "sess-1",
+                remoteModuleId = "M02",
+                factAttemptId = attemptId,
+                factObligationGeneration = gen1
+            )
+        )
+
+        decisionLogs.clear()
+        controller.applyMarkRecoveredForTest("sess-1", "M02", evidence = "ICE_CONNECTED")
+        assertTrue(
+            decisionLogs.any {
+                it.contains("IGNORE_STALE_TERMINAL_FACT") &&
+                    it.contains("reason=obligation_already_closed") &&
+                    it.contains("closeReason=OBLIGATION_DEADLINE")
+            }
+        )
+        assertFalse(decisionLogs.any { it.contains("RECOVERY_EDGE_RECOVERED") })
+        assertEquals(
+            ObligationCloseReason.OBLIGATION_DEADLINE,
+            controller.obligationCloseReason("sess-1", "M02")
+        )
+
+        nowMs += 5L
+        decisionLogs.clear()
+        notifyReachability(
+            trigger = RecoveryReevaluateTrigger.REMOTE_MODULE_RECOVERED,
+            evidence = RecoveryResurrectionEvidence(
+                kind = RecoveryReevaluateTrigger.REMOTE_MODULE_RECOVERED,
+                observedAtMs = nowMs
+            )
+        )
+        assertTrue(controller.edgeObligationOpen("sess-1", "M02"))
+        assertEquals(gen1 + 1L, controller.obligationGeneration("sess-1", "M02"))
+    }
 }
