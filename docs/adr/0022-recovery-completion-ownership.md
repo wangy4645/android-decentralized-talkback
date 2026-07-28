@@ -3590,6 +3590,427 @@ Controller (sole obligationGeneration writer):
 
 **Out of Gap-2 scope:** Gap-1 (`SIGNAL_INBOUND_RESUMED`), deadline/watchdog extension, carrier / completion predicate / UI, HELLO→`EDGE_RECOVERED`, resurrection-specific owner / `immediate=true`.
 
+## §13.3 Negotiation Capability Observation Lifecycle (B3.0) — ACCEPTED
+
+**Status:** **Accepted 2026-07-28** (architecture review after soak `logs/43e-b3-20260728-180733`).
+
+**Verdict:** B3 capability contract remains valid. Failure is missing **capability observation lifecycle**, not wrong Capability Truth.
+
+```text
+Capability Truth = probeIceRestartGate(edge).executable   (INV-NEG-012)  ✅
+Producer seam / Event contract / Rising-edge model         ✅
+Observation memory for rising-edge detector                ❌ → B3.0 fix
+```
+
+**Layering:**
+
+```text
+probeIceRestartGate → current executable (Truth)
+        ↓
+observation ledger (previousExecutable / edge lifecycle)
+        ↓
+rising-edge detector (false → true)
+        ↓
+NEGOTIATION_CAN_EXECUTE
+```
+
+### INV-NEG-015
+
+> Any deferred negotiation intent MUST establish a capability observation baseline before waiting for `NEGOTIATION_CAN_EXECUTE`.
+
+中文：任何进入 deferred negotiation lifecycle 的 intent，在等待 `NEGOTIATION_CAN_EXECUTE` 前，必须建立 capability observation baseline。
+
+**Admission seed (P0 / B3.0):** when Recovery creates a negotiation-deferred ICE-restart intent because the gate is non-executable, Coordinator records observation=`false`. Must **not** seed from bare probe queries (probe stays side-effect free).
+
+**Lifecycle hygiene (P1):** clear observation on edge/session/channel termination. Generation binding is P2 hardening — out of B3.0 root-cause fix.
+
+**Naming:** observation ledger (`NegotiationCapabilityObservation` / `lastObservedNegotiationExecutableByEdge`), not “capability cache”.
+
+**Do not change:** capability predicate, wakeup model (`NEGOTIATION_CAN_EXECUTE`), event semantics, or return to `NEGOTIATION_RELEASED` wakeup.
+
+**Regression test:** stale previous=`true` → defer (seed `false`) → STABLE/`executable=true` → rising-edge → `NEGOTIATION_CAN_EXECUTE` / wakeup / EXECUTED.
+
+### Soak `43e-b30-20260728-190310` — refined verdict (Accepted 2026-07-28)
+
+```text
+FAIL_B30 as gold-chain verdict     = correct (no DEFER→CAN_EXECUTE→WAKEUP→EXECUTED)
+B3.0 capability observation        = PASS (INV-NEG-015 baselines 8/8)
+B3 wakeup closure                  = BLOCKED_BY_OBLIGATION_LIFECYCLE
+```
+
+**Not a B3 capability regression.** Observation baseline is established; deferred intent dies before capability rising-edge can fire.
+
+Host M02 / edge M03 / intent `R1` decision chain:
+
+```text
+REMOTE_MODULE_RECOVERED → SUPERSEDE attempt=2
+  → GATE_BLOCKED SIGNALING_NOT_STABLE (HAVE_LOCAL_OFFER)
+  → DEFER R1 + OBSERVATION baseline=false          ✅ INV-NEG-015
+  → ICE CONNECTED / MEDIA_LIFECYCLE CONNECTED
+  → RECOVERY_COMPLETION_EVIDENCE_ACCEPTED evidence=ICE_CONNECTED
+  → phase ICE_RESTARTING → RECOVERED
+  → OBLIGATION_CLOSE_REQUESTED reason=RECOVERED
+  → WAKEUP_EXPIRED / STALE_DISCARD R1 (~177ms)
+```
+
+**Semantic split exposed:**
+
+| Layer | Question | This soak |
+|-------|----------|-----------|
+| Negotiation capability | Can I `createOffer`? | Still `HAVE_LOCAL_OFFER` / gate false |
+| Recovery obligation | Do I still need recovery? | Closed on `ICE_CONNECTED` as `RECOVERED` |
+
+`RECOVERED` here is **media-plane ICE restore**, not “deferred negotiation intent no longer needed”. Closing obligation unconditionally expires the negotiation intent → Recovery layer overrides Negotiation wait.
+
+**Do not change (still frozen):** `NEGOTIATION_CAN_EXECUTE`, rising-edge, probe predicate, observation baseline.
+
+### Q10 — Obligation vs Deferred Intent lifecycle — **FROZEN R-1**
+
+**Status:** Frozen 2026-07-28 (grill).
+
+**Decision:** **R-1 Defer obligation close** — not R-2 (close obligation, keep orphan intent).
+
+Rationale: as-built and glossary already make **Obligation Episode the sole lifecycle owner** of ICE Restart Intent (`closeObligation` → expire deferred; INV-NEG-002/003). R-2 would introduce a second durable owner (DeferredIntentController) — out of B3 / this knife.
+
+```text
+ICE_CONNECTED / Media Edge Restored
+  → record transport/media fact
+  → canClose(obligation, evidence)?
+       pending intents all covered | superseded | cancelled | ALL-domain end?
+         NO  → obligation remains OPEN (INV-REC-027)
+         YES → CLOSED(RECOVERED) / expire covered intents
+```
+
+**Semantic freeze:** `RECOVERED` (episode close) ≠ “one dimension (transport) finished”. Episode close only after owned deferred intents are covered or ALL-domain invalidated.
+
+### Q11 — Phase when transport restored but NEGOTIATION intent uncovered — **FROZEN P-1**
+
+**Status:** Frozen 2026-07-28 (grill).
+
+**Decision:** **P-1** — reject P-2 (`phase=RECOVERED` + obligation OPEN) and defer P-3 (new `WAITING_*` phases).
+
+```text
+ICE_CONNECTED
+  → mediaRestored = true          // Media Edge Restored fact
+  → phase stays actively recovering (not RECOVERED)
+  → obligation OPEN
+  → … NEGOTIATION_CAN_EXECUTE → EXECUTED (or ALL-domain invalidate) …
+  → closeObligation permitted
+  → phase = RECOVERED
+```
+
+**Phase semantics (frozen):**
+
+| Phase reading | Meaning |
+|---------------|---------|
+| **Actively recovering** (existing enum members where `isActivelyRecovering()`; not a new enum token) | Recovery process ongoing; unresolved obligation may still own deferred intents. **May include** transport/media restored facts. |
+| **`RECOVERED`** | All owned deferred intents resolved **and** `closeObligation` permitted. **Not** ICE connected / media restored / one dimension complete. |
+
+**Reject P-2:** `phase=RECOVERED` + `obligation OPEN` breaks projection contract (UI/metrics infer finished while NEGOTIATION intent pending).
+
+**Defer P-3:** domain wait belongs in intent domain + block reason + obligation OPEN — not global phase explosion (`WAITING_MEDIA` / `WAITING_CONTROL` / …).
+
+### INV-REC-027 (frozen with Q10 R-1)
+
+> Recovery obligation MUST remain open while it owns any uncovered deferred intent.
+
+中文：Recovery obligation 只要仍持有未被 completion evidence 覆盖的 deferred intent，就不得关闭。
+
+### INV-REC-028 (frozen with Q11 P-1)
+
+> Recovery phase MUST NOT transition to `RECOVERED` while any owned deferred intent remains uncovered.
+
+中文：只要 obligation 仍持有未被 completion evidence 覆盖的 deferred intent，attempt phase 不得进入 `RECOVERED`。
+
+Pairs with INV-REC-026 (domain coverage) and INV-REC-027 (obligation stays open).
+
+```text
+Evidence → domain coverage check
+  uncovered → stay actively recovering + obligation OPEN
+  all covered → close obligation → RECOVERED
+```
+
+### Q12 — Obligation deferred-intent cardinality — **FROZEN M-1**
+
+**Status:** Frozen 2026-07-28 (grill).
+
+**Decision:** **M-1 single active deferred intent slot** — reject M-2 (multi-intent aggregate) and M-3 (per-domain sub-obligations) for this knife.
+
+```text
+Edge → Obligation Episode → at most one active Deferred Intent → Domain
+```
+
+As-built matches: one `EdgeRecoveryRecord` holds one `{mediaActionDisposition, deferredReason, wakeupBinding, iceRestartIntentId, deferredGateBlockReason}`.
+
+**canClose (M-1):**
+
+```text
+canClose(obligation, evidence) =
+  noDeferredIntent
+  OR evidence.covers(intent.domain)
+  OR evidence covers ALL (session/membership terminate, explicit cancel)
+```
+
+**Out of scope:** multi-domain bags, partial-complete phases, child-intent stale rules — later orchestration evolution, not completion-authority fix.
+
+**Q10–Q12 closed loop:**
+
+```text
+Completion evidence → domain match → intent resolved → obligation close → phase RECOVERED
+```
+
+### Q13 — `media_path_active_without_restart` authority — **FROZEN B-3 + B-1**
+
+**Status:** Frozen 2026-07-28 (grill).
+
+**Decision:** **B-3 + B-1** — not B-2 alone.
+
+| Layer | Rule |
+|-------|------|
+| **B-1 (semantics)** | `media_path_active_without_restart` is an **Observation Fact** (telemetry/diagnosis only). It MUST NOT enter the `CompletionEvidence` set / `canClose` authority. |
+| **B-3 (behavior)** | While a **pending NEGOTIATION deferred ICE-restart intent** exists, forbid the short-circuit that upgrades this observation into control-plane / restart-completed semantics (`crossControlPlaneBoundary` → `phase=ICE_RESTARTING` → `markRecovered`). |
+
+**Fact meaning:**
+
+```text
+Observed: ICE/media path usable WITHOUT a successful ICE restart transaction
+Proves:   transport/media availability now
+Does NOT prove: negotiation intent resolved | restart executed | obligation complete
+```
+
+**Correct chain (with pending NEGOTIATION defer):**
+
+```text
+ICE CONNECTED → observe media_path_active_without_restart (audit only)
+  → pending NEGOTIATION intent? YES
+  → forbid short-circuit completion
+  → stay actively recovering + obligation OPEN (Q10/Q11)
+  → NEGOTIATION_CAN_EXECUTE → dispatch → resolve
+  → then closeObligation → RECOVERED
+```
+
+**ICE_RESTARTING:** enter only after restart is actually **dispatched** (INV-NEG-004 / Q11) — not when media is live while restart remains DEFERRED.
+
+### INV-REC-029 (frozen with Q13 B-1)
+
+> Media or transport availability observation MUST NOT imply negotiation completion.
+
+中文：Media/transport 恢复事实不得推导 negotiation 完成。
+
+### INV-REC-030 (frozen with Q13 B-3)
+
+> A recovery path that owns a deferred ICE-restart intent MUST NOT enter restart-completed / episode-RECOVERED semantics before that restart transaction is dispatched and resolved (or the intent is invalidated by ALL-domain / explicit supersede-cancel).
+
+中文：需要 ICE restart 且仍持有 deferred restart intent 的恢复路径，在 restart 实际 dispatch 并解消（或被 ALL-domain/显式作废）前，不得进入 restart-completed / episode RECOVERED 语义。
+
+**Root-cause statement (post Q10–Q13):**
+
+> Recovery completion authority incorrectly promoted an observation fact (`media_path_active_without_restart`) into domain completion / episode close while a NEGOTIATION deferred intent was still uncovered — not a missing `NEGOTIATION_CAN_EXECUTE` event.
+
+### Q14 — Post-EXECUTED obligation close evidence — **FROZEN C-3** (absorbs C-2)
+
+**Status:** Frozen 2026-07-28 (grill).
+
+**Decision:** **C-3** — reject C-1. C-2’s “post-dispatch evidence only” constraint is absorbed into C-3 (prefer timestamp/`restartDispatchAt` freshness over blindly clearing `mediaRestored` bool).
+
+```text
+DEFERRED (NEGOTIATION)
+  → NEGOTIATION_CAN_EXECUTE
+  → EXECUTED                    // intent action resolved (dispatch accepted)
+  → NEGOTIATION_INTENT_RESOLVED // deferral cleared; iceRestartIssued may be true
+  → wait RESTART_RESOLVED evidence (post-dispatch)
+  → closeObligation → RECOVERED
+```
+
+| Token | Means |
+|-------|--------|
+| **EXECUTED** | Deferred action was dispatched / attempt consumed the intent (e.g. createOffer/SLD/send). **Not** episode success. |
+| **RECOVERED** | Obligation complete: intent resolved **and** restart-resolved completion evidence accepted. |
+
+**Forbidden (C-1):** after EXECUTED, reuse **pre-dispatch** `mediaRestored` / `ICE_CONNECTED` to close.
+
+**Freshness (C-2 absorbed):** completion evidence for close MUST be **post-`restartDispatchAt`** (or equivalent generation/attempt binding) — not a boolean that predates dispatch.
+
+### INV-REC-031 (frozen with Q14 C-3)
+
+> Executing a deferred intent resolves the intent action, but MUST NOT by itself close the owning obligation.
+
+中文：deferred intent 的执行成功只代表动作完成，不代表 recovery obligation 完成。
+
+### INV-NEG-016 (frozen with Q14; **not** INV-NEG-014 — that id is audit-wakeup)
+
+> A negotiation ICE-restart completion MUST be evidenced by **post-dispatch** resolution, not by pre-dispatch transport availability.
+
+中文：ICE restart 完成必须由 dispatch 后产生的 resolution evidence 证明，不得使用 dispatch 前已有的 transport availability。
+
+### Q10–Q14 freeze summary (B3.1 / Recovery completion authority)
+
+| Q | Decision |
+|---|----------|
+| Q10 | **R-1** defer obligation close |
+| Q11 | **P-1** stay actively recovering until close permitted |
+| Q12 | **M-1** single deferred intent slot + domain |
+| Q13 | **B-3+B-1** media_path observation ≠ completion; forbid short-circuit |
+| Q14 | **C-3** EXECUTED ≠ RECOVERED; need post-dispatch restart-resolved evidence |
+
+```text
+ICE_CONNECTED(old) ──X──→ close
+NEGOTIATION_CAN_EXECUTE → dispatch → EXECUTED
+  → post-dispatch restart-resolved evidence → closeObligation → RECOVERED
+```
+
+**Implement checkpoints (design frozen — no further model expansion):**
+
+1. Every `markRecovered()` caller holds **legal** completion evidence (domain + freshness).
+2. Every `closeObligation()` path goes through `canClose(obligation, evidence)` (M-1).
+3. No path elevates `mediaRestored` / `media_path_active_without_restart` alone into `phase=RECOVERED` while uncovered NEGOTIATION defer exists, or into `ICE_RESTARTING` before dispatch.
+
+### Implementation note — B3.1 completion authority (2026-07-28)
+
+**Status:** Implemented on `fix/ignore-late-ice-after-recovered`.
+
+| Checkpoint | Seam |
+|------------|------|
+| Check 1 | `markRecovered` refuses when `!canClose(... RECOVERED ...)` — logs `RECOVERY_COMPLETION_HELD`; phase stays actively recovering |
+| Check 2 | `closeObligation` gated by `canClose` — ALL-domain (`MEMBERSHIP_LEFT` / `CONFERENCE_TERMINATED` / `OBLIGATION_DEADLINE`) always; else domain coverage + post-`restartDispatchAtMs` freshness for RECOVERED after ICE restart dispatch |
+| Check 3 | `continueControlPlaneRecoveryAfterMediaRestored`: pending NEGOTIATION defer → `RECOVERY_MEDIA_PATH_OBSERVATION decision=HOLD` (no `ICE_RESTARTING` / no `markRecovered`) |
+
+**Fields:** `EdgeRecoveryRecord.restartDispatchAtMs`, `mediaRestoredObservedAtMs` (bool `mediaRestored` retained; freshness via timestamps).
+
+**UT lock:** `RecoveryCompletionAuthorityTest` (defer+ICE / media_path HOLD / pre-dispatch mediaRestored HOLD / post-dispatch CLOSE).
+
+### Design freeze confirmation — **ACCEPTED 2026-07-28**
+
+**Reviewer verdict:** Q10–Q14 + INV-REC-026..031 + INV-NEG-016 formally frozen. Further grilling has no ROI for the current bug.
+
+```text
+B3 capability:                 FROZEN / NO CHANGE
+Recovery completion authority: DESIGN FROZEN
+Next phase:                    IMPLEMENTATION ONLY
+```
+
+**Next session scope (strict):** Recovery completion authority fix only.
+
+| In scope | Out of scope |
+|----------|--------------|
+| Check 1: audit every `markRecovered()` (evidence / domain / freshness / covers deferred?) | Change `NEGOTIATION_CAN_EXECUTE` / rising-edge / probe / observation baseline |
+| Check 2: all `closeObligation()` via `canClose(obligation, evidence)` | Re-open Q10–Q14 |
+| Check 3: scan `mediaRestored` / `media_path_active_without_restart` / bare `ICE_CONNECTED` promotion paths | Multi-intent (M-2/M-3), new WAITING_* phases, architecture optimization |
+
+**Semantic equalities (frozen):**
+
+```text
+ICE_CONNECTED      ≠ RECOVERED
+mediaRestored      ≠ restart completed
+EXECUTED           ≠ obligation completed
+RECOVERED          == all owned deferred responsibility resolved
+```
+
+### INV-REC-026 (Accepted with Q10–Q14)
+
+**Status:** **Accepted 2026-07-28** (grill Q10–Q14). Implementation is a separate knife; do not expand `NEGOTIATION_CAN_EXECUTE` / rising-edge / probe / observation baseline in that knife.
+
+#### Formal statement
+
+> Recovery completion evidence MUST NOT close a deferred intent whose blocking domain is not satisfied by that evidence.
+
+中文：Recovery completion evidence 只能关闭由该 evidence 覆盖的 deferred intent；不得跨域关闭其它 domain 的 intent.
+
+**Corollary (negotiation):** a deferred intent with `domain=NEGOTIATION` (`DeferredReason.NEGOTIATION_SETTLING` / `gateBlock=SIGNALING_NOT_STABLE|ANSWERER_SETTLING`) MUST remain alive until either:
+
+1. executed after `NEGOTIATION_CAN_EXECUTE` **and** post-dispatch restart-resolved evidence accepted (Q14 C-3), or
+2. an **explicit higher-priority outcome that covers NEGOTIATION domain** (or ALL), or
+3. edge/session lifecycle end.
+
+`ICE_CONNECTED` / `MEDIA_RESTORED` / `media_path_active_without_restart` alone are **not** (2).
+
+#### Naming split (semantic)
+
+| Today (overloaded) | Proposed reading |
+|--------------------|------------------|
+| `RECOVERED` / `ObligationCloseReason.RECOVERED` | Often means **transport/media recovery success** |
+| Deferred ICE-restart intent success | Means **negotiation recovery resolved** (executed or domain-valid invalidation) |
+
+Do not rename in code this round — freeze the distinction in the authority model first.
+
+#### Current implementation fact (root cause confirmed)
+
+`closeObligation()` **unconditionally** calls `expireDeferredIceRestartIntent(... OBLIGATION_CLOSE:$reason)` — i.e. **closeAll(edge deferred intents)**, no `canClose(intent, evidence)` gate.
+
+Soak chain (`43e-b30-20260728-190310`, R1):
+
+```text
+DEFER R1 domain=NEGOTIATION block=SIGNALING_NOT_STABLE
+  → ICE CONNECTED
+  → crossControlPlaneBoundary(media_path_active_without_restart)
+       // forces phase=ICE_RESTARTING even though restart not issued
+  → COMPLETION_EVIDENCE_ACCEPTED(ICE_CONNECTED)
+  → markRecovered → closeObligation(RECOVERED)
+  → expire R1   // unauthorized cross-domain close
+```
+
+So `ICE_CONNECTED` is mapped as if it completed **ALL** pending recovery intents on the edge.
+
+---
+
+### Table 1 — Deferred Intent Domain (as-built → target)
+
+| Intent / deferred carrier | Today's signals | Domain |
+|---------------------------|-----------------|--------|
+| Host ICE restart (bounded) | `DeferredReason.NEGOTIATION_SETTLING` + `IceRestartGateBlockReason` + wakeup `NEGOTIATION_CAN_EXECUTE` | **NEGOTIATION** |
+| Host ICE restart / media action | `DeferredReason.MEDIA_NOT_READY` | **MEDIA** |
+| Recovery media dispatch | `DeferredReason.ROUTE_NOT_READY` | **TRANSPORT** |
+| Recovery media dispatch | `DeferredReason.AUTHORITY_NOT_READY` | **CONTROL** |
+| Participant reattach | reattach delivery / wakeup `ROUTE_CONVERGED` / peer discover (existing) | **SESSION/CONTROL** (reattach) |
+
+Target shape (design only):
+
+```text
+DeferredIntent { id, edge, domain, blockReason, wakeupBinding }
+```
+
+`gateBlock` already logged on R1 — promote to explicit domain at grill/impl time.
+
+---
+
+### Table 2 — Completion Evidence Authority
+
+| Evidence / close reason | Proves | MAY close domains | MUST NOT close |
+|-------------------------|--------|-------------------|----------------|
+| `ICE_CONNECTED` | transport path usable | TRANSPORT, MEDIA (if policy says media≡ICE) | **NEGOTIATION** |
+| `MEDIA_RESTORED` / media path live | media path restored | MEDIA (and TRANSPORT if bundled) | **NEGOTIATION** |
+| `media_path_active_without_restart` boundary | media live without local restart dispatch | same as ICE/MEDIA | **NEGOTIATION** (must not force-complete deferred restart) |
+| `NEGOTIATION_CAN_EXECUTE` + drain EXECUTED | negotiation gate open and intent ran | NEGOTIATION (resolve by execution) | — |
+| Remote answer applied / signaling STABLE + gate recheck executable | negotiation settled enough to run or drop restart | NEGOTIATION (after re-probe) | — |
+| Rollback completed | negotiation rolled back | NEGOTIATION (B3.1) | — |
+| Explicit cancel / policy abort | intent abandoned | named domains or ALL | — |
+| `MEMBERSHIP_LEFT` / `CONFERENCE_TERMINATED` / session end | edge lifecycle over | **ALL** | — |
+| `OBLIGATION_DEADLINE` | episode timed out | episode close; intent expiry is episode hygiene — **grill whether NEGOTIATION defer should extend deadline** | silent success-as-RECOVERED |
+| `SUPERSEDE` / `ADMIT_SUCCESSOR` | new attempt replaces old | prior attempt's intents (lineage) | must audit STALE_DISCARD SUPERSEDED |
+
+**Authority check (target):**
+
+```text
+canClose(intent, evidence) :=
+  evidence.covers(intent.domain) OR evidence.covers(ALL)
+```
+
+Today:
+
+```text
+closeObligation → expireDeferredIceRestartIntent   // ALWAYS
+```
+
+≡ `canClose = true` for every deferred ICE-restart intent regardless of domain.
+
+---
+
+### Design verdict
+
+> **B3 negotiation wakeup is correct. The leak is Recovery completion authority: transport/media evidence closes NEGOTIATION deferred intents. Freeze INV-REC-026 (domain-matched close). Next implementable knife is `canClose(intent, evidence)` at obligation close / `media_path_active_without_restart` — not more CAN_EXECUTE surface.**
+
+**Out of this design step:** code changes, renaming `RECOVERED`, B3.1 rollback, extending obligation deadline policy.
+
 ## References
 
 - ADR-0020 — Conference Runtime Projection Contract

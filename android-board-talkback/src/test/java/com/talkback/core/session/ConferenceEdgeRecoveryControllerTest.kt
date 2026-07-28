@@ -924,6 +924,16 @@ class ConferenceEdgeRecoveryControllerTest {
             RecoveryReason.NETWORK_RECOVERY,
             RecoverySource.ICE_MONITOR
         )
+        // Q14: isIceConnected was true throughout; need post-dispatch CONNECTED observation.
+        nowMs += 40L
+        controller.onIceStateChanged(
+            sessionId = "sess-1",
+            channelId = "CH-1",
+            remoteModuleId = "M01",
+            iceState = "CONNECTED",
+            eligibility = eligible(),
+            initiatesReattach = true
+        )
         assertTrue(
             decisionLogs.any {
                 it.contains("RECOVERY_EDGE_RECOVERED") && it.contains("remote=M01")
@@ -1171,8 +1181,8 @@ class ConferenceEdgeRecoveryControllerTest {
     }
 
     @Test
-    fun accepted_whenIceAlreadyConnected_recoversWithoutNewIceEvent() {
-        // Soak gap: ICE already CONNECTED at ACCEPTED → must feed completion evaluation.
+    fun accepted_whenIceAlreadyConnected_requiresPostDispatchIceEventToRecover() {
+        // Q14 / INV-NEG-016: probe of pre-existing ICE after dispatch is not restart-resolved.
         var iceConnected = true
         controller = buildController(
             attemptBudgetMs = 500L,
@@ -1185,19 +1195,31 @@ class ConferenceEdgeRecoveryControllerTest {
             RecoverySource.ICE_MONITOR
         )
         assertEquals(1, iceRestartCalls)
-        assertTrue(decisionLogs.any { it.contains("RECOVERY_EDGE_RECOVERED") })
+        assertTrue(controller.edgeObligationOpen("sess-1", "M03"))
+        assertFalse(decisionLogs.any { it.contains("RECOVERY_EDGE_RECOVERED") })
         assertTrue(
             decisionLogs.any {
-                it.contains("RECOVERY_DECISION") && it.contains("decision=RECOVERED")
+                it.contains("RECOVERY_COMPLETION_HELD") && it.contains("domain=RESTART_FRESHNESS")
             }
         )
-        assertFalse(controller.factsForSession("sess-1").anyFailedMediaRecovery)
+
+        nowMs += 40L
+        controller.onIceStateChanged(
+            sessionId = "sess-1",
+            channelId = "CH-1",
+            remoteModuleId = "M03",
+            iceState = "CONNECTED",
+            eligibility = eligible(),
+            initiatesReattach = false
+        )
+        assertTrue(decisionLogs.any { it.contains("RECOVERY_EDGE_RECOVERED") })
+        assertEquals(ObligationCloseReason.RECOVERED, controller.obligationCloseReason("sess-1", "M03"))
         iceConnected = false
     }
 
     @Test
-    fun accepted_iceRestartApiFailsButIceConnected_stillRecovers() {
-        // Restart call may fail while media is already up — still complete via evaluation.
+    fun accepted_iceRestartApiFailsButIceConnected_holdsUntilPostDispatchEvidence() {
+        // Q14: failed restart + already-connected ICE must not close on pre-dispatch transport.
         controller = buildController(
             attemptBudgetMs = 500L,
             onIceRestart = { _, _ ->
@@ -1213,13 +1235,30 @@ class ConferenceEdgeRecoveryControllerTest {
             RecoverySource.ICE_MONITOR
         )
         assertEquals(1, iceRestartCalls)
-        assertTrue(decisionLogs.any { it.contains("RECOVERY_EDGE_RECOVERED") })
-        assertFalse(controller.factsForSession("sess-1").anyFailedMediaRecovery)
+        assertTrue(controller.edgeObligationOpen("sess-1", "M04"))
+        assertFalse(decisionLogs.any { it.contains("RECOVERY_EDGE_RECOVERED") })
         assertFalse(
             decisionLogs.any {
                 it.contains("FAILED_MEDIA_RECOVERY") && it.contains("ice_restart_failed")
             }
         )
+        assertTrue(
+            decisionLogs.any {
+                it.contains("RECOVERY_COMPLETION_HELD") && it.contains("domain=RESTART_FRESHNESS")
+            }
+        )
+
+        nowMs += 40L
+        controller.onIceStateChanged(
+            sessionId = "sess-1",
+            channelId = "CH-1",
+            remoteModuleId = "M04",
+            iceState = "CONNECTED",
+            eligibility = eligible(),
+            initiatesReattach = false
+        )
+        assertTrue(decisionLogs.any { it.contains("RECOVERY_EDGE_RECOVERED") })
+        assertEquals(ObligationCloseReason.RECOVERED, controller.obligationCloseReason("sess-1", "M04"))
     }
 
     @Test

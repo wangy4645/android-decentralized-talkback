@@ -48,6 +48,12 @@ class ConferenceEdgeRecoveryController(
     private val probeIceRestartGate: (sessionId: String, remoteModuleId: String) -> IceRestartGateProbe =
         { _, _ -> IceRestartGateProbe(executable = true) },
     /**
+     * INV-NEG-015: when Recovery admits a negotiation-deferred ICE restart intent,
+     * Coordinator must establish capability observation baseline=false (not via bare probe).
+     */
+    private val onNegotiationGateDeferred: (sessionId: String, remoteModuleId: String) -> Unit =
+        { _, _ -> },
+    /**
      * Probe current ICE connectedness after ACCEPTED / ICE restart (#83).
      * Coordinator wires qosMonitor; tests inject to cover already-CONNECTED soak gap.
      */
@@ -855,12 +861,115 @@ class ConferenceEdgeRecoveryController(
         else -> trigger.name
     }
 
+    /**
+     * ADR-0022 Q12 M-1 / Q10 R-1 / Q14 C-3:
+     * canClose = noDeferred || evidence.covers(intent.domain) || ALL-domain end;
+     * after ice-restart dispatch, RECOVERED also requires post-dispatch restart-resolved evidence.
+     */
+    private fun canClose(
+        record: EdgeRecoveryRecord,
+        reason: ObligationCloseReason,
+        closeEvidence: String?
+    ): Boolean {
+        if (isAllDomainObligationClose(reason)) return true
+        if (hasDeferredMediaAction(record)) {
+            val domain = record.deferredReason?.toDeferredIntentDomain()
+                ?: DeferredIntentDomain.ALL
+            if (!evidenceCoversDeferredDomain(closeEvidence, domain)) {
+                return false
+            }
+        }
+        if (
+            reason == ObligationCloseReason.RECOVERED &&
+            record.iceRestartIssued &&
+            record.restartDispatchAtMs != null
+        ) {
+            return isPostDispatchRestartResolvedEvidence(record, closeEvidence)
+        }
+        return true
+    }
+
+    private fun isAllDomainObligationClose(reason: ObligationCloseReason): Boolean =
+        reason == ObligationCloseReason.MEMBERSHIP_LEFT ||
+            reason == ObligationCloseReason.CONFERENCE_TERMINATED ||
+            reason == ObligationCloseReason.OBLIGATION_DEADLINE
+
+    /**
+     * Table 2 / INV-REC-026: media/transport evidence MUST NOT cover NEGOTIATION.
+     * ALL-domain close is handled by [isAllDomainObligationClose], not evidence tokens here.
+     */
+    private fun evidenceCoversDeferredDomain(
+        evidence: String?,
+        domain: DeferredIntentDomain
+    ): Boolean {
+        if (evidence.isNullOrBlank()) return false
+        return when (domain) {
+            DeferredIntentDomain.NEGOTIATION -> false
+            DeferredIntentDomain.MEDIA ->
+                evidence == "ICE_CONNECTED" ||
+                    evidence == "MEDIA_RESTORED" ||
+                    evidence == "EDGE_RECOVERED"
+            DeferredIntentDomain.TRANSPORT ->
+                evidence == "ICE_CONNECTED" ||
+                    evidence == "MEDIA_RESTORED" ||
+                    evidence == "ROUTE_CONVERGED" ||
+                    evidence == "EDGE_RECOVERED"
+            DeferredIntentDomain.CONTROL ->
+                evidence == "ROUTE_CONVERGED" ||
+                    evidence.contains("AUTHORITY", ignoreCase = true) ||
+                    evidence == "EDGE_RECOVERED"
+            DeferredIntentDomain.ALL -> true
+        }
+    }
+
+    /** INV-NEG-016 / Q14: media observation must be strictly after restartDispatchAt. */
+    private fun isPostDispatchRestartResolvedEvidence(
+        record: EdgeRecoveryRecord,
+        evidence: String?
+    ): Boolean {
+        val dispatchAt = record.restartDispatchAtMs ?: return false
+        val observedAt = record.mediaRestoredObservedAtMs ?: return false
+        if (observedAt <= dispatchAt) return false
+        return evidence == "ICE_CONNECTED" ||
+            evidence == "MEDIA_RESTORED" ||
+            evidence == "EDGE_RECOVERED"
+    }
+
+    private fun noteMediaRestored(record: EdgeRecoveryRecord) {
+        record.mediaRestored = true
+        val now = clock()
+        val dispatchAt = record.restartDispatchAtMs
+        // Same-tick post-dispatch probe must still count as restart-resolved (INV-NEG-016).
+        record.mediaRestoredObservedAtMs =
+            if (dispatchAt != null && now <= dispatchAt) dispatchAt + 1L else now
+    }
+
+    private fun clearMediaRestoredFact(record: EdgeRecoveryRecord) {
+        record.mediaRestored = false
+        record.mediaRestoredObservedAtMs = null
+    }
+
     private fun closeObligation(
         record: EdgeRecoveryRecord,
         reason: ObligationCloseReason,
         closeEvidence: String? = null
     ) {
         if (record.obligationClosedAtMs != null) return
+        if (!canClose(record, reason, closeEvidence)) {
+            val domain = record.deferredReason?.toDeferredIntentDomain()?.name
+                ?: if (record.iceRestartIssued) "RESTART_FRESHNESS" else "NONE"
+            onLog(
+                "RECOVERY_OBLIGATION_CLOSE_HELD session=${record.key.sessionId} " +
+                    "remote=${record.key.remoteModuleId} attempt=${record.recoveryAttemptId} " +
+                    "reason=$reason evidence=${closeEvidence ?: "NONE"} " +
+                    "domain=$domain disposition=${record.mediaActionDisposition} " +
+                    "deferredReason=${record.deferredReason ?: "NONE"} " +
+                    "iceRestartIssued=${record.iceRestartIssued} " +
+                    "restartDispatchAtMs=${record.restartDispatchAtMs ?: "NONE"} " +
+                    "mediaRestoredObservedAtMs=${record.mediaRestoredObservedAtMs ?: "NONE"}"
+            )
+            return
+        }
         logObligationCloseRequested(record, reason, closeEvidence)
         expireDeferredIceRestartIntent(record, "OBLIGATION_CLOSE:$reason")
         cancelDeadline(record.key)
@@ -1191,7 +1300,7 @@ class ConferenceEdgeRecoveryController(
         if (iceState != "DISCONNECTED" && iceState != "FAILED") return
 
         val record = edges[key]
-        record?.mediaRestored = false
+        if (record != null) clearMediaRestoredFact(record)
         if (record?.phase == EdgeRecoveryPhase.FAILED_MEDIA_RECOVERY ||
             record?.phase == EdgeRecoveryPhase.FAILED_REQUIRES_USER_ACTION ||
             record?.phase == EdgeRecoveryPhase.FAILED_IDENTITY_MISMATCH ||
@@ -1366,9 +1475,14 @@ class ConferenceEdgeRecoveryController(
         )
         issueBoundedIceRestart(record, recoveryReason)
         // Soak gap (#83): ICE may already be CONNECTED with no fresh CONNECTED event.
-        // Probe and feed the media fact into completion evaluation — never shortcut RECOVERED.
+        // Record the media fact for evaluation, but INV-NEG-016 / Q14: do not stamp
+        // post-dispatch freshness from a probe of pre-existing ICE after restart dispatch.
         if (isIceConnected(sessionId, remoteModuleId)) {
-            record.mediaRestored = true
+            if (record.iceRestartIssued && record.restartDispatchAtMs != null) {
+                record.mediaRestored = true
+            } else {
+                noteMediaRestored(record)
+            }
             notifyAttemptLineageObservation(record, "transport_recovered_ice_connected")
             runIceRestorationCompletionEvaluation(record)
         }
@@ -1526,7 +1640,7 @@ class ConferenceEdgeRecoveryController(
             return
         }
         // ADR-0022 R28-E: record media fact, then completion evaluation — never direct RECOVERED.
-        record.mediaRestored = true
+        noteMediaRestored(record)
         notifyAttemptLineageObservation(record, "transport_recovered_on_ice_connected")
         runIceRestorationCompletionEvaluation(record)
     }
@@ -1541,8 +1655,9 @@ class ConferenceEdgeRecoveryController(
         cancelWatchdog(key)
         cancelDeadline(key)
         record.phase = EdgeRecoveryPhase.CONNECTED
-        record.mediaRestored = false
+        clearMediaRestoredFact(record)
         record.iceRestartIssued = false
+        record.restartDispatchAtMs = null
         record.obligationOpenedAtMs = null
         record.obligationDeadlineAtMs = null
         record.obligationClosedAtMs = null
@@ -1644,7 +1759,25 @@ class ConferenceEdgeRecoveryController(
             return
         }
         // ICE_RESTART_ONLY participant edge: do not flap transport when ICE is already CONNECTED.
+        // Q13 B-3+B-1: media_path_active_without_restart is observation-only while a NEGOTIATION
+        // deferred ICE-restart intent remains uncovered — forbid short-circuit into ICE_RESTARTING.
         if (isIceConnected(key.sessionId, key.remoteModuleId) && record.mediaRestored) {
+            if (isDeferredIceRestartIntent(record)) {
+                onLog(
+                    "RECOVERY_MEDIA_PATH_OBSERVATION session=${key.sessionId} remote=${key.remoteModuleId} " +
+                        "attempt=${record.recoveryAttemptId} reason=media_path_active_without_restart " +
+                        "decision=HOLD pendingNegotiationDefer=true " +
+                        "intentId=${record.iceRestartIntentId ?: "NONE"} " +
+                        "gateBlock=${record.deferredGateBlockReason ?: "UNKNOWN"}"
+                )
+                onLog(
+                    "RECOVERY_DECISION session=${key.sessionId} edge=${key.remoteModuleId} " +
+                        "attempt=${record.recoveryAttemptId} trigger=${RecoveryReevaluateTrigger.ICE_RESTORED} " +
+                        "decision=WAIT_FOR_NEGOTIATION_INTENT approved=true"
+                )
+                notifyChanged(key.sessionId)
+                return
+            }
             crossControlPlaneBoundary(
                 record = record,
                 reason = "media_path_active_without_restart"
@@ -1714,6 +1847,20 @@ class ConferenceEdgeRecoveryController(
                     "factAttempt=${record.recoveryAttemptId} factGen=${record.obligationGeneration} " +
                     "reason=obligation_already_closed closeReason=${current.obligationCloseReason} " +
                     "evidence=$closeEvidence"
+            )
+            return
+        }
+        // INV-REC-027/028: do not enter RECOVERED while uncovered deferred / pre-dispatch evidence.
+        if (!canClose(record, ObligationCloseReason.RECOVERED, closeEvidence)) {
+            val domain = record.deferredReason?.toDeferredIntentDomain()?.name
+                ?: if (record.iceRestartIssued) "RESTART_FRESHNESS" else "NONE"
+            onLog(
+                "RECOVERY_COMPLETION_HELD session=${key.sessionId} remote=${key.remoteModuleId} " +
+                    "attempt=${record.recoveryAttemptId} evidence=$closeEvidence domain=$domain " +
+                    "phase=${record.phase} deferredReason=${record.deferredReason ?: "NONE"} " +
+                    "iceRestartIssued=${record.iceRestartIssued} " +
+                    "restartDispatchAtMs=${record.restartDispatchAtMs ?: "NONE"} " +
+                    "mediaRestoredObservedAtMs=${record.mediaRestoredObservedAtMs ?: "NONE"}"
             )
             return
         }
@@ -1915,20 +2062,25 @@ class ConferenceEdgeRecoveryController(
                     "attempt=${record.recoveryAttemptId} gen=${record.obligationGeneration} " +
                     "intentId=$intentId reason=$block wakeup=NEGOTIATION_CAN_EXECUTE"
             )
+            // INV-NEG-015: baseline before waiting for CAN_EXECUTE (admission, not bare probe).
+            onNegotiationGateDeferred(record.key.sessionId, record.key.remoteModuleId)
             return
         }
         record.phase = EdgeRecoveryPhase.ICE_RESTARTING
         record.iceRestartIssued = true
+        record.restartDispatchAtMs = clock()
         assignMediaActionOwner(record, MediaActionOwner.HOST_RESTART)
         onLog(
             "RECOVERY_ICE_RESTART_DISPATCHED session=${record.key.sessionId} " +
                 "remote=${record.key.remoteModuleId} attempt=${record.recoveryAttemptId} " +
-                "intentId=${record.iceRestartIntentId ?: "NONE"}"
+                "intentId=${record.iceRestartIntentId ?: "NONE"} " +
+                "restartDispatchAtMs=${record.restartDispatchAtMs}"
         )
         val restarted = onIceRestart(record.key.sessionId, record.key.remoteModuleId)
         if (!restarted) {
             // Restart API may fail while ICE is already CONNECTED (#83 soak). Keep the
             // attempt active so completion evaluation can still observe mediaRestored.
+            // INV-NEG-016: do not stamp a fresh mediaRestoredObservedAtMs from pre-existing ICE.
             if (isIceConnected(record.key.sessionId, record.key.remoteModuleId)) {
                 record.mediaRestored = true
             } else {
@@ -2549,7 +2701,8 @@ class ConferenceEdgeRecoveryController(
         record.phase = EdgeRecoveryPhase.RECOVERY_PENDING
         record.recoveryAttemptId = ++attemptSeq
         record.iceRestartIssued = false
-        record.mediaRestored = false
+        record.restartDispatchAtMs = null
+        clearMediaRestoredFact(record)
         record.epochRefreshUsed = false
         record.recoveryViaInboundReattach = false
         record.reattachDeliveryState = ReattachDeliveryState.QUEUED

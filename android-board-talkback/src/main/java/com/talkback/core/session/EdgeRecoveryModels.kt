@@ -129,6 +129,25 @@ enum class DeferredReason {
 }
 
 /**
+ * ADR-0022 Q12 M-1 / INV-REC-026: deferred intent blocking domain.
+ * Completion evidence must cover this domain before closeObligation may expire the intent.
+ */
+enum class DeferredIntentDomain {
+    NEGOTIATION,
+    MEDIA,
+    TRANSPORT,
+    CONTROL,
+    ALL
+}
+
+internal fun DeferredReason.toDeferredIntentDomain(): DeferredIntentDomain = when (this) {
+    DeferredReason.NEGOTIATION_SETTLING -> DeferredIntentDomain.NEGOTIATION
+    DeferredReason.MEDIA_NOT_READY -> DeferredIntentDomain.MEDIA
+    DeferredReason.ROUTE_NOT_READY -> DeferredIntentDomain.TRANSPORT
+    DeferredReason.AUTHORITY_NOT_READY -> DeferredIntentDomain.CONTROL
+}
+
+/**
  * Step A-1 / B3: finer gate block under umbrella [DeferredReason.NEGOTIATION_SETTLING].
  * Diagnostic only — both reasons share wakeup [WakeupSourceType.NEGOTIATION_CAN_EXECUTE] (W-1).
  */
@@ -264,8 +283,18 @@ internal data class EdgeRecoveryRecord(
     var recoveryViaInboundReattach: Boolean = false,
     var epochRefreshUsed: Boolean = false,
     var iceRestartIssued: Boolean = false,
+    /**
+     * Q14 C-3 / INV-NEG-016: wall-clock when bounded ICE restart was actually dispatched.
+     * Completion evidence for RECOVERED must be observed after this instant.
+     */
+    var restartDispatchAtMs: Long? = null,
     /** Media-plane ICE restored fact for current attempt (ADR-0022 R28-E). */
     var mediaRestored: Boolean = false,
+    /**
+     * Observation time of the latest [mediaRestored]=true stamp (ICE CONNECTED / media fact).
+     * Used with [restartDispatchAtMs] for post-dispatch freshness (Q14); bool is not cleared.
+     */
+    var mediaRestoredObservedAtMs: Long? = null,
     var initiatesReattach: Boolean = false,
     /** Failure episode id on this edge; independent of [recoveryAttemptId] (ADR-0022 P1). */
     var obligationGeneration: Long = 0L,
