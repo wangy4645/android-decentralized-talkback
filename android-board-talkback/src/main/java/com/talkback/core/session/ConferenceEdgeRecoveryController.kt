@@ -806,6 +806,9 @@ class ConferenceEdgeRecoveryController(
     /**
      * Capability materiality notification from Coordinator (ADR-0022 R28-G).
      * Fact writers MUST NOT call this — only [TalkbackCoordinator] after signature comparison.
+     *
+     * §13.2.4 Gap-2: when obligation is CLOSED, fresh [RecoveryResurrectionEvidence] may admit a
+     * Successor Obligation Episode. OPEN path MUST NOT bump [obligationGeneration].
      */
     fun onRecoveryReachabilityChanged(
         sessionId: String,
@@ -814,11 +817,88 @@ class ConferenceEdgeRecoveryController(
         snapshot: EdgeReachabilitySnapshot,
         signature: RecoveryCapabilitySignature,
         capabilityBefore: RecoveryCapabilitySignature?,
-        trigger: RecoveryReevaluateTrigger
+        trigger: RecoveryReevaluateTrigger,
+        resurrectionEvidence: RecoveryResurrectionEvidence? = null
     ) {
         val key = ConferenceEdgeKey(sessionId, remoteModuleId)
         val record = edges[key] ?: return
-        if (!record.edgeObligationOpen()) return
+        if (resurrectionEvidence != null &&
+            (trigger != RecoveryReevaluateTrigger.REMOTE_MODULE_RECOVERED ||
+                resurrectionEvidence.kind != RecoveryReevaluateTrigger.REMOTE_MODULE_RECOVERED)
+        ) {
+            onLog(
+                "RECOVERY_INVALID_EVIDENCE_BINDING session=$sessionId edge=$remoteModuleId " +
+                    "trigger=$trigger evidenceKind=${resurrectionEvidence.kind} " +
+                    "attempt=${record.recoveryAttemptId} obligationGen=${record.obligationGeneration}"
+            )
+            return
+        }
+        if (record.edgeObligationOpen()) {
+            reevaluateOpenObligation(
+                record = record,
+                snapshot = snapshot,
+                signature = signature,
+                capabilityBefore = capabilityBefore,
+                trigger = trigger
+            )
+            return
+        }
+        if (isFreshRemoteModuleRecoveredEvidence(record, resurrectionEvidence)) {
+            admitSuccessorObligationEpisode(
+                record = record,
+                channelId = channelId,
+                signature = signature,
+                evidence = resurrectionEvidence!!
+            )
+            return
+        }
+        onLog(
+            "RECOVERY_REACHABILITY_IGNORED session=$sessionId edge=$remoteModuleId " +
+                "trigger=$trigger reason=no_open_obligation_or_fresh_resurrection " +
+                "attempt=${record.recoveryAttemptId} obligationGen=${record.obligationGeneration}"
+        )
+    }
+
+    /**
+     * INV-REC-022: lineage / completion terminal authority is attempt-scoped within the current
+     * obligation generation. Historical attempts / closed gens MUST NOT terminate successor state.
+     * An already-closed obligation (e.g. [ObligationCloseReason.OBLIGATION_DEADLINE]) also rejects
+     * late RECOVERED facts so they cannot rewrite [EdgeRecoveryPhase] and poison successor admission.
+     */
+    fun canMarkLineageRecovered(
+        sessionId: String,
+        remoteModuleId: String,
+        factAttemptId: Long,
+        factObligationGeneration: Long
+    ): Boolean {
+        val current = edges[ConferenceEdgeKey(sessionId, remoteModuleId)] ?: return false
+        if (current.obligationClosedAtMs != null) return false
+        return factAttemptId == current.recoveryAttemptId &&
+            factObligationGeneration == current.obligationGeneration
+    }
+
+    /**
+     * Test seam: apply [markRecovered] against the live edge record (same object a racing
+     * completion callback would hold after exclusive close).
+     */
+    internal fun applyMarkRecoveredForTest(
+        sessionId: String,
+        remoteModuleId: String,
+        evidence: String = "ICE_CONNECTED"
+    ) {
+        val record = edges[ConferenceEdgeKey(sessionId, remoteModuleId)] ?: return
+        markRecovered(record, evidence)
+    }
+
+    private fun reevaluateOpenObligation(
+        record: EdgeRecoveryRecord,
+        snapshot: EdgeReachabilitySnapshot,
+        signature: RecoveryCapabilitySignature,
+        capabilityBefore: RecoveryCapabilitySignature?,
+        trigger: RecoveryReevaluateTrigger
+    ) {
+        val sessionId = record.key.sessionId
+        val remoteModuleId = record.key.remoteModuleId
         if (hasDeferredWakeupForTrigger(sessionId, remoteModuleId, trigger)) {
             onLog(
                 "RECOVERY_WAKEUP_FIRED session=$sessionId edge=$remoteModuleId " +
@@ -836,6 +916,93 @@ class ConferenceEdgeRecoveryController(
         )
         runCompletionEvaluationStub(record, snapshot, signature, trigger)
         notifyChanged(sessionId)
+    }
+
+    private fun isFreshRemoteModuleRecoveredEvidence(
+        record: EdgeRecoveryRecord,
+        evidence: RecoveryResurrectionEvidence?
+    ): Boolean {
+        if (evidence == null) return false
+        if (evidence.kind != RecoveryReevaluateTrigger.REMOTE_MODULE_RECOVERED) return false
+        val closedAt = record.obligationClosedAtMs ?: return false
+        if (evidence.observedAtMs <= closedAt) return false
+        // Edge Lifecycle ACTIVE == record present (caller resolved).
+        // "unhealthy / no media-complete" == not RECOVERED. mediaRestored is attempt-scoped
+        // media-plane evidence and MUST NOT block successor admission after OBLIGATION_DEADLINE.
+        if (record.phase == EdgeRecoveryPhase.RECOVERED) return false
+        return true
+    }
+
+    /**
+     * ADR-0022 §13.2.4: admit Successor Obligation Episode (gen+1 + first attempt).
+     * B-13.2.4-1: admission ≠ beginRecovery fusion — resolve/dispatch separately (M1, INV-REC-023).
+     */
+    private fun admitSuccessorObligationEpisode(
+        record: EdgeRecoveryRecord,
+        channelId: String,
+        signature: RecoveryCapabilitySignature,
+        evidence: RecoveryResurrectionEvidence
+    ): SuccessorObligationAdmission {
+        val key = record.key
+        val initiatesReattach = record.initiatesReattach
+        val previousGen = record.obligationGeneration
+        val previousAttempt = record.recoveryAttemptId
+        val admitted = openNewRecoveryObligation(
+            key = key,
+            channelId = channelId.ifBlank { record.channelId },
+            phase = EdgeRecoveryPhase.RECOVERY_PENDING,
+            initiatesReattach = initiatesReattach,
+            trigger = "ADMIT_SUCCESSOR_OBLIGATION_EPISODE"
+        )
+        onLog(
+            "ADMIT_SUCCESSOR_OBLIGATION_EPISODE session=${key.sessionId} remote=${key.remoteModuleId} " +
+                "priorGen=$previousGen priorAttempt=$previousAttempt " +
+                "obligationGen=${admitted.obligationGeneration} attempt=${admitted.recoveryAttemptId} " +
+                "evidenceKind=${evidence.kind} observedAtMs=${evidence.observedAtMs}"
+        )
+        // M1: same resolve path as R1 / SUPERSEDE; immediate=false; watchdog only after dispatch.
+        admitted.mediaActionOwner = MediaActionOwner.PENDING
+        clearMediaActionDeferral(admitted)
+        val recoveryReason = RecoveryReason.NETWORK_RECOVERY
+        if (admitted.initiatesReattach) {
+            if (
+                RecoveryAction.DISPATCH_REATTACH in signature.permittedActions &&
+                !admitted.controlPlaneStarted()
+            ) {
+                applyReattachDispatchOutcome(
+                    record = admitted,
+                    outcome = onRequestReattach(key.sessionId, admitted.channelId, key.remoteModuleId),
+                    trigger = RecoveryReevaluateTrigger.REMOTE_MODULE_RECOVERED
+                )
+                if (admitted.phase == EdgeRecoveryPhase.REATTACH_REQUESTED) {
+                    scheduleWatchdog(admitted)
+                }
+            } else {
+                recordMediaActionDeferred(
+                    record = admitted,
+                    owner = MediaActionOwner.PARTICIPANT_REATTACH,
+                    reason = DeferredReason.MEDIA_NOT_READY,
+                    wakeupBinding = WakeupBinding(
+                        sourceType = WakeupSourceType.ROUTE_CONVERGED,
+                        sourceKey = edgeWakeupKey(key.sessionId, key.remoteModuleId)
+                    ),
+                    trigger = "ADMIT_SUCCESSOR:${RecoveryReevaluateTrigger.REMOTE_MODULE_RECOVERED}"
+                )
+            }
+        } else {
+            resolveMediaActionOwner(
+                record = admitted,
+                recoveryReason = recoveryReason,
+                immediate = false,
+                trigger = "ADMIT_SUCCESSOR:${RecoveryReevaluateTrigger.REMOTE_MODULE_RECOVERED}"
+            )
+            // issueBoundedIceRestart schedules watchdog on dispatch; deferred must not (INV-REC-023).
+        }
+        notifyChanged(key.sessionId)
+        return SuccessorObligationAdmission(
+            obligationGeneration = admitted.obligationGeneration,
+            recoveryAttemptId = admitted.recoveryAttemptId
+        )
     }
 
     fun isChannelCancelled(channelId: String): Boolean {
@@ -1340,6 +1507,30 @@ class ConferenceEdgeRecoveryController(
 
     private fun markRecovered(record: EdgeRecoveryRecord, closeEvidence: String = "EDGE_RECOVERED") {
         val key = record.key
+        val current = edges[key] ?: return
+        if (
+            record.recoveryAttemptId != current.recoveryAttemptId ||
+            record.obligationGeneration != current.obligationGeneration
+        ) {
+            onLog(
+                "IGNORE_STALE_TERMINAL_FACT session=${key.sessionId} remote=${key.remoteModuleId} " +
+                    "factAttempt=${record.recoveryAttemptId} factGen=${record.obligationGeneration} " +
+                    "currentAttempt=${current.recoveryAttemptId} currentGen=${current.obligationGeneration} " +
+                    "evidence=$closeEvidence"
+            )
+            return
+        }
+        // Exclusive close already stamped (e.g. OBLIGATION_DEADLINE on scheduler thread).
+        // MUST NOT rewrite phase→RECOVERED; that poisons successor freshness (phase==RECOVERED).
+        if (current.obligationClosedAtMs != null) {
+            onLog(
+                "IGNORE_STALE_TERMINAL_FACT session=${key.sessionId} remote=${key.remoteModuleId} " +
+                    "factAttempt=${record.recoveryAttemptId} factGen=${record.obligationGeneration} " +
+                    "reason=obligation_already_closed closeReason=${current.obligationCloseReason} " +
+                    "evidence=$closeEvidence"
+            )
+            return
+        }
         cancelDebounce(key)
         cancelWatchdog(key)
         cancelDeadline(key)

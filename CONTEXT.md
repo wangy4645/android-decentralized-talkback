@@ -150,23 +150,31 @@ _Avoid_: 把 `RECOVERED` 或 `OBLIGATION_CLOSED` 当作删 record, 把 ICE 断�
 
 **Obligation Episode**:
 一个 Edge Lifecycle 内的一次 recovery responsibility 周期；由 `obligationGeneration` 标识。每 episode 独立走 R28-H OPEN → attempts → CLOSED。`CLOSED(RECOVERED)` 或 `CLOSED(OBLIGATION_DEADLINE)` 结束当前 episode，不结束 Edge Lifecycle。见 ADR-0022 R28-J。
-_Avoid_: 把 episode 与 attempt 混用, 把 CLOSED 当作 edge 销毁
+_Avoid_: 把 episode 与 attempt 混用, 把 CLOSED 当作 edge 销毁, 与 R28-L.2 Recovery Lineage Episode 混名
 
 **obligationGeneration**:
 Obligation Episode 在**当前 Edge Lifecycle 内**的单调递增序号；新 episode 为 `gen+1`；新 lifecycle（record 重建）从初始值重新开始。不是 edge identity、不是 membership epoch、不是 endpoint generation。见 ADR-0022 R28-J。
-_Avoid_: 把 generation 当作 edge 代数, 在 `FAILED_MEDIA_RECOVERY` / SUPERSEDE 时 bump gen
+_Avoid_: 把 generation 当作 edge 代数, 在 `FAILED_MEDIA_RECOVERY` / SUPERSEDE 时 bump gen, CLOSED 后再在同 gen 上挂新 attempt（reopen）
+
+**Successor Obligation Episode**:
+同一 **Edge Lifecycle** 上，在前一 Obligation Episode `CLOSED` 之后，由 controller-validated fresh stamped `REMOTE_MODULE_RECOVERED` **准入**的新 Obligation Episode（`obligationGeneration + 1`）及其首个 **Recovery Attempt**。准入 ≠ attempt 已开始（B-13.2.4-1）：admit 后经 M1 action resolve → dispatch → 才挂 watchdog。见 ADR-0022 §13.2.4 **Accepted**.
+_Avoid_: CREATE_SUCCESSOR_ATTEMPT, retryRecovery, admit→beginRecovery 熔合, InboundConnectivityRestored 直接准入, admit 即 scheduleWatchdog
+
+**Resurrection Evidence Freshness**:
+Admission 护栏（非 timeout）：`REMOTE_MODULE_RECOVERED` 被 recovery authority 接纳为 admission fact 时由 **controller 侧 stamp** 的 `observedAtMs` 必须 **严格大于** 前一 Obligation Episode 的 `obligationClosedAtMs`，且 Edge Lifecycle 仍 ACTIVE。比较基准是 `closedAt`（实际结束事实），不是 `deadlineAt`。不上独立 freshness 窗口 W。HELLO receive time 不是 freshness 输入（可与 stamp 同 tick）。见 ADR-0022 §13.2.4。
+_Avoid_: 用 HELLO receivedAt 当 freshness, 用 deadlineAt 比较, closedAt+W 上界, 用 moduleStaleMs 做 freshness 比较, 仅 hasResurrectionEvidence==true
 
 **Recovery Attempt**:
-Recovery Edge 上的一轮有界 recovery 执行，由 `attemptId` 标识并隶属于该 edge。Attempt terminal 含 `RECOVERED`、`CANCELLED`、`ATTEMPT_TIMEOUT`、`SUPERSEDED`；**`ATTEMPT_TIMEOUT` 终止 attempt，不终止 edge 义务**。
-_Avoid_: 把 timeout 当作 membership prune, 无 attempt 代数的 retry
+Recovery Edge 上的一轮有界 recovery 执行，由 `attemptId` 标识并隶属于**当前 Obligation Episode**。Attempt terminal 含 `RECOVERED`、`CANCELLED`、`ATTEMPT_TIMEOUT`、`SUPERSEDED`；**`ATTEMPT_TIMEOUT` 终止 attempt，不终止 edge 义务**。
+_Avoid_: 把 timeout 当作 membership prune, 无 attempt 代数的 retry, 在 CLOSED obligation 上挂新 attempt
 
 **Recovery Completion Obligation**:
 当前 **Obligation Episode** 在 OPEN 期间必须有人负责 **re-evaluate completion** 的契约义务。Episode terminal：`RECOVERED`、`OBLIGATION_DEADLINE` 等 R28-H close set。Edge Lifecycle terminal（record remove）：Membership `LEFT`、Conference `TERMINATED`、本端 teardown。与 R26 membership 窗口兼容；不等同于「再发一次 reattach」的实现动作。见 ADR-0022 R28-H / R28-J。
 _Avoid_: timeout 即系统撒手, participant 发过一次即完成, 把 episode CLOSED 当作 edge 销毁
 
 **Recovery Completion Owner**:
-Recovery Edge 上 completion 义务的**逻辑唯一 owner**；由本端 **Conference Edge Recovery Controller** 维护，**不属于**某个 Module。全网 exactly-one 指 edge 域内单一义务，非「M01 或 M02 谁当 owner」。
-_Avoid_: initiatesReattach 侧即 lifetime owner, participant/host 二元 owner
+Recovery Edge 上 completion 义务的**逻辑唯一 owner**；由本端 **Conference Edge Recovery Controller** 维护，**不属于**某个 Module。全网 exactly-one 指 edge 域内单一义务，非「M01 或 M02 谁当 owner」。Controller 亦是 **Successor Obligation Episode** 准入与 `obligationGeneration` 的唯一 writer（INV-REC-024）；Coordinator 只生产/投递 resurrection evidence。
+_Avoid_: initiatesReattach 侧即 lifetime owner, participant/host 二元 owner, Coordinator/transport 直接 bump obligationGeneration
 
 **Preferred Recovery Initiator**:
 Recovery Edge 上 **优先** 由哪一侧发起 reattach 的 role 提示；由 `initiatesReattach` 表达（participant→host 边通常为 participant）。决定 preferred action，**不**决定 completion ownership，**不**在 primary 离线时终止义务。

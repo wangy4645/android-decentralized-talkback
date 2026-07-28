@@ -3532,6 +3532,64 @@ L.1.4 repairs local socket         PRR establishes peer signaling path
 
 **UT:** `DiscoveryUdpSocketTest` (`d1` close→rebind→ready, `d2` EADDRINUSE once→retry→ready, `d3` ten failures→capped retry, no leak)
 
+## §13.2 Recovery Action Restoration Contract
+
+### 13.2.4 Recovery Resurrection Eligibility Matrix — ACCEPTED
+
+**Status:** **Accepted 2026-07-28** (semantic contract). Gap-2 implementation: successor obligation admission only.
+
+**Freeze goal:** define **successor obligation-episode admission**, not recovery execution / carrier / completion / UI.
+
+**R2 admission predicate (E2 + freshness):**
+
+```text
+MUST admit successor obligation episode iff:
+
+  EdgeLifecycle ACTIVE
+  AND previous obligationGeneration is CLOSED
+  AND evidence.kind == REMOTE_MODULE_RECOVERED
+  AND evidence.observedAtMs > previousObligation.closedAtMs
+  AND evidence belongs to current edge identity
+  AND edge still unhealthy (no media-complete)
+```
+
+**Unhealthy clarification:** `no media-complete` means `phase != RECOVERED`. Attempt-scoped `mediaRestored=true` (media-plane fact left after incomplete ICE / deadline) MUST NOT deny successor admission.
+
+**Authority (O2′ / C2):**
+
+```text
+Coordinator: REMOTE_MODULE_RECOVERED + observedAtMs → R28-G onRecoveryReachabilityChanged(evidence)
+Controller (sole obligationGeneration writer):
+  OPEN  → reevaluate / SUPERSEDE (MUST NOT bump gen)
+  CLOSED + fresh REMOTE_MODULE_RECOVERED → admitSuccessorObligationEpisode → B2′
+  evidence != null && trigger != REMOTE_MODULE_RECOVERED
+    → RECOVERY_INVALID_EVIDENCE_BINDING (MUST NOT silent ignore)
+  else → IGNORE
+```
+
+**B2′ execution reset:** new `obligationGeneration` + new `attemptId`; clear iceRestartIssued / mediaRestored / deferred / watchdog leftovers; preserve edge key / channelId / initiatesReattach.
+
+**M1:** `resolveMediaActionOwner` / reattach 同源；`immediate=false`；watchdog only after dispatch (INV-REC-023).
+
+**B-13.2.4-1:** `ADMIT_SUCCESSOR_OBLIGATION_EPISODE ≠ BEGIN_RECOVERY_ATTEMPT` — forbid admit→beginRecovery fusion.
+
+**INV-REC-017..027** (summary): obligation CLOSED ≠ authority death; fresh evidence MAY admit gen+1; resurrection MUST NOT mutate completion; no exhausted carrier inherit; evidence is admission-only; terminal authority is current gen+attempt (INV-REC-022); no budget before dispatch; controller-only gen writer; kind gate; evidence rides R28-G only; reuse policy not execution state.
+
+**Implementation gates:**
+
+| Gate | Verifies |
+|------|----------|
+| **G-RESURRECT-0** | evidence kind ≠ `REMOTE_MODULE_RECOVERED` → DENY |
+| **G-RESURRECT-1** | CLOSED + fresh evidence + ACTIVE edge → gen+1 admitted |
+| **G-RESURRECT-2** | CLOSED + stale evidence → no-op |
+| **G-RESURRECT-3** | OPEN obligation → reevaluate, no gen bump |
+| **G-RESURRECT-4** | stale terminal fact → INV-REC-022 reject |
+| **G-RESURRECT-5** | successor execution state clean |
+| **G-RESURRECT-6** | CLOSED + `mediaRestored=true` residual + fresh evidence → still admit gen+1 |
+| **G-RESURRECT-7** | CLOSED(OBLIGATION_DEADLINE) + late `markRecovered` → ignore; fresh evidence still admits |
+
+**Out of Gap-2 scope:** Gap-1 (`SIGNAL_INBOUND_RESUMED`), deadline/watchdog extension, carrier / completion predicate / UI, HELLO→`EDGE_RECOVERED`, resurrection-specific owner / `immediate=true`.
+
 ## References
 
 - ADR-0020 — Conference Runtime Projection Contract
