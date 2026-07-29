@@ -23,6 +23,7 @@ class PeerEdgeSignalingReadiness(
 
     private val facts = ConcurrentHashMap<String, EdgeFact>()
     private val lostEmittedForStale = ConcurrentHashMap.newKeySet<String>()
+    private val lastReadyEmitted = ConcurrentHashMap<String, Boolean>()
 
     @Volatile
     var onPeerEdgeSignalingLost: ((PeerEdgeSignalingLost) -> Unit)? = null
@@ -30,11 +31,23 @@ class PeerEdgeSignalingReadiness(
     fun onPeerInboundObserved(fact: PeerInboundObserved) {
         val snapshot = localSnapshot()
         if (fact.receiveGeneration != snapshot.rebindGeneration) return
+        val previousReady = isReady(fact.remoteModuleId)
         facts[fact.remoteModuleId] = EdgeFact(
             observedGeneration = fact.receiveGeneration,
             lastPeerInboundObservedAtMs = fact.observedAtMs
         )
         lostEmittedForStale.remove(fact.remoteModuleId)
+        val nowReady = isReady(fact.remoteModuleId)
+        if (nowReady && !previousReady) {
+            emitReadyTransition(
+                remoteModuleId = fact.remoteModuleId,
+                generation = fact.receiveGeneration,
+                previous = previousReady,
+                reason = "INBOUND_OBSERVED",
+                observedSignal = "NETWORK_SIGNAL",
+                lastInboundAtMs = fact.observedAtMs
+            )
+        }
     }
 
     /**
@@ -43,17 +56,35 @@ class PeerEdgeSignalingReadiness(
      */
     fun invalidateGeneration(priorGeneration: Long) {
         val now = clock()
-        val removed = mutableListOf<String>()
+        val newGeneration = localSnapshot().rebindGeneration
+        val removed = mutableListOf<Pair<String, EdgeFact>>()
         facts.entries.removeIf { (peer, fact) ->
             if (fact.observedGeneration == priorGeneration) {
-                removed.add(peer)
+                removed.add(peer to fact)
                 true
             } else {
                 false
             }
         }
-        removed.forEach { peer ->
+        removed.forEach { (peer, fact) ->
             lostEmittedForStale.remove(peer)
+            val previousReady = lastReadyEmitted[peer] == true
+            lastReadyEmitted[peer] = false
+            PeerEdgeSignalingTrace.invalidated(
+                remoteModuleId = peer,
+                oldGeneration = priorGeneration,
+                newGeneration = if (newGeneration > priorGeneration) newGeneration else priorGeneration + 1L,
+                reason = "TRANSPORT_EPOCH_ADVANCED"
+            )
+            if (previousReady) {
+                PeerEdgeSignalingTrace.notReady(
+                    remoteModuleId = peer,
+                    generation = priorGeneration,
+                    previous = true,
+                    reason = "GENERATION_INVALIDATED",
+                    lastInboundAtMs = fact.lastPeerInboundObservedAtMs
+                )
+            }
             onPeerEdgeSignalingLost?.invoke(
                 PeerEdgeSignalingLost(
                     remoteModuleId = peer,
@@ -124,6 +155,15 @@ class PeerEdgeSignalingReadiness(
             if (snap.reason == PeerEdgeSignalingNotReadyReason.FRESHNESS_EXPIRED &&
                 lostEmittedForStale.add(peer)
             ) {
+                val previousReady = lastReadyEmitted[peer] == true
+                lastReadyEmitted[peer] = false
+                PeerEdgeSignalingTrace.notReady(
+                    remoteModuleId = peer,
+                    generation = local.rebindGeneration,
+                    previous = previousReady,
+                    reason = "STALE_TIMEOUT",
+                    lastInboundAtMs = snap.lastPeerInboundObservedAtMs
+                )
                 onPeerEdgeSignalingLost?.invoke(
                     PeerEdgeSignalingLost(
                         remoteModuleId = peer,
@@ -140,6 +180,26 @@ class PeerEdgeSignalingReadiness(
     fun clearAll() {
         facts.clear()
         lostEmittedForStale.clear()
+        lastReadyEmitted.clear()
+    }
+
+    private fun emitReadyTransition(
+        remoteModuleId: String,
+        generation: Long,
+        previous: Boolean,
+        reason: String,
+        observedSignal: String?,
+        lastInboundAtMs: Long?
+    ) {
+        lastReadyEmitted[remoteModuleId] = true
+        PeerEdgeSignalingTrace.ready(
+            remoteModuleId = remoteModuleId,
+            generation = generation,
+            previous = previous,
+            reason = reason,
+            observedSignal = observedSignal,
+            lastInboundAtMs = lastInboundAtMs
+        )
     }
 }
 
