@@ -17,6 +17,7 @@ class UserVisibleConnectivityProjectionTest {
 
     @Test
     fun caseA_smoke_mediaOk_controlSyncPending_isSyncing_notReconnecting() {
+        // Case 2 (PR #97 core): ICE_CONNECTED / media usable + control sync → SYNCING
         val axes = UserVisibleConnectivityProjection.deriveAxes(
             receivePathLive = true,
             mediaEverLive = true,
@@ -29,6 +30,23 @@ class UserVisibleConnectivityProjectionTest {
         assertNotEquals(UserVisibleConnectivityState.RECONNECTING, state)
         assertEquals(MediaUsability.MEDIA_OK, axes.media)
         assertEquals(ControlSyncState.SYNCING, axes.control)
+    }
+
+    @Test
+    fun case1_iceDisconnected_stickyReceivePath_mediaUnavailable_isReconnecting_notSyncing() {
+        // Field bug: ice=DISCONNECTED, MediaState.RECONNECTING, sticky receivePathLive=true.
+        // MediaUsabilityFact must supply mediaUnavailable=true so media axis is UNAVAILABLE.
+        val axes = UserVisibleConnectivityProjection.deriveAxes(
+            receivePathLive = true,
+            mediaEverLive = true,
+            recovering = true,
+            mediaUnavailable = true,
+            controlSyncPending = true
+        )
+        val state = UserVisibleConnectivityProjection.project(axes)
+        assertEquals(UserVisibleConnectivityState.RECONNECTING, state)
+        assertNotEquals(UserVisibleConnectivityState.SYNCING, state)
+        assertEquals(MediaUsability.MEDIA_UNAVAILABLE, axes.media)
     }
 
     @Test
@@ -61,6 +79,7 @@ class UserVisibleConnectivityProjectionTest {
 
     @Test
     fun caseD_stable_isConnected() {
+        // Case 3: ICE_CONNECTED / media usable / control stable → CONNECTED
         val state = UserVisibleConnectivityProjection.project(
             UserVisibleConnectivityProjection.deriveAxes(
                 receivePathLive = true,

@@ -1338,7 +1338,10 @@ class TalkViewModel(
         moduleId: String
     ): Boolean = runtime.conferenceEdgeRecovering(sessionId, moduleId)
 
-    /** ADR-0030 per-peer fact; live controller read (not presence aggregate snapshot). */
+    /**
+     * UVCP media-axis input (INV-PRES-006): MediaUsabilityFact over live MediaState +
+     * ADR-0030 failed-media residency (not presence aggregate snapshot).
+     */
     private fun edgeMediaUnavailablePeer(
         runtime: com.talkback.app.TalkbackRuntime,
         sessionId: String,
