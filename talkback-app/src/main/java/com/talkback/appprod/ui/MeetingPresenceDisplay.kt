@@ -5,10 +5,14 @@ import com.talkback.core.session.ConferenceParticipantDisplayState
 import com.talkback.core.session.ConferencePresenceProjection
 import com.talkback.appprod.ui.LocalReachability.ParticipantPresenceState
 import com.talkback.appprod.ui.LocalReachability.toMembershipState
+import com.talkback.appprod.ui.UserVisibleConnectivityProjection.UserVisibleConnectivityState
 
 /**
- * View-only presence display rules (ADR-0025 R30-F / R30-I → ADR-0028 R30-J).
- * Header uses roster membership; hints and avatars use [LocalReachability] only.
+ * View-only presence display (ADR-0025 / ADR-0028 / ADR-0034).
+ *
+ * Connectivity copy (pill / avatar connectivity semantics) is owned by
+ * [UserVisibleConnectivityProjection] — not `recoveringPeers` / lifecycle booleans.
+ * [LocalReachability] remains for membership LEFT / initial JOINING paths.
  */
 object MeetingPresenceDisplay {
 
@@ -20,6 +24,8 @@ object MeetingPresenceDisplay {
     enum class ParticipantAvailabilityKind {
         NONE,
         JOINING,
+        SYNCING,
+        DEGRADED,
         RECONNECTING,
         CAPTURE_BLOCKED
     }
@@ -33,7 +39,11 @@ object MeetingPresenceDisplay {
         val isRecoveringPeer: Boolean,
         val mediaUnavailablePeer: Boolean,
         val speaking: Boolean,
-        val captureBlocked: Boolean = false
+        val captureBlocked: Boolean = false,
+        /** Coarse control sync (negotiation deferred / obligation open). Diagnostic → axis only. */
+        val controlSyncPending: Boolean = false,
+        /** Coarse peer-edge / control degradation (not media loss). */
+        val controlDegraded: Boolean = false
     )
 
     data class ParticipantPresentationState(
@@ -41,7 +51,8 @@ object MeetingPresenceDisplay {
         val isLocal: Boolean,
         val endpointStatus: EndpointStatus,
         val availabilityKind: ParticipantAvailabilityKind,
-        val reachability: LocalReachability.Result
+        val reachability: LocalReachability.Result,
+        val visibleConnectivity: UserVisibleConnectivityState? = null
     )
 
     internal fun resolveLocalReachability(facts: ParticipantPresentationFacts): LocalReachability.Result {
@@ -63,6 +74,42 @@ object MeetingPresenceDisplay {
         )
     }
 
+    internal fun resolveVisibleConnectivity(
+        facts: ParticipantPresentationFacts
+    ): UserVisibleConnectivityState? {
+        if (facts.isLocal) return UserVisibleConnectivityState.CONNECTED
+        if (facts.membership.toMembershipState() == LocalReachability.MembershipState.LEFT) {
+            return null
+        }
+        val receivePathLive = receivePathLivenessProvider.receivePathLive(
+            facts.sessionId,
+            facts.moduleId
+        )
+        val mediaEverLive = receivePathLivenessProvider.mediaEverLive(
+            facts.sessionId,
+            facts.moduleId
+        )
+        if (
+            UserVisibleConnectivityProjection.isInitialJoinPath(
+                receivePathLive = receivePathLive,
+                mediaEverLive = mediaEverLive,
+                recovering = facts.isRecoveringPeer,
+                mediaUnavailable = facts.mediaUnavailablePeer
+            )
+        ) {
+            return null
+        }
+        return UserVisibleConnectivityProjection.project(
+            UserVisibleConnectivityProjection.deriveAxes(
+                receivePathLive = receivePathLive,
+                mediaEverLive = mediaEverLive,
+                recovering = facts.isRecoveringPeer,
+                mediaUnavailable = facts.mediaUnavailablePeer,
+                controlDegraded = facts.controlDegraded,
+                controlSyncPending = facts.controlSyncPending
+            )
+        )
+    }
 
     fun resolveParticipantPresentation(
         facts: ParticipantPresentationFacts
@@ -75,96 +122,97 @@ object MeetingPresenceDisplay {
             } else {
                 ParticipantAvailabilityKind.NONE
             }
-            return ParticipantPresentationState(facts.moduleId, isLocal = true, status, kind, reachability)
+            return ParticipantPresentationState(
+                facts.moduleId,
+                isLocal = true,
+                status,
+                kind,
+                reachability,
+                UserVisibleConnectivityState.CONNECTED
+            )
         }
-        val receivePathLive = reachability.state == ParticipantPresenceState.ONLINE
-        if (facts.speaking && receivePathLive) {
+        if (
+            reachability.state == ParticipantPresenceState.LEFT ||
+            reachability.state == ParticipantPresenceState.OFFLINE
+        ) {
+            return ParticipantPresentationState(
+                facts.moduleId,
+                isLocal = false,
+                EndpointStatus.OFFLINE,
+                ParticipantAvailabilityKind.NONE,
+                reachability,
+                visibleConnectivity = null
+            )
+        }
+
+        val connectivity = resolveVisibleConnectivity(facts)
+        if (connectivity == null) {
+            // Initial join / membership path — LocalReachability JOINING.
+            return ParticipantPresentationState(
+                facts.moduleId,
+                isLocal = false,
+                EndpointStatus.CONNECTING,
+                ParticipantAvailabilityKind.JOINING,
+                reachability,
+                visibleConnectivity = null
+            )
+        }
+
+        if (facts.speaking && connectivity == UserVisibleConnectivityState.CONNECTED) {
             return ParticipantPresentationState(
                 facts.moduleId,
                 isLocal = false,
                 EndpointStatus.SPEAKING,
                 ParticipantAvailabilityKind.NONE,
-                reachability
+                reachability,
+                connectivity
             )
         }
-        return when (reachability.state) {
-            ParticipantPresenceState.LEFT,
-            ParticipantPresenceState.OFFLINE ->
-                ParticipantPresentationState(
-                    facts.moduleId,
-                    isLocal = false,
-                    EndpointStatus.OFFLINE,
-                    ParticipantAvailabilityKind.NONE,
-                    reachability
-                )
-            ParticipantPresenceState.RECONNECTING ->
-                ParticipantPresentationState(
-                    facts.moduleId,
-                    isLocal = false,
-                    EndpointStatus.RECONNECTING,
-                    ParticipantAvailabilityKind.RECONNECTING,
-                    reachability
-                )
-            ParticipantPresenceState.JOINING ->
-                ParticipantPresentationState(
-                    facts.moduleId,
-                    isLocal = false,
-                    EndpointStatus.CONNECTING,
-                    ParticipantAvailabilityKind.JOINING,
-                    reachability
-                )
-            ParticipantPresenceState.ONLINE ->
-                ParticipantPresentationState(
-                    facts.moduleId,
-                    isLocal = false,
-                    if (facts.speaking) EndpointStatus.SPEAKING else EndpointStatus.ONLINE,
-                    ParticipantAvailabilityKind.NONE,
-                    reachability
-                )
-        }
-    }
 
-    internal fun availabilityKindFromReachability(
-        reachability: LocalReachability.Result
-    ): ParticipantAvailabilityKind =
-        when (reachability.state) {
-            ParticipantPresenceState.JOINING -> ParticipantAvailabilityKind.JOINING
-            ParticipantPresenceState.RECONNECTING -> ParticipantAvailabilityKind.RECONNECTING
-            else -> ParticipantAvailabilityKind.NONE
+        val (status, kind) = when (connectivity) {
+            UserVisibleConnectivityState.RECONNECTING ->
+                EndpointStatus.RECONNECTING to ParticipantAvailabilityKind.RECONNECTING
+            UserVisibleConnectivityState.DEGRADED ->
+                EndpointStatus.DEGRADED to ParticipantAvailabilityKind.DEGRADED
+            UserVisibleConnectivityState.SYNCING ->
+                EndpointStatus.SYNCING to ParticipantAvailabilityKind.SYNCING
+            UserVisibleConnectivityState.CONNECTED ->
+                (if (facts.speaking) EndpointStatus.SPEAKING else EndpointStatus.ONLINE) to
+                    ParticipantAvailabilityKind.NONE
         }
-
-    internal fun aggregateHintFromReachabilities(
-        reachabilities: List<Pair<String, LocalReachability.Result>>,
-        localCaptureBlocked: Boolean
-    ): String? {
-        if (localCaptureBlocked) {
-            return "Microphone unavailable"
-        }
-        val joining = reachabilities.filter { (_, r) ->
-            r.state == ParticipantPresenceState.JOINING
-        }
-        val reconnecting = reachabilities.filter { (_, r) ->
-            r.state == ParticipantPresenceState.RECONNECTING
-        }
-        return when {
-            joining.size == 1 -> "${joining.single().first} joining..."
-            joining.size > 1 -> "${joining.size} joining..."
-            reconnecting.size == 1 -> "${reconnecting.single().first} reconnecting..."
-            reconnecting.size > 1 -> "${reconnecting.size} reconnecting..."
-            else -> null
-        }
+        return ParticipantPresentationState(
+            facts.moduleId,
+            isLocal = false,
+            status,
+            kind,
+            reachability,
+            connectivity
+        )
     }
 
     fun aggregateAvailabilityHint(
         states: List<ParticipantPresentationState>,
         localCaptureBlocked: Boolean
-    ): String? =
-        aggregateHintFromReachabilities(
-            reachabilities = states
-                .filterNot { it.isLocal }
-                .map { it.moduleId to it.reachability },
-            localCaptureBlocked = localCaptureBlocked
+    ): String? {
+        if (localCaptureBlocked) {
+            return "Microphone unavailable"
+        }
+        val joining = states.filter { !it.isLocal && it.availabilityKind == ParticipantAvailabilityKind.JOINING }
+        if (joining.isNotEmpty()) {
+            return when (joining.size) {
+                1 -> "${joining.single().moduleId} joining..."
+                else -> "${joining.size} joining..."
+            }
+        }
+        val connectivityPeers = states.mapNotNull { state ->
+            if (state.isLocal) return@mapNotNull null
+            val c = state.visibleConnectivity ?: return@mapNotNull null
+            state.moduleId to c
+        }
+        return UserVisibleConnectivityProjection.formatMeetingHint(
+            UserVisibleConnectivityProjection.aggregateMeetingConnectivity(connectivityPeers)
         )
+    }
 
     fun renderConferencePresence(
         presence: ConferencePresenceProjection,
@@ -173,15 +221,6 @@ object MeetingPresenceDisplay {
     ): ConferencePresenceUi {
         val states = participantFacts.map(::resolveParticipantPresentation)
         val avatarStatuses = states.associate { it.moduleId to it.endpointStatus }
-        val endpoints = states.map { state ->
-            EndpointUiItem(
-                key = "${state.moduleId}-presentation",
-                displayLabel = state.moduleId,
-                status = state.endpointStatus,
-                signalBars = ConferenceEndpointStatusMapper.signalBarsFor(state.endpointStatus),
-                isLocal = state.isLocal
-            )
-        }
         return ConferencePresenceUi(
             headerLabel = participantCountLabel(presence.joinedCount),
             connectingHint = aggregateAvailabilityHint(states, localCaptureBlocked),

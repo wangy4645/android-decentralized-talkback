@@ -126,8 +126,8 @@ class MeetingPresenceDisplayTest {
     }
 
     @Test
-    fun r30i_recoveryPendingWithPlaybackReady_showsReconnecting_rule2() {
-        // Rule 2 (session efe1d26d): edge recovering vetoes media liveness.
+    fun adr0034_recoveryPendingWithPlaybackReady_showsSyncing_notReconnecting() {
+        // ADR-0034: MEDIA_OK + recovering/control pending → SYNCING (supersedes ADR-0030 Rule 2 UX).
         val ui = MeetingPresenceDisplay.renderConferencePresence(
             presence = ConferencePresenceProjection(
                 joinedCount = 3,
@@ -144,8 +144,12 @@ class MeetingPresenceDisplayTest {
                 remote("M03", ConferenceParticipantDisplayState.VISIBLE_CONNECTED)
             )
         )
-        assertEquals("M01 reconnecting...", ui.connectingHint)
-        assertEquals(EndpointStatus.RECONNECTING, ui.avatarStatuses["M01"])
+        assertEquals("M01 syncing...", ui.connectingHint)
+        assertEquals(EndpointStatus.SYNCING, ui.avatarStatuses["M01"])
+        assertEquals(
+            UserVisibleConnectivityProjection.UserVisibleConnectivityState.SYNCING,
+            ui.participantStates.first { it.moduleId == "M01" }.visibleConnectivity
+        )
     }
 
     @Test
@@ -241,6 +245,46 @@ class MeetingPresenceDisplayTest {
         assertFalse(ui.headerLabel.contains("/"))
     }
 
+    @Test
+    fun adr0034_recoveringPeersAggregate_alone_doesNotDriveHint() {
+        // recoveringPeers on presence projection is diagnostic; per-peer facts own UX.
+        val ui = MeetingPresenceDisplay.renderConferencePresence(
+            presence = ConferencePresenceProjection(
+                joinedCount = 3,
+                connectedCount = 3,
+                recoveringPeers = setOf("M03")
+            ),
+            participantFacts = listOf(
+                remote("M01", ConferenceParticipantDisplayState.VISIBLE_CONNECTED),
+                remote("M02", ConferenceParticipantDisplayState.VISIBLE_CONNECTED),
+                remote(
+                    "M03",
+                    ConferenceParticipantDisplayState.VISIBLE_CONNECTED,
+                    isRecoveringPeer = false
+                )
+            )
+        )
+        assertNull(ui.connectingHint)
+        assertEquals(EndpointStatus.ONLINE, ui.avatarStatuses["M03"])
+    }
+
+    @Test
+    fun adr0034_controlDegraded_withMediaOk_showsDegraded() {
+        val ui = MeetingPresenceDisplay.renderConferencePresence(
+            presence = ConferencePresenceProjection(joinedCount = 2, connectedCount = 2),
+            participantFacts = listOf(
+                remote("M01", ConferenceParticipantDisplayState.VISIBLE_CONNECTED),
+                remote(
+                    "M03",
+                    ConferenceParticipantDisplayState.VISIBLE_CONNECTED,
+                    controlDegraded = true
+                )
+            )
+        )
+        assertEquals("M03 degraded...", ui.connectingHint)
+        assertEquals(EndpointStatus.DEGRADED, ui.avatarStatuses["M03"])
+    }
+
     private fun testProvider(): ReceivePathLivenessProvider = object : ReceivePathLivenessProvider {
         override fun receivePathLive(sessionId: String, remoteModuleId: String): Boolean =
             remoteModuleId in setOf("M01", "M02", "M03")
@@ -253,7 +297,9 @@ class MeetingPresenceDisplayTest {
         moduleId: String,
         displayState: ConferenceParticipantDisplayState,
         isRecoveringPeer: Boolean = false,
-        mediaUnavailablePeer: Boolean = false
+        mediaUnavailablePeer: Boolean = false,
+        controlDegraded: Boolean = false,
+        controlSyncPending: Boolean = false
     ) = MeetingPresenceDisplay.ParticipantPresentationFacts(
         sessionId = "sess-test",
         moduleId = moduleId,
@@ -261,6 +307,8 @@ class MeetingPresenceDisplayTest {
         displayState = displayState,
         isRecoveringPeer = isRecoveringPeer,
         mediaUnavailablePeer = mediaUnavailablePeer,
-        speaking = false
+        speaking = false,
+        controlDegraded = controlDegraded,
+        controlSyncPending = controlSyncPending
     )
 }
