@@ -3,12 +3,13 @@ package com.talkback.appprod.ui
 import com.talkback.core.session.ConferenceMembershipLifecycle
 
 /**
- * Sole presentation owner for per-peer user-visible reachability (ADR-0028 R30-J,
- * composition rules frozen by ADR-0030 Presence Projection Contract).
- * Pure projection — no timers, latch, or cache. No projection output may feed back in.
+ * Local reachability composition (ADR-0028 / ADR-0030).
+ * Pure projection — no timers, latch, or cache.
  *
- * ADR-0030 Rule 2: edge signals (recovering, mediaUnavailable) veto media
- * receivePathLive; media cannot imply ONLINE while edge is recovering/unavailable.
+ * **ADR-0034:** user-visible connectivity copy (pill / reconnecting|syncing|degraded)
+ * is owned by [UserVisibleConnectivityProjection]. This resolver remains for membership
+ * LEFT / JOINING diagnostics and historical presence synthesis; its Rule 2 output
+ * **MUST NOT** be consumed as the sole reconnecting UX truth when media is usable.
  */
 object LocalReachability {
 

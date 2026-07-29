@@ -273,12 +273,60 @@ Recovery 协议完成向的前置条件：Recovery Signal Dispatch Gate **且** 
 _Avoid_: authorityReachable 隐含 routeConverged
 
 **Conference Presence Projection**:
-会议在场读模型：本端可见的 **joined / connected / recovering** 人数与 peer 集合，由 `ConferencePresenceProjector` 从 Membership roster、`EdgeRecoveryFacts`、`ConnectedPeers` 等只读事实产出。UI **MUST** 只消费此投影（及 Runtime 投影的 phase），**MUST NOT** 读 `ReachabilitySnapshot` 或在 ViewModel 内重建 presence。见 ADR-0022 R27′。
-_Avoid_: memberKeys.size 当 joinedCount, ICE/transport 推断 recovering, 扩 ConferenceRuntimeProjector 塞 presence 字段
+会议在场读模型：本端可见的 **joined / connected / recovering** 人数与 peer 集合，由 `ConferencePresenceProjector` 从 Membership roster、`EdgeRecoveryFacts`、`ConnectedPeers` 等只读事实产出。UI **MUST** 只消费此投影（及 Runtime 投影的 phase），**MUST NOT** 读 `ReachabilitySnapshot` 或在 ViewModel 内重建 presence。见 ADR-0022 R27′。**Presence Projection / Recovery UX：Q1–Q9 ACCEPTED；[ADR-0034](docs/adr/0034-user-visible-connectivity-projection.md) Accepted（设计冻结）**——用户可见连通文案真相源为 **User Visible Connectivity Projection**（INV-PRES-001..009）；`recoveringPeers` / `sessionEdgeRecovering` 不得直接驱动 reconnecting 文案；部分取代 ADR-0030 Rule 2 对 connectivity UX 的效力。
+_Avoid_: memberKeys.size 当 joinedCount, ICE/transport 推断 recovering, 扩 ConferenceRuntimeProjector 塞 presence 字段, sessionEdgeRecovering==reconnecting
+
+**User Visible Connectivity Projection**:
+面向用户的连通语义投影（Presence Projection / Recovery UX）：把各 domain 的只读事实解释成用户该看到的状态。**双轴映射（Q6=F-4）**：Axis A=`MEDIA_USABILITY`（`MEDIA_OK` / `MEDIA_UNAVAILABLE`）；Axis B=`CONTROL_SYNC_STATE`（`STABLE` / `SYNCING` / `DEGRADED`）；`(Media, ControlSync) → UserVisibleConnectivityState`。硬否决等价 F-1：`MEDIA_OK` **禁止**产出 `RECONNECTING`。**输出粒度 = peer-level**（真相源）；Meeting pill / 摘要仅为二级聚合消费者。**不是** truth owner；不得 mutate 任何 owner。可读取 media / peer-edge readiness / negotiation sync **coarse**；lifecycle（obligation / `sessionEdgeRecovering` / phase）仅诊断，**不得**直接当 UI 连通态。**MUST NOT** 拥有 timer、expiration、retry 或 terminal transition（**Q5=L-1**）。**显示与 admission 分离（Q9=C-2+C-4）**：Projection 只驱动 pill/avatar/hint；硬门控仍由 domain admission；Projection **MAY** soft hint，**MUST NOT** grant/deny protocol actions。Grill **Q1–Q9 ACCEPTED**；规范见 **[ADR-0034](docs/adr/0034-user-visible-connectivity-projection.md)**（D / P-2 / G-3 / S-2 / L-1 / F-4 / E-2 / A-1+A-3 / C-2+C-4，2026-07-29）——设计冻结，可进实现。
+_Avoid_: 用 sessionEdgeRecovering 当 reconnecting, 把 obligation OPEN 直接显示为对方断线, 在 projection 里 closeObligation / markRecovered / rebind, 把 SIGNALING_NOT_STABLE / HAVE_LOCAL_OFFER / deferredReason 原文露给 UI, Meeting pill 反向当 truth, recoveringPeers 当 UI 连通语义输入, negotiation pending alone → RECONNECTING, DEGRADED 折叠成 SYNCING, count-based escalation, Projection 当 admission, SYNCING 禁用呼叫, CONNECTED 绕过 admission
+
+**Peer Connectivity State**:
+`User Visible Connectivity Projection` 对单个 peer 的输出；是 UI 连通语义的唯一真相源。**V1 四态（Q7=E-2）**：`CONNECTED` | `SYNCING` | `DEGRADED` | `RECONNECTING`。`UNAVAILABLE` 保留为未来扩展，**不**进入 V1 用户态合同。`DEGRADED` 是一等用户态，**不得**当 `SYNCING` 别名。由双轴映射表产出：`MEDIA_OK+STABLE→CONNECTED`，`MEDIA_OK+SYNCING→SYNCING`，`MEDIA_OK+DEGRADED→DEGRADED`，`MEDIA_UNAVAILABLE` + 修复/恢复中 → `RECONNECTING`。Avatar / member row 直接消费；Meeting summary 只能对其做非升级聚合。**禁止**复用内部词 `RECOVERING` 当投影输出身份；**禁止** obligation / `sessionEdgeRecovering` / negotiation pending 直接当 UI 态。
+_Avoid_: recoveringPeers 当 peer UI 态, meetingState 反写 peerState, RECOVERING 当 UI 态, obligation OPEN → RECONNECTING, sessionEdgeRecovering → RECONNECTING, HAVE_LOCAL_OFFER → RECONNECTING, DEGRADED→SYNCING 折叠, SYNCING 表示持久降级
+
+**Meeting Connectivity Summary**:
+Meeting pill / 会议级连通摘要：对 peer-level `Peer Connectivity State` 的 **non-escalating aggregation**。**V1 严重度序（Q8=A-1）**：`RECONNECTING > DEGRADED > SYNCING > CONNECTED`（先于数量）。同严重度多 peer 时，presentation **MAY** 附名单或计数（**A-3**），但 **MUST** 保持同一态、不得升级。**MAY** 展示 `SYNCING` / `DEGRADED`，但必须保持各自语义。只选摘要，不得反写 peer 态。规范见 **[ADR-0034](docs/adr/0034-user-visible-connectivity-projection.md)**。Grill **Q1–Q9 ACCEPTED**（D / P-2 / G-3 / S-2 / L-1 / F-4 / E-2 / A-1+A-3 / C-2+C-4，2026-07-29）。
+_Avoid_: 仅有 SYNCING peers 时摘要显示 RECONNECTING, 用 recoveringPeers 直接生成 pill, SYNCING 静默丢弃导致 pill 显示一切正常, DEGRADED 显示为 reconnecting, 用 peer 数量压过更高严重度, 同级随机只显示一个 peer 却升级语义, pill 态当 admission
+
+**INV-PRES-001**:
+用户可见连通状态 **MUST NOT** 仅由单一内部 lifecycle boolean 推导（尤其禁止 `sessionEdgeRecovering` / 裸 `recoveringPeers` → RECONNECTING）。
+_Avoid_: if (recovering) show reconnecting
+
+**INV-PRES-002**:
+`User Visible Connectivity Projection` **MAY** 跨域消费只读事实，但 **MUST NOT** 把内部协议 lifecycle / gate / defer **原因**暴露为用户可见连通语义（例如不得显示 `SIGNALING_NOT_STABLE`、`HAVE_LOCAL_OFFER`、`ICE_RESTART_GATE_BLOCKED`、`deferredReason`）。Projection 侧只认粗粒度如 `CONTROL_SYNC_IN_PROGRESS` → `SYNCING`。
+_Avoid_: 诊断字符串进 Meeting pill, syncing 文案贴 gate reason
+
+**INV-PRES-003**:
+Meeting-level connectivity summary **MUST** 是 peer-level 用户可见连通态的 **non-escalating aggregation**；**MUST NOT** 把较轻的 peer 态升级为更强的失败/恢复语义（例如不得把仅有 `SYNCING` 的 peers 显示为会议 `RECONNECTING`）。
+_Avoid_: recoveringPeers 非空 → 整会 reconnecting, meetingState 反写 peers
+
+**INV-PRES-004**:
+Meeting connectivity summary **MAY** 展示 `SYNCING`，但 **MUST** 以 syncing 语义呈现，且 **MUST NOT** 将其表示为 reconnecting、unavailable 或 failure。
+_Avoid_: SYNCING → "reconnecting...", SYNCING 当失败态
+
+**INV-PRES-005**:
+`User Visible Connectivity Projection` **MUST** 是纯投影：不得拥有 timer、expiration、retry 或 terminal transition。`SYNCING` **仅**在所消费的 coarse domain facts 仍 justifying 时出现，facts 不再 justifying 时自然消失——不是 Projection 宣布「同步完成」。
+_Avoid_: Projection 10s 后强制 CONNECTED, SYNCING==obligation OPEN, Presence Recovery Controller
+
+**INV-PRES-006**:
+`User Visible Connectivity Projection` **MUST** 从独立的 media 与 control synchronization facts 推导连通态（双轴映射）。**MUST NOT** 把 lifecycle ownership 信号（`obligation`、`sessionEdgeRecovering`、`phase`）直接当作用户可见连通态。`RECONNECTING` **requires** media unavailable；`SYNCING` = media available ∧ control synchronization incomplete。
+_Avoid_: obligation OPEN → RECONNECTING, sessionEdgeRecovering → reconnecting, negotiation pending → RECONNECTING, MEDIA_OK → RECONNECTING
+
+**INV-PRES-007**:
+`DEGRADED` 是 V1 一等用户可见态。**MUST NOT** 把 `DEGRADED` 当作 `SYNCING` 的别名；**MUST NOT** 用 `SYNCING` 表示持久降级条件。
+_Avoid_: MEDIA_OK+CONTROL_DEGRADED → SYNCING, SYNCING 文案覆盖 peer_edge_stale 降级
+
+**INV-PRES-008**:
+Meeting Connectivity Summary **MUST** 按固定严重度序聚合 peer 连通态：`RECONNECTING > DEGRADED > SYNCING > CONNECTED`。**MUST NOT** 把较轻 peer 态升级为更严重态。同严重度 peers 的 presentation **MAY** 包含计数或 peer 标识，但 **MUST** 保持同一态。数量 **MUST NOT** 压过更高严重度。
+_Avoid_: 3×SYNCING 压过 1×DEGRADED, SYNCING→RECONNECTING, DEGRADED→RECONNECTING, lifecycle boolean→pill
+
+**INV-PRES-009**:
+`UserVisibleConnectivityState` **是 display-only**。Action enablement / hard admission **MUST** 仍由 domain admission authorities 拥有（ChannelGovernance / Directory / Membership / Peer Control Admission / Qualification Gate 等）。`UserVisibleConnectivityProjection` **MUST NOT** grant/deny protocol actions、mutate lifecycle，或绕过 admission。Projection **MAY** 提供 soft hint（如「可能暂不可用」），**MUST NOT** 因投影态本身禁用/放行呼叫。
+_Avoid_: SYNCING → disable call, CONNECTED → bypass admission, Projection 当 Action Admission Authority
 
 **Conference Presence Projector**:
-与 `ConferenceRuntimeProjector` 并列的专用投影器：消费同一批只读 facts，输出 `ConferencePresenceProjection(joinedCount, connectedCount, recoveringPeers: Set<ModuleId>)`。职责为 **presence**（谁在场、谁连通、谁 recovering），非 lifecycle phase 或 authority。见 ADR-0022 R27′-B。
-_Avoid_: 把 joinedCount 挂进 RuntimeProjection DTO, ViewModel filter roster
+与 `ConferenceRuntimeProjector` 并列的专用投影器：消费同一批只读 facts，输出 `ConferencePresenceProjection(joinedCount, connectedCount, recoveringPeers: Set<ModuleId>)`。职责为 **presence**（谁在场、谁连通、谁 recovering），非 lifecycle phase 或 authority。见 ADR-0022 R27′-B。`recoveringPeers` 保留给 recovery/诊断；**不得**再作为用户连通文案真相源。
+_Avoid_: 把 joinedCount 挂进 RuntimeProjection DTO, ViewModel filter roster, recoveringPeers → Meeting pill reconnecting
 
 **Conference Edge Recovery Controller**:
 每条 Conference connectivity edge 的 recovery 决策与状态机唯一 owner。负责 eligibility、RECOVERY_REATTACH 编排、bounded ICE restart 策略、termination 取消与 EdgeRecoveryFacts 产出；不直接操作 PeerConnection，不修改 Membership。见 ADR-0021。

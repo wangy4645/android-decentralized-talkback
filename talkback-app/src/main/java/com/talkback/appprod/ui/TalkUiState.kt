@@ -20,7 +20,11 @@ enum class EndpointStatus {
     INVITING,
     /** ICE/media negotiation in progress. */
     CONNECTING,
-    /** Conference peer media lost; edge recovery in progress (ADR-0025 R30-F). */
+    /** Media usable; control plane still synchronizing (ADR-0034). */
+    SYNCING,
+    /** Media usable; soft degradation (ADR-0034). */
+    DEGRADED,
+    /** Conference peer media lost; repair/recovery active (ADR-0034). */
     RECONNECTING,
     /** Invite timed out or was not answered. */
     EXPIRED

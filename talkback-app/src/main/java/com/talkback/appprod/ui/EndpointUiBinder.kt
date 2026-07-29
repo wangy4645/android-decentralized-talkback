@@ -25,6 +25,8 @@ object EndpointUiBinder {
             EndpointStatus.OFFLINE -> ctx.getString(R.string.status_offline)
             EndpointStatus.INVITING -> ctx.getString(R.string.status_inviting)
             EndpointStatus.CONNECTING -> ctx.getString(R.string.status_connecting)
+            EndpointStatus.SYNCING -> ctx.getString(R.string.status_syncing)
+            EndpointStatus.DEGRADED -> ctx.getString(R.string.status_degraded)
             EndpointStatus.RECONNECTING -> ctx.getString(R.string.status_reconnecting)
             EndpointStatus.EXPIRED -> ctx.getString(R.string.status_expired)
         }
@@ -32,6 +34,8 @@ object EndpointUiBinder {
         val isSpeaking = item.status == EndpointStatus.SPEAKING
         val isOffline = item.status == EndpointStatus.OFFLINE
         val isReconnecting = item.status == EndpointStatus.RECONNECTING
+        val isSoftConnectivity =
+            item.status == EndpointStatus.SYNCING || item.status == EndpointStatus.DEGRADED
         val isMuted = item.status == EndpointStatus.EXPIRED || item.status == EndpointStatus.INVITING
         waveformView.isVisible = isSpeaking
         signalBarsView.isVisible = !isSpeaking && !isOffline && !isMuted && !isReconnecting
@@ -42,6 +46,8 @@ object EndpointUiBinder {
             EndpointStatus.OFFLINE -> R.drawable.dot_offline
             EndpointStatus.INVITING -> R.drawable.dot_offline
             EndpointStatus.CONNECTING -> R.drawable.dot_meeting_connecting
+            EndpointStatus.SYNCING -> R.drawable.dot_meeting_connecting
+            EndpointStatus.DEGRADED -> R.drawable.dot_meeting_connecting
             EndpointStatus.RECONNECTING -> R.drawable.dot_reconnecting
             EndpointStatus.EXPIRED -> R.drawable.dot_offline
         }
@@ -59,6 +65,8 @@ object EndpointUiBinder {
             EndpointStatus.SPEAKING -> R.color.tb_primary
             EndpointStatus.ONLINE -> if (item.isLocal) R.color.tb_primary else R.color.tb_success
             EndpointStatus.CONNECTING -> R.color.tb_meeting_connecting
+            EndpointStatus.SYNCING -> R.color.tb_meeting_connecting
+            EndpointStatus.DEGRADED -> R.color.tb_text_muted
             EndpointStatus.RECONNECTING -> R.color.tb_text_muted
             EndpointStatus.INVITING -> R.color.tb_text_muted
             EndpointStatus.EXPIRED -> R.color.tb_text_muted
@@ -66,7 +74,7 @@ object EndpointUiBinder {
         }
         statusView.setTextColor(ContextCompat.getColor(ctx, statusColor))
 
-        keyView.alpha = if (isOffline || isMuted || isReconnecting) 0.55f else 1f
+        keyView.alpha = if (isOffline || isMuted || isReconnecting) 0.55f else if (isSoftConnectivity) 0.8f else 1f
         signalBarsView.alpha = if (!isSpeaking && (isOffline || isMuted || isReconnecting)) 0.35f else 1f
     }
 }

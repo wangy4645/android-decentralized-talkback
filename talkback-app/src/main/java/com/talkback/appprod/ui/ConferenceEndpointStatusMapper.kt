@@ -38,6 +38,8 @@ object ConferenceEndpointStatusMapper {
     fun signalBarsFor(status: EndpointStatus): Int = when (status) {
         EndpointStatus.OFFLINE -> 0
         EndpointStatus.CONNECTING,
+        EndpointStatus.SYNCING,
+        EndpointStatus.DEGRADED,
         EndpointStatus.RECONNECTING -> 1
         else -> 3
     }

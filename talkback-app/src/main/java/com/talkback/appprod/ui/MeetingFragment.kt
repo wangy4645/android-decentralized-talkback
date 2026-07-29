@@ -382,6 +382,8 @@ class MeetingFragment : Fragment() {
             label.maxLines = 1
             val isSpeaking = item.status == EndpointStatus.SPEAKING
             val isReconnecting = item.status == EndpointStatus.RECONNECTING
+            val isSyncing = item.status == EndpointStatus.SYNCING
+            val isDegraded = item.status == EndpointStatus.DEGRADED
             val isConnecting = item.status == EndpointStatus.CONNECTING
             when {
                 isSpeaking -> {
@@ -394,6 +396,20 @@ class MeetingFragment : Fragment() {
                     chip.alpha = 0.55f
                     label.setTextColor(secondary)
                     label.text = "${item.displayLabel}\n${ctx.getString(R.string.status_reconnecting)}"
+                    label.maxLines = 2
+                }
+                isSyncing -> {
+                    frame.setBackgroundResource(R.drawable.bg_meeting_chip_connecting)
+                    chip.alpha = 0.85f
+                    label.setTextColor(primary)
+                    label.text = "${item.displayLabel}\n${ctx.getString(R.string.status_syncing)}"
+                    label.maxLines = 2
+                }
+                isDegraded -> {
+                    frame.setBackgroundResource(R.drawable.bg_meeting_chip_connecting)
+                    chip.alpha = 0.75f
+                    label.setTextColor(secondary)
+                    label.text = "${item.displayLabel}\n${ctx.getString(R.string.status_degraded)}"
                     label.maxLines = 2
                 }
                 isConnecting -> {

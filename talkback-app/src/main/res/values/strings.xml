@@ -43,6 +43,8 @@
     <string name="status_inviting">Inviting…</string>
     <string name="status_connecting">Connecting…</string>
     <string name="status_joining">Joining…</string>
+    <string name="status_syncing">Syncing…</string>
+    <string name="status_degraded">Degraded</string>
     <string name="status_reconnecting">Reconnecting…</string>
     <string name="status_expired">No answer</string>
     <string name="action_broadcast">Broadcast</string>

@@ -30,7 +30,7 @@ class LocalReachabilityTest {
     }
 
     @Test
-    fun r30_j_1_edgeRecovering_vetoesReceivePathLive_showsReconnecting() {
+    fun r30_j_1_edgeRecovering_localReachabilityStillVetoes_butUiShowsSyncing() {
         val reachability = LocalReachability.resolve(
             membership = LocalReachability.MembershipState.JOINED,
             receivePathLive = true,
@@ -38,13 +38,26 @@ class LocalReachabilityTest {
             mediaUnavailable = false,
             mediaEverLive = true
         )
+        // Diagnostic LocalReachability may still report RECONNECTING (ADR-0030).
         assertEquals(LocalReachability.ParticipantPresenceState.RECONNECTING, reachability.state)
 
-        val hint = MeetingPresenceDisplay.aggregateHintFromReachabilities(
-            reachabilities = listOf("M01" to reachability),
-            localCaptureBlocked = false
+        // ADR-0034 connectivity UX: MEDIA_OK + recovering → SYNCING.
+        MeetingPresenceDisplay.receivePathLivenessProvider = object : ReceivePathLivenessProvider {
+            override fun receivePathLive(sessionId: String, remoteModuleId: String): Boolean = true
+            override fun mediaEverLive(sessionId: String, remoteModuleId: String): Boolean = true
+        }
+        val presentation = MeetingPresenceDisplay.resolveParticipantPresentation(
+            remoteFacts(
+                moduleId = "M01",
+                displayState = ConferenceParticipantDisplayState.VISIBLE_CONNECTED,
+                isRecoveringPeer = true
+            )
         )
-        assertEquals("M01 reconnecting...", hint)
+        assertEquals(MeetingPresenceDisplay.ParticipantAvailabilityKind.SYNCING, presentation.availabilityKind)
+        assertEquals(
+            "M01 syncing...",
+            MeetingPresenceDisplay.aggregateAvailabilityHint(listOf(presentation), localCaptureBlocked = false)
+        )
     }
 
     @Test
@@ -103,26 +116,8 @@ class LocalReachabilityTest {
     }
 
     @Test
-    fun r30_j_2_hintOnlyFromLocalReachabilityAggregate_notRecoveringPeers() {
-        val m01Reachability = LocalReachability.resolve(
-            membership = LocalReachability.MembershipState.JOINED,
-            receivePathLive = false,
-            recovering = false,
-            mediaUnavailable = false,
-            mediaEverLive = true
-        )
-        assertEquals(LocalReachability.ParticipantPresenceState.RECONNECTING, m01Reachability.state)
-
-        val hintFromReachability = MeetingPresenceDisplay.aggregateHintFromReachabilities(
-            reachabilities = listOf(
-                "M01" to m01Reachability,
-                "M02" to online("M02"),
-                "M03" to online("M03")
-            ),
-            localCaptureBlocked = false
-        )
-        assertEquals("M01 reconnecting...", hintFromReachability)
-
+    fun r30_j_2_hintFromVisibleConnectivity_notRecoveringPeersAggregate() {
+        // receivePathLive false for M01 (setUp); mediaEverLive true → RECONNECTING via UVCP.
         val presentation = MeetingPresenceDisplay.resolveParticipantPresentation(
             remoteFacts(
                 sessionId = "sess-test",
@@ -131,18 +126,31 @@ class LocalReachabilityTest {
                 isRecoveringPeer = false
             )
         )
+        assertEquals(MeetingPresenceDisplay.ParticipantAvailabilityKind.RECONNECTING, presentation.availabilityKind)
         assertEquals(
-            hintFromReachability,
-            MeetingPresenceDisplay.aggregateHintFromReachabilities(
-                reachabilities = listOf(
-                    "M01" to presentation.reachability,
-                    "M02" to online("M02"),
-                    "M03" to online("M03")
-                ),
+            UserVisibleConnectivityProjection.UserVisibleConnectivityState.RECONNECTING,
+            presentation.visibleConnectivity
+        )
+
+        val m02 = MeetingPresenceDisplay.resolveParticipantPresentation(
+            remoteFacts(
+                moduleId = "M02",
+                displayState = ConferenceParticipantDisplayState.VISIBLE_CONNECTED
+            )
+        )
+        val m03 = MeetingPresenceDisplay.resolveParticipantPresentation(
+            remoteFacts(
+                moduleId = "M03",
+                displayState = ConferenceParticipantDisplayState.VISIBLE_CONNECTED
+            )
+        )
+        assertEquals(
+            "M01 reconnecting...",
+            MeetingPresenceDisplay.aggregateAvailabilityHint(
+                listOf(presentation, m02, m03),
                 localCaptureBlocked = false
             )
         )
-        assertEquals(MeetingPresenceDisplay.ParticipantAvailabilityKind.RECONNECTING, presentation.availabilityKind)
     }
 
     @Test
@@ -156,14 +164,19 @@ class LocalReachabilityTest {
         )
         assertEquals(LocalReachability.ParticipantPresenceState.ONLINE, reachability.state)
 
-        val hint = MeetingPresenceDisplay.aggregateHintFromReachabilities(
-            reachabilities = listOf(
-                "M02" to reachability,
-                "M03" to online("M03")
-            ),
-            localCaptureBlocked = false
+        MeetingPresenceDisplay.receivePathLivenessProvider = object : ReceivePathLivenessProvider {
+            override fun receivePathLive(sessionId: String, remoteModuleId: String): Boolean = true
+            override fun mediaEverLive(sessionId: String, remoteModuleId: String): Boolean = true
+        }
+        val presentation = MeetingPresenceDisplay.resolveParticipantPresentation(
+            remoteFacts(
+                moduleId = "M02",
+                displayState = ConferenceParticipantDisplayState.VISIBLE_CONNECTED
+            )
         )
-        assertNull(hint)
+        assertNull(
+            MeetingPresenceDisplay.aggregateAvailabilityHint(listOf(presentation), localCaptureBlocked = false)
+        )
     }
 
     @Test
@@ -209,15 +222,6 @@ class LocalReachabilityTest {
             )
         )
     }
-
-    private fun online(moduleId: String): LocalReachability.Result =
-        LocalReachability.resolve(
-            membership = LocalReachability.MembershipState.JOINED,
-            receivePathLive = true,
-            recovering = false,
-            mediaUnavailable = false,
-            mediaEverLive = true
-        ).also { require(moduleId.isNotBlank()) }
 
     private fun remoteFacts(
         sessionId: String = "sess-test",
