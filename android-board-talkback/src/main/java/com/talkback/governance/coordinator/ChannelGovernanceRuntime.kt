@@ -20,12 +20,13 @@ class ChannelGovernanceRuntime(host: ChannelGovernanceHost) {
     private val channelProbes = CoordinatorCapabilityProbes(host)
     val transitionCoordinator = TransitionCoordinator(channelProbes.channelProbes)
     private val operationGate = OperationGate()
-    private val unicastSnapshot = capabilitySnapshot(UNICAST_CHANNEL_ID, channelProbes.unicastProbes)
 
     fun canStart(operation: Operation, channelId: String): GateDecision {
         transitionCoordinator.expireTimeouts(channelId).forEach(GovernanceObservabilityLog::transitionTerminal)
+        // Unicast Directory/Routing must be probed live — a construction-time snapshot freezes
+        // DIRECTORY_NOT_READY forever if dialable peers arrive after coordinator start.
         val snapshot = if (operation == Operation.SINGLE_CALL) {
-            unicastSnapshot
+            capabilitySnapshot(UNICAST_CHANNEL_ID, channelProbes.unicastProbes)
         } else {
             transitionCoordinator.capabilitySnapshot(channelId)
         }
