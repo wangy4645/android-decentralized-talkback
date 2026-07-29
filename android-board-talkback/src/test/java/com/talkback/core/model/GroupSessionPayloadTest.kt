@@ -53,6 +53,42 @@ class GroupSessionPayloadTest {
     }
 
     @Test
+    fun encodeDecodeOfferCorrelationFields() {
+        val original = GroupSessionPayload(
+            sdp = "v=0",
+            channelId = "CONF-01",
+            members = listOf("M02-E01", "M03-E01"),
+            initiatorModuleId = "M02",
+            floorAuthorityModuleId = "M02",
+            sessionMode = MeshSessionMode.CONFERENCE,
+            joinIntent = ConferenceJoinIntent.RECOVERY_REATTACH,
+            offerLineageId = "L55",
+            restartAttemptId = 17L,
+            transportGeneration = 2L,
+            obligationGeneration = 5L,
+            deliveryAttemptId = 1L
+        )
+        val decoded = GroupSessionPayload.decode(original.encode())
+        assertNotNull(decoded)
+        assertEquals("L55", decoded!!.offerLineageId)
+        assertEquals(17L, decoded.restartAttemptId)
+        assertEquals(2L, decoded.transportGeneration)
+        assertEquals(5L, decoded.obligationGeneration)
+        assertEquals(1L, decoded.deliveryAttemptId)
+        assertEquals(ConferenceJoinIntent.RECOVERY_REATTACH, decoded.joinIntent)
+    }
+
+    @Test
+    fun decodeMissingOfferCorrelationDefaultsNull() {
+        val raw = """{"sdp":"v=0","channelId":"CH-01","members":["M01-E01"],"initiatorModuleId":"M01","floorAuthorityModuleId":"M01"}"""
+        val decoded = GroupSessionPayload.decode(raw)
+        assertNotNull(decoded)
+        assertEquals(null, decoded!!.offerLineageId)
+        assertEquals(null, decoded.restartAttemptId)
+        assertEquals(null, decoded.transportGeneration)
+    }
+
+    @Test
     fun parseMembersFromKeys() {
         val members = GroupSessionPayload.parseMembers(listOf("M01-E01", "M02-E02"))
         assertEquals(2, members.size)

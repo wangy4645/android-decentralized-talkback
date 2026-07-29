@@ -8,6 +8,7 @@ import com.talkback.core.signaling.link.QualificationFailureReason
 import com.talkback.core.signaling.prr.PrrInboundFactObserver
 import com.talkback.core.ptt.FloorRequestCallsiteTracer
 import com.talkback.core.util.TalkbackLog
+import com.talkback.core.util.OfferDeliveryObservation
 import com.talkback.core.util.TransportCapabilityTrace
 import com.talkback.core.model.EndpointAddress
 import com.talkback.core.model.EndpointId
@@ -98,6 +99,12 @@ class UdpSignalingChannel(
                 }
                 val source = PeerTarget(packet.address.hostAddress ?: "", packet.port)
                 observeFirstInboundAfterRebind(source.host, source.port)
+                OfferDeliveryObservation.udpDatagramReceived(
+                    srcHost = source.host,
+                    srcPort = source.port,
+                    socketId = socketId,
+                    bytes = packet.length
+                )
                 val body = String(packet.data, packet.offset, packet.length)
                 val decoded = runCatching { decode(body) }
                 val envelope = decoded.getOrNull()
@@ -108,6 +115,12 @@ class UdpSignalingChannel(
                     )
                     continue
                 }
+                OfferDeliveryObservation.signalEnvelopeDecoded(
+                    envelope = envelope,
+                    srcHost = source.host,
+                    srcPort = source.port,
+                    socketId = socketId
+                )
                 val packetLocalIp = localIp(socketRef.get())
                 TransportCapabilityTrace.datagramReceived(
                     signalType = envelope.type.name,
@@ -118,6 +131,26 @@ class UdpSignalingChannel(
                     networkId = TransportCapabilityTrace.currentNetworkId(),
                     bytes = packet.length
                 )
+                OfferDeliveryObservation.classifyInbound(
+                    envelope = envelope,
+                    srcHost = source.host,
+                    srcPort = source.port,
+                    socketId = socketId
+                )
+                if (envelope.type == SignalType.GROUP_JOIN) {
+                    val (lineage, attempt, gen) = OfferDeliveryObservation.correlationFromEnvelope(envelope)
+                    OfferDeliveryObservation.emit(
+                        stage = OfferDeliveryObservation.Stage.REMOTE_RECEIVE,
+                        remoteModuleId = envelope.from.moduleId.value,
+                        pathKind = OfferDeliveryObservation.pathKindOf(envelope),
+                        signalType = envelope.type.name,
+                        offerLineageId = lineage,
+                        sessionId = envelope.sessionId,
+                        restartAttemptId = attempt,
+                        transportGeneration = gen,
+                        detail = "src=${source.host}:${source.port} socketId=$socketId"
+                    )
+                }
                 LinkQualificationTrace.remoteReceiveObserved(
                     localModuleId = localModuleId,
                     remoteModuleId = envelope.from.moduleId.value,
@@ -196,6 +229,20 @@ class UdpSignalingChannel(
                 sessionId = envelope.sessionId.takeIf { it.isNotBlank() },
                 nonce = envelope.nonce.takeIf { it.isNotBlank() }
             )
+            if (envelope.type == SignalType.GROUP_JOIN) {
+                val (lineage, attempt, gen) = OfferDeliveryObservation.correlationFromEnvelope(envelope)
+                OfferDeliveryObservation.emit(
+                    stage = OfferDeliveryObservation.Stage.LOCAL_ACCEPT,
+                    remoteModuleId = envelope.to?.moduleId?.value ?: "UNKNOWN",
+                    pathKind = OfferDeliveryObservation.pathKindOf(envelope),
+                    signalType = envelope.type.name,
+                    offerLineageId = lineage,
+                    sessionId = envelope.sessionId,
+                    restartAttemptId = attempt,
+                    transportGeneration = gen,
+                    detail = "dst=$dstIp:${packet.port} socketId=$socketId"
+                )
+            }
             observePathAsymmetry(dstIp, packet.port, envelope.type.name)
             if (countsAsLocalOutbound) {
                 observeFirstOutboundAfterRebind(dstIp, packet.port)

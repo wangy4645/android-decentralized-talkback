@@ -24,6 +24,7 @@ import com.talkback.core.discovery.ModuleDiscoveryService
 import com.talkback.core.discovery.ModulePresence
 import com.talkback.core.discovery.StaticPeerEntry
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.atomic.AtomicLong
 import com.talkback.core.model.ConferenceJoinIntent
 import com.talkback.core.model.ConferenceRejoinPayload
 import com.talkback.core.model.EndpointAddress
@@ -38,6 +39,7 @@ import com.talkback.core.model.MembershipSnapshot
 import com.talkback.core.model.MeshSessionMode
 import com.talkback.core.model.HelloPayload
 import com.talkback.core.model.ModuleId
+import com.talkback.core.model.RecoveryReattachAckPayload
 import com.talkback.core.model.RecoveryReattachRequest
 import com.talkback.core.model.RemoteEndpointInfo
 import com.talkback.core.model.SignalEnvelope
@@ -149,6 +151,8 @@ import com.talkback.core.sync.StateSyncManager
 import com.talkback.core.util.ConferenceAuditTimelineLog
 import com.talkback.core.util.ConferenceRecoveryOwnershipLog
 import com.talkback.core.util.MediaRecoveryCausalTrace
+import com.talkback.core.util.OfferDeliveryObservation
+import com.talkback.core.util.RecoveryDeliveryFact
 import com.talkback.core.util.FloorTrace
 import com.talkback.core.util.GroupTransitionReadinessLog
 import com.talkback.core.util.MeetingRecoveryLog
@@ -255,7 +259,13 @@ data class TalkbackCoordinatorConfig(
     /** Minimum gap between PERIODIC_BUILDING snapshots per session. */
     val periodicBuildingWindowMs: Long = 30_000L,
     /** Throttle ICE_STATE_CHANGED topology snapshots per peer. */
-    val iceTopologySnapshotThrottleMs: Long = 2_000L
+    val iceTopologySnapshotThrottleMs: Long = 2_000L,
+    /** ADR-0035 PR2: bounded recovery-offer delivery attempts per offerLineageId. */
+    val maxDeliveryAttempts: Int = 3,
+    /** ADR-0035 PR2: delivery retry timer backstop interval. */
+    val deliveryRetryIntervalMs: Long = 3_000L,
+    /** ADR-0035 PR2: minimum gap between delivery dispatches on the same lineage. */
+    val deliveryRetryMinGapMs: Long = 500L
 )
 
 private data class ReDialRecord(
@@ -333,6 +343,15 @@ class TalkbackCoordinator(
      * Truth remains [computeIceRestartGateProbe]; this is transition memory only.
      */
     private val negotiationCapabilityObservation = NegotiationCapabilityObservation()
+    /** Per-device monotonic offer id for RECOVERY_OFFER_* correlation (observation only). */
+    private val offerLineageSeq = AtomicLong(0L)
+    private data class PendingRecoveryDelivery(
+        val identity: RecoveryDeliveryFact.Identity,
+        val sessionId: String,
+        val exhausted: Boolean = false
+    )
+    /** ADR-0035 PR1: outbound recovery offer awaiting RECOVERY_REATTACH_ACK (observation only). */
+    private val pendingRecoveryDeliveryByLineage = ConcurrentHashMap<String, PendingRecoveryDelivery>()
     private val conferenceEdgeRecoveryController: ConferenceEdgeRecoveryController by lazy {
         ConferenceEdgeRecoveryController(
             localModuleId = localModuleId.value,
@@ -461,7 +480,33 @@ class TalkbackCoordinator(
                 }
             },
             attemptBudgetMs = config.edgeRecoveryAttemptBudgetMs,
-            observationWindowMs = config.edgeRecoveryObservationWindowMs
+            observationWindowMs = config.edgeRecoveryObservationWindowMs,
+            maxDeliveryAttempts = config.maxDeliveryAttempts,
+            deliveryRetryIntervalMs = config.deliveryRetryIntervalMs,
+            deliveryRetryMinGapMs = config.deliveryRetryMinGapMs,
+            onDispatchRecoveryOffer = { sessionId, remoteModuleId, offerLineageId, deliveryAttemptId ->
+                var ok = false
+                runOnCoordinatorSync {
+                    ok = dispatchRecoveryOffer(
+                        sessionId = sessionId,
+                        remoteModuleId = remoteModuleId,
+                        offerLineageId = offerLineageId,
+                        deliveryAttemptId = deliveryAttemptId
+                    )
+                }
+                ok
+            },
+            onRecoveryOfferDeliveryExhausted = { sessionId, remoteModuleId, offerLineageId ->
+                runOnCoordinatorSync {
+                    pendingRecoveryDeliveryByLineage.computeIfPresent(offerLineageId) { _, pending ->
+                        PendingRecoveryDelivery(
+                            identity = pending.identity,
+                            sessionId = pending.sessionId,
+                            exhausted = true
+                        )
+                    }
+                }
+            }
         )
     }
     private val groupMeshReconciler = GroupMeshReconciler()
@@ -3495,6 +3540,7 @@ class TalkbackCoordinator(
             SignalType.GROUP_LEAVE -> handleGroupLeave(signal)
             SignalType.GROUP_RESYNC_REQUEST -> handleGroupResyncRequest(signal, fromPeer)
             SignalType.CONFERENCE_REJOIN -> handleConferenceRejoin(signal, fromPeer)
+            SignalType.RECOVERY_REATTACH_ACK -> handleRecoveryReattachAck(signal, fromPeer)
             SignalType.WEBRTC_ICE -> handleIce(signal)
             SignalType.HEARTBEAT -> Unit
             SignalType.FLOOR_REQUEST -> {
@@ -4965,6 +5011,7 @@ class TalkbackCoordinator(
 
     private fun handleGroupJoin(signal: SignalEnvelope, fromPeer: PeerTarget) {
         val payload = GroupSessionPayload.decode(signal.payload)
+        payload?.let { observeRecoveryDeliveryIngress(signal, fromPeer, it) }
         val channelId = payload?.channelId
         val incomingType = payload?.sessionMode?.let(::sessionTypeFromMode)
         if (incomingType == SessionType.GROUP &&
@@ -4980,7 +5027,8 @@ class TalkbackCoordinator(
                 remoteEndpointId = signal.from.endpointId.value,
                 joinIntent = payload?.joinIntent?.name,
                 decision = MediaRecoveryCausalTrace.OfferIngressDecision.DROP_GROUP_BUSY,
-                detail = "channel=$channelId"
+                detail = "channel=$channelId",
+                payload = payload
             )
             signal.to?.let { callee ->
                 sendGroupBusyReject(
@@ -5005,7 +5053,8 @@ class TalkbackCoordinator(
                 remoteEndpointId = signal.from.endpointId.value,
                 joinIntent = payload?.joinIntent?.name,
                 decision = MediaRecoveryCausalTrace.OfferIngressDecision.QUEUED_NO_SESSION,
-                detail = "pendingGroupJoins"
+                detail = "pendingGroupJoins",
+                payload = payload
             )
             return
         }
@@ -5013,6 +5062,102 @@ class TalkbackCoordinator(
     }
 
     /** 4.3-D-1: observation only — never gates accept/drop. */
+    private fun observeRecoveryDeliveryIngress(
+        signal: SignalEnvelope,
+        fromPeer: PeerTarget,
+        payload: GroupSessionPayload
+    ) {
+        if (payload.joinIntent != ConferenceJoinIntent.RECOVERY_REATTACH) return
+        val lineageId = payload.offerLineageId?.takeIf { it.isNotBlank() } ?: return
+        val senderId = signal.from.moduleId.value
+        val deliveryAttemptId = payload.deliveryAttemptId.coerceAtLeast(1L)
+        val identity = RecoveryDeliveryFact.Identity(
+            offerLineageId = lineageId,
+            recoveryAttemptId = payload.restartAttemptId ?: 0L,
+            obligationGeneration = payload.obligationGeneration ?: 0L,
+            deliveryAttemptId = deliveryAttemptId,
+            from = senderId,
+            to = localModuleId.value
+        )
+        val verdict = conferenceEdgeRecoveryController.evaluateInboundReattachLineage(
+            sessionId = signal.sessionId,
+            remoteModuleId = senderId,
+            senderAttemptId = payload.restartAttemptId ?: 0L,
+            senderObligationGeneration = payload.obligationGeneration ?: 0L
+        )
+        if (verdict != InboundReattachLineageVerdict.ACCEPT) {
+            log(
+                "RECOVERY_DELIVERY_ACK_SKIPPED offerLineageId=$lineageId from=$senderId " +
+                    "reason=$verdict deliveryAttemptId=$deliveryAttemptId"
+            )
+            return
+        }
+        RecoveryDeliveryFact.reattachReceived(identity, signal.sessionId)
+        val callee = signal.to ?: return
+        val ackPayload = RecoveryReattachAckPayload(
+            offerLineageId = lineageId,
+            recoveryAttemptId = identity.recoveryAttemptId,
+            obligationGeneration = identity.obligationGeneration,
+            deliveryAttemptId = deliveryAttemptId
+        ).encode()
+        val envelope = buildSignedEnvelope(
+            SignalType.RECOVERY_REATTACH_ACK,
+            callee,
+            signal.from,
+            signal.sessionId,
+            ackPayload
+        )
+        if (sendSignalHandoff(fromPeer, envelope)) {
+            RecoveryDeliveryFact.ackSent(identity, signal.sessionId)
+        }
+    }
+
+    private fun handleRecoveryReattachAck(signal: SignalEnvelope, fromPeer: PeerTarget) {
+        rememberSignalPeer(signal.from.moduleId.value, fromPeer)
+        val ack = RecoveryReattachAckPayload.decode(signal.payload) ?: return
+        val pending = pendingRecoveryDeliveryByLineage[ack.offerLineageId]
+        val exhausted = pending?.exhausted == true ||
+            conferenceEdgeRecoveryController.isRecoveryOfferDeliveryExhausted(
+                signal.sessionId,
+                signal.from.moduleId.value
+            )
+        val ackIdentity = RecoveryDeliveryFact.Identity(
+            offerLineageId = ack.offerLineageId,
+            recoveryAttemptId = ack.recoveryAttemptId,
+            obligationGeneration = ack.obligationGeneration,
+            deliveryAttemptId = ack.deliveryAttemptId,
+            from = signal.from.moduleId.value,
+            to = localModuleId.value
+        )
+        val accepted = pending != null &&
+            !exhausted &&
+            RecoveryDeliveryFact.matchesAck(pending.identity, ack.toAckFields())
+        RecoveryDeliveryFact.ackReceived(
+            identity = ackIdentity,
+            sessionId = signal.sessionId,
+            accepted = accepted,
+            detail = when {
+                exhausted -> "delivery_exhausted"
+                pending == null -> "no_pending_or_lineage_mismatch"
+                !accepted -> "no_pending_or_lineage_mismatch"
+                else -> null
+            }
+        )
+        if (accepted) {
+            RecoveryDeliveryFact.emit(
+                RecoveryDeliveryFact.Phase.DELIVERY_CONFIRMED,
+                pending!!.identity,
+                pending.sessionId
+            )
+            pendingRecoveryDeliveryByLineage.remove(ack.offerLineageId)
+            conferenceEdgeRecoveryController.onRecoveryOfferDeliveryConfirmed(
+                sessionId = pending.sessionId,
+                remoteModuleId = ackIdentity.from,
+                offerLineageId = ack.offerLineageId
+            )
+        }
+    }
+
     private fun observeRecoveryOfferIngress(
         sessionId: String,
         remoteModuleId: String,
@@ -5021,7 +5166,8 @@ class TalkbackCoordinator(
         decision: MediaRecoveryCausalTrace.OfferIngressDecision,
         localIceState: String? = null,
         detail: String? = null,
-        session: TalkbackSession? = null
+        session: TalkbackSession? = null,
+        payload: GroupSessionPayload? = null
     ) {
         val conf = session ?: sessions[sessionId]
         val lineage = conf?.takeIf { it.type == SessionType.CONFERENCE }?.let {
@@ -5044,6 +5190,38 @@ class TalkbackCoordinator(
                 iceRestart = joinIntent == ConferenceJoinIntent.RECOVERY_REATTACH.name
             )
         }
+        val pathKind = when (joinIntent) {
+            ConferenceJoinIntent.RECOVERY_REATTACH.name ->
+                OfferDeliveryObservation.PathKind.RECOVERY_REATTACH
+            null -> OfferDeliveryObservation.PathKind.OTHER
+            else -> OfferDeliveryObservation.PathKind.GROUP_MESH
+        }
+        if (pathKind == OfferDeliveryObservation.PathKind.RECOVERY_REATTACH) {
+            OfferDeliveryObservation.emit(
+                stage = OfferDeliveryObservation.Stage.RECOVERY_HANDLER_ENTER,
+                remoteModuleId = remoteModuleId,
+                offerLineageId = payload?.offerLineageId,
+                sessionId = sessionId,
+                restartAttemptId = payload?.restartAttemptId,
+                transportGeneration = payload?.transportGeneration,
+                pathKind = pathKind,
+                signalType = SignalType.GROUP_JOIN.name,
+                joinIntent = joinIntent
+            )
+        }
+        OfferDeliveryObservation.emit(
+            stage = OfferDeliveryObservation.Stage.HANDLER_ACCEPT,
+            remoteModuleId = remoteModuleId,
+            offerLineageId = payload?.offerLineageId,
+            sessionId = sessionId,
+            restartAttemptId = payload?.restartAttemptId,
+            transportGeneration = payload?.transportGeneration,
+            decision = decision.name,
+            detail = detail,
+            pathKind = pathKind,
+            signalType = SignalType.GROUP_JOIN.name,
+            joinIntent = joinIntent
+        )
         MediaRecoveryCausalTrace.recoveryOfferReceived(
             ctx = ctx,
             decision = decision,
@@ -5051,7 +5229,10 @@ class TalkbackCoordinator(
             localIceState = localIceState,
             localAttemptId = lineage?.attemptId,
             localObligationGen = lineage?.obligationGeneration,
-            detail = detail
+            detail = detail,
+            offerLineageId = payload?.offerLineageId,
+            offerRestartAttemptId = payload?.restartAttemptId,
+            offerTransportGeneration = payload?.transportGeneration
         )
     }
 
@@ -5062,18 +5243,20 @@ class TalkbackCoordinator(
     ) {
         val caller = signal.from
         val callee = signal.to
+        val earlyPayload = GroupSessionPayload.decode(signal.payload)
         if (callee == null) {
             observeRecoveryOfferIngress(
                 sessionId = signal.sessionId,
                 remoteModuleId = caller.moduleId.value,
                 remoteEndpointId = caller.endpointId.value,
-                joinIntent = GroupSessionPayload.decode(signal.payload)?.joinIntent?.name,
+                joinIntent = earlyPayload?.joinIntent?.name,
                 decision = MediaRecoveryCausalTrace.OfferIngressDecision.DROP_NO_CALLEE,
-                session = session
+                session = session,
+                payload = earlyPayload
             )
             return
         }
-        val payload = GroupSessionPayload.decode(signal.payload)
+        val payload = earlyPayload
         if (payload == null) {
             observeRecoveryOfferIngress(
                 sessionId = signal.sessionId,
@@ -5112,7 +5295,8 @@ class TalkbackCoordinator(
                         "signalingState=${snap?.signalingState ?: "UNKNOWN"} " +
                         "localDesc=${snap?.localDescriptionType ?: "NONE"} " +
                         "remoteDesc=${snap?.remoteDescriptionType ?: "NONE"}",
-                    session = session
+                    session = session,
+                    payload = payload
                 )
                 return
             }
@@ -5129,7 +5313,8 @@ class TalkbackCoordinator(
                     decision = MediaRecoveryCausalTrace.OfferIngressDecision.DROP_ICE_RESTART_THROTTLED,
                     localIceState = ice,
                     detail = "channel=$channelId",
-                    session = session
+                    session = session,
+                    payload = payload
                 )
                 return
             }
@@ -5154,7 +5339,8 @@ class TalkbackCoordinator(
                 joinIntent = payload.joinIntent.name,
                 decision = MediaRecoveryCausalTrace.OfferIngressDecision.ACCEPT_ICE_RESTART,
                 localIceState = ice,
-                session = session
+                session = session,
+                payload = payload
             )
             val answer = engine.applyRemoteOffer(payload.sdp, politeForMeshPair(peerId))
             drainPendingIce(session.id, peerId, engine)
@@ -5210,7 +5396,8 @@ class TalkbackCoordinator(
             remoteEndpointId = caller.endpointId.value,
             joinIntent = payload.joinIntent.name,
             decision = MediaRecoveryCausalTrace.OfferIngressDecision.ACCEPT_FIRST_MESH,
-            session = session
+            session = session,
+            payload = payload
         )
         val answer = engine.applyRemoteOffer(payload.sdp, politeForMeshPair(caller.moduleId.value))
         drainPendingIce(session.id, caller.moduleId.value, engine)
@@ -8820,11 +9007,33 @@ class TalkbackCoordinator(
         attemptConferencePeerOffer(session, remoteModuleId, remote, iceRestart = false)
     }
 
+    private fun dispatchRecoveryOffer(
+        sessionId: String,
+        remoteModuleId: String,
+        offerLineageId: String,
+        deliveryAttemptId: Long
+    ): Boolean {
+        val session = sessions[sessionId] ?: return false
+        if (session.type != SessionType.CONFERENCE || !session.accepted) return false
+        val remote = meshRoster(session).firstOrNull { it.moduleId.value == remoteModuleId }
+            ?: resolveConferenceHostEndpoint(session, remoteModuleId)
+        return attemptConferencePeerOffer(
+            session = session,
+            remoteModuleId = remoteModuleId,
+            remote = remote,
+            iceRestart = true,
+            fixedOfferLineageId = offerLineageId,
+            fixedDeliveryAttemptId = deliveryAttemptId
+        )
+    }
+
     private fun attemptConferencePeerOffer(
         session: TalkbackSession,
         remoteModuleId: String,
         remote: EndpointAddress,
-        iceRestart: Boolean
+        iceRestart: Boolean,
+        fixedOfferLineageId: String? = null,
+        fixedDeliveryAttemptId: Long? = null
     ): Boolean {
         if (!config.iceReconnectEnabled) return false
         val peer = session.remotePeersByModule[remoteModuleId]
@@ -8889,15 +9098,61 @@ class TalkbackCoordinator(
         } else {
             ConferenceJoinIntent.NORMAL_JOIN
         }
+        val offerLineageId = fixedOfferLineageId ?: "L${offerLineageSeq.incrementAndGet()}"
+        val deliveryAttemptId = fixedDeliveryAttemptId ?: 1L
+        val isDeliveryRetry = fixedOfferLineageId != null
+        val recoveryDeliveryIdentity = if (joinIntent == ConferenceJoinIntent.RECOVERY_REATTACH) {
+            RecoveryDeliveryFact.Identity(
+                offerLineageId = offerLineageId,
+                recoveryAttemptId = traceCtx.recoveryAttemptId ?: 0L,
+                obligationGeneration = traceCtx.obligationGeneration ?: 0L,
+                deliveryAttemptId = deliveryAttemptId,
+                from = session.local.moduleId.value,
+                to = remoteModuleId
+            )
+        } else {
+            null
+        }
+        recoveryDeliveryIdentity?.let {
+            if (!isDeliveryRetry) {
+                RecoveryDeliveryFact.emit(RecoveryDeliveryFact.Phase.REQUESTED, it, session.id)
+                pendingRecoveryDeliveryByLineage[offerLineageId] =
+                    PendingRecoveryDelivery(it, session.id)
+            }
+        }
+        val offerPayload = groupPayloadBase(
+            session,
+            joinIntent = joinIntent
+        ).copy(
+            sdp = offer,
+            offerLineageId = offerLineageId,
+            restartAttemptId = traceCtx.recoveryAttemptId,
+            transportGeneration = traceCtx.transportGeneration,
+            obligationGeneration = traceCtx.obligationGeneration,
+            deliveryAttemptId = deliveryAttemptId
+        )
+        OfferDeliveryObservation.emit(
+            stage = OfferDeliveryObservation.Stage.SEND_REQUEST,
+            remoteModuleId = remoteModuleId,
+            offerLineageId = offerLineageId,
+            sessionId = session.id,
+            restartAttemptId = traceCtx.recoveryAttemptId,
+            transportGeneration = traceCtx.transportGeneration,
+            pathKind = if (joinIntent == ConferenceJoinIntent.RECOVERY_REATTACH) {
+                OfferDeliveryObservation.PathKind.RECOVERY_REATTACH
+            } else {
+                OfferDeliveryObservation.PathKind.GROUP_MESH
+            },
+            signalType = SignalType.GROUP_JOIN.name,
+            joinIntent = joinIntent.name,
+            detail = "joinIntent=${joinIntent.name}"
+        )
         val envelope = buildSignedEnvelope(
             SignalType.GROUP_JOIN,
             session.local,
             remote,
             session.id,
-            groupPayloadBase(
-                session,
-                joinIntent = joinIntent
-            ).copy(sdp = offer).encode()
+            offerPayload.encode()
         )
         val transportOutcome = runCatching {
             signalingChannel.send(peer, envelope)
@@ -8910,11 +9165,34 @@ class TalkbackCoordinator(
             ctx = traceCtx,
             joinIntent = joinIntent.name,
             transportOutcome = transportOutcome,
-            signalingEpoch = session.rosterEpoch
+            signalingEpoch = session.rosterEpoch,
+            offerLineageId = offerLineageId
         )
+        recoveryDeliveryIdentity?.let { identity ->
+            if (transportOutcome == "SENT") {
+                RecoveryDeliveryFact.emit(RecoveryDeliveryFact.Phase.LOCAL_ACCEPTED, identity, session.id)
+                RecoveryDeliveryFact.emit(
+                    RecoveryDeliveryFact.Phase.DELIVERY_PENDING,
+                    identity,
+                    session.id
+                )
+                pendingRecoveryDeliveryByLineage[offerLineageId] =
+                    PendingRecoveryDelivery(identity, session.id)
+                conferenceEdgeRecoveryController.onRecoveryOfferDeliveryPending(
+                    sessionId = session.id,
+                    remoteModuleId = remoteModuleId,
+                    identity = identity
+                )
+            } else if (!isDeliveryRetry) {
+                pendingRecoveryDeliveryByLineage.remove(offerLineageId)
+            }
+        }
         log(
             "[${session.traceId}] Conference ${if (iceRestart) "ICE restart" else "offer"} sent -> $remoteModuleId"
         )
+        if (isDeliveryRetry) {
+            return transportOutcome == "SENT"
+        }
         // Preserve pre-4.3-D-1 contract: emission attempt always reports dispatched=true;
         // transportOutcome is observation-only.
         return true

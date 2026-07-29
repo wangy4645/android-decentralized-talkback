@@ -62,11 +62,17 @@ object MediaRecoveryCausalTrace {
         sb.append(" scope=").append(ctx.scope.name)
         sb.append(" remote=").append(ctx.remoteModuleId)
         ctx.remoteEndpointId?.let { sb.append(" remoteEndpoint=").append(it) }
-        ctx.recoveryAttemptId?.let { sb.append(" attempt=").append(it) }
+        ctx.recoveryAttemptId?.let {
+            sb.append(" attempt=").append(it)
+            sb.append(" restartAttemptId=").append(it)
+        }
         ctx.obligationGeneration?.let { sb.append(" obligationGen=").append(it) }
         ctx.conferenceGeneration?.let { sb.append(" conferenceGeneration=").append(it) }
         ctx.pcGeneration?.let { sb.append(" pcGeneration=").append(it) }
-        ctx.transportGeneration?.let { sb.append(" transportGeneration=").append(it) }
+        ctx.transportGeneration?.let {
+            sb.append(" transportGeneration=").append(it)
+            sb.append(" gen=").append(it)
+        }
         if (ctx.iceRestart) {
             sb.append(" iceRestart=true")
         }
@@ -119,12 +125,14 @@ object MediaRecoveryCausalTrace {
         ctx: Context,
         joinIntent: String,
         transportOutcome: String,
-        signalingEpoch: Long? = null
+        signalingEpoch: Long? = null,
+        offerLineageId: String? = null
     ) {
         val sb = StringBuilder(formatContext("RECOVERY_OFFER_SENT", ctx))
         sb.append(" joinIntent=").append(joinIntent)
         sb.append(" transportOutcome=").append(transportOutcome)
         signalingEpoch?.let { sb.append(" signalingEpoch=").append(it) }
+        offerLineageId?.let { sb.append(" offerLineageId=").append(it) }
         log(sb.toString())
     }
 
@@ -144,7 +152,12 @@ object MediaRecoveryCausalTrace {
         localIceState: String? = null,
         localAttemptId: Long? = null,
         localObligationGen: Long? = null,
-        detail: String? = null
+        detail: String? = null,
+        offerLineageId: String? = null,
+        /** Sender-stamped restart attempt from GROUP_JOIN payload (preferred over local lineage). */
+        offerRestartAttemptId: Long? = null,
+        /** Sender-stamped transport generation from GROUP_JOIN payload. */
+        offerTransportGeneration: Long? = null
     ) {
         val sb = StringBuilder(formatContext("RECOVERY_OFFER_RECEIVED", ctx))
         sb.append(" decision=").append(decision.name)
@@ -152,6 +165,20 @@ object MediaRecoveryCausalTrace {
         localIceState?.let { sb.append(" localIce=").append(it) }
         localAttemptId?.let { sb.append(" localAttempt=").append(it) }
         localObligationGen?.let { sb.append(" localObligationGen=").append(it) }
+        offerLineageId?.let { sb.append(" offerLineageId=").append(it) }
+        offerRestartAttemptId?.let {
+            // Prefer offer stamp for cross-device join; still keep formatContext local attempt if any.
+            sb.append(" offerRestartAttemptId=").append(it)
+            if (ctx.recoveryAttemptId == null) {
+                sb.append(" restartAttemptId=").append(it)
+            }
+        }
+        offerTransportGeneration?.let {
+            sb.append(" offerTransportGeneration=").append(it)
+            if (ctx.transportGeneration == null) {
+                sb.append(" gen=").append(it)
+            }
+        }
         detail?.let { sb.append(" detail=").append(it) }
         log(sb.toString())
     }

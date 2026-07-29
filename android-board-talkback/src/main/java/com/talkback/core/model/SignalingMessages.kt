@@ -16,6 +16,8 @@ enum class SignalType {
     GROUP_RESYNC_REQUEST,
     /** Participant requests silent rejoin into an existing host conference (no new invite UX). */
     CONFERENCE_REJOIN,
+    /** ADR-0035: recovery offer ingress ACK (not SDP answer). */
+    RECOVERY_REATTACH_ACK,
     FLOOR_REQUEST,
     FLOOR_REQUEST_CANCEL,
     FLOOR_GRANTED,
