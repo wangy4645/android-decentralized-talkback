@@ -3935,11 +3935,11 @@ old evidence   ≠ fresh (post-dispatch) evidence
 2. **Freshness** — every `mediaRestoredObservedAt` / `ICE_CONNECTED` used for close answers: after the current recovery action (`restartDispatchAt`)?
 3. **Capability separation** — Recovery MUST NOT produce `NEGOTIATION_CAN_EXECUTE`; only consume Coordinator negotiation-seam rising-edge.
 
-**Next workstream:** `QualificationRepairCoordinator` / signaling readiness only — must not mutate frozen B3 capability or completion-authority contracts.
+**Next workstream (historical):** `QualificationRepairCoordinator` / signaling readiness — **QUALIFICATION_SIG_V1 CLOSED 2026-07-29**; must not mutate frozen B3 capability or completion-authority contracts.
 
-### Qualification / Signaling Readiness — workstream open (2026-07-28)
+### Qualification / Signaling Readiness — **QUALIFICATION_SIG_V1 CLOSED** (2026-07-29)
 
-**Status:** Grill **ACCEPTED 2026-07-28** (Q1–Q8 + INV-SIG-001..020). Next: implementation under three rails below. B3 / Completion Authority remain **CLOSED** — do not reopen.
+**Status:** **CLOSED 2026-07-29.** Grill **ACCEPTED 2026-07-28** (Q1–Q8 + INV-SIG-001..020); implementation + soak closed below. B3 / Completion Authority remain **CLOSED** — do not reopen. Do not expand this contract with further soak unless a new admission seam is introduced.
 
 ```text
 CLOSED                         NEW
@@ -4196,6 +4196,31 @@ INV-SIG-001..020
 3. `PEER_EDGE_SIGNALING_READY` MUST NOT enter B3 completion / obligation / `NEGOTIATION_CAN_EXECUTE`
 
 **Not in this grill:** concrete class APIs, debounce timings, UT list — implementation design.
+
+#### QUALIFICATION_SIG_V1 soak closure — **CLOSED 2026-07-29**
+
+**Contract freeze:**
+
+> Peer edge signaling readiness is an authenticated, generation-scoped, freshness-bounded projection used **only** for peer-scoped control signaling admission.
+
+> Peer stale MUST produce a peer-scoped repair hint (PRR) and MUST NOT advance the global transport / signaling epoch.
+
+**Soak evidence (do not reopen for more cases):**
+
+| Layer | Result | Evidence |
+|-------|--------|----------|
+| Projection | PASS | `PEER_EDGE_NOT_READY` / `PEER_EDGE_READY` / `PEER_EDGE_INVALIDATED` (`obs-sig-peer-edge-trace-20260729-091712`) |
+| Peer stale → PRR | PASS | `PRR_EPISODE reason=peer_edge_stale:M03` with `transportEpoch` unchanged |
+| Hard admission | PASS | `PEER_EDGE_CONTROL_BLOCKED type=GROUP_INVITE peer=M03 reason=FRESHNESS_EXPIRED` before transport (`obs-sig-hard-gate-20260729-095157`); no invite datagram to that peer |
+| B3 isolation | PASS | no `markRecovered` / obligation pollution from peer-edge path |
+
+**Companion fix (not part of INV-SIG contract):** unicast `SINGLE_CALL` Directory capability must be probed **live** on each `canStart` — a construction-time `CapabilitySnapshot` freezes `DIRECTORY_NOT_READY` after late discovery (`ChannelGovernanceRuntime`). Soak after fix: `GATE_DECISION op=SINGLE_CALL result=ALLOW`.
+
+```text
+B3 Recovery Completion        CLOSED
+Qualification Signaling V1    CLOSED
+Hard Admission                PASS
+```
 
 ### Design freeze confirmation — **ACCEPTED 2026-07-28**
 

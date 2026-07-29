@@ -197,7 +197,7 @@ _Avoid_: ICE CONNECTED == RECOVERED, 把 media 恢复当 control-plane 完成, �
 _Avoid_: SIGNALING_READY（全局）, 用 BIDIRECTIONAL_READY 推断所有 peer 可达
 
 **Peer Edge Signaling Ready**:
-针对单条 `(local, remoteModuleId)` edge 的**派生投影**（非通用 health gate）：公式见 Q5；仅 **Hard gate 新发往该 peer 的 control signaling**；**Ignore** ICE/media recovery dispatch、已有 RTP、membership/floor；UI 仅 Soft 诊断。PRR announce ≠ ready。见 ADR-0022 Q1–Q8 / INV-SIG-001..020。
+针对单条 `(local, remoteModuleId)` edge 的**派生投影**（非通用 health gate）：公式见 Q5；仅 **Hard gate 新发往该 peer 的 control signaling**；**Ignore** ICE/media recovery dispatch、已有 RTP、membership/floor；UI 仅 Soft 诊断。PRR announce ≠ ready。**QUALIFICATION_SIG_V1 CLOSED 2026-07-29**（投影 + peer-stale PRR 不 bump epoch + hard admission before send；见 ADR-0022）。
 _Avoid_: sticky ready bit, 当全局 health, 接入 B3/completion/obligation, peer stale → 全局 rebind, PeerEdgeSignalingReadiness 调用 repair, PRR/rebind 写 ready, false → 掐媒体/关义务
 
 **PeerInboundObserved**:
