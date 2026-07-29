@@ -2,22 +2,22 @@
 
 ## Status
 
-**Accepted** (design freeze 2026-07-29; implementation landed 2026-07-29) — `/grill-with-docs` **Q1–Q9 ACCEPTED**; **INV-PRES-001..009**. Reference: `UserVisibleConnectivityProjection` + meeting/member UI consumers. **G-PRES-A PASS** (2026-07-29).
+**Accepted** (design freeze 2026-07-29; implementation landed 2026-07-29) �?`/grill-with-docs` **Q1–Q9 ACCEPTED**; **INV-PRES-001..009**. Reference: `UserVisibleConnectivityProjection` + meeting/member UI consumers. **G-PRES-A PASS** (2026-07-29).
 
-Complements **ADR-0022** (recovery / completion ownership — CLOSED for this workstream), **ADR-0028** / **ADR-0030** (local presence ownership), **QUALIFICATION_SIG_V1** (peer readiness — CLOSED).
+Complements **ADR-0022** (recovery / completion ownership �?CLOSED for this workstream), **ADR-0028** / **ADR-0030** (local presence ownership), **QUALIFICATION_SIG_V1** (peer readiness �?CLOSED).
 
 **Partially supersedes [ADR-0030](./0030-presence-projection-contract.md) R30-P-3 Rule 2 and R30-P-5 Level 2** for **user-visible connectivity copy** (pill / member connectivity hint / avatar connectivity semantics):
 
 ```text
 ADR-0030 Rule 2 (withdrawn for connectivity UX):
-  recovering(P) || mediaUnavailable(P)  →  Presence RECONNECTING
+  recovering(P) || mediaUnavailable(P)  �? Presence RECONNECTING
   (even when receivePathLive)
 
 ADR-0034 (normative for connectivity UX):
-  MEDIA_OK + control sync incomplete  →  SYNCING
-  MEDIA_OK + control degraded         →  DEGRADED
-  MEDIA_UNAVAILABLE + repair active   →  RECONNECTING
-  recovering / obligation alone       →  MUST NOT drive RECONNECTING
+  MEDIA_OK + control sync incomplete  �? SYNCING
+  MEDIA_OK + control degraded         �? DEGRADED
+  MEDIA_UNAVAILABLE + repair active   �? RECONNECTING
+  recovering / obligation alone       �? MUST NOT drive RECONNECTING
 ```
 
 **Remain in force from ADR-0030 / 0028:** sole-owner discipline for per-peer local facts, purity (no timers inside projection), aggregate sets must not feed per-peer resolve, P2 asymmetric-mesh non-goal, membership-gated LEFT.
@@ -34,9 +34,9 @@ Root cause class:
 
 ```text
 Recovery lifecycle fact
-        ↓
+        �?
 sessionEdgeRecovering / recoveringPeers
-        ↓
+        �?
 UI = reconnecting
 ```
 
@@ -49,9 +49,9 @@ This ADR freezes a dedicated **User Visible Connectivity Projection**:
 Parallel discipline with CLOSED contracts:
 
 ```text
-B3:   observation  ≠  completion
-SIG:  readiness    ≠  repair
-PRES: visibility   ≠  admission / authority
+B3:   observation  �? completion
+SIG:  readiness    �? repair
+PRES: visibility   �? admission / authority
 ```
 
 ---
@@ -105,7 +105,7 @@ KEEP:   all domain owners / admission paths
 ## 2. Ownership Boundary
 
 ```text
-Domain Owners (media, peer readiness, negotiation coarse, …)
+Domain Owners (media, peer readiness, negotiation coarse, �?
         |
         | facts only (read)
         v
@@ -118,7 +118,7 @@ UI (pill / avatar connectivity / member hint)
 ### Projection MAY
 
 - Read media usability facts
-- Read coarse control-sync facts (including coarse peer readiness / negotiation sync phase — **not** protocol reason strings)
+- Read coarse control-sync facts (including coarse peer readiness / negotiation sync phase �?**not** protocol reason strings)
 - Output `PeerConnectivityState` and meeting summary
 
 ### Projection MUST NOT
@@ -129,7 +129,7 @@ UI (pill / avatar connectivity / member hint)
 - Grant or deny protocol admission
 - Own timers, expiration, retries, or terminal transitions
 
-Normative invariants: **INV-PRES-001..009** (see §9). Glossary: `CONTEXT.md` — **User Visible Connectivity Projection**.
+Normative invariants: **INV-PRES-001..009** (see §9). Glossary: `CONTEXT.md` �?**User Visible Connectivity Projection**.
 
 ---
 
@@ -161,20 +161,20 @@ Semantics (user language):
 | `DEGRADED` | Media usable; quality / integrity below normal (not "in progress") |
 | `RECONNECTING` | Media not usable; repair / recovery active |
 
-`SYNCING ≠ DEGRADED` (**INV-PRES-007**).
+`SYNCING �?DEGRADED` (**INV-PRES-007**).
 
 ---
 
-## 4. Dual Axis Mapping (Q6=F-4; hard veto ≡ F-1)
+## 4. Dual Axis Mapping (Q6=F-4; hard veto �?F-1)
 
-### Axis A — Media usability
+### Axis A �?Media usability
 
 ```text
 MEDIA_OK
 MEDIA_UNAVAILABLE
 ```
 
-### Axis B — Control sync state
+### Axis B �?Control sync state
 
 ```text
 STABLE
@@ -200,11 +200,11 @@ MEDIA_OK MUST NOT map to RECONNECTING
 ### Forbidden direct mappings (smoke class)
 
 ```text
-obligation OPEN              → RECONNECTING     ❌
-sessionEdgeRecovering=true   → RECONNECTING     ❌
+obligation OPEN              �?RECONNECTING     �?
+sessionEdgeRecovering=true   �?RECONNECTING     �?
 HAVE_LOCAL_OFFER /
 SIGNALING_NOT_STABLE /
-NEGOTIATION_DEFERRED         → RECONNECTING     ❌
+NEGOTIATION_DEFERRED         �?RECONNECTING     �?
 ```
 
 Correct smoke mapping:
@@ -215,7 +215,7 @@ negotiation deferred
 obligation OPEN
 sessionEdgeRecovering = true
 
-→ MEDIA_OK + CONTROL SYNCING → SYNCING
+�?MEDIA_OK + CONTROL SYNCING �?SYNCING
 ```
 
 Lifecycle signals remain **diagnostic only**; they may inform coarse `CONTROL_SYNC_STATE` derivation at the fact-adapter boundary, but **MUST NOT** be the UI state themselves (**INV-PRES-006**).
@@ -266,7 +266,7 @@ RECONNECTING > DEGRADED > SYNCING > CONNECTED
 Display:   UserVisibleConnectivityProjection
 Action:    Domain Admission Authority
            (ChannelGovernance / Directory / Membership /
-            Peer Control Admission / Qualification Gate / …)
+            Peer Control Admission / Qualification Gate / �?
 ```
 
 ### Allowed inconsistencies (healthy)
@@ -278,7 +278,7 @@ CALL_INVITE admission = ALLOW
 
 ```text
 pill = CONNECTED
-GROUP_INVITE admission = BLOCK (peer_edge_not_ready / membership / …)
+GROUP_INVITE admission = BLOCK (peer_edge_not_ready / membership / �?
 ```
 
 ```text
@@ -289,9 +289,9 @@ admission = ALLOW
 ### Forbidden
 
 ```text
-projection state → hard admission decision
-SYNCING → disable call because projection says so
-CONNECTED → bypass domain admission
+projection state �?hard admission decision
+SYNCING �?disable call because projection says so
+CONNECTED �?bypass domain admission
 ```
 
 Soft UX hint (**C-4**) is allowed ("may be unavailable") and **MUST NOT** replace hard admission (**INV-PRES-009**).
@@ -317,7 +317,7 @@ Projection announces **what the user should see now**, never **when recovery com
 
 ## 8. Mandatory Regression
 
-### Case A — Post-merge smoke (primary)
+### Case A �?Post-merge smoke (primary)
 
 **Input:**
 
@@ -343,7 +343,7 @@ markRecovered path
 domain admission path
 ```
 
-### Case B — True media loss
+### Case B �?True media loss
 
 **Input:**
 
@@ -358,7 +358,7 @@ repair / recovery active
 UI = RECONNECTING
 ```
 
-### Case C — Admission isolation
+### Case C �?Admission isolation
 
 **Input:**
 
@@ -373,7 +373,7 @@ domain admission = BLOCK
 BLOCK remains (projection does not grant)
 ```
 
-### Case D — DEGRADED not folded into SYNCING
+### Case D �?DEGRADED not folded into SYNCING
 
 **Input:**
 
@@ -396,7 +396,7 @@ NOT RECONNECTING
 
 | ID | Statement |
 |----|-----------|
-| **INV-PRES-001** | User-visible connectivity **MUST NOT** be derived solely from a single lifecycle boolean (`sessionEdgeRecovering` / bare `recoveringPeers` → RECONNECTING). |
+| **INV-PRES-001** | User-visible connectivity **MUST NOT** be derived solely from a single lifecycle boolean (`sessionEdgeRecovering` / bare `recoveringPeers` �?RECONNECTING). |
 | **INV-PRES-002** | Projection **MUST NOT** expose internal protocol lifecycle / gate / defer **reasons** as user connectivity semantics. |
 | **INV-PRES-003** | Meeting summary **MUST** be a **non-escalating** aggregation of peer states. |
 | **INV-PRES-004** | Meeting summary **MAY** show `SYNCING`, but **MUST NOT** present it as reconnecting / unavailable / failure. |
@@ -412,15 +412,15 @@ NOT RECONNECTING
 
 | Q | Decision |
 |---|----------|
-| Q1 | **D** — independent User Visible Connectivity Projection |
-| Q2 | **P-2** — read coarse domain facts only; map; no mutate |
-| Q3 | **G-3** — peer-level truth; meeting = aggregate consumer |
-| Q4 | **S-2** — `SYNCING` may appear on pill without masquerading as RECONNECTING |
-| Q5 | **L-1** — projection owns no lifecycle / timers |
-| Q6 | **F-4** — dual axis (media × control); hard veto ≡ F-1 |
-| Q7 | **E-2** — V1 four states; `UNAVAILABLE` reserved |
-| Q8 | **A-1 + A-3** — fixed severity; equal severity may name/count |
-| Q9 | **C-2 + C-4** — display vs admission; soft hint only |
+| Q1 | **D** �?independent User Visible Connectivity Projection |
+| Q2 | **P-2** �?read coarse domain facts only; map; no mutate |
+| Q3 | **G-3** �?peer-level truth; meeting = aggregate consumer |
+| Q4 | **S-2** �?`SYNCING` may appear on pill without masquerading as RECONNECTING |
+| Q5 | **L-1** �?projection owns no lifecycle / timers |
+| Q6 | **F-4** �?dual axis (media × control); hard veto �?F-1 |
+| Q7 | **E-2** �?V1 four states; `UNAVAILABLE` reserved |
+| Q8 | **A-1 + A-3** �?fixed severity; equal severity may name/count |
+| Q9 | **C-2 + C-4** �?display vs admission; soft hint only |
 
 ---
 
@@ -428,18 +428,18 @@ NOT RECONNECTING
 
 | ADR | Role relative to 0034 |
 |-----|------------------------|
-| **0022** | Recovery / completion authority — **CLOSED**; facts may feed coarse control axis only |
-| **0028** | Sole presentation owner problem; purity — still in force |
-| **0030** | LocalReachability composition — **Rule 2 / Level 2 partially superseded** for connectivity UX |
-| **0025** | Conference presence aggregates — pill must not use `recoveringPeers` as connectivity truth |
-| **0032 / 0033** | Dispatch / completion reachability — untouched |
-| **QUALIFICATION_SIG_V1** | Peer readiness admission — untouched; may inform Control=`DEGRADED` coarse fact only |
+| **0022** | Recovery / completion authority �?**CLOSED**; facts may feed coarse control axis only |
+| **0028** | Sole presentation owner problem; purity �?still in force |
+| **0030** | LocalReachability composition �?**Rule 2 / Level 2 partially superseded** for connectivity UX |
+| **0025** | Conference presence aggregates �?pill must not use `recoveringPeers` as connectivity truth |
+| **0032 / 0033** | Dispatch / completion reachability �?untouched |
+| **QUALIFICATION_SIG_V1** | Peer readiness admission �?untouched; may inform Control=`DEGRADED` coarse fact only |
 
 ```text
 0022  Recovery obligation / edge facts / completion
 0030  Local presence synthesis (narrowed for connectivity UX)
-0034  User-visible connectivity (media × control) ← this ADR
-SIG   Peer readiness → admission (not repair, not UI reconnecting)
+0034  User-visible connectivity (media × control) �?this ADR
+SIG   Peer readiness �?admission (not repair, not UI reconnecting)
 ```
 
 Consumers of **connectivity copy** (meeting pill `connectingHint`, member "reconnecting/syncing/degraded" strings) **MUST** read ADR-0034 projection output, **not** `recoveringPeers` / `sessionEdgeRecovering` / ADR-0030 Rule 2 alone.
@@ -450,7 +450,7 @@ Consumers of **connectivity copy** (meeting pill `connectingHint`, member "recon
 
 ## 12. Consequences
 
-- **Positive:** Smoke class (media OK + control pending → false reconnecting) becomes illegal by contract; Completion Authority need not be weakened to clear UI.
+- **Positive:** Smoke class (media OK + control pending �?false reconnecting) becomes illegal by contract; Completion Authority need not be weakened to clear UI.
 - **Positive:** `SYNCING` / `DEGRADED` become first-class, preventing new collapses.
 - **Negative:** Temporary dual paths during migration until all UI consumers switch; review must reject reintroduction of lifecycle→pill shortcuts.
 - **Neutral:** Soft hint may diverge from admission; that divergence is intentional.
@@ -474,8 +474,8 @@ Consumers of **connectivity copy** (meeting pill `connectingHint`, member "recon
 
 | Gate | Criterion | Status |
 |------|-----------|--------|
-| **G-PRES-A** | media OK + control/recovery pending → pill `SYNCING`, not `RECONNECTING` | **PASS** `logs/obs-pres-uvcp-20260729-120549` (M02: `media=CONNECTED` + `sessionEdgeRecovering=true` → `connectingHint=M03 syncing...`) |
-| **G-PRES-E** | after control facts clear (`recovering=false` / obligation CLOSED), projection → `CONNECTED` (no UI timer) | **BLOCKED_BY_COMPLETION** (2026-07-29 soak: long SYNCING is accurate; not a PRES defect) |
+| **G-PRES-A** | media OK + control/recovery pending �?pill `SYNCING`, not `RECONNECTING` | **PASS** `logs/obs-pres-uvcp-20260729-120549` (M02: `media=CONNECTED` + `sessionEdgeRecovering=true` �?`connectingHint=M03 syncing...`) |
+| **G-PRES-E** | after control facts clear (`recovering=false` / obligation CLOSED), projection �?`CONNECTED` (no UI timer) | **BLOCKED_BY_COMPLETION** (2026-07-29 soak: long SYNCING is accurate; not a PRES defect) |
 
 ### Observation (archived)
 
@@ -486,7 +486,7 @@ is a supported steady intermediate state.
 
 Do **not** open a bug for long-lived `SYNCING` while `sessionEdgeRecovering` / obligation remains open.
 Do **not** add projection timeouts to force `CONNECTED` (violates INV-PRES-005 / Q5=L-1).
-If `SYNCING` persists after media restore, investigate negotiation/completion episode closure — not UI hiding.
+If `SYNCING` persists after media restore, investigate negotiation/completion episode closure �?not UI hiding.
 
 
 ### Architecture acceptance (PR #97)
@@ -506,7 +506,7 @@ Remaining risk class: **fact-chain completeness**, not semantic ownership error.
 G-PRES-E field goal (when observed): prove
 
 `	ext
-domain fact transition → projection recompute → visible state transition
+domain fact transition �?projection recompute �?visible state transition
 `
 
 not `SYNCING` auto-hide / timer / `RECOVERED` forced UI rewrite.
@@ -528,27 +528,27 @@ Status:       IMPLEMENTED
 Validation:   G-PRES-A PASS ; G-PRES-E BLOCKED_BY_COMPLETION
 Media fact:  PR #98 PASS (INV-PRES-006 input; nested-sync deadlock fix)
 Acceptance:   PASS WITH FIELD G-PRES-E OBSERVATION
-Risk class:   fact-chain completion validation — NOT semantic boundary risk
+Risk class:   fact-chain completion validation �?NOT semantic boundary risk
 `
 
 Forward-only actions:
 
 1. Natural soak for G-PRES-E evidence (no manufactured protocol path; no UI timeout).
 2. On anomaly, triage layer first:
-   - `SYNCING` persists → domain facts
-   - facts cleared but UI stuck → projection
-   - UI ok but action wrong → admission
+   - `SYNCING` persists �?domain facts
+   - facts cleared but UI stuck �?projection
+   - UI ok but action wrong �?admission
 
 G-PRES-E field criteria (final):
 
-1. Completion domain closes naturally: negotiation resolved → resolved evidence → `OBLIGATION_CLOSED(RECOVERED)` (not UI timer → CONNECTED).
-2. Projection inputs: `CONTROL_SYNCING` disappears (media stays CONNECTED; control → STABLE).
-3. UI follows passively: `M03 syncing...` → connected / no extra hint (either ok for pill design).
+1. Completion domain closes naturally: negotiation resolved �?resolved evidence �?`OBLIGATION_CLOSED(RECOVERED)` (not UI timer �?CONNECTED).
+2. Projection inputs: `CONTROL_SYNCING` disappears (media stays CONNECTED; control �?STABLE).
+3. UI follows passively: `M03 syncing...` �?connected / no extra hint (either ok for pill design).
 
-Forbidden reverse couplings remain frozen: UI state ↛ completion / qualification repair / admission.
+Forbidden reverse couplings remain frozen: UI state �?completion / qualification repair / admission.
 
 
-### Fork observation — G-PRES-E blocked by completion (2026-07-29)
+### Fork observation �?G-PRES-E blocked by completion (2026-07-29)
 
 **Archived after soak** `logs/obs-pres-mediafact-20260729-150053`.
 
@@ -558,7 +558,7 @@ Long-lived SYNCING is an accurate projection of unresolved
 control synchronization and is not a PRES defect.
 ```
 
-Field confirmation (local edge perspective — not global inconsistency):
+Field confirmation (local edge perspective �?not global inconsistency):
 
 ```text
 M01 view: M03 reconnecting   (media=RECONNECTING, unavailable=true, ice=CHECKING)
@@ -582,14 +582,14 @@ WAIT_FOR_NEGOTIATION_INTENT
 
 **UVCP / ADR-0034 semantic model:** CLOSED. Do not reopen PRES grill for long SYNCING.
 
-**Next workstream (SEPARATE):** Negotiation Deferred Drain Authority — ownership / wakeup / drain evidence only. Forbidden: UVCP mapping, SYNCING timeout, recovering display rewrite, peer readiness, B3 reopen.
+**Deferred Drain:** IMPLEMENTED - [ADR-0022 Appendix D](./0022-recovery-completion-ownership.md) (grill Q1-Q5 / INV-NEG-018..022; df476d9). Soak gold-chain field-gated. Forbidden still: UVCP mapping, SYNCING timeout, recovering display rewrite, peer readiness, B3 reopen.
 
 ## References
 
 - Grill: Presence Projection / Recovery UX Q1–Q9 (2026-07-29)
 - Smoke: `logs/obs-smoke-post-merge-20260729-104309`
-- `CONTEXT.md` — User Visible Connectivity Projection; INV-PRES-001..009
-- [ADR-0030](./0030-presence-projection-contract.md) — partially superseded Rule 2 / Level 2
+- `CONTEXT.md` �?User Visible Connectivity Projection; INV-PRES-001..009
+- [ADR-0030](./0030-presence-projection-contract.md) �?partially superseded Rule 2 / Level 2
 - [ADR-0028](./0028-participant-presence-ownership-local-reachability-projection.md)
 - [ADR-0022](./0022-recovery-completion-ownership.md)
 - [ADR-0025](./0025-conference-presence-plane-projection-contract.md)
