@@ -403,16 +403,40 @@ class TalkbackCoordinator(
                 }
                 probe
             },
-            onNegotiationGateDeferred = { sessionId, remoteModuleId ->
-                runOnCoordinatorSync {
-                    negotiationCapabilityObservation.establishDeferredBaseline(
+            onNegotiationGateDeferred = { sessionId, remoteModuleId, bindAdmissionSeq ->
+                fun admitBaselineAndRecompute() {
+                    val admissionSeq = negotiationCapabilityObservation.establishDeferredBaseline(
                         sessionId,
                         remoteModuleId
                     )
+                    // INV-NEG-019: stamp intent baseline before DEFER_ADMISSION recompute/drain.
+                    bindAdmissionSeq(admissionSeq)
                     log(
                         "NEGOTIATION_CAPABILITY_OBSERVATION session=$sessionId " +
-                            "remote=$remoteModuleId baseline=false reason=DEFER_ADMISSION"
+                            "remote=$remoteModuleId baseline=false reason=DEFER_ADMISSION " +
+                            "admissionSeq=$admissionSeq"
                     )
+                    // INV-NEG-020 / Q3: immediate recompute after DEFER_ADMISSION.
+                    val session = sessions[sessionId] ?: return
+                    recomputeNegotiationCapability(
+                        session = session,
+                        remoteModuleId = remoteModuleId,
+                        transition = "DEFER_ADMISSION"
+                    )
+                }
+                // runOnCoordinatorSync does not set onCoordinatorThread; rising-edge drain may
+                // re-enter probeIceRestartGate → nested sync. Mark thread for reentrancy.
+                if (onCoordinatorThread.get()) {
+                    admitBaselineAndRecompute()
+                } else {
+                    runOnCoordinatorSync {
+                        onCoordinatorThread.set(true)
+                        try {
+                            admitBaselineAndRecompute()
+                        } finally {
+                            onCoordinatorThread.set(false)
+                        }
+                    }
                 }
             },
             onRecoveryStateChanged = { sessionId ->
@@ -5246,9 +5270,16 @@ class TalkbackCoordinator(
                 localRole = localRole
             )
         } else {
+            val block = if (
+                snap.signalingState.equals("HAVE_LOCAL_OFFER", ignoreCase = true)
+            ) {
+                IceRestartGateBlockReason.OFFER_AWAITING_ANSWER
+            } else {
+                IceRestartGateBlockReason.SIGNALING_NOT_STABLE
+            }
             IceRestartGateProbe(
                 executable = false,
-                blockReason = IceRestartGateBlockReason.SIGNALING_NOT_STABLE,
+                blockReason = block,
                 signalingState = snap.signalingState,
                 localRole = localRole
             )
@@ -5276,6 +5307,7 @@ class TalkbackCoordinator(
                 "NEGOTIATION_CAPABILITY_REEVAL session=${session.id} remote=$remoteModuleId " +
                     "transition=$transition executable=${probe.executable} " +
                     "previous=${observed.previous ?: "NONE"} rising=false " +
+                    "observationSeq=${observed.observationSeq} " +
                     "signalingState=${probe.signalingState ?: "UNKNOWN"} " +
                     "block=${probe.blockReason ?: "NONE"}"
             )
@@ -5285,13 +5317,27 @@ class TalkbackCoordinator(
             session.id,
             remoteModuleId
         )
+        // INV-NEG-019: rising-edge after false baseline ⇒ baselineSatisfied for pending intent.
+        val baselineSatisfied = observed.previous == false
         log(
-            "NEGOTIATION_CAN_EXECUTE session=${session.id} remote=$remoteModuleId " +
+            "NEGOTIATION_CAPABILITY_RISING session=${session.id} remote=$remoteModuleId " +
                 "transition=$transition intentId=${pendingIntentId ?: "NONE"} " +
+                "observationSeq=${observed.observationSeq} baselineSatisfied=$baselineSatisfied " +
                 "signalingState=${probe.signalingState ?: "UNKNOWN"} " +
                 "localRole=${probe.localRole ?: "UNKNOWN"}"
         )
-        conferenceEdgeRecoveryController.drainPendingIceRestart(session.id, remoteModuleId)
+        log(
+            "NEGOTIATION_CAN_EXECUTE session=${session.id} remote=$remoteModuleId " +
+                "transition=$transition intentId=${pendingIntentId ?: "NONE"} " +
+                "observationSeq=${observed.observationSeq} baselineSatisfied=$baselineSatisfied " +
+                "signalingState=${probe.signalingState ?: "UNKNOWN"} " +
+                "localRole=${probe.localRole ?: "UNKNOWN"}"
+        )
+        conferenceEdgeRecoveryController.drainPendingIceRestart(
+            session.id,
+            remoteModuleId,
+            capabilityEventObservationSeq = observed.observationSeq
+        )
     }
 
     /**

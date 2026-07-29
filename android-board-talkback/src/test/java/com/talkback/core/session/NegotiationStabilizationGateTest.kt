@@ -63,8 +63,9 @@ class NegotiationStabilizationGateTest {
                 localRole = "ANSWERER"
             )
         },
-        onNegotiationGateDeferred = { sid, rid ->
+        onNegotiationGateDeferred = { sid, rid, bind ->
             deferredBaselines.add(sid to rid)
+            bind(1L)
         }
     )
 
