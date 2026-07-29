@@ -48,11 +48,16 @@ class ConferenceEdgeRecoveryController(
     private val probeIceRestartGate: (sessionId: String, remoteModuleId: String) -> IceRestartGateProbe =
         { _, _ -> IceRestartGateProbe(executable = true) },
     /**
-     * INV-NEG-015: when Recovery admits a negotiation-deferred ICE restart intent,
-     * Coordinator must establish capability observation baseline=false (not via bare probe).
+     * INV-NEG-015 / INV-NEG-020: when Recovery admits a negotiation-deferred ICE restart intent,
+     * Coordinator must establish capability observation baseline=false and immediately recompute
+     * (DEFER_ADMISSION seam). [bindAdmissionSeq] MUST be invoked with the baseline observation
+     * seq **before** any rising-edge drain so INV-NEG-019 freshness holds.
      */
-    private val onNegotiationGateDeferred: (sessionId: String, remoteModuleId: String) -> Unit =
-        { _, _ -> },
+    private val onNegotiationGateDeferred: (
+        sessionId: String,
+        remoteModuleId: String,
+        bindAdmissionSeq: (Long) -> Unit
+    ) -> Unit = { _, _, bindAdmissionSeq -> bindAdmissionSeq(0L) },
     /**
      * Probe current ICE connectedness after ACCEPTED / ICE restart (#83).
      * Coordinator wires qosMonitor; tests inject to cover already-CONNECTED soak gap.
@@ -609,6 +614,7 @@ class ConferenceEdgeRecoveryController(
         record.wakeupBinding = null
         record.deferredGateBlockReason = null
         record.iceRestartIntentId = null
+        record.deferAdmissionObservationSeq = null
     }
 
     private fun hasDeferredMediaAction(record: EdgeRecoveryRecord): Boolean =
@@ -664,6 +670,14 @@ class ConferenceEdgeRecoveryController(
             cause.startsWith("DRAIN_STALE") || cause.startsWith("DRAIN_ALREADY") -> "RELEASE_MISSING"
             else -> "RELEASE_MISSING"
         }
+        if (terminalReason == "SUPERSEDED") {
+            onLog(
+                "DEFERRED_INTENT_SUPERSEDED session=${record.key.sessionId} " +
+                    "remote=${record.key.remoteModuleId} oldIntent=$intentId newIntent=LINEAGE_CUT " +
+                    "attempt=${record.recoveryAttemptId} obligationGen=${record.obligationGeneration} " +
+                    "cause=$cause"
+            )
+        }
         onLog(
             "RECOVERY_ICE_RESTART_INTENT_TERMINAL session=${record.key.sessionId} " +
                 "remote=${record.key.remoteModuleId} attempt=${record.recoveryAttemptId} " +
@@ -681,27 +695,77 @@ class ConferenceEdgeRecoveryController(
     }
 
     /**
-     * INV-NEG-005 / INV-REC-025: Coordinator routes NEGOTIATION_CAN_EXECUTE here after capability
-     * rising-edge. Re-validates attempt/gen/obligation/intent/gate before dispatch.
+     * INV-NEG-005 / INV-REC-025 / INV-NEG-019: Coordinator routes NEGOTIATION_CAN_EXECUTE here
+     * after capability rising-edge. Re-validates post-baseline freshness, re-probe, and
+     * current-slot lineage (intentId + attemptId + obligationGen) before dispatch.
+     *
+     * @param capabilityEventObservationSeq observation seq of the rising-edge event; when
+     *   non-null MUST be strictly greater than the intent's DEFER_ADMISSION baseline seq.
+     *   Null is a test seam that still re-probes + checks lineage (production always passes seq).
      */
-    fun drainPendingIceRestart(sessionId: String, remoteModuleId: String) {
+    fun drainPendingIceRestart(
+        sessionId: String,
+        remoteModuleId: String,
+        capabilityEventObservationSeq: Long? = null
+    ) {
         val key = ConferenceEdgeKey(sessionId, remoteModuleId)
         val record = edges[key] ?: return
         if (!isDeferredIceRestartIntent(record)) return
+        val attemptId = record.recoveryAttemptId
+        val obligationGen = record.obligationGeneration
+        val capturedIntentId = record.iceRestartIntentId
+        val intentId = capturedIntentId ?: "NONE"
+        val admissionSeq = record.deferAdmissionObservationSeq
+        onLog(
+            "DEFERRED_INTENT_DRAIN_ATTEMPT session=$sessionId remote=$remoteModuleId " +
+                "intentId=$intentId attemptId=$attemptId obligationGen=$obligationGen " +
+                "admissionSeq=${admissionSeq ?: "NONE"} " +
+                "eventSeq=${capabilityEventObservationSeq ?: "NONE"}"
+        )
         if (!record.edgeObligationOpen()) {
+            onLog(
+                "DEFERRED_INTENT_REJECTED session=$sessionId remote=$remoteModuleId " +
+                    "intentId=$intentId attemptId=$attemptId obligationGen=$obligationGen " +
+                    "reason=obligation_closed"
+            )
             expireDeferredIceRestartIntent(record, "DRAIN_OBLIGATION_CLOSED")
             clearMediaActionDeferral(record)
             return
         }
         if (record.iceRestartIssued) {
+            onLog(
+                "DEFERRED_INTENT_REJECTED session=$sessionId remote=$remoteModuleId " +
+                    "intentId=$intentId attemptId=$attemptId obligationGen=$obligationGen " +
+                    "reason=already_issued"
+            )
             expireDeferredIceRestartIntent(record, "DRAIN_ALREADY_ISSUED")
             clearMediaActionDeferral(record)
             return
         }
-        val attemptId = record.recoveryAttemptId
-        val obligationGen = record.obligationGeneration
-        val intentId = record.iceRestartIntentId ?: "NONE"
+        if (admissionSeq == null) {
+            onLog(
+                "DEFERRED_INTENT_REJECTED session=$sessionId remote=$remoteModuleId " +
+                    "intentId=$intentId attemptId=$attemptId obligationGen=$obligationGen " +
+                    "reason=baseline_missing"
+            )
+            return
+        }
+        if (capabilityEventObservationSeq != null && capabilityEventObservationSeq <= admissionSeq) {
+            onLog(
+                "DEFERRED_INTENT_REJECTED session=$sessionId remote=$remoteModuleId " +
+                    "intentId=$intentId attemptId=$attemptId obligationGen=$obligationGen " +
+                    "reason=stale_capability_event " +
+                    "admissionSeq=$admissionSeq eventSeq=$capabilityEventObservationSeq"
+            )
+            return
+        }
         val probe = probeIceRestartGate(sessionId, remoteModuleId)
+        onLog(
+            "DEFERRED_INTENT_DRAIN_ATTEMPT session=$sessionId remote=$remoteModuleId " +
+                "intentId=$intentId reprobeResult=${if (probe.executable) "executable" else "blocked"} " +
+                "gateBlock=${probe.blockReason ?: "NONE"} " +
+                "signalingState=${probe.signalingState ?: "UNKNOWN"}"
+        )
         if (!probe.executable) {
             onLog(
                 "RECOVERY_ICE_RESTART_DRAIN_HELD session=$sessionId remote=$remoteModuleId " +
@@ -709,6 +773,11 @@ class ConferenceEdgeRecoveryController(
                     "reason=gate_not_executable " +
                     "gateBlock=${probe.blockReason ?: "UNKNOWN"} " +
                     "signalingState=${probe.signalingState ?: "UNKNOWN"}"
+            )
+            onLog(
+                "DEFERRED_INTENT_REJECTED session=$sessionId remote=$remoteModuleId " +
+                    "intentId=$intentId attemptId=$attemptId obligationGen=$obligationGen " +
+                    "reason=gate_not_executable"
             )
             return
         }
@@ -720,9 +789,18 @@ class ConferenceEdgeRecoveryController(
         val still = edges[key] ?: return
         if (still.recoveryAttemptId != attemptId ||
             still.obligationGeneration != obligationGen ||
+            still.iceRestartIntentId != capturedIntentId ||
             !still.edgeObligationOpen() ||
             still.iceRestartIssued
         ) {
+            onLog(
+                "DEFERRED_INTENT_REJECTED session=$sessionId remote=$remoteModuleId " +
+                    "intentId=$intentId attemptId=$attemptId obligationGen=$obligationGen " +
+                    "reason=lineage_mismatch " +
+                    "currentIntent=${still.iceRestartIntentId ?: "NONE"} " +
+                    "currentAttempt=${still.recoveryAttemptId} " +
+                    "currentGen=${still.obligationGeneration}"
+            )
             expireDeferredIceRestartIntent(still, "DRAIN_STALE_LINEAGE")
             clearMediaActionDeferral(still)
             return
@@ -735,8 +813,14 @@ class ConferenceEdgeRecoveryController(
         )
         clearMediaActionDeferral(still)
         // Keep intentId through DISPATCH audit, then drop (deferral fields already cleared).
-        still.iceRestartIntentId = if (intentId == "NONE") null else intentId
+        still.iceRestartIntentId = capturedIntentId
         issueBoundedIceRestart(still, RecoveryReason.NETWORK_RECOVERY)
+        val dispatchAt = still.restartDispatchAtMs
+        onLog(
+            "DEFERRED_INTENT_EXECUTED session=$sessionId remote=$remoteModuleId " +
+                "intentId=$intentId attemptId=$attemptId obligationGen=$obligationGen " +
+                "restartAttemptId=$attemptId dispatchAt=${dispatchAt ?: "NONE"}"
+        )
         still.iceRestartIntentId = null
     }
 
@@ -2068,8 +2152,19 @@ class ConferenceEdgeRecoveryController(
                     "attempt=${record.recoveryAttemptId} gen=${record.obligationGeneration} " +
                     "intentId=$intentId reason=$block wakeup=NEGOTIATION_CAN_EXECUTE"
             )
-            // INV-NEG-015: baseline before waiting for CAN_EXECUTE (admission, not bare probe).
-            onNegotiationGateDeferred(record.key.sessionId, record.key.remoteModuleId)
+            // INV-NEG-015 / INV-NEG-020: baseline before waiting; DEFER_ADMISSION may recompute.
+            // bindAdmissionSeq MUST run before rising-edge drain inside the Coordinator callback.
+            onNegotiationGateDeferred(record.key.sessionId, record.key.remoteModuleId) { seq ->
+                record.deferAdmissionObservationSeq = seq
+                onLog(
+                    "DEFERRED_INTENT_CREATED session=${record.key.sessionId} " +
+                        "remote=${record.key.remoteModuleId} intentId=$intentId " +
+                        "attemptId=${record.recoveryAttemptId} " +
+                        "obligationGen=${record.obligationGeneration} " +
+                        "baselineCapability=false admissionSeq=$seq " +
+                        "gateBlock=$block"
+                )
+            }
             return
         }
         record.phase = EdgeRecoveryPhase.ICE_RESTARTING

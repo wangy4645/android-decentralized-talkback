@@ -156,6 +156,11 @@ enum class IceRestartGateBlockReason {
     ANSWERER_SETTLING,
     /** Waiting signaling STABLE → capability recompute (P2). */
     SIGNALING_NOT_STABLE,
+    /**
+     * Diagnostic split under [SIGNALING_NOT_STABLE]: local offer awaiting remote answer
+     * (`HAVE_LOCAL_OFFER`). Logs/binding only — not a second capability owner (INV-NEG-020).
+     */
+    OFFER_AWAITING_ANSWER,
 }
 
 /** Step A-1 observation: Coordinator probe for Negotiation Stabilization Gate. */
@@ -279,6 +284,11 @@ internal data class EdgeRecoveryRecord(
      * Distinguishes successor/supersede intents that share edge+attempt+gen.
      */
     var iceRestartIntentId: String? = null,
+    /**
+     * INV-NEG-019: observation seq stamped at DEFER_ADMISSION baseline.
+     * Drain may consume only capability events with seq strictly greater than this.
+     */
+    var deferAdmissionObservationSeq: Long? = null,
     /** True when current attempt crossed inbound [onRecoveryReattachAccepted] (C-1.1 handoff guard). */
     var recoveryViaInboundReattach: Boolean = false,
     var epochRefreshUsed: Boolean = false,

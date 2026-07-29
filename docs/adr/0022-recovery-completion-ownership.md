@@ -4346,13 +4346,119 @@ closeObligation → expireDeferredIceRestartIntent   // ALWAYS
 
 ≡ `canClose = true` for every deferred ICE-restart intent regardless of domain.
 
----
-
-### Design verdict
+### Design verdict (B3.1 / INV-REC-026 — historical)
 
 > **B3 negotiation wakeup is correct. The leak is Recovery completion authority: transport/media evidence closes NEGOTIATION deferred intents. Freeze INV-REC-026 (domain-matched close). Next implementable knife is `canClose(intent, evidence)` at obligation close / `media_path_active_without_restart` — not more CAN_EXECUTE surface.**
 
-**Out of this design step:** code changes, renaming `RECOVERED`, B3.1 rollback, extending obligation deadline policy.
+**Out of that design step:** code changes, renaming `RECOVERED`, B3.1 rollback, extending obligation deadline policy.
+
+---
+
+## Appendix D — Negotiation Deferred Drain Authority (IMPLEMENTED 2026-07-29)
+
+**Status:** **Design Accepted** (grill Q1–Q5, `/grill-with-docs` 2026-07-29). **Implementation landed** (`df476d9` + lineage UTs). Soak gold-chain still field-gated. **Do not expand Q6** without new field evidence.
+
+**Cross-ref:** ADR-0034 Fork observation — G-PRES-E `BLOCKED_BY_COMPLETION` (long SYNCING is accurate projection). Evidence soak: `logs/obs-pres-mediafact-20260729-150053`.
+
+**Entry freeze:**
+
+```text
+ICE_RESTART_DEFERRED (SIGNALING_NOT_STABLE)
+        → WAIT_FOR_NEGOTIATION_INTENT
+        → (no OBLIGATION_CLOSED(RECOVERED) while uncovered NEGOTIATION defer)
+```
+
+**Forbidden in this knife:** UVCP mapping, SYNCING timeout, recovering display rewrite, peer readiness, B3 capability/rising-edge/probe reopen, Completion Authority redesign.
+
+### Companion CLOSED contracts (do not reopen)
+
+```text
+observation ≠ completion
+capability ≠ ownership
+readiness ≠ repair
+intent lineage ≠ transport state
+EXECUTED ≠ RECOVERED
+```
+
+### Q1–Q5 decisions
+
+| Q | Decision |
+|---|----------|
+| **Q1** | Deferred ICE Restart Intent **owner** = Obligation Episode / Edge Recovery Controller. Single lifecycle authority owns create / retain / execute / expire / cancel. Helpers OK; authority not split. |
+| **Q2** | `NEGOTIATION_CAN_EXECUTE` = **A**: Truth = `probeIceRestartGate.executable`; Event = rising-edge notify; Consume = owner re-probe + post-baseline freshness + lineage. Event ≠ permission. Split `SIGNALING_NOT_STABLE` for diagnosis (e.g. `OFFER_AWAITING_ANSWER` = `HAVE_LOCAL_OFFER`) without second capability owner. |
+| **Q3** | Rising-edge **C**: Coordinator alone owns observation ledger + rising-edge + notify; Recovery consumes/drains. Fallback recompute on enumerated negotiation seams **and** immediately after `DEFER_ADMISSION`. No timer polling; no Recovery self-schedule drain; no `mediaRestored` → CAN_EXECUTE. |
+| **Q4** | EXECUTED **A** = adopt Q14 C-3: EXECUTED clears deferral / proves dispatch only; obligation close still requires Restart-Resolved Evidence via existing Completion Authority (INV-NEG-016 / INV-REC-031). No Drain-only `canClose`. |
+| **Q5** | Lineage **A** = **current-slot-only**. SUPERSEDE = lineage cut (predecessor STALE_DISCARD forever). Successor = new intentId + new DEFER_ADMISSION baseline; no inherited freshness/wakeup. Late answer → negotiation seam → recompute → drain **current** slot only. |
+
+### Invariants (new)
+
+#### INV-NEG-018
+
+> Deferred ICE Restart Intent lifecycle MUST have exactly one authority owner. The authority MUST own create, retain, execute, expire and cancel. Negotiation capability producers MUST NOT mutate intent lifecycle.
+
+中文：Deferred ICE Restart Intent 必须有唯一 lifecycle authority；该 authority 独占 create/retain/execute/expire/cancel；capability 生产者不得改 intent lifecycle。
+
+#### INV-NEG-019
+
+> `NEGOTIATION_CAN_EXECUTE` is a notification of a capability truth transition, not execution authority. Deferred intent execution MUST: (1) consume only events after its defer admission baseline; (2) re-probe current negotiation capability; (3) execute only when current intent lineage remains valid.
+
+中文：`NEGOTIATION_CAN_EXECUTE` 是 capability 边沿通知，不是执行权；execute 必须 post-baseline、re-probe、且当前 lineage 有效。
+
+#### INV-NEG-020
+
+> Negotiation capability observation MUST have a single owner. Recovery MUST consume `NEGOTIATION_CAN_EXECUTE` but MUST NOT produce capability truth or maintain capability observation state. Capability recomputation MAY be triggered by defined negotiation seams and deferred-intent admission, but MUST NOT rely on timer polling or blind retry.
+
+中文：capability observation 单 owner（Coordinator）；Recovery 只消费；recompute 仅枚举 seam + DEFER_ADMISSION，禁止 timer/盲重试。
+
+#### INV-NEG-021
+
+> Deferred ICE Restart drain execution MUST NOT resolve Recovery obligation. EXECUTED only proves deferred intent dispatch completion. Recovery completion MUST continue to require existing Restart-Resolved Evidence evaluated by Completion Authority.
+
+中文：drain EXECUTED ≠ 关义务；义务完成仍走既有 Restart-Resolved Evidence / Completion Authority。
+
+#### INV-NEG-022
+
+> Deferred ICE Restart drain MUST operate only on the current active intent lineage. SUPERSEDED / STALE_DISCARDED intents MUST NOT be reactivated by late negotiation answers, capability events, or transport observations. A successor intent MUST establish a new admission baseline and MUST NOT inherit predecessor freshness or wakeup evidence.
+
+中文：drain 仅当前 active lineage；已 SUPERSEDE/STALE_DISCARD 的 intent 不可被 late answer/capability/transport 复活；successor 必须新 baseline，不得继承 predecessor freshness/wakeup。
+
+### Normative chain
+
+```text
+Peer need restart + gate blocked
+  → create Deferred Intent (owner=Obligation Episode) + DEFER_ADMISSION baseline=false
+  → Coordinator recompute (Q3 fallback)
+  → … WAIT_FOR_NEGOTIATION_INTENT …
+  → negotiation seam / rising-edge → NEGOTIATION_CAN_EXECUTE (event)
+  → Recovery consume → re-probe → lineage OK → EXECUTED (clear defer)
+  → Restart-Resolved Evidence (post-restartDispatchAt) → canClose → RECOVERED
+```
+
+### Field soak classification (`obs-pres-mediafact-20260729-150053`, M02→M03)
+
+```text
+15:02:34  ICE restart #1 dispatch → HAVE_LOCAL_OFFER
+15:02:55  DEFER R1 SIGNALING_NOT_STABLE + OBSERVATION baseline=false
+15:02:56  SUPERSEDE → STALE_DISCARD R1 → DEFER R2 (new baseline)
+          RECOVERY_COMPLETION_HELD (ICE_CONNECTED 不得关 NEGOTIATION)
+          no post-defer NEGOTIATION_CAN_EXECUTE
+```
+
+**Verdict under this freeze:** **H-prod** — capability Truth stayed false (`HAVE_LOCAL_OFFER` / awaiting remote answer). Not a UVCP defect; not EXECUTED→RECOVERED leak. Completion HOLD behaved correctly. Drain gap = waiting for negotiation seam that flips Truth (late answer → `SIGNALING_STABLE_AFTER_REMOTE_ANSWER`).
+
+### Implementation checklist (code landed df476d9; soak remains field-gated)
+
+1. Ensure `DEFER_ADMISSION` path always triggers Coordinator `recomputeNegotiationCapability` once.
+2. Enforce drain gates: post-baseline event (or seam-driven recompute notify), re-probe, current `(intentId, attemptId, obligationGen)`.
+3. Diagnostic split of `SIGNALING_NOT_STABLE` (at least `OFFER_AWAITING_ANSWER`) — logs/binding only.
+4. UT: supersede R1→R2 + late CAN_EXECUTE must not revive R1; DEFER while Truth already true → immediate rising-edge path; EXECUTED must not `closeObligation`.
+5. Soak: gold chain DEFER → CAN_EXECUTE → WAKEUP → EXECUTED → post-dispatch RECOVERED; G-PRES-E remains observation-only until obligation closes.
+
+### Design verdict
+
+> **G-PRES-E long SYNCING is correct while NEGOTIATION deferred intent is uncovered. Drain Authority frozen (Q1–Q5 / INV-NEG-018..022) and implemented (`df476d9`). Next gate is soak gold-chain — not more grill questions, not UVCP/timeout, not Completion Authority reopen.**
+
+---
 
 ## References
 
@@ -4381,3 +4487,4 @@ closeObligation → expireDeferredIceRestartIntent   // ALWAYS
 - R28-L.1.4 acceptance soak `logs/obs-r28l1-4-repair-20260726-170329` (G-L4-1 **PASS**; Case B post-repair peer path gap; `REPAIR_DUPLICATE_REJECTED` → L.1.5)
 - R28-L completion observe soak `logs/obs-r28m-completion-20260726-164948` (session `8792302b`; zero completion traces — gate never cleared)
 - R28-L diagnostic failure sample `467cc536` (M03 WiFi flap; `FIRST_OUTBOUND` without `FIRST_INBOUND` — L.1.4 soak replay target)
+- Deferred Drain motivation soak `logs/obs-pres-mediafact-20260729-150053` (G-PRES-E `BLOCKED_BY_COMPLETION`; M02→M03 `ICE_RESTART_DEFERRED` → `WAIT_FOR_NEGOTIATION_INTENT`; Appendix D)
