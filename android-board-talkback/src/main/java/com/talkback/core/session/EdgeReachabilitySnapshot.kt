@@ -1,46 +1,99 @@
 package com.talkback.core.session
 
 /**
- * Recovery-internal reachability facts for one edge (ADR-0022 R28-D).
+ * Recovery-internal reachability facts for one edge (ADR-0022 R28-D; ADR-0032 R28-N).
  * Aggregated read-only; recovery controller MUST NOT write back to fact writers.
  * Not for UI — distinct from membership [ReachabilitySnapshot].
+ *
+ * Each field belongs to exactly one plane and may only be consumed by predicates
+ * below that plane (ADR-0032 INV-REC-011):
+ *
+ * | field                  | plane     | consumers              |
+ * |------------------------|-----------|------------------------|
+ * | [linkReady]            | transport | dispatch, completion   |
+ * | [peerDiscovered]       | discovery | dispatch, completion   |
+ * | [peerSignalingReachable] | signaling | dispatch, completion |
+ * | [mediaRouteConnected]  | media     | completion, materiality|
+ * | [authorityReachable]   | authority | completion             |
  */
 data class EdgeReachabilitySnapshot(
+    /** Transport plane: channel readiness — NOT LinkQualificationState. */
     val linkReady: Boolean,
+    /** Discovery plane: a dialable address for the peer exists. */
     val peerDiscovered: Boolean,
-    val routeConverged: Boolean,
+    /** Signaling plane: inbound signal from the peer within the staleness window. */
+    val peerSignalingReachable: Boolean,
+    /** Media plane: mesh ICE connected. MUST NOT gate recovery initiation. */
+    val mediaRouteConnected: Boolean,
+    /** Authority plane: conference authority reachable (self-authority is tautological). */
     val authorityReachable: Boolean
 ) {
+    /**
+     * Recovery initiation permission (ADR-0022 P0).
+     * Does not require [mediaRouteConnected] — recovery actions exist to establish the route.
+     */
+    fun canAttemptRecovery(): Boolean =
+        linkReady && peerDiscovered
+
+    /**
+     * Recovery action admission (ADR-0032 INV-REC-010).
+     * Consumes transport, discovery and signaling facts only: the media route is what
+     * recovery actions restore, so it MUST NOT be a prerequisite for dispatching them.
+     */
     fun canDispatchRecoverySignal(): Boolean =
-        linkReady && peerDiscovered && routeConverged
+        linkReady && peerDiscovered && peerSignalingReachable
 
+    /**
+     * Completion is an observation of success rather than an action, so it MAY consume
+     * the media plane (ADR-0032 § 5).
+     */
     fun canCompleteRecovery(): Boolean =
-        canDispatchRecoverySignal() && authorityReachable
+        canDispatchRecoverySignal() && mediaRouteConnected && authorityReachable
 
+    /** Why recovery initiation is blocked (link / peer discovery only). */
+    fun attemptWaitingReason(): RecoveryWaitingReason? = when {
+        !linkReady -> RecoveryWaitingReason.WAITING_FOR_LINK
+        !peerDiscovered -> RecoveryWaitingReason.WAITING_FOR_DISCOVERY
+        else -> null
+    }
+
+    /** Why action dispatch is blocked. Never reports a media-plane reason (INV-REC-012). */
     fun dispatchWaitingReason(): RecoveryWaitingReason? = when {
         !linkReady -> RecoveryWaitingReason.WAITING_FOR_LINK
         !peerDiscovered -> RecoveryWaitingReason.WAITING_FOR_DISCOVERY
-        !routeConverged -> RecoveryWaitingReason.WAITING_FOR_ROUTE
+        !peerSignalingReachable -> RecoveryWaitingReason.WAITING_FOR_PEER_SIGNALING
+        else -> null
+    }
+
+    /** Why completion is blocked. Media- and authority-plane reasons only (INV-REC-012). */
+    fun completionWaitingReason(): RecoveryWaitingReason? = when {
+        dispatchWaitingReason() != null -> dispatchWaitingReason()
+        !mediaRouteConnected -> RecoveryWaitingReason.WAITING_FOR_ROUTE
+        !authorityReachable -> RecoveryWaitingReason.WAITING_FOR_AUTHORITY
         else -> null
     }
 
     fun formatProbeFields(): String =
         "linkReady=$linkReady peerDiscovered=$peerDiscovered " +
-            "routeConverged=$routeConverged authorityReachable=$authorityReachable"
+            "peerSignalingReachable=$peerSignalingReachable " +
+            "mediaRouteConnected=$mediaRouteConnected authorityReachable=$authorityReachable"
 }
 
 enum class RecoveryWaitingReason {
     WAITING_FOR_LINK,
     WAITING_FOR_DISCOVERY,
+    /** ADR-0032: no inbound signal from the peer; blocks dispatch. */
+    WAITING_FOR_PEER_SIGNALING,
+    /** Media convergence only — MUST NOT appear on a dispatch path (ADR-0032 INV-REC-012). */
     WAITING_FOR_ROUTE,
     WAITING_FOR_AUTHORITY,
     WAITING_FOR_INBOUND,
-    WAITING_FOR_ACCEPT
+    WAITING_FOR_ACCEPT,
 }
 
 enum class ReattachDispatchOutcome {
     SENT,
-    /** Gate blocked: [EdgeReachabilitySnapshot.canDispatchRecoverySignal] false. */
+    /** Gate blocked: [EdgeReachabilitySnapshot.canAttemptRecovery] or dispatch admission false. */
     DEFERRED,
     SEND_FAILED,
     PEER_UNREACHABLE,
@@ -85,29 +138,61 @@ enum class RecoveryReevaluateTrigger {
     LINK_READY,
     LINK_LOST,
     PEER_DISCOVERED,
+    /** Known peer signaling path restored after moduleStaleMs silence (ADR-0022 Appendix M-B.1). */
+    PEER_REACHABILITY_RESTORED,
     PEER_LOST,
+    /** HELLO / module rediscovery (ADR-0022 Appendix C-3.2 C-13). */
+    REMOTE_MODULE_RECOVERED,
     AUTHORITY_REACHABLE,
     AUTHORITY_LOST,
     /** ICE CONNECTED / equivalent media restoration (ADR-0022 R28-E / #83). */
-    ICE_RESTORED
+    ICE_RESTORED,
+    /** ICE CHECKING — early resurrection signal while obligation OPEN (ADR-0022). */
+    ICE_CHECKING
 }
+
+/**
+ * Resurrection admission evidence riding the R28-G notify seam (ADR-0022 §13.2.4 C2).
+ * Coordinator stamps [observedAtMs]; Controller MUST NOT invent it.
+ * MUST only accompany [RecoveryReevaluateTrigger.REMOTE_MODULE_RECOVERED].
+ */
+data class RecoveryResurrectionEvidence(
+    val kind: RecoveryReevaluateTrigger,
+    val observedAtMs: Long
+)
+
+/** Result of admitting a Successor Obligation Episode (ADR-0022 §13.2.4). */
+data class SuccessorObligationAdmission(
+    val obligationGeneration: Long,
+    val recoveryAttemptId: Long
+)
 
 /**
  * Projects recovery capability from reachability facts and edge role (ADR-0022 R28-G).
  * [controlPlaneStarted] — attempt crossed REATTACH_REQUESTED / REATTACH_ACCEPTED / ICE_RESTARTING.
+ *
+ * Both role branches admit actions from [EdgeReachabilitySnapshot.canDispatchRecoverySignal],
+ * which excludes the media plane (ADR-0032 INV-REC-010). A host without a started control
+ * plane waits for inbound reattach, never for the media route.
  */
 fun projectRecoveryCapabilitySignature(
     snapshot: EdgeReachabilitySnapshot,
     initiatesReattach: Boolean,
     controlPlaneStarted: Boolean
 ): RecoveryCapabilitySignature {
-    if (!snapshot.canDispatchRecoverySignal()) {
+    if (!snapshot.canAttemptRecovery()) {
         return RecoveryCapabilitySignature(
             permittedActions = emptySet(),
-            waitingReason = snapshot.dispatchWaitingReason()
+            waitingReason = snapshot.attemptWaitingReason()
         )
     }
     if (initiatesReattach) {
+        if (!snapshot.canDispatchRecoverySignal()) {
+            return RecoveryCapabilitySignature(
+                permittedActions = emptySet(),
+                waitingReason = snapshot.dispatchWaitingReason()
+            )
+        }
         val actions = linkedSetOf(RecoveryAction.DISPATCH_REATTACH)
         if (snapshot.canCompleteRecovery()) {
             actions.add(RecoveryAction.COMPLETE_EDGE)
@@ -118,6 +203,12 @@ fun projectRecoveryCapabilitySignature(
             null
         }
         return RecoveryCapabilitySignature(actions, waiting)
+    }
+    if (!snapshot.canDispatchRecoverySignal()) {
+        return RecoveryCapabilitySignature(
+            permittedActions = emptySet(),
+            waitingReason = snapshot.dispatchWaitingReason()
+        )
     }
     if (controlPlaneStarted) {
         return RecoveryCapabilitySignature(

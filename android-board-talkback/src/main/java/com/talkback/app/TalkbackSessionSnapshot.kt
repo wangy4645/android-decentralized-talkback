@@ -41,6 +41,8 @@ data class TalkbackSessionSnapshot(
      * Meeting UI MUST use joined/connected/recovering from here — not roster size or ICE.
      */
     val conferencePresenceProjection: ConferencePresenceProjection? = null,
+    /** Remote modules that have reached CONNECTED at least once this session (ADR-0025 presence UI). */
+    val conferenceEverConnectedModuleIds: Set<String> = emptySet(),
     /** ICE-direct mesh peer count; diagnostics only — must not drive Conference UI. */
     val meshConnectedPeerCount: Int = 0,
     /**

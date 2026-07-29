@@ -687,28 +687,20 @@ class TalkbackCoordinatorIntegrationTest {
         nodeM01.runtime.simulateRemoteIceState("M02", "DISCONNECTED")
         assertTrue(
             nodeM01.waitForLogSince(m01LogMark, timeoutMs = 8_000L) {
-                it.contains("RECOVERY_REATTACH_DEFERRED") &&
+                it.contains("decision=DISPATCH_REATTACH") &&
                     it.contains("session=$sessionId") &&
-                    it.contains("ch=$channelId") &&
-                    it.contains("reason=WAITING_FOR_ROUTE") &&
-                    it.contains("routeConverged=false")
-            }
-        )
-        assertTrue(
-            nodeM01.waitForLogSince(m01LogMark, timeoutMs = 3_000L) {
-                it.contains("RECOVERY_WAITING") &&
-                    it.contains("session=$sessionId") &&
-                    it.contains("reason=WAITING_FOR_ROUTE") &&
-                    it.contains("routeConverged=false")
+                    it.contains("edge=M02")
             }
         )
         val logsDuringDisconnect = synchronized(nodeM01.logs) {
             nodeM01.logs.drop(m01LogMark)
         }
         assertFalse(
-            "reattach must not send while route is not converged (R28-D1)",
+            "participant reattach must not be blocked by media route gate while ICE is down",
             logsDuringDisconnect.any {
-                it.contains("RECOVERY_REATTACH_SENT") && it.contains("to=M02")
+                it.contains("RECOVERY_REATTACH_DEFERRED") &&
+                    it.contains("reason=WAITING_FOR_ROUTE") &&
+                    it.contains("mediaRouteConnected=false")
             }
         )
 
@@ -717,20 +709,56 @@ class TalkbackCoordinatorIntegrationTest {
             nodeM01.waitForLogSince(m01LogMark, timeoutMs = 5_000L) {
                 it.contains("RECOVERY_REEVALUATE") &&
                     it.contains("session=$sessionId") &&
-                    it.contains("edge=M02") &&
-                    it.contains("controlPlaneStarted=false")
+                    it.contains("edge=M02")
             }
         )
-        val logsAfterReconnect = synchronized(nodeM01.logs) {
-            nodeM01.logs.drop(m01LogMark)
+        // R28-E no-shortcut (ICE alone before control-plane) is unit-tested.
+        // Post P0, outbound reattach may start control-plane before ICE reconnects.
+    }
+
+    /**
+     * Recovery Dispatch Eligibility Contract — host inbound reattach.
+     * The participant's own media route is up so it dispatches; the host's media route to
+     * the participant is down. The host MUST NOT defer the inbound reattach on its own
+     * media-plane state, because that reattach is what starts the control plane and in turn
+     * unlocks host ICE restart.
+     */
+    @Test
+    fun conference_dispatchContract_hostMustNotDeferInboundReattachOnMediaRoute() {
+        val channelId = "CONF-DISPATCH-INBOUND"
+        nodeM01.runtime.setAutoAcceptConferenceInvites(true)
+        nodeM02.runtime.requireConferenceCall(
+            nodeM02.localEndpoint,
+            listOf(EndpointAddress(m01, EndpointId("E01"))),
+            channelId
+        )
+        assertTrue(nodeM01.waitForLog { it.contains("Conference invite accepted") || it.contains("invite accepted") })
+        connectConferenceHostIce(nodeM02, nodeM01, hostModuleId = "M02")
+        nodeM01.runtime.simulateRemoteIceState("M02", "CONNECTED")
+        Thread.sleep(500L)
+
+        val hostLogMark = synchronized(nodeM02.logs) { nodeM02.logs.size }
+        nodeM01.runtime.simulateRemoteIceState("M02", "DISCONNECTED")
+        nodeM02.runtime.simulateRemoteIceState("M01", "DISCONNECTED")
+        Thread.sleep(300L)
+        nodeM01.runtime.simulateRemoteIceState("M02", "CONNECTED")
+
+        val accepted = nodeM02.waitForLogSince(hostLogMark, timeoutMs = 8_000L) {
+            it.contains("RECOVERY_REATTACH accepted M01")
         }
+        val hostLogs = synchronized(nodeM02.logs) { nodeM02.logs.drop(hostLogMark) }
+        val evidence = hostLogs
+            .filter { it.contains("RECOVERY_REATTACH") || it.contains("RECOVERY_WAITING") }
+            .joinToString("\n")
         assertFalse(
-            "ICE reconnect before control-plane MUST NOT shortcut to RECOVERED (R28-E)",
-            logsAfterReconnect.any {
-                it.contains("RECOVERY_EDGE_RECOVERED") &&
-                    it.contains("session=$sessionId") &&
-                    it.contains("remote=M02")
+            "host must not defer inbound reattach on media-plane state\n$evidence",
+            hostLogs.any {
+                it.contains("RECOVERY_REATTACH_INBOUND_DEFERRED") && it.contains("remote=M01")
             }
+        )
+        assertTrue(
+            "host must accept inbound reattach while its own media route is down\n$evidence",
+            accepted
         )
     }
 

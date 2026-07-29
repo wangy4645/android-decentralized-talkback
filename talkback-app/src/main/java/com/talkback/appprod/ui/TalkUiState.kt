@@ -20,6 +20,8 @@ enum class EndpointStatus {
     INVITING,
     /** ICE/media negotiation in progress. */
     CONNECTING,
+    /** Conference peer media lost; edge recovery in progress (ADR-0025 R30-F). */
+    RECONNECTING,
     /** Invite timed out or was not answered. */
     EXPIRED
 }
@@ -55,8 +57,10 @@ data class MeetingUiState(
     val connectedParticipantCount: Int = 0,
     /** Remote peers with active edge recovery on this device (ADR-0022 R27′). */
     val recoveringPeers: Set<String> = emptySet(),
-    /** View label from presence divergence: "3" or "2/3" (R27′-fix). */
-    val participantCountLabel: String = "0",
+    /** Primary meeting header label from joinedCount only (ADR-0025 R30-F). */
+    val participantCountLabel: String = "0 Participants",
+    /** Optional weak hint e.g. "1 connecting..." — never connected/joined fraction. */
+    val connectingParticipantHint: String? = null,
     val awaitingAdditionalParticipants: Boolean = false,
     /** Conference runtime phase from [TalkbackSessionSnapshot.conferenceRuntimeState] (RO-M2 PR-3). */
     val runtimePhase: ConferenceRuntimePhase? = null,
@@ -109,6 +113,13 @@ data class TalkUiState(
     val channelReadiness: ChannelReadiness = ChannelReadiness.NO_SERVICE,
     /** True when peers are known but this device waits for the elected mesh host to invite. */
     val channelAwaitingHost: Boolean = false,
+    /** User tab selection (navigation only). */
+    val userSelectedTab: UserSelectedTab = UserSelectedTab.PTT,
+    /** @see EffectiveInteractionMode — runtime capability projection (read-only). */
+    val effectiveInteractionMode: EffectiveInteractionMode = EffectiveInteractionMode.GROUP_PTT,
+    /** @see PrimaryInteractionAction — derived primary button action for this frame. */
+    val primaryInteractionAction: PrimaryInteractionAction = PrimaryInteractionAction.PTT_HOLD,
+    /** True when [userSelectedTab] is MEETING (tab chrome / meeting page context). */
     val conferenceMode: Boolean = false,
     val conferenceActive: Boolean = false,
     val conferenceEndReason: ConferenceEndReason = ConferenceEndReason.NONE,
@@ -124,5 +135,18 @@ data class TalkUiState(
     val sessionMemberKeys: List<String> = emptyList(),
     val endpoints: List<EndpointUiItem>,
     val call: CallUiState = CallUiState(),
-    val meeting: MeetingUiState = MeetingUiState()
+    val meeting: MeetingUiState = MeetingUiState(),
+    /** Unified conference lifecycle / media / membership display projection. */
+    val conferenceDisplay: ConferenceDisplayState = ConferenceDisplayState(
+        phase = ConferenceDisplayPhase.INACTIVE,
+        live = false,
+        showConnectingPanel = false,
+        showLivePanel = false,
+        membershipHintVisible = false,
+        timerEligible = false,
+        statusPill = ConferenceStatusPillKind.INACTIVE,
+        inProgress = false,
+        mediaConnecting = false,
+        recovering = false
+    )
 )

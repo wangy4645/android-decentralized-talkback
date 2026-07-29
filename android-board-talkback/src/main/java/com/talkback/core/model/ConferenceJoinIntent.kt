@@ -9,7 +9,9 @@ package com.talkback.core.model
 enum class ConferenceJoinIntent {
     NORMAL_JOIN,
     USER_REJOIN,
-    RECOVERY_REATTACH;
+    RECOVERY_REATTACH,
+    /** Delivery receipt for [RECOVERY_REATTACH] — connectivity plane only. */
+    RECOVERY_REATTACH_RECEIPT;
 
     fun encode(): String = name
 

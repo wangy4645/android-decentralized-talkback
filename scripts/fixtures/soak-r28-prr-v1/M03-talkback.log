@@ -1,0 +1,6 @@
+﻿07-26 20:00:00.000  I/Talkback: PRR_EPISODE_STARTED transportEpoch=6 socketId=11 reason=qualification_repair networkId=104 timestamp=1753531200000
+07-26 20:00:00.010  I/Talkback: PRR_HELLO_SENT transportEpoch=6 socketId=11 networkId=104 timestamp=1753531200010
+07-26 20:00:00.011  I/Talkback: PRR_ENDPOINT_REANNOUNCED transportEpoch=6 socketId=11 networkId=104 timestamp=1753531200011
+07-26 20:00:00.050  I/Talkback: PRR_FACT_OBSERVED localEpoch=2 remoteModuleId=M03 fact=HELLO_RECEIVED remoteEpoch=6 src=192.168.1.3:50003 socketId=99 timestamp=1753531200050
+07-26 20:00:01.000  I/Talkback: LINK_FACT_RECEIVED fact=FIRST_INBOUND_AFTER_REBIND socketId=11 rebindGeneration=6 accepted=true
+07-26 20:00:01.010  I/Talkback: LINK_QUALIFICATION_STATE_CHANGED oldState=RECEIVE_READY newState=BIDIRECTIONAL_READY reason=FIRST_INBOUND_AFTER_REBIND

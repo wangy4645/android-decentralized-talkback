@@ -97,4 +97,16 @@ class HelloPayloadTest {
         val raw = payload.encode()
         assertEquals(null, HelloPayload.decode(raw)!!.floorSnapshot)
     }
+
+    @Test
+    fun encodeDecode_prrTransportEpoch_roundTrips() {
+        val payload = HelloPayload(
+            moduleId = "M01",
+            endpoints = emptyList(),
+            transportEpoch = 6L
+        )
+        val decoded = HelloPayload.decode(payload.encode())
+        assertNotNull(decoded)
+        assertEquals(6L, decoded!!.transportEpoch)
+    }
 }

@@ -2,6 +2,16 @@ package com.talkback.core.webrtc
 
 import java.nio.ByteBuffer
 
+/**
+ * Edge negotiation settling fact (4.3-E Step4-A).
+ * Not a timer: set when Answerer remote-offer convergence completes; cleared by
+ * ownership transition / next negotiation completion / rollback.
+ */
+enum class NegotiationSettling {
+    NONE,
+    ANSWERER_SETTLED
+}
+
 interface WebRtcAudioEngine {
     fun setOnLocalIceCandidate(listener: (String) -> Unit)
     fun createOffer(iceRestart: Boolean = false): String
@@ -41,6 +51,28 @@ interface WebRtcAudioEngine {
 
     /** Latest ICE connection state name (PeerConnection.IceConnectionState). */
     fun iceConnectionState(): String = "UNKNOWN"
+
+    /**
+     * Read-only PeerConnection negotiation snapshot (4.3-E observation).
+     * Must not affect signaling / ICE behavior.
+     */
+    fun negotiationSnapshot(): NegotiationPcSnapshot = NegotiationPcSnapshot()
+
+    /**
+     * Whether this PC just completed Answerer remote-offer convergence.
+     * Observation fact for ICE_RESTART_REQUESTED / future stabilization gate.
+     */
+    fun negotiationSettling(): NegotiationSettling = NegotiationSettling.NONE
+
+    fun justSettledAsAnswerer(): Boolean =
+        negotiationSettling() == NegotiationSettling.ANSWERER_SETTLED
+
+    /**
+     * Coordinator seam after local Answerer SDP + GROUP_ACCEPT signaling handoff success
+     * (INV-NEG-005). Clears [NegotiationSettling.ANSWERER_SETTLED] and returns true when a
+     * release fact should be routed. Must not be called from Recovery.
+     */
+    fun commitAnswererTransaction(): Boolean = false
 
     /** Anchor relay: switch outbound between microphone and program track. */
     fun setProgramRelayMode(mode: ProgramRelayMode) = Unit

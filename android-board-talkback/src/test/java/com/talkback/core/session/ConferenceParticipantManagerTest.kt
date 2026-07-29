@@ -54,6 +54,22 @@ class ConferenceParticipantManagerTest {
     }
 
     @Test
+    fun participantMedia_readOnly_doesNotCreateRecord() {
+        val sessionId = "CONF-4"
+        manager.initSession(
+            sessionId,
+            local,
+            listOf(local, EndpointAddress(m02, EndpointId("E01")))
+        )
+        manager.onInviteAccepted(sessionId, "M02")
+        manager.updateMediaState(sessionId, "M02", MediaState.RECONNECTING)
+
+        assertEquals(MediaState.RECONNECTING, manager.participantMedia(sessionId, "M02"))
+        assertEquals(MediaState.NONE, manager.participantMedia(sessionId, "M03"))
+        assertFalse(manager.containsParticipant(sessionId, "M03"))
+    }
+
+    @Test
     fun onLateJoin_restoresMissingParticipant() {
         val sessionId = "CONF-3"
         manager.initSession(sessionId, local, listOf(local, EndpointAddress(m02, EndpointId("E01"))))

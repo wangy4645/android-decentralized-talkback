@@ -60,16 +60,21 @@ class TalkbackRuntime(
     private val coordinator: TalkbackCoordinator,
     private val endpointRegistry: EndpointRegistry,
     private val staticDiscovery: StaticPeerDiscoveryService,
-    private val gossipDiscovery: MeshSweepGossipDiscovery? = null
+    private val gossipDiscovery: MeshSweepGossipDiscovery? = null,
+    private val networkCapabilityObserver: NetworkCapabilityObserver? = null
 ) {
     fun acquireReleaseTimeoutMs(): Long = config.acquireReleaseTimeoutMs
 
     fun start() {
+        // Bind ports first, then attach NetworkCallback. If the observer starts while
+        // localPort is still unset, rebindBinding no-ops and signaling stays null forever.
         coordinator.start(config.signalingPort)
+        networkCapabilityObserver?.start()
     }
 
     fun stop() {
         coordinator.stop()
+        networkCapabilityObserver?.stop()
     }
 
     fun updateStaticPeers(peers: List<StaticPeerEntry>) {
@@ -105,6 +110,9 @@ class TalkbackRuntime(
     fun sendConferenceInvites(sessionId: String, invitees: List<EndpointAddress>): Int =
         coordinator.sendConferenceInvites(sessionId, invitees)
 
+    fun sendConferenceRejoinInvites(sessionId: String, invitees: List<EndpointAddress>): Int =
+        coordinator.sendConferenceRejoinInvites(sessionId, invitees)
+
     fun sendConferenceRejoin(
         channelId: String,
         authority: EndpointAddress,
@@ -134,8 +142,12 @@ class TalkbackRuntime(
         coordinator.hangup(sessionId)
     }
 
-    fun leaveConference(sessionId: String) {
-        coordinator.leaveConference(sessionId)
+    fun leaveConference(
+        sessionId: String,
+        reason: String = "UNSPECIFIED",
+        caller: String = "UNKNOWN"
+    ) {
+        coordinator.leaveConference(sessionId, reason, caller)
     }
 
     fun clearConferencePttCooldown(channelId: String) {
@@ -150,8 +162,8 @@ class TalkbackRuntime(
         coordinator.rejectCall(sessionId, reason)
     }
 
-    fun setCallMuted(sessionId: String, muted: Boolean) {
-        coordinator.setCallMuted(sessionId, muted)
+    fun setCallMuted(sessionId: String, muted: Boolean, reason: String = "unspecified") {
+        coordinator.setCallMuted(sessionId, muted, reason)
     }
 
     fun setAutoAcceptConferenceInvites(enabled: Boolean) {
@@ -219,6 +231,35 @@ class TalkbackRuntime(
     fun conferenceNetworkIndicator(): com.talkback.core.session.ConferenceNetworkIndicator =
         runCatching { coordinator.conferenceNetworkIndicator() }
             .getOrElse { com.talkback.core.session.ConferenceNetworkIndicator.UNKNOWN }
+
+    fun receivePathLive(sessionId: String, remoteModuleId: String): Boolean =
+        runCatching { coordinator.receivePathLive(sessionId, remoteModuleId) }.getOrElse { false }
+
+    fun mediaEverLive(sessionId: String, remoteModuleId: String): Boolean =
+        runCatching { coordinator.mediaEverLive(sessionId, remoteModuleId) }.getOrElse { false }
+
+    fun conferenceParticipantRecordExists(sessionId: String, moduleId: String): Boolean =
+        runCatching { coordinator.conferenceParticipantRecordExists(sessionId, moduleId) }
+            .getOrElse { false }
+
+    fun conferenceParticipantMedia(sessionId: String, moduleId: String): com.talkback.core.session.MediaState =
+        runCatching { coordinator.conferenceParticipantMedia(sessionId, moduleId) }
+            .getOrElse { com.talkback.core.session.MediaState.NONE }
+
+    fun conferenceAuthorityReachable(sessionId: String): Boolean =
+        runCatching { coordinator.conferenceAuthorityReachable(sessionId) }.getOrElse { false }
+
+    fun conferenceEdgeRecoveryLineage(
+        sessionId: String,
+        remoteModuleId: String
+    ): com.talkback.core.session.EdgeAttemptLineageRaw? =
+        runCatching { coordinator.conferenceEdgeRecoveryLineage(sessionId, remoteModuleId) }.getOrNull()
+
+    fun conferenceEdgeRecovering(sessionId: String, remoteModuleId: String): Boolean =
+        runCatching { coordinator.conferenceEdgeRecovering(sessionId, remoteModuleId) }.getOrElse { false }
+
+    fun conferenceMediaUnavailable(sessionId: String, remoteModuleId: String): Boolean =
+        runCatching { coordinator.conferenceMediaUnavailable(sessionId, remoteModuleId) }.getOrElse { false }
 
     fun networkQualityLabel(): String = conferenceNetworkIndicator().toQualityLabel()
     fun onlineModuleCount(): Int = runCatching { coordinator.onlineModuleCount() }.getOrElse { 0 }
@@ -317,8 +358,26 @@ class TalkbackRuntime(
 
     internal fun testInvariantF1BreakCount(): Int = coordinator.testInvariantF1BreakCount()
 
+    /** Test-only: local authority belief for [channelId], not resolved system authority. */
+    internal fun testAuthorityBeliefModuleId(channelId: String): String? =
+        runCatching { coordinator.testAuthorityBeliefModuleId(channelId) }.getOrNull()
+
     internal fun testIsSessionCapturing(sessionId: String): Boolean =
         coordinator.testIsSessionCapturing(sessionId)
+
+    internal fun testCanPublishConferenceAudio(sessionId: String): Boolean =
+        coordinator.testCanPublishConferenceAudio(sessionId)
+
+    internal fun testIsSessionPlaybackEnabled(sessionId: String): Boolean =
+        coordinator.testIsSessionPlaybackEnabled(sessionId)
+
+    internal fun testRefreshConferenceReceivePlayback(sessionId: String, reason: String = "test_refresh") {
+        coordinator.testRefreshConferenceReceivePlayback(sessionId, reason)
+    }
+
+    internal fun testSetSessionPlaybackEnabled(sessionId: String, enabled: Boolean, reason: String) {
+        coordinator.testSetSessionPlaybackEnabled(sessionId, enabled, reason)
+    }
 
     internal fun testResolverLocalKey(sessionId: String): String? =
         coordinator.testResolverLocalKey(sessionId)
@@ -410,6 +469,13 @@ class TalkbackRuntime(
 
     internal fun testObligationCloseReason(sessionId: String, remoteModuleId: String) =
         coordinator.testObligationCloseReason(sessionId, remoteModuleId)
+
+    internal fun testCanAuthorityPrune(sessionId: String, remoteModuleId: String): Boolean =
+        coordinator.testCanAuthorityPrune(sessionId, remoteModuleId)
+
+    internal fun testAuthorityPruneConferenceMember(sessionId: String, moduleId: String) {
+        coordinator.testAuthorityPruneConferenceMember(sessionId, moduleId)
+    }
 
     internal fun testObligationDeadlineAt(sessionId: String, remoteModuleId: String): Long? =
         coordinator.testObligationDeadlineAt(sessionId, remoteModuleId)

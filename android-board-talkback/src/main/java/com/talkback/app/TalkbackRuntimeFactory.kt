@@ -10,12 +10,25 @@ import com.talkback.core.discovery.NsdModuleDiscoveryService
 import com.talkback.core.discovery.StaticPeerDiscoveryService
 import com.talkback.core.discovery.StaticPeerEntry
 import com.talkback.core.registry.EndpointRegistry
+import com.talkback.core.signaling.AndroidSignalingSocketBinder
 import com.talkback.core.signaling.DiscoveryTransport
 import com.talkback.core.signaling.DiscoveryUdpSocket
 import com.talkback.core.signaling.SignalingChannel
+import com.talkback.core.signaling.SignalingTransportManager
+import com.talkback.core.signaling.link.LinkQualificationState
 import com.talkback.core.signaling.UdpSignalingChannel
+import com.talkback.core.signaling.peer.PeerEdgePrrHintCoordinator
+import com.talkback.core.signaling.peer.PeerEdgeSignalingReadiness
+import com.talkback.core.model.EndpointAddress
+import com.talkback.core.model.EndpointId
+import com.talkback.core.model.RemoteEndpointInfo
+import com.talkback.core.signaling.prr.DiscoveryPrrHelloTargetProvider
+import com.talkback.core.signaling.prr.LocalEndpointSnapshot
+import com.talkback.core.signaling.prr.PeerReachabilityReannounceController
+import com.talkback.core.signaling.prr.UdpSignalingReannounceSender
 import com.talkback.core.webrtc.MediaBearerScope
 import com.talkback.core.webrtc.SessionMediaRegistry
+import java.util.concurrent.Executors
 
 enum class AudioEngineMode {
     REAL_WEBRTC,
@@ -36,7 +49,7 @@ object TalkbackRuntimeFactory {
         discoveryService: ModuleDiscoveryService? = null,
         gossipDiscovery: MeshSweepGossipDiscovery? = null,
         discoveryTransport: DiscoveryTransport? = null,
-        signalingChannel: SignalingChannel = UdpSignalingChannel(),
+        signalingChannel: SignalingChannel? = null,
         onLog: ((String) -> Unit)? = null
     ): TalkbackRuntime {
         return createBundle(
@@ -60,15 +73,91 @@ object TalkbackRuntimeFactory {
         discoveryService: ModuleDiscoveryService? = null,
         gossipDiscovery: MeshSweepGossipDiscovery? = null,
         discoveryTransport: DiscoveryTransport? = null,
-        signalingChannel: SignalingChannel = UdpSignalingChannel(),
+        signalingChannel: SignalingChannel? = null,
         onLog: ((String) -> Unit)? = null
     ): TalkbackRuntimeBundle {
         val endpointRegistry = EndpointRegistry(config.localModuleId)
+        val helloTargetProvider = DiscoveryPrrHelloTargetProvider(config.localModuleId)
+        val transportManager = SignalingTransportManager()
+        val socketBinder = AndroidSignalingSocketBinder()
+        val resolvedDiscoveryTransport = discoveryTransport ?: DiscoveryUdpSocket(socketBinder = socketBinder).also {
+            transportManager.attachBinding(it)
+        }
+        val resolvedSignalingChannel = signalingChannel ?: UdpSignalingChannel(
+            lifecycleReporter = transportManager,
+            linkQualificationFacts = transportManager.linkQualificationFacts(),
+            signalingGeneration = transportManager.signalingGenerationAuthority(),
+            socketBinder = socketBinder,
+            localModuleId = config.localModuleId.value
+        ).also {
+            transportManager.attachSignalingBinding(it)
+        }
+        // Peer-edge readiness Hard gate requires stamped receiveGeneration (UDP accept path).
+        // Injected InMemory channels used by JVM integration tests do not stamp; keep readiness null.
+        val peerEdgeSignalingReadiness = if (signalingChannel == null) {
+            PeerEdgeSignalingReadiness(
+                moduleStaleMs = config.moduleStaleMs,
+                localSnapshot = { transportManager.linkQualificationSnapshot() }
+            ).also { readiness ->
+                transportManager.wirePeerEdgeSignalingReadiness(readiness)
+            }
+        } else {
+            null
+        }
+        val prrSender = UdpSignalingReannounceSender(
+            signalingChannel = resolvedSignalingChannel,
+            sharedSecret = config.sharedSecret,
+            helloTargetProvider = helloTargetProvider
+        )
+        val prrController = PeerReachabilityReannounceController(
+            sender = prrSender,
+            endpointSnapshot = {
+                val endpoints = endpointRegistry.allOnline().map {
+                    RemoteEndpointInfo(
+                        endpointId = it.address.endpointId.value,
+                        displayName = it.displayName,
+                        online = it.online,
+                        priority = it.priority
+                    )
+                }
+                val from = endpointRegistry.allOnline().firstOrNull()?.address
+                    ?: EndpointAddress(config.localModuleId, EndpointId("E01"))
+                LocalEndpointSnapshot(
+                    localModuleId = config.localModuleId.value,
+                    endpoints = endpoints,
+                    fromAddress = from,
+                    signalingPort = config.signalingPort
+                )
+            }
+        )
+        transportManager.wirePrrController(prrController)
+        if (peerEdgeSignalingReadiness != null) {
+            val peerEdgePrrHintScheduler = Executors.newSingleThreadScheduledExecutor { r ->
+                Thread(r, "peer-edge-prr-hint").apply { isDaemon = true }
+            }
+            val peerEdgePrrHint = PeerEdgePrrHintCoordinator(
+                scheduler = peerEdgePrrHintScheduler,
+                isStillNotReady = { moduleId -> !peerEdgeSignalingReadiness.isReady(moduleId) },
+                announcePeer = { moduleId ->
+                    val target = helloTargetProvider.helloTargetFor(moduleId) ?: return@PeerEdgePrrHintCoordinator
+                    val snap = transportManager.linkQualificationSnapshot()
+                    prrController.onPeerEdgeSignalingHint(
+                        remoteModuleId = moduleId,
+                        target = target,
+                        transportEpoch = snap.rebindGeneration,
+                        socketId = snap.socketId,
+                        networkId = snap.networkId
+                    )
+                }
+            )
+            peerEdgeSignalingReadiness.onPeerEdgeSignalingLost = peerEdgePrrHint::onPeerEdgeSignalingLost
+        }
+        val networkObserver = NetworkCapabilityObserver(context, transportManager, socketBinder)
         val staticDiscovery = StaticPeerDiscoveryService(staticPeers)
         val gossip = gossipDiscovery ?: MeshSweepGossipDiscovery(
             sharedSecret = { config.sharedSecret },
             subnetProvider = NetworkInterfaceSubnetProvider(),
-            transport = discoveryTransport ?: DiscoveryUdpSocket(),
+            transport = resolvedDiscoveryTransport,
             config = MeshSweepGossipConfig(
                 discoveryPort = config.discoveryPort,
                 sweepMaxHosts = config.sweepMaxHosts,
@@ -82,6 +171,7 @@ object TalkbackRuntimeFactory {
             gossip,
             NsdModuleDiscoveryService(context)
         )
+        resolvedDiscovery.onPresenceChanged { helloTargetProvider.updatePresence(it) }
         val coordinatorConfig = TalkbackCoordinatorConfig(
             autoAcceptIncoming = config.autoAcceptIncoming,
             sessionIdleTimeoutMs = config.sessionIdleTimeoutMs,
@@ -121,16 +211,32 @@ object TalkbackRuntimeFactory {
         )
         coordinator = TalkbackCoordinator(
             discoveryService = resolvedDiscovery,
-            signalingChannel = signalingChannel,
+            signalingChannel = resolvedSignalingChannel,
             mediaRegistry = mediaRegistry,
             localModuleId = config.localModuleId,
             endpointRegistry = endpointRegistry,
             config = coordinatorConfig,
             localDeviceHealth = AndroidBatteryHealthProvider(context),
+            linkQualificationSnapshot = {
+                transportManager.readLinkQualificationSnapshot("recovery_gate")
+            },
+            peerEdgeSignalingReadiness = peerEdgeSignalingReadiness,
             onLog = onLog
         )
+        transportManager.onLinkQualificationStateChanged { _, newState ->
+            if (newState == LinkQualificationState.BIDIRECTIONAL_READY) {
+                coordinator.onLinkQualificationStateChanged()
+            }
+        }
         coordinator.updateStaticPeers(staticPeers)
-        val runtime = TalkbackRuntime(config, coordinator, endpointRegistry, staticDiscovery, gossip)
+        val runtime = TalkbackRuntime(
+            config,
+            coordinator,
+            endpointRegistry,
+            staticDiscovery,
+            gossip,
+            networkObserver
+        )
         return TalkbackRuntimeBundle(runtime, gossip)
     }
 }

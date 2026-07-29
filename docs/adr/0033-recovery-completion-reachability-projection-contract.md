@@ -1,0 +1,283 @@
+# ADR-0033: Recovery Completion Reachability Projection Contract
+
+## Status
+
+**Accepted** (2026-07-27). Opens after [ADR-0032](./0032-recovery-dispatch-eligibility-contract.md) (Accepted). This is a **conformance correction** for completion eligibility projection, not a new recovery feature slice. R28 Frozen remains unchanged.
+
+Complements **ADR-0022** (recovery completion ownership). Does **not** reopen dispatch eligibility ([ADR-0032](./0032-recovery-dispatch-eligibility-contract.md)), PRR, or link qualification.
+
+Continues the `INV-REC-*` series at **INV-REC-014**.
+
+## Acceptance criterion
+
+**Completion Reachability Projection correctness** — not recovery end-to-end success.
+
+| In scope | Out of scope |
+|---|---|
+| Snapshot fields declare correct provenance plane | `EDGE_RECOVERED` |
+| Self-authority does not require media self-loop | PRR episode creation |
+| `authorityReachable` semantics on authority plane | Signaling re-announcement |
+| | Peer signaling convergence |
+| | ICE restart success |
+
+### Acceptance evidence
+
+Case B soak: `logs/obs-r28n-caseb-20260727-105945`
+
+Verified:
+
+- Host recovery snapshot no longer derives `authorityReachable` from `isPeerMediaConnected(self)`.
+- `authorityReachable=true` observed during recovery wait on host (M02).
+- Self-authority media loopback deadlock removed.
+
+Non-goal:
+
+- `EDGE_RECOVERED` convergence is **not** an ADR-0033 acceptance criterion.
+- Remaining completion convergence depends on signaling/media recovery path (R28-L; out of scope).
+
+Do **not** reopen ADR-0033 because `EDGE_RECOVERED` is missing.
+
+## Final scope
+
+### Closed
+
+`authorityReachable` provenance on the completion snapshot.
+
+Before:
+
+```text
+authorityReachable
+        |
+        v
+isPeerMediaConnected(authority)
+        |
+        v
+media self-loop (structural deadlock on host)
+```
+
+After:
+
+```text
+authorityReachable
+        |
+        v
+membership/signaling-aware authority semantics
+(self-authority tautology; remote host via media edge)
+```
+
+Verification signal:
+
+```text
+authorityReachable=true
+observed during recovery wait
+```
+
+### Explicitly not owned
+
+ADR-0033 does **not** own:
+
+- PRR episode creation
+- Signaling re-announcement
+- Peer signaling convergence
+- ICE restart success
+- `EDGE_RECOVERED` final convergence
+
+## Summary
+
+Case B soak `obs-r28n-caseb-20260727-094332` proved the dispatch chain is closed:
+
+```text
+PRR -> peerSignalingReachable -> RECOVERY_ICE_RESTART_DISPATCHED
+```
+
+Completion was blocked by a **Completion Reachability Projection Gap**: `authorityReachable` was sourced from `isPeerMediaConnected(hostModuleId)`, a media-plane read applied to a self-authority case.
+
+Post-fix soak `obs-r28n-caseb-20260727-105945` shows the authority projection gap closed; completion wait moves to signaling/media convergence:
+
+```text
+RECOVERY_WAITING reason=WAITING_FOR_PEER_SIGNALING
+  authorityReachable=true
+  peerSignalingReachable=false
+  mediaRouteConnected=false
+```
+
+## 1. Non-goals (frozen)
+
+This ADR MUST NOT:
+
+1. **Modify PRR** — the `PRR -> Signaling Reachability -> Dispatch Eligibility` chain is closed.
+2. **Modify dispatch gate** — `canDispatchRecoverySignal()` continues to consume `peerSignalingReachable` only; `mediaRouteConnected` MUST NOT re-enter dispatch admission.
+3. **Modify link qualification** — `BIDIRECTIONAL_READY` remains transport-epoch scoped (R28-L).
+4. **Require `EDGE_RECOVERED`** — end-to-end completion is a soak outcome gate, not this ADR's acceptance criterion.
+
+## 2. Problem naming
+
+Do not call this an `authorityReachable bug`. The defect class is:
+
+> **Completion Reachability Projection Gap**
+
+`authorityReachable` is the first exposed field. The underlying issue is that the completion phase consumes reachability facts whose provenance is undeclared or wrong.
+
+## 3. Invariants
+
+### INV-REC-014
+
+Completion eligibility MUST NOT consume media-derived authority reachability unless the completion predicate explicitly requires media convergence.
+
+### INV-REC-015
+
+Every completion snapshot field MUST declare its provenance plane. Self-authority cases MUST have explicit semantics and MUST NOT evaluate reachability through a synthetic remote media edge.
+
+### INV-REC-016
+
+Dispatch success and completion success are independent outcomes. `RECOVERY_ICE_RESTART_DISPATCHED` MUST NOT imply `EDGE_RECOVERED`. (Case B evidence: `obs-r28n-caseb-20260727-094332`.)
+
+## 4. Completion predicate matrix (authority plane)
+
+| Field | Plane | Source (post-fix) | Consumers |
+|---|---|---|---|
+| `authorityReachable` | authority | Self-authority tautology; remote host via `isPeerMediaConnected(host)` | completion |
+| `mediaRouteConnected` | media | ICE / qosMonitor | completion, materiality |
+| `peerSignalingReachable` | signaling | signaling reachability projection | dispatch, completion |
+| membership state | membership | membership | completion |
+
+Signaling plane inventory for `peerSignalingReachable` is **open** (뿯½7); not part of ADR-0033 closure.
+
+## 5. Architecture boundary (frozen)
+
+```text
+ADR-0032
+Recovery Dispatch Eligibility
+        |
+        | PASS
+        v
+
+ADR-0033
+Completion Reachability Projection (authority plane)
+        |
+        | PASS
+        v
+
+OPEN
+Signaling convergence inventory
+        |
+        +-- same source?
+        +-- same edge?
+        +-- same freshness?
+                |
+                v
+        Decision:
+          close as implementation timing
+        or
+          open projection contract ADR (only if inventory proves wrong plane/source)
+```
+
+Do **not** open ADR-0034 until inventory proves `PRR_FACT_OBSERVED != peerSignalingReachable` source, or completion consumes the wrong signaling plane.
+
+## 6. Case B soak gate matrix (frozen)
+
+Script: `scripts/soak-r28n-caseb.ps1`
+
+Gates are **observation contracts**, not architecture invariants. Node-centric script checks MUST NOT be mistaken for global node requirements.
+
+| Gate | Owner scope | Meaning | ADR-0032/0033 acceptance |
+|---|---|---|---|
+| G-PRR | epoch owner (`RecoveryPeer`) | PRR announcement happened; affected peer observes fact | No |
+| G-L4-2 | transport epoch owner | Qualification recovered on owner | No |
+| G-R28-N_DISPATCH | recovery edge (host) | Dispatch eligibility correct | ADR-0032 |
+| FORBIDDEN_ROUTE_DEFER | global invariant | No media-route deadlock on dispatch path | ADR-0032 |
+| G-R28-COMPLETION | end-to-end | Recovery convergence outcome (`EDGE_RECOVERED`) | No; WARN allowed |
+
+### G-PRR
+
+**Wrong (node-centric):** host must have `PRR_EPISODE_STARTED`.
+
+**Correct (epoch owner):**
+
+```text
+G-PRR PASS* iff:
+  epoch owner emits PRR episode
+  AND
+  affected peer observes PRR fact for owner
+```
+
+Case B (M03 WiFi flap, owner=M03, observer=host M02):
+
+```text
+M03: PRR_EPISODE_STARTED
+M02: PRR_FACT_OBSERVED(remoteModuleId=M03)
+```
+
+Report: `G-PRR PASS* owner=M03`
+
+### G-L4-2
+
+**Wrong (node-centric):** all nodes `BIDIRECTIONAL_READY`.
+
+**Correct (transport epoch owner):** qualification is evaluated per transport epoch owner (INV-PRR-004).
+
+Case B:
+
+```text
+M03: BIDIRECTIONAL_READY expected (epoch changed)
+M02: no new qualification episode expected (epoch unchanged)
+```
+
+Report: `G-L4-2 PASS* owner=M03`
+
+### Evidence replay (`obs-r28n-caseb-20260727-105945`)
+
+| Gate | Result |
+|---|---|
+| G-PRR | PASS* owner=M03 |
+| G-L4-2 | PASS* owner=M03 |
+| G-R28-N_DISPATCH | PASS |
+| FORBIDDEN_ROUTE_DEFER | PASS |
+| G-R28-COMPLETION | WARN (end-to-end only) |
+
+## 7. Open follow-up: signaling source inventory (not ADR-0033)
+
+**Do not create ADR-0034 yet.** Inventory first.
+
+Question is not "did PRR notify?" but:
+
+> Does completion's `peerSignalingReachable` consume the same signaling truth that PRR produces?
+
+### Fact inventory (initial)
+
+| Fact | Producer | Plane | Lifetime | Completion allowed |
+|---|---|---|---|---|
+| `PRR_HELLO_SENT` | SignalingTransport | signaling | episode | no |
+| `PRR_FACT_OBSERVED` | PRR observer | signaling observation | episode | no |
+| `moduleLastHelloMs` | `rememberHello` | signaling | stale window | candidate |
+| `lastPeerObservedAtMs` | `rememberSignalPeer` | signaling observation | stale window | candidate |
+| `peerSignalingReachable` | projection | signaling | snapshot | yes |
+
+### Three verification dimensions
+
+**1. Plane** — signaling fact must feed signaling projection, not PRR trace 뿯↽ completion bypass:
+
+```text
+signaling fact -> signaling projection -> completion   (expected)
+PRR trace -X-> completion                            (forbidden)
+```
+
+**2. Edge identity** — recovery edge `M02 -> M03` must use the same remote key as `PRR_FACT_OBSERVED(remoteModuleId=M03)`.
+
+**3. Freshness** — `PRR_FACT_OBSERVED` timestamp must enter (or align with) the freshness window that `peerSignalingReachable` uses.
+
+### Decision rule
+
+| Inventory outcome | Action |
+|---|---|
+| Same plane, edge, freshness; completion still waits | Close as implementation timing / convergence lag |
+| Wrong plane or divergent source | Open new projection contract ADR |
+
+Case B anchor: `obs-r28n-caseb-20260727-105945` — `PRR_FACT_OBSERVED` present on M02 for M03 while `peerSignalingReachable=false` on recovery wait.
+
+## References
+
+- [ADR-0032](./0032-recovery-dispatch-eligibility-contract.md) — dispatch eligibility (Accepted)
+- [ADR-0022](./0022-recovery-completion-ownership.md) — completion ownership
+- Case B dispatch soak: `logs/obs-r28n-caseb-20260727-094332`
+- Case B authority projection soak: `logs/obs-r28n-caseb-20260727-105945`

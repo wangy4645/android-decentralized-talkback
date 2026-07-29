@@ -188,4 +188,46 @@ class ConferenceParticipantInvariantTest {
         assertTrue(hostAfter.memberKeys.containsAll(rosterBefore))
         assertTrue(hostAfter.memberKeys.any { it.startsWith("M02") })
     }
+
+    @Test
+    fun conferenceRejoinBusy_invMem001_preservesEstablishedMemberRoster() {
+        val channelId = "CONF-INV-MEM-001"
+        val sessionId = nodeM02.runtime.requireConferenceCall(
+            nodeM02.localEndpoint,
+            listOf(
+                EndpointAddress(m01, EndpointId("E01")),
+                EndpointAddress(m03, EndpointId("E01"))
+            ),
+            channelId
+        )
+        assertTrue(nodeM01.waitForLog { it.contains("invite accepted") })
+        assertTrue(nodeM03.waitForLog { it.contains("invite accepted") })
+        listOf(nodeM01, nodeM02, nodeM03).forEach { node ->
+            node.runtime.simulateRemoteIceState("M01", "CONNECTED")
+            node.runtime.simulateRemoteIceState("M02", "CONNECTED")
+            node.runtime.simulateRemoteIceState("M03", "CONNECTED")
+        }
+        Thread.sleep(300L)
+        nodeM02.runtime.simulateRemoteIceState("M03", "DISCONNECTED")
+        Thread.sleep(200L)
+
+        val sent = nodeM02.runtime.sendConferenceRejoinInvites(
+            sessionId,
+            listOf(EndpointAddress(m03, EndpointId("E01")))
+        )
+        assertTrue("host should dispatch rejoin invite to M03", sent > 0)
+        assertTrue(
+            nodeM02.waitForLog(timeoutMs = 8_000L) {
+                it.contains("INV-MEM-001") ||
+                    it.contains("Ignoring BUSY from established member M03")
+            }
+        )
+
+        val snapshot = nodeM02.runtime.sessionSnapshotForChannel(channelId)
+        assertNotNull(snapshot)
+        assertTrue(
+            "INV-MEM-001: M03 must remain on host roster after rejoin BUSY",
+            snapshot!!.memberKeys.any { it.startsWith("M03") }
+        )
+    }
 }

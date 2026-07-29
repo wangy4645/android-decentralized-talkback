@@ -18,7 +18,21 @@ class ChannelLifecyclePolicyTest {
         assertFalse(ChannelLifecyclePolicy.blocksNewGroupMesh(state(ChannelMode.GROUP_PTT)))
         assertTrue(ChannelLifecyclePolicy.blocksNewGroupMesh(state(ChannelMode.CONFERENCE)))
         assertTrue(ChannelLifecyclePolicy.blocksNewGroupMesh(state(pending = true)))
-        assertTrue(ChannelLifecyclePolicy.blocksNewGroupMesh(state(meetingPreferred = true)))
+        assertFalse(ChannelLifecyclePolicy.blocksNewGroupMesh(state(meetingPreferred = true)))
+    }
+
+    @Test
+    fun meetingPreferred_doesNotBlockNewGroupMesh() {
+        assertFalse(
+            ChannelLifecyclePolicy.blocksNewGroupMesh(
+                state(ChannelMode.IDLE, meetingPreferred = true)
+            )
+        )
+        assertFalse(
+            ChannelLifecyclePolicy.blocksNewGroupMesh(
+                state(ChannelMode.GROUP_PTT, meetingPreferred = true)
+            )
+        )
     }
 
     @Test

@@ -12,6 +12,10 @@ import com.talkback.governance.transition.TransitionTerminalState
 import com.talkback.governance.transition.TransitionTrigger
 
 object GovernanceObservabilityLog {
+    /** P0-a observation hook; must not mutate runtime. */
+    @Volatile
+    var transitionTerminalObserver: ((TransitionRecord) -> Unit)? = null
+
     fun gateDecision(operation: Operation, channelId: String, decision: GateDecision) {
         when (decision) {
             is GateDecision.Allow -> TalkbackLog.i(
@@ -62,6 +66,7 @@ object GovernanceObservabilityLog {
                 "trigger=${record.trigger} terminal=${record.terminal} " +
                 "durationMs=${record.terminalAtMs?.minus(record.startedAtMs)}$reasonSuffix"
         )
+        transitionTerminalObserver?.invoke(record)
     }
 
     fun inviteDispatchCompleted(channelId: String, result: InviteDispatchResult) {

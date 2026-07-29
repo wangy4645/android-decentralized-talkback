@@ -8,7 +8,10 @@ data class RecoveryReattachRequest(
     val conferenceId: String,
     val hostSessionId: String,
     val membershipEpoch: Long,
-    val endpointId: String
+    val endpointId: String,
+    val recoveryAttemptId: Long = 0L,
+    val obligationGeneration: Long = 0L,
+    val requestNonce: String = ""
 ) {
     fun toRejoinPayload(intent: ConferenceJoinIntent = ConferenceJoinIntent.RECOVERY_REATTACH): ConferenceRejoinPayload =
         ConferenceRejoinPayload(
@@ -16,7 +19,10 @@ data class RecoveryReattachRequest(
             hostSessionId = hostSessionId,
             membershipEpoch = membershipEpoch,
             endpointId = endpointId,
-            intent = intent
+            intent = intent,
+            recoveryAttemptId = recoveryAttemptId,
+            obligationGeneration = obligationGeneration,
+            requestNonce = requestNonce
         )
 
     companion object {
@@ -26,7 +32,10 @@ data class RecoveryReattachRequest(
                 conferenceId = payload.channelId,
                 hostSessionId = payload.hostSessionId,
                 membershipEpoch = payload.membershipEpoch,
-                endpointId = payload.endpointId
+                endpointId = payload.endpointId,
+                recoveryAttemptId = payload.recoveryAttemptId,
+                obligationGeneration = payload.obligationGeneration,
+                requestNonce = payload.requestNonce
             )
         }
     }
