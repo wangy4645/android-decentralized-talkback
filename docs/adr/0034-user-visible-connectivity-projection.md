@@ -488,6 +488,34 @@ Do **not** open a bug for long-lived `SYNCING` while `sessionEdgeRecovering` / o
 Do **not** add projection timeouts to force `CONNECTED` (violates INV-PRES-005 / Q5=L-1).
 If `SYNCING` persists after media restore, investigate negotiation/completion episode closure — not UI hiding.
 
+
+### Architecture acceptance (PR #97)
+
+**PASS WITH FIELD G-PRES-E OBSERVATION** (2026-07-29).
+
+`	ext
+QUALIFICATION_SIG_V1        CLOSED
+B3 Completion Authority      CLOSED
+PRES / UVCP                  IMPLEMENTED
+G-PRES-A                     PASS
+G-PRES-E                     PENDING FIELD VALIDATION
+`
+
+Remaining risk class: **fact-chain completeness**, not semantic ownership error.
+
+G-PRES-E field goal (when observed): prove
+
+`	ext
+domain fact transition → projection recompute → visible state transition
+`
+
+not `SYNCING` auto-hide / timer / `RECOVERED` forced UI rewrite.
+
+If obligation stays OPEN after media restore: **PRES correct; investigate completion**.
+If obligation CLOSED but CONTROL_SYNCING input remains: **PRES input-contract defect**.
+
+Frozen non-actions: no SYNCING timeout; no Projection `closeObligation`; no UI-driven recovery retry; keep `sessionEdgeRecovering` as recovery diagnostic only.
+
 ## References
 
 - Grill: Presence Projection / Recovery UX Q1–Q9 (2026-07-29)
