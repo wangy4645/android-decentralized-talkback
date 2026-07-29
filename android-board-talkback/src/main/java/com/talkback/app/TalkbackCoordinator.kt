@@ -126,6 +126,7 @@ import com.talkback.core.session.DefaultLocalDeviceHealthProvider
 import com.talkback.core.session.InviteState
 import com.talkback.core.session.LocalDeviceHealthProvider
 import com.talkback.core.session.MediaState
+import com.talkback.core.session.MediaUsabilityFact
 import com.talkback.core.session.MediaTopology
 import com.talkback.core.session.MemberView
 import com.talkback.core.session.MeshTopology
@@ -2760,10 +2761,25 @@ class TalkbackCoordinator(
             conferenceEdgeRecoveryController.isEdgeRecovering(sessionId, remoteModuleId)
         }
 
-    /** Read-only; ADR-0030 per-peer fact: failed-media residency (e.g. FAILED_MEDIA_RECOVERY). */
+    /**
+     * Read-only UVCP / presence media-axis input (INV-PRES-006).
+     *
+     * Composes ADR-0030 failed-media residency with [MediaState] path usability
+     * ([MediaState.RECONNECTING] / [MediaState.FAILED] from ICE_DISCONNECTED / ICE_FAILED).
+     * Does not mutate recovery obligation or projection mapping.
+     *
+     * IMPORTANT: read [ConferenceParticipantManager] / recovery controller directly inside
+     * this sync block. Do **not** call [conferenceParticipantMedia] here — that nests
+     * another [runOnCoordinatorSync] on the single-thread executor and deadlocks the UI
+     * (`onCoordinatorThread` is only set for async [runOnCoordinator], not sync submit).
+     */
     fun conferenceMediaUnavailable(sessionId: String, remoteModuleId: String): Boolean =
         runOnCoordinatorSync {
-            conferenceEdgeRecoveryController.isMediaUnavailable(sessionId, remoteModuleId)
+            MediaUsabilityFact.isUnavailable(
+                mediaState = conferenceParticipantManager.participantMedia(sessionId, remoteModuleId),
+                failedMediaResidency =
+                    conferenceEdgeRecoveryController.isMediaUnavailable(sessionId, remoteModuleId)
+            )
         }
 
     fun networkQualityLabel(): String = conferenceNetworkIndicator().toQualityLabel()

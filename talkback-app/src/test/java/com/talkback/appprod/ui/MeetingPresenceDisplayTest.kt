@@ -2,9 +2,12 @@ package com.talkback.appprod.ui
 
 import com.talkback.core.session.ConferenceParticipantDisplayState
 import com.talkback.core.session.ConferencePresenceProjection
+import com.talkback.core.session.MediaState
+import com.talkback.core.session.MediaUsabilityFact
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Before
 import org.junit.Test
@@ -223,6 +226,40 @@ class MeetingPresenceDisplayTest {
             LocalReachability.ParticipantPresenceState.RECONNECTING,
             state.reachability.state
         )
+    }
+
+    @Test
+    fun invPres006_iceDisconnected_stickyPcm_mediaFactUnavailable_showsReconnecting_notSyncing() {
+        // obs-pres-e-20260729-140050: ice=DISCONNECTED, media=RECONNECTING, residency=false,
+        // sticky receivePathLive=true → must not paint SYNCING (INV-PRES-006).
+        MeetingPresenceDisplay.receivePathLivenessProvider = object : ReceivePathLivenessProvider {
+            override fun receivePathLive(sessionId: String, remoteModuleId: String): Boolean = true
+            override fun mediaEverLive(sessionId: String, remoteModuleId: String): Boolean = true
+        }
+        val mediaUnavailable = MediaUsabilityFact.isUnavailable(
+            mediaState = MediaState.RECONNECTING,
+            failedMediaResidency = false
+        )
+        val ui = MeetingPresenceDisplay.renderConferencePresence(
+            presence = ConferencePresenceProjection(
+                joinedCount = 3,
+                connectedCount = 2,
+                recoveringPeers = setOf("M03")
+            ),
+            participantFacts = listOf(
+                remote("M01", ConferenceParticipantDisplayState.VISIBLE_CONNECTED),
+                remote("M02", ConferenceParticipantDisplayState.VISIBLE_CONNECTED),
+                remote(
+                    "M03",
+                    ConferenceParticipantDisplayState.VISIBLE_RECONNECTING,
+                    isRecoveringPeer = true,
+                    mediaUnavailablePeer = mediaUnavailable
+                )
+            )
+        )
+        assertEquals("M03 reconnecting...", ui.connectingHint)
+        assertEquals(EndpointStatus.RECONNECTING, ui.avatarStatuses["M03"])
+        assertNotEquals(EndpointStatus.SYNCING, ui.avatarStatuses["M03"])
     }
 
     @Test

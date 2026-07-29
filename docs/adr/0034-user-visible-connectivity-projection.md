@@ -475,7 +475,7 @@ Consumers of **connectivity copy** (meeting pill `connectingHint`, member "recon
 | Gate | Criterion | Status |
 |------|-----------|--------|
 | **G-PRES-A** | media OK + control/recovery pending → pill `SYNCING`, not `RECONNECTING` | **PASS** `logs/obs-pres-uvcp-20260729-120549` (M02: `media=CONNECTED` + `sessionEdgeRecovering=true` → `connectingHint=M03 syncing...`) |
-| **G-PRES-E** | after control facts clear (`recovering=false` / obligation CLOSED), projection → `CONNECTED` (no UI timer) | **PENDING** (domain-driven; not a PRES bug if SYNCING persists while facts still justify) |
+| **G-PRES-E** | after control facts clear (`recovering=false` / obligation CLOSED), projection → `CONNECTED` (no UI timer) | **BLOCKED_BY_COMPLETION** (2026-07-29 soak: long SYNCING is accurate; not a PRES defect) |
 
 ### Observation (archived)
 
@@ -498,7 +498,7 @@ QUALIFICATION_SIG_V1        CLOSED
 B3 Completion Authority      CLOSED
 PRES / UVCP                  IMPLEMENTED
 G-PRES-A                     PASS
-G-PRES-E                     PENDING FIELD VALIDATION
+G-PRES-E                     BLOCKED_BY_COMPLETION
 `
 
 Remaining risk class: **fact-chain completeness**, not semantic ownership error.
@@ -525,7 +525,8 @@ Frozen non-actions: no SYNCING timeout; no Projection `closeObligation`; no UI-d
 ADR-0034 Presence / UVCP
 
 Status:       IMPLEMENTED
-Validation:   G-PRES-A PASS ; G-PRES-E PENDING FIELD VALIDATION
+Validation:   G-PRES-A PASS ; G-PRES-E BLOCKED_BY_COMPLETION
+Media fact:  PR #98 PASS (INV-PRES-006 input; nested-sync deadlock fix)
 Acceptance:   PASS WITH FIELD G-PRES-E OBSERVATION
 Risk class:   fact-chain completion validation — NOT semantic boundary risk
 `
@@ -545,6 +546,43 @@ G-PRES-E field criteria (final):
 3. UI follows passively: `M03 syncing...` → connected / no extra hint (either ok for pill design).
 
 Forbidden reverse couplings remain frozen: UI state ↛ completion / qualification repair / admission.
+
+
+### Fork observation — G-PRES-E blocked by completion (2026-07-29)
+
+**Archived after soak** `logs/obs-pres-mediafact-20260729-150053`.
+
+```text
+G-PRES-E is blocked by negotiation completion.
+Long-lived SYNCING is an accurate projection of unresolved
+control synchronization and is not a PRES defect.
+```
+
+Field confirmation (local edge perspective — not global inconsistency):
+
+```text
+M01 view: M03 reconnecting   (media=RECONNECTING, unavailable=true, ice=CHECKING)
+M02 view: M03 syncing        (media=CONNECTED, recovering=true, obligation OPEN)
+M03 view: M02 syncing        (local recovering toward M02)
+```
+
+Completion chain observed while SYNCING persisted:
+
+```text
+ICE_RESTART_DEFERRED (SIGNALING_NOT_STABLE)
+        |
+        v
+WAIT_FOR_NEGOTIATION_INTENT
+        |
+        v
+(no OBLIGATION_CLOSED(RECOVERED))
+```
+
+**PR #98:** PASS for UVCP media-axis fact composition (MediaUsabilityFact) + nested `runOnCoordinatorSync` deadlock fix. Does **not** claim G-PRES-E.
+
+**UVCP / ADR-0034 semantic model:** CLOSED. Do not reopen PRES grill for long SYNCING.
+
+**Next workstream (SEPARATE):** Negotiation Deferred Drain Authority — ownership / wakeup / drain evidence only. Forbidden: UVCP mapping, SYNCING timeout, recovering display rewrite, peer readiness, B3 reopen.
 
 ## References
 
