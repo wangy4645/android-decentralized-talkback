@@ -2,7 +2,7 @@
 
 ## Status
 
-**Accepted** (design freeze 2026-07-29; implementation landed 2026-07-29) — `/grill-with-docs` **Q1–Q9 ACCEPTED**; **INV-PRES-001..009**. Reference: `UserVisibleConnectivityProjection` + meeting/member UI consumers.
+**Accepted** (design freeze 2026-07-29; implementation landed 2026-07-29) — `/grill-with-docs` **Q1–Q9 ACCEPTED**; **INV-PRES-001..009**. Reference: `UserVisibleConnectivityProjection` + meeting/member UI consumers. **G-PRES-A PASS** (2026-07-29).
 
 Complements **ADR-0022** (recovery / completion ownership — CLOSED for this workstream), **ADR-0028** / **ADR-0030** (local presence ownership), **QUALIFICATION_SIG_V1** (peer readiness — CLOSED).
 
@@ -466,6 +466,27 @@ Consumers of **connectivity copy** (meeting pill `connectingHint`, member "recon
 5. Do not touch `closeObligation` / `markRecovered` / `NEGOTIATION_CAN_EXECUTE`.
 
 ---
+
+
+---
+
+## 14. Soak / field gates
+
+| Gate | Criterion | Status |
+|------|-----------|--------|
+| **G-PRES-A** | media OK + control/recovery pending → pill `SYNCING`, not `RECONNECTING` | **PASS** `logs/obs-pres-uvcp-20260729-120549` (M02: `media=CONNECTED` + `sessionEdgeRecovering=true` → `connectingHint=M03 syncing...`) |
+| **G-PRES-E** | after control facts clear (`recovering=false` / obligation CLOSED), projection → `CONNECTED` (no UI timer) | **PENDING** (domain-driven; not a PRES bug if SYNCING persists while facts still justify) |
+
+### Observation (archived)
+
+`	ext
+Media restored while control recovery pending
+is a supported steady intermediate state.
+`
+
+Do **not** open a bug for long-lived `SYNCING` while `sessionEdgeRecovering` / obligation remains open.
+Do **not** add projection timeouts to force `CONNECTED` (violates INV-PRES-005 / Q5=L-1).
+If `SYNCING` persists after media restore, investigate negotiation/completion episode closure — not UI hiding.
 
 ## References
 

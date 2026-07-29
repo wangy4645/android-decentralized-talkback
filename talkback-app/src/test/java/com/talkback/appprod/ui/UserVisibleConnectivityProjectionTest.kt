@@ -166,6 +166,32 @@ class UserVisibleConnectivityProjectionTest {
         assertEquals(UserVisibleConnectivityState.CONNECTED, visible)
     }
 
+
+    @Test
+    fun caseE_syncingClearsToConnected_whenControlFactsNoLongerJustify() {
+        // G-PRES-E (unit): projection recalculates; no timer owns the transition.
+        val whilePending = UserVisibleConnectivityProjection.project(
+            UserVisibleConnectivityProjection.deriveAxes(
+                receivePathLive = true,
+                mediaEverLive = true,
+                recovering = true,
+                mediaUnavailable = false
+            )
+        )
+        assertEquals(UserVisibleConnectivityState.SYNCING, whilePending)
+
+        val afterResolved = UserVisibleConnectivityProjection.project(
+            UserVisibleConnectivityProjection.deriveAxes(
+                receivePathLive = true,
+                mediaEverLive = true,
+                recovering = false,
+                mediaUnavailable = false,
+                controlSyncPending = false
+            )
+        )
+        assertEquals(UserVisibleConnectivityState.CONNECTED, afterResolved)
+    }
+
     @Test
     fun projection_isPure_noTimerFields() {
         val clazz = UserVisibleConnectivityProjection::class.java
