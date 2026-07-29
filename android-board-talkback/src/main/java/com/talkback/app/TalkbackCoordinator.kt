@@ -2767,11 +2767,16 @@ class TalkbackCoordinator(
      * Composes ADR-0030 failed-media residency with [MediaState] path usability
      * ([MediaState.RECONNECTING] / [MediaState.FAILED] from ICE_DISCONNECTED / ICE_FAILED).
      * Does not mutate recovery obligation or projection mapping.
+     *
+     * IMPORTANT: read [ConferenceParticipantManager] / recovery controller directly inside
+     * this sync block. Do **not** call [conferenceParticipantMedia] here — that nests
+     * another [runOnCoordinatorSync] on the single-thread executor and deadlocks the UI
+     * (`onCoordinatorThread` is only set for async [runOnCoordinator], not sync submit).
      */
     fun conferenceMediaUnavailable(sessionId: String, remoteModuleId: String): Boolean =
         runOnCoordinatorSync {
             MediaUsabilityFact.isUnavailable(
-                mediaState = conferenceParticipantMedia(sessionId, remoteModuleId),
+                mediaState = conferenceParticipantManager.participantMedia(sessionId, remoteModuleId),
                 failedMediaResidency =
                     conferenceEdgeRecoveryController.isMediaUnavailable(sessionId, remoteModuleId)
             )
