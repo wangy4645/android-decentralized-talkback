@@ -70,7 +70,8 @@ class MediaRecoveryCausalTraceTest {
             ctx = ctx,
             joinIntent = "RECOVERY_REATTACH",
             transportOutcome = "SENT",
-            signalingEpoch = 1L
+            signalingEpoch = 1L,
+            offerLineageId = "L55"
         )
         MediaRecoveryCausalTrace.recoveryOfferReceived(
             ctx = ctx,
@@ -79,18 +80,27 @@ class MediaRecoveryCausalTraceTest {
             localIceState = "CONNECTED",
             localAttemptId = 5L,
             localObligationGen = 2L,
-            detail = "meshCompleted=true"
+            detail = "meshCompleted=true",
+            offerLineageId = "L55",
+            offerRestartAttemptId = 4L,
+            offerTransportGeneration = 8L
         )
         assertTrue(lines[0].startsWith("RECOVERY_OFFER_SENT"))
         assertTrue(lines[0].contains("attempt=4"))
+        assertTrue(lines[0].contains("restartAttemptId=4"))
         assertTrue(lines[0].contains("obligationGen=2"))
         assertTrue(lines[0].contains("transportOutcome=SENT"))
         assertTrue(lines[0].contains("signalingEpoch=1"))
+        assertTrue(lines[0].contains("offerLineageId=L55"))
+        assertTrue(lines[0].contains("gen=8"))
         assertTrue(lines[1].startsWith("RECOVERY_OFFER_RECEIVED"))
         assertTrue(lines[1].contains("decision=DROP_DUPLICATE_ICE_CONNECTED"))
         assertTrue(lines[1].contains("localIce=CONNECTED"))
         assertTrue(lines[1].contains("localAttempt=5"))
         assertTrue(lines[1].contains("localObligationGen=2"))
+        assertTrue(lines[1].contains("offerLineageId=L55"))
+        assertTrue(lines[1].contains("offerRestartAttemptId=4"))
+        assertTrue(lines[1].contains("offerTransportGeneration=8"))
     }
 
     @Test

@@ -231,6 +231,17 @@ internal fun edgeWakeupKey(sessionId: String, remoteModuleId: String): String =
 internal fun moduleWakeupKey(moduleId: String): String = "module($moduleId)"
 
 /** REATTACH control-plane delivery facts — orthogonal to obligation state (ADR-0022 Appendix D). */
+/** ADR-0035 PR2: outbound recovery-offer delivery lifecycle (Episode-owned). */
+enum class RecoveryOfferDeliveryPhase {
+    NONE,
+    PENDING,
+    RETRY_PENDING,
+    CONFIRMED,
+    EXHAUSTED;
+
+    fun isAwaitingAck(): Boolean = this == PENDING || this == RETRY_PENDING
+}
+
 enum class ReattachDeliveryState {
     QUEUED,
     TRANSPORT_SENT,
@@ -320,7 +331,12 @@ internal data class EdgeRecoveryRecord(
     var reattachNonce: String? = null,
     /** Lineage bound at last outbound REATTACH transport send (ADR-0022 R28-L reject guard). */
     var outboundDispatchAttemptId: Long? = null,
-    var outboundDispatchObligationGeneration: Long? = null
+    var outboundDispatchObligationGeneration: Long? = null,
+    /** ADR-0035 PR2: recovery offer delivery assurance on this edge. */
+    var recoveryOfferDeliveryPhase: RecoveryOfferDeliveryPhase = RecoveryOfferDeliveryPhase.NONE,
+    var recoveryOfferLineageId: String? = null,
+    var recoveryOfferDeliveryAttemptId: Long = 0L,
+    var recoveryOfferLastDispatchAtMs: Long? = null
 ) {
     /** True while this record owns an active recovery attempt (ADR-0022 P0.5). */
     fun hasActiveAttempt(): Boolean = phase.isActivelyRecovering()

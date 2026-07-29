@@ -1,6 +1,7 @@
 package com.talkback.core.session
 
 import com.talkback.core.qos.IceConnectivity
+import com.talkback.core.util.RecoveryDeliveryFact
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.ScheduledFuture
@@ -73,7 +74,25 @@ class ConferenceEdgeRecoveryController(
         remoteModuleId: String,
         trigger: String,
         supersededFromAttempt: Long?
-    ) -> Unit = { _, _, _, _ -> }
+    ) -> Unit = { _, _, _, _ -> },
+    /** ADR-0035 PR2: bounded recovery-offer delivery retry budget. */
+    private val maxDeliveryAttempts: Int = 3,
+    private val deliveryRetryIntervalMs: Long = 3_000L,
+    private val deliveryRetryMinGapMs: Long = 500L,
+    /**
+     * Coordinator executes same-lineage recovery offer dispatch (deliveryAttempt++ only).
+     */
+    private val onDispatchRecoveryOffer: (
+        sessionId: String,
+        remoteModuleId: String,
+        offerLineageId: String,
+        deliveryAttemptId: Long
+    ) -> Boolean = { _, _, _, _ -> false },
+    private val onRecoveryOfferDeliveryExhausted: (
+        sessionId: String,
+        remoteModuleId: String,
+        offerLineageId: String
+    ) -> Unit = { _, _, _ -> }
 ) {
     private val edges = ConcurrentHashMap<ConferenceEdgeKey, EdgeRecoveryRecord>()
     private val debounceTimers = ConcurrentHashMap<ConferenceEdgeKey, ScheduledFuture<*>>()
@@ -88,6 +107,56 @@ class ConferenceEdgeRecoveryController(
     /** G-R28-M-5: suppress duplicate post-terminal facts (e.g. repeated HELLO). */
     private data class TerminalReevaluateKey(val attemptId: Long, val trigger: RecoveryReevaluateTrigger)
     private val terminalReevaluateDedup = ConcurrentHashMap<ConferenceEdgeKey, TerminalReevaluateKey>()
+
+    private val recoveryOfferDeliveryPolicy = RecoveryOfferDeliveryPolicy(
+        localModuleId = localModuleId,
+        maxDeliveryAttempts = maxDeliveryAttempts,
+        deliveryRetryIntervalMs = deliveryRetryIntervalMs,
+        deliveryRetryMinGapMs = deliveryRetryMinGapMs,
+        clock = clock,
+        scheduler = scheduler,
+        onLog = onLog,
+        onDispatchRecoveryOffer = onDispatchRecoveryOffer,
+        canDispatchRecoverySignal = canDispatchRecoveryMediaAction,
+        onDeliveryExhausted = onRecoveryOfferDeliveryExhausted
+    ).also { policy ->
+        policy.bindEdgesLookup { edges[it] }
+    }
+
+    /** ADR-0035 PR2: outbound recovery offer entered DELIVERY_PENDING (Coordinator fact). */
+    fun onRecoveryOfferDeliveryPending(
+        sessionId: String,
+        remoteModuleId: String,
+        identity: RecoveryDeliveryFact.Identity
+    ) {
+        val record = edges[ConferenceEdgeKey(sessionId, remoteModuleId)] ?: return
+        recoveryOfferDeliveryPolicy.onOutboundDeliveryPending(record, identity, sessionId)
+    }
+
+    /** ADR-0035 PR2: matching ACK accepted for current lineage. */
+    fun onRecoveryOfferDeliveryConfirmed(
+        sessionId: String,
+        remoteModuleId: String,
+        offerLineageId: String
+    ) {
+        val record = edges[ConferenceEdgeKey(sessionId, remoteModuleId)] ?: return
+        if (record.recoveryOfferDeliveryPhase == RecoveryOfferDeliveryPhase.EXHAUSTED) return
+        recoveryOfferDeliveryPolicy.onDeliveryConfirmed(record, offerLineageId)
+    }
+
+    fun isRecoveryOfferDeliveryExhausted(sessionId: String, remoteModuleId: String): Boolean {
+        val record = edges[ConferenceEdgeKey(sessionId, remoteModuleId)] ?: return false
+        return record.recoveryOfferDeliveryPhase == RecoveryOfferDeliveryPhase.EXHAUSTED
+    }
+
+    internal fun evaluateRecoveryOfferDeliveryRetryForTest(
+        sessionId: String,
+        remoteModuleId: String,
+        trigger: String
+    ) {
+        val record = edges[ConferenceEdgeKey(sessionId, remoteModuleId)] ?: return
+        recoveryOfferDeliveryPolicy.evaluateDeliveryRetryForTest(record, trigger)
+    }
 
     fun factsForSession(sessionId: String): EdgeRecoveryFacts {
         val sessionEdges = edges.values.filter { it.key.sessionId == sessionId }
@@ -1232,6 +1301,12 @@ class ConferenceEdgeRecoveryController(
                     "wakeupBinding=${record.wakeupBinding?.logLabel()}"
             )
         }
+        if (
+            trigger == RecoveryReevaluateTrigger.LINK_READY ||
+            trigger == RecoveryReevaluateTrigger.PEER_REACHABILITY_RESTORED
+        ) {
+            recoveryOfferDeliveryPolicy.onDeliveryHint(record, trigger.name)
+        }
         val controlPlane = record.controlPlaneStarted()
         onLog(
             "RECOVERY_REEVALUATE session=$sessionId edge=$remoteModuleId " +
@@ -2270,6 +2345,7 @@ class ConferenceEdgeRecoveryController(
         cancelWatchdog(key)
         cancelDeadline(key)
         val record = edges[key] ?: return
+        recoveryOfferDeliveryPolicy.cancel(record)
         record.phase = EdgeRecoveryPhase.CANCELLED
         val closeReason = when {
             reason.contains("session_cancelled", ignoreCase = true) ||
@@ -2795,6 +2871,7 @@ class ConferenceEdgeRecoveryController(
         val previousObligationOpen = record.obligationClosedAtMs == null &&
             record.obligationOpenedAtMs != null
         terminalReevaluateDedup.remove(record.key)
+        recoveryOfferDeliveryPolicy.clearDeliveryState(record)
         // Drop prior failed-residency deadline; next FAILED stamps a fresh one (R28-H.1).
         // Also cancel the superseded attempt's watchdog so it cannot emit FAILED (#79).
         cancelDeadline(record.key)

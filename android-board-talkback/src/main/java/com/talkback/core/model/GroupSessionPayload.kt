@@ -27,7 +27,20 @@ data class GroupSessionPayload(
     /** ADR-0021 D1: distinguishes mesh join from recovery reattach on GROUP_JOIN. */
     val joinIntent: ConferenceJoinIntent = ConferenceJoinIntent.NORMAL_JOIN,
     /** Control-plane roster sync without media (RESYNC response). */
-    val membershipSnapshot: MembershipSnapshot? = null
+    val membershipSnapshot: MembershipSnapshot? = null,
+    /**
+     * Per-offer correlation id for ICE-restart / recovery GROUP_JOIN (observation).
+     * Optional; older peers ignore unknown keys. Used to join OFFER_SENT ↔ OFFER_RECEIVED.
+     */
+    val offerLineageId: String? = null,
+    /** Sender-side recovery attempt id for the offer (observation / correlation). */
+    val restartAttemptId: Long? = null,
+    /** Sender-side transport/PC generation stamped on the offer (observation / correlation). */
+    val transportGeneration: Long? = null,
+    /** ADR-0035: obligation generation stamped on recovery offer (ACK correlation). */
+    val obligationGeneration: Long? = null,
+    /** ADR-0035 PR1: delivery attempt within a lineage (default 1; no retry owner yet). */
+    val deliveryAttemptId: Long = 1L
 ) {
     fun encode(): String {
         val arr = JSONArray()
@@ -67,6 +80,21 @@ data class GroupSessionPayload(
             json.put("joinIntent", joinIntent.encode())
         }
         membershipSnapshot?.let { json.put("membershipSnapshot", it.encode()) }
+        if (!offerLineageId.isNullOrBlank()) {
+            json.put("offerLineageId", offerLineageId)
+        }
+        if (restartAttemptId != null && restartAttemptId > 0L) {
+            json.put("restartAttemptId", restartAttemptId)
+        }
+        if (transportGeneration != null && transportGeneration > 0L) {
+            json.put("transportGeneration", transportGeneration)
+        }
+        if (obligationGeneration != null && obligationGeneration > 0L) {
+            json.put("obligationGeneration", obligationGeneration)
+        }
+        if (deliveryAttemptId > 0L) {
+            json.put("deliveryAttemptId", deliveryAttemptId)
+        }
         return json.toString()
     }
 
@@ -102,7 +130,12 @@ data class GroupSessionPayload(
                     ),
                     membershipSnapshot = json.optJSONObject("membershipSnapshot")?.let {
                         MembershipSnapshot.decode(it)
-                    }
+                    },
+                    offerLineageId = json.optString("offerLineageId").takeIf { it.isNotBlank() },
+                    restartAttemptId = json.optLong("restartAttemptId", 0L).takeIf { it > 0L },
+                    transportGeneration = json.optLong("transportGeneration", 0L).takeIf { it > 0L },
+                    obligationGeneration = json.optLong("obligationGeneration", 0L).takeIf { it > 0L },
+                    deliveryAttemptId = json.optLong("deliveryAttemptId", 1L).coerceAtLeast(1L)
                 )
             }.getOrNull()
         }
