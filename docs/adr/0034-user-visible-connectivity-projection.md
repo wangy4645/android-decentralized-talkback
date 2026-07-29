@@ -516,6 +516,36 @@ If obligation CLOSED but CONTROL_SYNCING input remains: **PRES input-contract de
 
 Frozen non-actions: no SYNCING timeout; no Projection `closeObligation`; no UI-driven recovery retry; keep `sessionEdgeRecovering` as recovery diagnostic only.
 
+
+### Maintenance observation mode (2026-07-29)
+
+**Entered maintenance observation.** Do not reopen PRES / SIG / B3 grill on this line.
+
+`	ext
+ADR-0034 Presence / UVCP
+
+Status:       IMPLEMENTED
+Validation:   G-PRES-A PASS ; G-PRES-E PENDING FIELD VALIDATION
+Acceptance:   PASS WITH FIELD G-PRES-E OBSERVATION
+Risk class:   fact-chain completion validation — NOT semantic boundary risk
+`
+
+Forward-only actions:
+
+1. Natural soak for G-PRES-E evidence (no manufactured protocol path; no UI timeout).
+2. On anomaly, triage layer first:
+   - `SYNCING` persists → domain facts
+   - facts cleared but UI stuck → projection
+   - UI ok but action wrong → admission
+
+G-PRES-E field criteria (final):
+
+1. Completion domain closes naturally: negotiation resolved → resolved evidence → `OBLIGATION_CLOSED(RECOVERED)` (not UI timer → CONNECTED).
+2. Projection inputs: `CONTROL_SYNCING` disappears (media stays CONNECTED; control → STABLE).
+3. UI follows passively: `M03 syncing...` → connected / no extra hint (either ok for pill design).
+
+Forbidden reverse couplings remain frozen: UI state ↛ completion / qualification repair / admission.
+
 ## References
 
 - Grill: Presence Projection / Recovery UX Q1–Q9 (2026-07-29)
