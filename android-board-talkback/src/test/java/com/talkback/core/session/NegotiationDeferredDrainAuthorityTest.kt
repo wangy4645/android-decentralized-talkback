@@ -113,7 +113,7 @@ class NegotiationDeferredDrainAuthorityTest {
         assertNotNull(controller.pendingIceRestartIntentId(sessionId, remoteModuleId))
         assertTrue(
             decisionLogs.any {
-                it.contains("DEFERRED_INTENT_REJECTED") && it.contains("reason=gate_not_executable")
+                it.contains("DEFERRED_INTENT_HELD") && it.contains("hold=NEGOTIATION")
             }
         )
     }

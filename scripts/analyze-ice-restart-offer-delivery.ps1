@@ -1,4 +1,4 @@
-# ICE Restart Offer Delivery / Signal Path Classification analyzer
+﻿# ICE Restart Offer Delivery / Signal Path Classification analyzer
 # Does not reopen Drain / UVCP / Qualification / Completion Authority.
 #
 # SignalPathKey (MUST match all that apply):
@@ -231,7 +231,7 @@ if ($txns.Count -eq 0) {
         }
 
         # Ingress R1/R2/R3 (peer): time-correlated loosely by lineage on decoded stages;
-        # UDP_DATAGRAM_RECEIVED has remote=UNKNOWN — report count near session if D1.
+        # UDP_DATAGRAM_RECEIVED has remote=UNKNOWN 鈥?report count near session if D1.
         $udpAny = @($delivAll | Where-Object {
             $_.Device -eq $peer -and (Has-Token $_.Line "stage=UDP_DATAGRAM_RECEIVED")
         }).Count
@@ -279,20 +279,80 @@ if ($txns.Count -eq 0) {
 
         $ingressClass = "N/A"
         if ($pathClass -eq "D1_NO_REMOTE_RECEIVE") {
-            if ($reattachClass -eq "PASS") {
-                $ingressClass = "R3_CLASSIFIED_BUT_NO_HANDLER_CHAIN"
-            } elseif ($decodedHits -eq "PASS") {
-                $ingressClass = "R3_DECODE_OK_CLASSIFY_MISS"
-            } elseif ($udpAny -gt 0) {
-                $ingressClass = "R2_OR_R1_NEED_SRC_CORRELATION"
-            } else {
-                $ingressClass = "R1_NO_UDP_ON_PEER"
+            $senderDstIp = $null
+            $senderSrcIp = $null
+            $senderLocalHits = @($delivAll | Where-Object {
+                (Has-Token $_.Line "stage=LOCAL_ACCEPT") -and
+                $_.Device -eq $sender -and
+                (Get-Field $_.Line "remote") -eq $peer -and (
+                    -not $lineageKey -or $lineageKey -eq "NONE" -or
+                    (Get-Field $_.Line "offerLineageId") -eq $lineageKey
+                )
+            })
+            foreach ($hit in $senderLocalHits) {
+                if ($hit.Line -match "dst=([0-9.]+):") { $senderDstIp = $Matches[1]; break }
+                if ($hit.Line -match "dstIp=([0-9.]+)") { $senderDstIp = $Matches[1]; break }
+            }
+            $senderSentHits = @($all | Where-Object {
+                $_.Device -eq $sender -and (Has-Token $_.Line "SIGNAL_DATAGRAM_SENT") -and
+                (Has-Token $_.Line "signalType=GROUP_JOIN")
+            })
+            foreach ($hit in $senderSentHits) {
+                if ($hit.Line -match "localIp=([0-9.]+)") { $senderSrcIp = $Matches[1]; break }
+            }
+            if (-not $senderSrcIp) {
+                $obs = @($all | Where-Object {
+                    $_.Device -eq $peer -and (Has-Token $_.Line "REMOTE_RECEIVE_OBSERVED") -and
+                    $_.Line -match "remote=$sender\b" -and $_.Line -match "src=([0-9.]+):"
+                } | Select-Object -First 1)
+                if ($obs -and $obs.Line -match "src=([0-9.]+):") { $senderSrcIp = $Matches[1] }
+            }
+            $peerLines = @($all | Where-Object { $_.Device -eq $peer })
+            $peerNetworkLost = @($peerLines | Where-Object {
+                (Has-Token $_.Line "NETWORK_LOST")
+            }).Count -gt 0
+            $peerUnboundRebind = @($peerLines | Where-Object {
+                (Has-Token $_.Line "SIGNAL_SOCKET_REBIND") -and $_.Line -match "boundNetworkId=unbound"
+            }).Count -gt 0
+            $peerBestEffortFromSender = @($peerLines | Where-Object {
+                (Has-Token $_.Line "REMOTE_RECEIVE_OBSERVED") -and $_.Line -match "remote=$sender\b"
+            }).Count
+            $peerLargeGroupJoin = @($peerLines | Where-Object {
+                (Has-Token $_.Line "SIGNAL_DATAGRAM_RECEIVED") -and
+                $_.Line -match "signalType=GROUP_JOIN" -and
+                ($senderSrcIp -and $_.Line -match "srcIp=$senderSrcIp\b") -and
+                $_.Line -match "bytes=(\d+)" -and [int]$Matches[1] -ge 1500
+            }).Count
+            if ($reattachClass -eq "PASS" -and $remoteP -eq "FAIL") {
+                $ingressClass = "D1-C_LOG_CORRELATION_MISS"
+            }
+            elseif ($decodedHits -eq "PASS" -and $reattachClass -eq "FAIL") {
+                $ingressClass = "D1-C_DECODE_OR_CLASSIFY_MISS"
+            }
+            elseif ($peerNetworkLost -or $peerUnboundRebind -or ($udpAny -eq 0 -and $peerBestEffortFromSender -eq 0)) {
+                $ingressClass = "D1-A_PEER_INTERFACE_DOWN"
+            }
+            elseif ($peerBestEffortFromSender -gt 0 -and $peerLargeGroupJoin -eq 0) {
+                $ingressClass = "D1-B_UDP_LOST_BEFORE_SOCKET"
+            }
+            elseif ($senderDstIp -and @($peerLines | Where-Object {
+                (Has-Token $_.Line "SIGNAL_SOCKET_BOUND") -and
+                $_.Line -match "localAddress=([0-9.]+)" -and
+                $Matches[1] -ne $senderDstIp -and $Matches[1] -ne "::"
+            }).Count -gt 0) {
+                $ingressClass = "D1-D_WRONG_DESTINATION"
+            }
+            elseif ($udpAny -gt 0) {
+                $ingressClass = "D1-B_UDP_LOST_BEFORE_SOCKET"
+            }
+            else {
+                $ingressClass = "D1-A_PEER_INTERFACE_DOWN"
             }
         }
 
         Write-Host "classification=$($t.Classification)"
         Write-Host "pathClass=$pathClass"
-        Write-Host "ingressClass=$ingressClass"
+        Write-Host "d1Ingress=$ingressClass"
         Write-Host "---"
     }
     $case1 = @($txns | Where-Object { $_.Classification -eq "CASE_1_OFFER_DELIVERY" }).Count
