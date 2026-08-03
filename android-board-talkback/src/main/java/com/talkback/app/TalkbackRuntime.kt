@@ -489,4 +489,9 @@ class TalkbackRuntime(
     internal fun testNotifyRemoteModuleRecovered(moduleId: String) {
         coordinator.testNotifyRemoteModuleRecovered(moduleId)
     }
+    fun debugSuppressSuccessorAttemptArm(remoteModuleId: String, ttlMs: Long = 180_000L): Boolean =
+        coordinator.debugSuppressSuccessorAttemptArm(remoteModuleId, ttlMs)
+
+    fun debugSuppressSuccessorAttemptClear(remoteModuleId: String): Boolean =
+        coordinator.debugSuppressSuccessorAttemptClear(remoteModuleId)
 }

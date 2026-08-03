@@ -5,6 +5,7 @@ import com.talkback.core.model.RecoveryHandlerOutcome
 import com.talkback.core.util.RecoveryDeliveryFact
 import com.talkback.core.util.RecoveryControlReconciliationFact
 import com.talkback.core.util.RecoveryControlReconciliationMembershipObservation
+import com.talkback.core.util.SuppressSuccessorAttemptDebugInjection
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.ScheduledFuture
@@ -1463,6 +1464,24 @@ class ConferenceEdgeRecoveryController internal constructor(
             return
         }
         if (isFreshRemoteModuleRecoveredEvidence(record, resurrectionEvidence)) {
+            // Harness primitive only — does not change production successor ownership (R4).
+            if (
+                SuppressSuccessorAttemptDebugInjection.trySuppressAdmission(
+                    sessionId = key.sessionId,
+                    remoteModuleId = key.remoteModuleId,
+                    originalAttemptId = record.recoveryAttemptId,
+                    generation = record.obligationGeneration,
+                    nowMs = clock(),
+                    log = onLog
+                )
+            ) {
+                onLog(
+                    "RECOVERY_REACHABILITY_IGNORED session=$sessionId edge=$remoteModuleId " +
+                        "trigger=$trigger reason=suppress_successor_attempt " +
+                        "attempt=${record.recoveryAttemptId} obligationGen=${record.obligationGeneration}"
+                )
+                return
+            }
             admitSuccessorObligationEpisode(
                 record = record,
                 channelId = channelId,

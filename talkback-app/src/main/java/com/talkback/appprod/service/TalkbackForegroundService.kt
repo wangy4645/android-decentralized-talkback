@@ -14,16 +14,64 @@ import android.os.IBinder
 import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
+import com.talkback.appprod.BuildConfig
 import com.talkback.appprod.R
 import com.talkback.appprod.TalkbackApp
 import com.talkback.appprod.data.AppConfigStore
+import com.talkback.appprod.debug.DebugHarnessBroadcastDispatcher
 import com.talkback.appprod.runtime.TalkbackRuntimeManager
 import com.talkback.appprod.ui.SettingsActions
+import java.util.concurrent.Executors
 
 class TalkbackForegroundService : Service() {
     private lateinit var runtimeManager: TalkbackRuntimeManager
     private var wakeLock: PowerManager.WakeLock? = null
     private var serviceStopped = false
+    private var suppressDebugReceiverRegistered = false
+
+    // Cached pool: one hung debug work must not stall later PendingResult finish paths.
+    private val debugBroadcastExecutor = Executors.newCachedThreadPool { r ->
+        Thread(r, "talkback-debug-bcast").apply { isDaemon = true }
+    }
+
+    private val suppressDebugReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (!BuildConfig.DEBUG || intent == null) return
+            val action = intent.action ?: return
+            val remote = intent.getStringExtra(EXTRA_DEBUG_REMOTE) ?: "M03"
+            val ttlMs = intent.getLongExtra(EXTRA_DEBUG_TTL_MS, 180_000L)
+            android.util.Log.i(DEBUG_LOG_TAG, "DEBUG_DISPATCH_DELIVERED action=$action remote=$remote")
+            val pending = goAsync()
+            DebugHarnessBroadcastDispatcher.schedule(
+                executor = debugBroadcastExecutor,
+                finishPending = { pending.finish() },
+                action = action,
+                log = { line -> android.util.Log.i(DEBUG_LOG_TAG, line) },
+                work = {
+                    val runtime = runtimeManager.getRuntime()
+                    if (runtime == null) {
+                        android.util.Log.i(
+                            DEBUG_LOG_TAG,
+                            "DEBUG_DISPATCH_SKIPPED action=$action reason=runtime_unavailable"
+                        )
+                        return@schedule DebugHarnessBroadcastDispatcher.Outcome.SKIPPED
+                    }
+                    val ok = when (action) {
+                        ACTION_DEBUG_SUPPRESS_SUCCESSOR_ARM ->
+                            runtime.debugSuppressSuccessorAttemptArm(remote, ttlMs)
+                        ACTION_DEBUG_SUPPRESS_SUCCESSOR_CLEAR ->
+                            runtime.debugSuppressSuccessorAttemptClear(remote)
+                        else -> false
+                    }
+                    if (ok) {
+                        DebugHarnessBroadcastDispatcher.Outcome.COMPLETED
+                    } else {
+                        DebugHarnessBroadcastDispatcher.Outcome.SKIPPED
+                    }
+                }
+            )
+        }
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -31,6 +79,20 @@ class TalkbackForegroundService : Service() {
         runtimeManager = TalkbackApp.get(this).runtimeManager
         ensureChannel()
         startForeground(NOTIFY_ID, buildNotification(getString(R.string.notification_running)))
+        if (BuildConfig.DEBUG) {
+            val filter = IntentFilter().apply {
+                addAction(ACTION_DEBUG_SUPPRESS_SUCCESSOR_ARM)
+                addAction(ACTION_DEBUG_SUPPRESS_SUCCESSOR_CLEAR)
+            }
+            // DEBUG only: exported so adb shell (uid 2000) can trigger field injection.
+            ContextCompat.registerReceiver(
+                this,
+                suppressDebugReceiver,
+                filter,
+                ContextCompat.RECEIVER_EXPORTED
+            )
+            suppressDebugReceiverRegistered = true
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -62,6 +124,11 @@ class TalkbackForegroundService : Service() {
     }
 
     override fun onDestroy() {
+        if (suppressDebugReceiverRegistered) {
+            runCatching { unregisterReceiver(suppressDebugReceiver) }
+            suppressDebugReceiverRegistered = false
+        }
+        runCatching { debugBroadcastExecutor.shutdownNow() }
         stopServiceInternal("Service destroyed")
         super.onDestroy()
     }
@@ -133,6 +200,7 @@ class TalkbackForegroundService : Service() {
     companion object {
         private const val CHANNEL_ID = "talkback_service"
         private const val NOTIFY_ID = 3001
+        private const val DEBUG_LOG_TAG = "Talkback"
 
         const val EXTRA_MODULE_ID = "moduleId"
         const val EXTRA_ENDPOINT_ID = "endpointId"
@@ -152,5 +220,13 @@ class TalkbackForegroundService : Service() {
         const val STATE_RUNNING = "RUNNING"
         const val STATE_STOPPED = "STOPPED"
         const val STATE_ERROR = "ERROR"
+
+        const val EXTRA_DEBUG_REMOTE = "remote"
+        const val EXTRA_DEBUG_TTL_MS = "ttlMs"
+        /** Harness: suppress successor obligation admission (Attempt-4c-S). */
+        const val ACTION_DEBUG_SUPPRESS_SUCCESSOR_ARM =
+            "com.talkback.appprod.debug.SUPPRESS_SUCCESSOR_ATTEMPT_ARM"
+        const val ACTION_DEBUG_SUPPRESS_SUCCESSOR_CLEAR =
+            "com.talkback.appprod.debug.SUPPRESS_SUCCESSOR_ATTEMPT_CLEAR"
     }
 }
