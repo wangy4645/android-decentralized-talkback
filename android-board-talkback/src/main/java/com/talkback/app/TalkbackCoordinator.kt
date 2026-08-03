@@ -11670,7 +11670,14 @@ class TalkbackCoordinator(
         }
         return coordinatorExecutor.submit(block).get()
     }
-    /** DEBUG harness only: bounded wait; never ANR the caller. */
+    /**
+     * DEBUG harness only: bounded wait; never ANR the caller.
+     *
+     * Must mark [onCoordinatorThread] while [block] runs — otherwise nested
+     * [runOnCoordinatorSync] from recovery probes (e.g. PR52C RELEASE →
+     * isRecoveryDispatchReady → canDispatchRecoveryMediaAction) deadlocks the
+     * single-thread executor and poisons all later coordinator work.
+     */
     private fun <T> runOnCoordinatorSyncTimed(
         action: String,
         timeoutMs: Long = 3_000L,
@@ -11685,7 +11692,14 @@ class TalkbackCoordinator(
             return block()
         }
         return try {
-            coordinatorExecutor.submit(block).get(timeoutMs, TimeUnit.MILLISECONDS)
+            coordinatorExecutor.submit<T> {
+                onCoordinatorThread.set(true)
+                try {
+                    block()
+                } finally {
+                    onCoordinatorThread.set(false)
+                }
+            }.get(timeoutMs, TimeUnit.MILLISECONDS)
         } catch (_: java.util.concurrent.TimeoutException) {
             log("DEBUG_DISPATCH_TIMEOUT action=$action timeoutMs=$timeoutMs")
             default
@@ -11767,7 +11781,8 @@ class TalkbackCoordinator(
 
     /**
      * DEBUG harness: release dispatch readiness (PR52C).
-     * Uses the same controller release path as production drain; only the call site is debug.
+     * Readiness-aware controller entry: NOOP when no HELD(DISPATCH); otherwise drain seam.
+     * Does not change production release/drain semantics — only the debug call site.
      */
     fun debugPr52cReleaseDispatch(remoteModuleId: String): Boolean {
         var sawSession = false
@@ -11776,7 +11791,6 @@ class TalkbackCoordinator(
                 ?: return@runOnCoordinatorSyncTimed false
             sawSession = true
             conferenceEdgeRecoveryController.debugReleaseDispatchReadiness(session.id, remoteModuleId)
-            true
         }
         when {
             ok -> log("DEBUG_DISPATCH_COMPLETED action=PR52C_RELEASE_DISPATCH remote=$remoteModuleId")

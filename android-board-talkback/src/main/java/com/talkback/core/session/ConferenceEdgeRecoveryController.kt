@@ -3409,13 +3409,37 @@ class ConferenceEdgeRecoveryController internal constructor(
         return intentId
     }
 
-    /** PR5-2c-C E.14.14: release dispatch via dispatch-readiness seam (not negotiation wakeup). */
-    fun debugReleaseDispatchReadiness(sessionId: String, remoteModuleId: String) {
+    /**
+     * PR5-2c-C E.14.14 / harness: release dispatch via dispatch-readiness seam
+     * (not negotiation wakeup).
+     *
+     * Readiness-aware: when there is no HELD(DISPATCH) deferred intent, emit
+     * [DEBUG_RELEASE_NOOP] and return without calling [isRecoveryDispatchReady] /
+     * drain. Field evidence (2026-08-03): unconditional readiness probe nested
+     * into Coordinator sync and deadlocked the single-thread executor.
+     */
+    fun debugReleaseDispatchReadiness(sessionId: String, remoteModuleId: String): Boolean {
         onLog(
             "DEBUG_RELEASE_DISPATCH session=$sessionId remote=$remoteModuleId " +
                 "seam=${Pr52cDebugInjection.DEBUG_RELEASE_SEAM}"
         )
         Pr52cDebugInjection.releaseDispatch(sessionId, remoteModuleId)
+        val key = ConferenceEdgeKey(sessionId, remoteModuleId)
+        val record = edges[key]
+        val heldDispatch =
+            record != null &&
+                isDeferredIceRestartIntent(record) &&
+                record.deferredIntentHoldReason == DeferredIntentHoldReason.DISPATCH
+        if (!heldDispatch) {
+            onLog(
+                "DEBUG_RELEASE_NOOP session=$sessionId remote=$remoteModuleId " +
+                    "seam=${Pr52cDebugInjection.DEBUG_RELEASE_SEAM} " +
+                    "reason=no_held_dispatch_intent " +
+                    "hold=${record?.deferredIntentHoldReason ?: "NONE"} " +
+                    "intentId=${record?.iceRestartIntentId ?: "NONE"}"
+            )
+            return true
+        }
         val dispatchReady = isRecoveryDispatchReady(sessionId, remoteModuleId)
         onLog(
             "DEBUG_RELEASE_DISPATCH_READINESS_OBSERVED session=$sessionId remote=$remoteModuleId " +
@@ -3426,6 +3450,7 @@ class ConferenceEdgeRecoveryController internal constructor(
             remoteModuleId = remoteModuleId,
             seamTrigger = Pr52cDebugInjection.DEBUG_RELEASE_SEAM
         )
+        return true
     }
 
     /**
