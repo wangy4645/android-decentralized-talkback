@@ -87,7 +87,7 @@ Title intent: `refactor(recovery): consolidate deferred intent authority`
 |---|---|---|---|
 | `core/session/DeferredIntentAuthority.kt` | U | ADR-0022 E.16.1 Slice-1; **closure hole** | WIP |
 | `core/session/DeferredIntentAuthoritySlice1Test.kt` | U | Slice-1 lifecycle UT | WIP |
-| `core/session/DeferredIntentAuthoritySlice1JointTest.kt` | U | Joint-shaped DI UT (not field harness) | WIP |
+| `core/session/DeferredIntentAuthorityInteractionTest.kt` | U | Joint-shaped DI UT (not field harness) | WIP |
 | `core/session/InvDi001ReleaseIntentTest.kt` | U | INV-DI-001 release | WIP |
 | `core/session/Pr52cDeferredIntentHoldTest.kt` | U | HELD path | WIP |
 | `core/session/DebugExplicitSupersedePhase3aTest.kt` | U | explicit supersede (DI plane) | WIP |
@@ -246,3 +246,10 @@ Ownership / semantic review remains:
 
 PR-A does **not** land Coordinator WIP, D1 injection, Membership Q7, Joint/soak harness.
 PR-D WIP recovered to `git stash@{0}`: `P2 HOLD: PR-D coordinator/runtime/udp/service WIP (recovered)`.
+
+## PR-B status (2026-08-03)
+
+PR-A merged as `3518dce` / #102. DeferredIntentAuthority was compile-carried; PR-B consolidates ownership.
+
+Include: DeferredIntentAuthority KDoc ownership freeze + Slice-1 / INV-DI-001 / HELD / explicit-supersede regression tests.
+Exclude: CompletionPolicy, ControlReconciliation, Coordinator WIP, D1, SUPPRESS_SUCCESSOR, Joint harness.

@@ -3,10 +3,14 @@ package com.talkback.core.session
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * ADR-0022 §E.16.1 J-X / Slice-1: narrow authority for deferred-intent lifecycle transitions.
+ * ADR-0022 §E.16.1 J-X / Slice-1: sole owner of deferred-intent lifecycle transitions.
  *
- * Owns: supersede legality, SUPERSEDED terminal state, audit facts, late-event disposition.
- * Does NOT own: media recovery, negotiation policy, drain algorithm, dispatch readiness, CompletionPolicy.
+ * P2 PR-B consolidation: compile-carried by PR-A; ownership and regression guards land here.
+ * Does not expand capability — freezes R2/B3 release facts and terminals.
+ *
+ * Owns: supersede legality, SUPERSEDED terminal, releaseIntent facts, late-event disposition.
+ * Does NOT own: media recovery, negotiation capability predicate, drain algorithm,
+ * dispatch readiness, CompletionPolicy / RECOVERED.
  */
 class DeferredIntentAuthority(
     private val onLog: (String) -> Unit = {},
