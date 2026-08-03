@@ -11740,6 +11740,8 @@ Hook: before `admitSuccessorObligationEpisode` in `onRecoveryReachabilityChanged
 Attempt-4c-S (`-Attempt 4cs`): no D1; arm suppress on host; classify Case S A/B/C.
 Do **not** implement `SUCCESSOR_OBLIGATION_ADOPTED` / `TRANSFERRED` here (R4-impl WAITING).
 
+**Field (2026-08-03):** Case **S-A PASS** — artifact `logs/phase3c-b-attempt4cs-20260803-155535`; report `docs/analysis/attempt4cs-field-report.md`. Reading: old obligation CLOSED under applied suppression; no successor admission; no RECOVERED; no ADOPTED. Next = Joint preparation (no R4-impl).
+
 ## References
 
 - ADR-0020 — Conference Runtime Projection Contract
