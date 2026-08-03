@@ -1,7 +1,9 @@
 package com.talkback.core.session
 
 import com.talkback.core.qos.IceConnectivity
+import com.talkback.core.model.RecoveryHandlerOutcome
 import com.talkback.core.util.RecoveryDeliveryFact
+import com.talkback.core.util.RecoveryControlReconciliationFact
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.ScheduledFuture
@@ -9,7 +11,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 
 /**
- * Per-edge conference recovery policy and state (ADR-0021 R4–R18).
+ * Per-edge conference recovery policy and state (ADR-0021 R4鈥揜18).
  * Control-plane reattach precedes bounded media ICE restart; termination cancels all edges.
  */
 class ConferenceEdgeRecoveryController(
@@ -88,11 +90,22 @@ class ConferenceEdgeRecoveryController(
         offerLineageId: String,
         deliveryAttemptId: Long
     ) -> Boolean = { _, _, _, _ -> false },
+    /**
+     * PR3-1: admission projection for recovery-offer dispatch (initial + retry).
+     * Coordinator wires peer-edge inbound evidence; tests default to DISPATCH_NOW.
+     */
+    private val evaluateRecoveryAdmission: (
+        sessionId: String,
+        remoteModuleId: String
+    ) -> PeerSignalingReachabilityProjection = { _, _ -> defaultRecoveryAdmissionProjection() },
     private val onRecoveryOfferDeliveryExhausted: (
         sessionId: String,
         remoteModuleId: String,
         offerLineageId: String
-    ) -> Unit = { _, _, _ -> }
+    ) -> Unit = { _, _, _ -> },
+    /** PR5-2b / Q7: channel GROUP membership epoch aligned with authority digest (ADR-0022 Q6-2). */
+    private val queryMembershipEpochConverged: (channelId: String, conferenceSessionId: String) -> Boolean =
+        { _, _ -> true }
 ) {
     private val edges = ConcurrentHashMap<ConferenceEdgeKey, EdgeRecoveryRecord>()
     private val debounceTimers = ConcurrentHashMap<ConferenceEdgeKey, ScheduledFuture<*>>()
@@ -102,7 +115,7 @@ class ConferenceEdgeRecoveryController(
     private val cancelledChannels = ConcurrentHashMap<String, Long>()
     private val pendingTransportNonce = ConcurrentHashMap<ConferenceEdgeKey, String>()
     private var attemptSeq = 0L
-    /** Commit Seam Trace: monotonic ICE-restart deferred intent ids (R1, R2, …). */
+    /** Commit Seam Trace: monotonic ICE-restart deferred intent ids (R1, R2, 鈥?. */
     private val iceRestartIntentSeq = AtomicLong(0L)
     /** G-R28-M-5: suppress duplicate post-terminal facts (e.g. repeated HELLO). */
     private data class TerminalReevaluateKey(val attemptId: Long, val trigger: RecoveryReevaluateTrigger)
@@ -118,9 +131,70 @@ class ConferenceEdgeRecoveryController(
         onLog = onLog,
         onDispatchRecoveryOffer = onDispatchRecoveryOffer,
         canDispatchRecoverySignal = canDispatchRecoveryMediaAction,
+        evaluateRecoveryAdmission = evaluateRecoveryAdmission,
         onDeliveryExhausted = onRecoveryOfferDeliveryExhausted
     ).also { policy ->
         policy.bindEdgesLookup { edges[it] }
+    }
+
+    /**
+     * ADR-0022 搂E.16.1 Slice-1: DeferredIntentAuthority owns supersede legality / facts.
+     * Does not own drain algorithm, delivery, or CompletionPolicy.
+     */
+    private val deferredIntentAuthority = DeferredIntentAuthority(
+        onLog = onLog,
+        clock = clock,
+        onReleaseFence = { sessionId, remoteModuleId, intentId, reason ->
+            if (Pr52cDebugInjection.fencedIntentId(sessionId, remoteModuleId) == intentId) {
+                Pr52cDebugInjection.clearValidationFence(sessionId, remoteModuleId)
+                onLog(
+                    "DEFERRED_INTENT_VALIDATION_FENCE_CLEARED session=$sessionId " +
+                        "remote=$remoteModuleId intentId=$intentId reason=$reason"
+                )
+            }
+        }
+    )
+
+    private val completionMutationHost = object : RecoveryCompletionPolicy.MutationHost {
+        override fun currentRecord(key: ConferenceEdgeKey) = edges[key]
+        override fun clock(): Long = this@ConferenceEdgeRecoveryController.clock()
+        override fun log(message: String) = onLog(message)
+        override fun cancelDebounce(key: ConferenceEdgeKey) =
+            this@ConferenceEdgeRecoveryController.cancelDebounce(key)
+        override fun cancelWatchdog(key: ConferenceEdgeKey) =
+            this@ConferenceEdgeRecoveryController.cancelWatchdog(key)
+        override fun cancelDeadline(key: ConferenceEdgeKey) =
+            this@ConferenceEdgeRecoveryController.cancelDeadline(key)
+        override fun logPhaseTransition(
+            record: EdgeRecoveryRecord,
+            oldPhase: EdgeRecoveryPhase,
+            newPhase: EdgeRecoveryPhase,
+            reason: String
+        ) = this@ConferenceEdgeRecoveryController.logPhaseTransition(record, oldPhase, newPhase, reason)
+        override fun expireDeferredIceRestartIntent(record: EdgeRecoveryRecord, reason: String) =
+            this@ConferenceEdgeRecoveryController.expireDeferredIceRestartIntent(record, reason)
+        override fun notifyAttemptLineageObservation(record: EdgeRecoveryRecord, reason: String) =
+            this@ConferenceEdgeRecoveryController.notifyAttemptLineageObservation(record, reason)
+        override fun notifyChanged(sessionId: String) =
+            this@ConferenceEdgeRecoveryController.notifyChanged(sessionId)
+        override fun logObligationCloseRequested(
+            record: EdgeRecoveryRecord,
+            reason: ObligationCloseReason,
+            closeEvidence: String?
+        ) = this@ConferenceEdgeRecoveryController.logObligationCloseRequested(record, reason, closeEvidence)
+    }
+
+    init {
+        RecoveryAttemptOwner.bindLogSink(onLog)
+        onLog(
+            "RECOVERY_BUILD_IDENTITY authorityReleaseIntent=true INV-DI-001_enabled=true " +
+                "buildTag=PR5-3_Grill_R2 contract=releaseIntent"
+        )
+        RecoveryDeliveryFact.bindIngressAbsentHandler { identity, sessionId ->
+            val sid = sessionId?.takeIf { it.isNotBlank() } ?: return@bindIngressAbsentHandler
+            val record = edges[ConferenceEdgeKey(sid, identity.to)] ?: return@bindIngressAbsentHandler
+            recoveryOfferDeliveryPolicy.onRemoteIngressAbsent(record, identity, sessionId)
+        }
     }
 
     /** ADR-0035 PR2: outbound recovery offer entered DELIVERY_PENDING (Coordinator fact). */
@@ -133,15 +207,22 @@ class ConferenceEdgeRecoveryController(
         recoveryOfferDeliveryPolicy.onOutboundDeliveryPending(record, identity, sessionId)
     }
 
-    /** ADR-0035 PR2: matching ACK accepted for current lineage. */
+    /** ADR-0035 PR2/PR4: matching ACK accepted for current lineage. */
     fun onRecoveryOfferDeliveryConfirmed(
         sessionId: String,
         remoteModuleId: String,
-        offerLineageId: String
+        offerLineageId: String,
+        handlerOutcome: RecoveryHandlerOutcome = RecoveryHandlerOutcome.ACCEPTED
     ) {
         val record = edges[ConferenceEdgeKey(sessionId, remoteModuleId)] ?: return
         if (record.recoveryOfferDeliveryPhase == RecoveryOfferDeliveryPhase.EXHAUSTED) return
+        record.deliveryConfirmedOutcome = handlerOutcome
         recoveryOfferDeliveryPolicy.onDeliveryConfirmed(record, offerLineageId)
+        onLog(
+            "RECOVERY_REEVALUATE_STARTED session=$sessionId edge=$remoteModuleId " +
+                "trigger=DELIVERY_CONFIRMED deliveryConfirmedOutcome=$handlerOutcome " +
+                "offerLineageId=$offerLineageId"
+        )
     }
 
     fun isRecoveryOfferDeliveryExhausted(sessionId: String, remoteModuleId: String): Boolean {
@@ -305,22 +386,25 @@ class ConferenceEdgeRecoveryController(
         sessionId: String,
         remoteModuleId: String,
         senderAttemptId: Long,
-        senderObligationGeneration: Long
+        senderObligationGeneration: Long,
+        inboundDelivery: InboundReattachDeliveryIdentity? = null
     ): InboundReattachLineageVerdict {
         val record = edges[ConferenceEdgeKey(sessionId, remoteModuleId)] ?: return InboundReattachLineageVerdict.ACCEPT
-        if (record.obligationClosedAtMs != null) return InboundReattachLineageVerdict.OBLIGATION_CLOSED
-        if (senderObligationGeneration > 0L &&
-            record.obligationGeneration > 0L &&
-            senderObligationGeneration < record.obligationGeneration
+        // INV-PR52c-004: OBLIGATION_DEADLINE rejects late inbound; RECOVERED does not quarantine
+        // opposite-direction delivery (INV-PR52c-003/005).
+        if (record.obligationClosedAtMs != null &&
+            record.obligationCloseReason == ObligationCloseReason.OBLIGATION_DEADLINE
         ) {
             return InboundReattachLineageVerdict.STALE_OBLIGATION_GENERATION
         }
-        if (senderAttemptId > 0L &&
-            record.recoveryAttemptId > 0L &&
-            senderAttemptId < record.recoveryAttemptId
+        if (inboundDelivery != null &&
+            (inboundDelivery.from != remoteModuleId || inboundDelivery.to != localModuleId)
         ) {
             return InboundReattachLineageVerdict.STALE_OBLIGATION_GENERATION
         }
+        // INV-PR52c-007/008: opposite-direction inbound is not rejected solely for attempt mismatch,
+        // local RECOVERED closure, or receiver.currentObligationGeneration. Orphan same-direction
+        // stale delivery is enforced on outbound dispatch / authority ACK pending match.
         return InboundReattachLineageVerdict.ACCEPT
     }
 
@@ -502,6 +586,7 @@ class ConferenceEdgeRecoveryController(
                 "obligationOpen=${record.edgeObligationOpen()} " +
                 "pendingCompletion=${record.hasPendingCompletionDecision}"
         )
+        RecoveryAttemptOwner.reconcileFromFacts(record, "PHASE:$trigger")
     }
 
     /**
@@ -652,6 +737,24 @@ class ConferenceEdgeRecoveryController(
         trigger: String,
         mediaActionOwnerModuleId: String = localModuleId
     ) {
+        val key = record.key
+        val fencedIntentId = record.iceRestartIntentId
+        if (
+            fencedIntentId != null &&
+            record.deferredReason == DeferredReason.NEGOTIATION_SETTLING &&
+            Pr52cDebugInjection.shouldSuppressProductionDeferredDrain(
+                key.sessionId,
+                key.remoteModuleId,
+                fencedIntentId,
+                trigger
+            )
+        ) {
+            onLog(
+                "DEFERRED_INTENT_VALIDATION_FENCE session=${key.sessionId} remote=${key.remoteModuleId} " +
+                    "intentId=$fencedIntentId seam=$trigger action=suppress_production_media_defer"
+            )
+            return
+        }
         record.mediaActionOwner = owner
         record.mediaActionDisposition = MediaActionDisposition.DEFERRED
         record.deferredReason = reason
@@ -677,23 +780,68 @@ class ConferenceEdgeRecoveryController(
         )
     }
 
-    private fun clearMediaActionDeferral(record: EdgeRecoveryRecord) {
+    private fun clearDeferralFields(record: EdgeRecoveryRecord) {
         record.mediaActionDisposition = MediaActionDisposition.UNASSIGNED
         record.deferredReason = null
         record.wakeupBinding = null
         record.deferredGateBlockReason = null
-        record.iceRestartIntentId = null
         record.deferAdmissionObservationSeq = null
+        record.deferredIntentHoldReason = null
+        record.deferredIntentDrainRetryCount = 0
+    }
+
+    /**
+     * INV-DI-001 / Grill R2: release committed intent slot only through Authority.
+     */
+    private fun releaseDeferredIntentSlot(
+        record: EdgeRecoveryRecord,
+        reason: String,
+        domain: DeferredIntentAuthority.RequestingDomain,
+        kind: DeferredIntentAuthority.ReleaseKind,
+        expireCause: String? = null
+    ) {
+        val intentId = record.iceRestartIntentId ?: return
+        val result = deferredIntentAuthority.releaseIntent(
+            intentId = intentId,
+            reason = reason,
+            requestingDomain = domain,
+            kind = kind,
+            expireCause = expireCause
+        )
+        when (result) {
+            is DeferredIntentAuthority.ReleaseResult.Accepted,
+            is DeferredIntentAuthority.ReleaseResult.NoAuthorityRecord -> {
+                if (record.iceRestartIntentId == intentId) {
+                    record.iceRestartIntentId = null
+                }
+                clearValidationFenceIfArmed(
+                    record.key.sessionId,
+                    record.key.remoteModuleId,
+                    intentId,
+                    reason
+                )
+            }
+            is DeferredIntentAuthority.ReleaseResult.Rejected -> {
+                onLog(
+                    "DEFERRED_INTENT_RELEASE_REJECTED session=${record.key.sessionId} " +
+                        "remote=${record.key.remoteModuleId} intentId=$intentId " +
+                        "reason=${result.reason} kind=$kind"
+                )
+            }
+        }
     }
 
     private fun hasDeferredMediaAction(record: EdgeRecoveryRecord): Boolean =
         record.mediaActionDisposition == MediaActionDisposition.DEFERRED &&
             record.mediaActionOwner.isAssigned()
 
-    private fun isDeferredIceRestartIntent(record: EdgeRecoveryRecord): Boolean =
+    private fun isNegotiationDeferredIceRestartSlot(record: EdgeRecoveryRecord): Boolean =
         hasDeferredMediaAction(record) &&
             record.deferredReason == DeferredReason.NEGOTIATION_SETTLING &&
-            record.wakeupBinding?.sourceType == WakeupSourceType.NEGOTIATION_CAN_EXECUTE
+            record.iceRestartIntentId != null
+
+    private fun isDeferredIceRestartIntent(record: EdgeRecoveryRecord): Boolean =
+        isNegotiationDeferredIceRestartSlot(record)
 
     /**
      * Commit Seam Trace: deferred ICE-restart intent id awaiting NEGOTIATION_CAN_EXECUTE, if any.
@@ -714,12 +862,10 @@ class ConferenceEdgeRecoveryController(
     }
 
     /**
-     * INV-NEG-003: deferred ICE Restart Intent MUST NOT silently vanish across
-     * SUPERSEDE / CLOSE / generation change — emit auditable EXPIRED → STALE_DISCARD.
-     * Caller clears fields (or replaces the record) after this audit.
+     * INV-DI-001: terminal transition via [releaseDeferredIntentSlot] 鈥?not log-only.
      */
     private fun expireDeferredIceRestartIntent(record: EdgeRecoveryRecord, cause: String) {
-        if (!hasDeferredMediaAction(record)) return
+        if (!hasDeferredMediaAction(record) && record.iceRestartIntentId == null) return
         val binding = record.wakeupBinding
         val intentId = record.iceRestartIntentId ?: "NONE"
         if (binding != null) {
@@ -729,37 +875,108 @@ class ConferenceEdgeRecoveryController(
                     "wakeupBinding=${binding.logLabel()} cause=$cause"
             )
         }
-        if (!isDeferredIceRestartIntent(record)) return
-        // Step A-1: STALE_DISCARD must name why — not a bare STALE (OBLIGATION_CLOSED |
-        // SUPERSEDED | RELEASE_MISSING). RELEASE_MISSING = never got the bound release fact.
-        val terminalReason = when {
-            cause.startsWith("SUPERSEDE") || cause.startsWith("ADMIT_SUCCESSOR") -> "SUPERSEDED"
-            cause.startsWith("OBLIGATION_CLOSE") || cause.startsWith("DRAIN_OBLIGATION") ->
-                "OBLIGATION_CLOSED"
-            cause.startsWith("DRAIN_STALE") || cause.startsWith("DRAIN_ALREADY") -> "RELEASE_MISSING"
-            else -> "RELEASE_MISSING"
+        if (!isDeferredIceRestartIntent(record) && record.iceRestartIntentId == null) return
+        val kind = when {
+            cause.startsWith("SUPERSEDE") || cause.startsWith("ADMIT_SUCCESSOR") ->
+                DeferredIntentAuthority.ReleaseKind.SUPERSEDE
+            else -> DeferredIntentAuthority.ReleaseKind.TERMINAL_DISCARD
         }
-        if (terminalReason == "SUPERSEDED") {
-            onLog(
-                "DEFERRED_INTENT_SUPERSEDED session=${record.key.sessionId} " +
-                    "remote=${record.key.remoteModuleId} oldIntent=$intentId newIntent=LINEAGE_CUT " +
-                    "attempt=${record.recoveryAttemptId} obligationGen=${record.obligationGeneration} " +
-                    "cause=$cause"
-            )
+        val domain = when {
+            cause.startsWith("OBLIGATION_CLOSE") ->
+                DeferredIntentAuthority.RequestingDomain.CONTROL
+            cause.startsWith("DRAIN_") ->
+                DeferredIntentAuthority.RequestingDomain.NEGOTIATION
+            else -> DeferredIntentAuthority.RequestingDomain.MEDIA
         }
-        onLog(
-            "RECOVERY_ICE_RESTART_INTENT_TERMINAL session=${record.key.sessionId} " +
-                "remote=${record.key.remoteModuleId} attempt=${record.recoveryAttemptId} " +
-                "intentId=$intentId obligationGen=${record.obligationGeneration} " +
-                "terminal=STALE_DISCARD reason=$terminalReason expireCause=$cause " +
-                "gateBlock=${record.deferredGateBlockReason ?: "UNKNOWN"} " +
-                "wakeup=${record.wakeupBinding?.sourceType ?: "NONE"}"
+        releaseDeferredIntentSlot(
+            record = record,
+            reason = cause,
+            domain = domain,
+            kind = kind,
+            expireCause = cause
+        )
+        clearDeferralFields(record)
+    }
+
+    private fun isRecoveryDispatchReady(sessionId: String, remoteModuleId: String): Boolean {
+        if (!canDispatchRecoveryMediaAction(sessionId, remoteModuleId)) return false
+        val admission = evaluateRecoveryAdmission(sessionId, remoteModuleId)
+        return admission.decision == AdmissionDecisionProjection.DISPATCH_NOW
+    }
+
+    private fun enterHeldNegotiation(
+        sessionId: String,
+        remoteModuleId: String,
+        record: EdgeRecoveryRecord,
+        attemptId: Long,
+        obligationGen: Long,
+        intentId: String,
+        probe: IceRestartGateProbe
+    ) {
+        record.deferredIntentHoldReason = DeferredIntentHoldReason.NEGOTIATION
+        record.deferredGateBlockReason = probe.blockReason
+        record.wakeupBinding = WakeupBinding(
+            sourceType = WakeupSourceType.NEGOTIATION_CAN_EXECUTE,
+            sourceKey = edgeWakeupKey(sessionId, remoteModuleId)
         )
         onLog(
-            "RECOVERY_ICE_RESTART_INTENT_EXPIRED session=${record.key.sessionId} " +
-                "remote=${record.key.remoteModuleId} attempt=${record.recoveryAttemptId} " +
-                "intentId=$intentId obligationGen=${record.obligationGeneration} disposition=EXPIRED " +
-                "terminal=STALE_DISCARD cause=$cause"
+            "RECOVERY_ICE_RESTART_DRAIN_HELD session=$sessionId remote=$remoteModuleId " +
+                "attempt=$attemptId intentId=$intentId obligationGen=$obligationGen " +
+                "reason=gate_not_executable " +
+                "gateBlock=${probe.blockReason ?: "UNKNOWN"} " +
+                "signalingState=${probe.signalingState ?: "UNKNOWN"}"
+        )
+        onLog(
+            "DEFERRED_INTENT_HELD session=$sessionId remote=$remoteModuleId " +
+                "intentId=$intentId attemptId=$attemptId obligationGen=$obligationGen " +
+                "hold=NEGOTIATION reason=gate_not_executable " +
+                "gateBlock=${probe.blockReason ?: "UNKNOWN"} " +
+                "signalingState=${probe.signalingState ?: "UNKNOWN"}"
+        )
+    }
+
+    private fun enterHeldDispatch(
+        sessionId: String,
+        remoteModuleId: String,
+        record: EdgeRecoveryRecord,
+        attemptId: Long,
+        obligationGen: Long,
+        intentId: String,
+        probe: IceRestartGateProbe
+    ) {
+        record.deferredIntentHoldReason = DeferredIntentHoldReason.DISPATCH
+        record.deferredIntentDrainRetryCount++
+        record.wakeupBinding = WakeupBinding(
+            sourceType = WakeupSourceType.ROUTE_CONVERGED,
+            sourceKey = edgeWakeupKey(sessionId, remoteModuleId)
+        )
+        deferredIntentAuthority.markHeldDispatch(intentId)
+        onLog(
+            "DEFERRED_INTENT_HELD session=$sessionId remote=$remoteModuleId " +
+                "intentId=$intentId attemptId=$attemptId obligationGen=$obligationGen " +
+                "hold=DISPATCH reason=dispatch_not_ready " +
+                "retryCount=${record.deferredIntentDrainRetryCount} " +
+                "negotiationExecutable=true " +
+                "gateBlock=${probe.blockReason ?: "NONE"} " +
+                "signalingState=${probe.signalingState ?: "UNKNOWN"}"
+        )
+    }
+
+    /**
+     * PR5-2c-C: dispatch-readiness seam retry for HELD(dispatch_not_ready).
+     * MUST NOT synthesize NEGOTIATION_CAN_EXECUTE.
+     */
+    fun retryHeldDeferredIntentDrain(
+        sessionId: String,
+        remoteModuleId: String,
+        seamTrigger: String
+    ) {
+        drainPendingIceRestartInternal(
+            sessionId = sessionId,
+            remoteModuleId = remoteModuleId,
+            capabilityEventObservationSeq = null,
+            trigger = DeferredIntentDrainTrigger.DISPATCH_READINESS_RETRY,
+            seamLabel = seamTrigger
         )
     }
 
@@ -768,28 +985,76 @@ class ConferenceEdgeRecoveryController(
      * after capability rising-edge. Re-validates post-baseline freshness, re-probe, and
      * current-slot lineage (intentId + attemptId + obligationGen) before dispatch.
      *
+     * PR5-2c-C: additionally requires recovery dispatch readiness before EXECUTED.
+     *
      * @param capabilityEventObservationSeq observation seq of the rising-edge event; when
      *   non-null MUST be strictly greater than the intent's DEFER_ADMISSION baseline seq.
-     *   Null is a test seam that still re-probes + checks lineage (production always passes seq).
+     *   Null is a test seam / dispatch-readiness retry (not a negotiation capability consume).
      */
     fun drainPendingIceRestart(
         sessionId: String,
         remoteModuleId: String,
         capabilityEventObservationSeq: Long? = null
     ) {
+        drainPendingIceRestartInternal(
+            sessionId = sessionId,
+            remoteModuleId = remoteModuleId,
+            capabilityEventObservationSeq = capabilityEventObservationSeq,
+            trigger = DeferredIntentDrainTrigger.NEGOTIATION_CAN_EXECUTE,
+            seamLabel = null
+        )
+    }
+
+    private fun drainPendingIceRestartInternal(
+        sessionId: String,
+        remoteModuleId: String,
+        capabilityEventObservationSeq: Long?,
+        trigger: DeferredIntentDrainTrigger,
+        seamLabel: String?
+    ) {
         val key = ConferenceEdgeKey(sessionId, remoteModuleId)
         val record = edges[key] ?: return
-        if (!isDeferredIceRestartIntent(record)) return
+        if (!isDeferredIceRestartIntent(record)) {
+            if (seamLabel == Pr52cDebugInjection.DEBUG_RELEASE_SEAM) {
+                onLog(
+                    "DEFERRED_INTENT_DRAIN_RETRY_SKIPPED session=$sessionId remote=$remoteModuleId " +
+                        "intentId=${record.iceRestartIntentId ?: "NONE"} " +
+                        "seam=$seamLabel reason=not_negotiation_deferred_slot " +
+                        "deferredReason=${record.deferredReason ?: "NONE"} " +
+                        "hold=${record.deferredIntentHoldReason ?: "NONE"}"
+                )
+            }
+            return
+        }
         val attemptId = record.recoveryAttemptId
         val obligationGen = record.obligationGeneration
         val capturedIntentId = record.iceRestartIntentId
         val intentId = capturedIntentId ?: "NONE"
+        // J-X-6: SUPERSEDED intents may observe late drain attempts but must not execute.
+        if (capturedIntentId != null &&
+            deferredIntentAuthority.observeLateEvent(
+                capturedIntentId,
+                "DEFERRED_INTENT_DRAIN_ATTEMPT:${trigger.name}"
+            ) == DeferredIntentAuthority.LateEventDisposition.AUDIT_ONLY
+        ) {
+            return
+        }
         val admissionSeq = record.deferAdmissionObservationSeq
+        if (trigger == DeferredIntentDrainTrigger.DISPATCH_READINESS_RETRY) {
+            onLog(
+                "DEFERRED_INTENT_DRAIN_RETRY session=$sessionId remote=$remoteModuleId " +
+                    "intentId=$intentId attemptId=$attemptId obligationGen=$obligationGen " +
+                    "admissionSeq=${admissionSeq ?: "NONE"} seam=${seamLabel ?: "UNKNOWN"} " +
+                    "retryCount=${record.deferredIntentDrainRetryCount}"
+            )
+            if (record.deferredIntentHoldReason != DeferredIntentHoldReason.DISPATCH) return
+        }
         onLog(
             "DEFERRED_INTENT_DRAIN_ATTEMPT session=$sessionId remote=$remoteModuleId " +
                 "intentId=$intentId attemptId=$attemptId obligationGen=$obligationGen " +
                 "admissionSeq=${admissionSeq ?: "NONE"} " +
-                "eventSeq=${capabilityEventObservationSeq ?: "NONE"}"
+                "eventSeq=${capabilityEventObservationSeq ?: "NONE"} " +
+                "trigger=${trigger.name}"
         )
         if (!record.edgeObligationOpen()) {
             onLog(
@@ -798,7 +1063,6 @@ class ConferenceEdgeRecoveryController(
                     "reason=obligation_closed"
             )
             expireDeferredIceRestartIntent(record, "DRAIN_OBLIGATION_CLOSED")
-            clearMediaActionDeferral(record)
             return
         }
         if (record.iceRestartIssued) {
@@ -808,7 +1072,6 @@ class ConferenceEdgeRecoveryController(
                     "reason=already_issued"
             )
             expireDeferredIceRestartIntent(record, "DRAIN_ALREADY_ISSUED")
-            clearMediaActionDeferral(record)
             return
         }
         if (admissionSeq == null) {
@@ -819,7 +1082,10 @@ class ConferenceEdgeRecoveryController(
             )
             return
         }
-        if (capabilityEventObservationSeq != null && capabilityEventObservationSeq <= admissionSeq) {
+        if (trigger == DeferredIntentDrainTrigger.NEGOTIATION_CAN_EXECUTE &&
+            capabilityEventObservationSeq != null &&
+            capabilityEventObservationSeq <= admissionSeq
+        ) {
             onLog(
                 "DEFERRED_INTENT_REJECTED session=$sessionId remote=$remoteModuleId " +
                     "intentId=$intentId attemptId=$attemptId obligationGen=$obligationGen " +
@@ -829,32 +1095,47 @@ class ConferenceEdgeRecoveryController(
             return
         }
         val probe = probeIceRestartGate(sessionId, remoteModuleId)
+        val dispatchReady = isRecoveryDispatchReady(sessionId, remoteModuleId)
         onLog(
-            "DEFERRED_INTENT_DRAIN_ATTEMPT session=$sessionId remote=$remoteModuleId " +
-                "intentId=$intentId reprobeResult=${if (probe.executable) "executable" else "blocked"} " +
+            "DEFERRED_INTENT_REPROBE_RESULT session=$sessionId remote=$remoteModuleId " +
+                "intentId=$intentId attemptId=$attemptId obligationGen=$obligationGen " +
+                "trigger=${trigger.name} " +
+                "negotiationExecutable=${probe.executable} " +
+                "dispatchReady=$dispatchReady " +
                 "gateBlock=${probe.blockReason ?: "NONE"} " +
                 "signalingState=${probe.signalingState ?: "UNKNOWN"}"
         )
         if (!probe.executable) {
-            onLog(
-                "RECOVERY_ICE_RESTART_DRAIN_HELD session=$sessionId remote=$remoteModuleId " +
-                    "attempt=$attemptId intentId=$intentId obligationGen=$obligationGen " +
-                    "reason=gate_not_executable " +
-                    "gateBlock=${probe.blockReason ?: "UNKNOWN"} " +
-                    "signalingState=${probe.signalingState ?: "UNKNOWN"}"
-            )
-            onLog(
-                "DEFERRED_INTENT_REJECTED session=$sessionId remote=$remoteModuleId " +
-                    "intentId=$intentId attemptId=$attemptId obligationGen=$obligationGen " +
-                    "reason=gate_not_executable"
+            enterHeldNegotiation(
+                sessionId = sessionId,
+                remoteModuleId = remoteModuleId,
+                record = record,
+                attemptId = attemptId,
+                obligationGen = obligationGen,
+                intentId = intentId,
+                probe = probe
             )
             return
         }
-        onLog(
-            "RECOVERY_WAKEUP_FIRED session=$sessionId edge=$remoteModuleId " +
-                "attempt=$attemptId intentId=$intentId trigger=NEGOTIATION_CAN_EXECUTE " +
-                "wakeupBinding=${record.wakeupBinding?.logLabel()}"
-        )
+        if (!dispatchReady) {
+            enterHeldDispatch(
+                sessionId = sessionId,
+                remoteModuleId = remoteModuleId,
+                record = record,
+                attemptId = attemptId,
+                obligationGen = obligationGen,
+                intentId = intentId,
+                probe = probe
+            )
+            return
+        }
+        if (trigger == DeferredIntentDrainTrigger.NEGOTIATION_CAN_EXECUTE) {
+            onLog(
+                "RECOVERY_WAKEUP_FIRED session=$sessionId edge=$remoteModuleId " +
+                    "attempt=$attemptId intentId=$intentId trigger=NEGOTIATION_CAN_EXECUTE " +
+                    "wakeupBinding=${record.wakeupBinding?.logLabel()}"
+            )
+        }
         val still = edges[key] ?: return
         if (still.recoveryAttemptId != attemptId ||
             still.obligationGeneration != obligationGen ||
@@ -865,23 +1146,28 @@ class ConferenceEdgeRecoveryController(
             onLog(
                 "DEFERRED_INTENT_REJECTED session=$sessionId remote=$remoteModuleId " +
                     "intentId=$intentId attemptId=$attemptId obligationGen=$obligationGen " +
-                    "reason=lineage_mismatch " +
+                    "reason=STALE_DEFERRED_INTENT lineage_mismatch " +
                     "currentIntent=${still.iceRestartIntentId ?: "NONE"} " +
                     "currentAttempt=${still.recoveryAttemptId} " +
                     "currentGen=${still.obligationGeneration}"
             )
             expireDeferredIceRestartIntent(still, "DRAIN_STALE_LINEAGE")
-            clearMediaActionDeferral(still)
             return
+        }
+        val drainTerminalReason = when (trigger) {
+            DeferredIntentDrainTrigger.NEGOTIATION_CAN_EXECUTE ->
+                "DRAIN_AFTER_NEGOTIATION_CAN_EXECUTE"
+            DeferredIntentDrainTrigger.DISPATCH_READINESS_RETRY ->
+                "DRAIN_AFTER_DISPATCH_READINESS_RETRY"
         }
         onLog(
             "RECOVERY_ICE_RESTART_INTENT_TERMINAL session=$sessionId remote=$remoteModuleId " +
                 "attempt=$attemptId intentId=$intentId obligationGen=$obligationGen " +
-                "terminal=EXECUTED reason=DRAIN_AFTER_NEGOTIATION_CAN_EXECUTE " +
+                "terminal=EXECUTED reason=$drainTerminalReason " +
                 "gateBlock=${still.deferredGateBlockReason ?: "NONE"}"
         )
-        clearMediaActionDeferral(still)
-        // Keep intentId through DISPATCH audit, then drop (deferral fields already cleared).
+        clearDeferralFields(still)
+        // Keep intentId through DISPATCH audit, then drop via Authority after EXECUTED.
         still.iceRestartIntentId = capturedIntentId
         issueBoundedIceRestart(still, RecoveryReason.NETWORK_RECOVERY)
         val dispatchAt = still.restartDispatchAtMs
@@ -890,7 +1176,30 @@ class ConferenceEdgeRecoveryController(
                 "intentId=$intentId attemptId=$attemptId obligationGen=$obligationGen " +
                 "restartAttemptId=$attemptId dispatchAt=${dispatchAt ?: "NONE"}"
         )
-        still.iceRestartIntentId = null
+        if (capturedIntentId != null) {
+            deferredIntentAuthority.markExecuted(capturedIntentId)
+            releaseDeferredIntentSlot(
+                record = still,
+                reason = drainTerminalReason,
+                domain = DeferredIntentAuthority.RequestingDomain.NEGOTIATION,
+                kind = DeferredIntentAuthority.ReleaseKind.SLOT_AFTER_EXECUTED
+            )
+        }
+    }
+
+    private fun clearValidationFenceIfArmed(
+        sessionId: String,
+        remoteModuleId: String,
+        intentId: String?,
+        reason: String
+    ) {
+        if (intentId == null) return
+        if (Pr52cDebugInjection.fencedIntentId(sessionId, remoteModuleId) != intentId) return
+        Pr52cDebugInjection.clearValidationFence(sessionId, remoteModuleId)
+        onLog(
+            "DEFERRED_INTENT_VALIDATION_FENCE_CLEARED session=$sessionId remote=$remoteModuleId " +
+                "intentId=$intentId reason=$reason"
+        )
     }
 
     /**
@@ -933,6 +1242,22 @@ class ConferenceEdgeRecoveryController(
         if (record.mediaActionOwner.isAssigned() && !hasDeferredMediaAction(record)) return
         if (!record.phase.isActivelyRecovering()) return
         val key = record.key
+        val fencedIntentId = record.iceRestartIntentId
+        if (
+            fencedIntentId != null &&
+            Pr52cDebugInjection.shouldSuppressProductionDeferredDrain(
+                key.sessionId,
+                key.remoteModuleId,
+                fencedIntentId,
+                trigger
+            )
+        ) {
+            onLog(
+                "DEFERRED_INTENT_VALIDATION_FENCE session=${key.sessionId} remote=${key.remoteModuleId} " +
+                    "intentId=$fencedIntentId seam=$trigger action=suppress_production_media_resolve"
+            )
+            return
+        }
         if (hasParticipantHandoffPending(record)) {
             recordMediaActionDeferred(
                 record = record,
@@ -1014,80 +1339,6 @@ class ConferenceEdgeRecoveryController(
         else -> trigger.name
     }
 
-    /**
-     * ADR-0022 Q12 M-1 / Q10 R-1 / Q14 C-3:
-     * canClose = noDeferred || evidence.covers(intent.domain) || ALL-domain end;
-     * after ice-restart dispatch, RECOVERED also requires post-dispatch restart-resolved evidence.
-     */
-    private fun canClose(
-        record: EdgeRecoveryRecord,
-        reason: ObligationCloseReason,
-        closeEvidence: String?
-    ): Boolean {
-        if (isAllDomainObligationClose(reason)) return true
-        if (hasDeferredMediaAction(record)) {
-            val domain = record.deferredReason?.toDeferredIntentDomain()
-                ?: DeferredIntentDomain.ALL
-            if (!evidenceCoversDeferredDomain(closeEvidence, domain)) {
-                return false
-            }
-        }
-        if (
-            reason == ObligationCloseReason.RECOVERED &&
-            record.iceRestartIssued &&
-            record.restartDispatchAtMs != null
-        ) {
-            return isPostDispatchRestartResolvedEvidence(record, closeEvidence)
-        }
-        return true
-    }
-
-    private fun isAllDomainObligationClose(reason: ObligationCloseReason): Boolean =
-        reason == ObligationCloseReason.MEMBERSHIP_LEFT ||
-            reason == ObligationCloseReason.CONFERENCE_TERMINATED ||
-            reason == ObligationCloseReason.OBLIGATION_DEADLINE
-
-    /**
-     * Table 2 / INV-REC-026: media/transport evidence MUST NOT cover NEGOTIATION.
-     * ALL-domain close is handled by [isAllDomainObligationClose], not evidence tokens here.
-     */
-    private fun evidenceCoversDeferredDomain(
-        evidence: String?,
-        domain: DeferredIntentDomain
-    ): Boolean {
-        if (evidence.isNullOrBlank()) return false
-        return when (domain) {
-            DeferredIntentDomain.NEGOTIATION -> false
-            DeferredIntentDomain.MEDIA ->
-                evidence == "ICE_CONNECTED" ||
-                    evidence == "MEDIA_RESTORED" ||
-                    evidence == "EDGE_RECOVERED"
-            DeferredIntentDomain.TRANSPORT ->
-                evidence == "ICE_CONNECTED" ||
-                    evidence == "MEDIA_RESTORED" ||
-                    evidence == "ROUTE_CONVERGED" ||
-                    evidence == "EDGE_RECOVERED"
-            DeferredIntentDomain.CONTROL ->
-                evidence == "ROUTE_CONVERGED" ||
-                    evidence.contains("AUTHORITY", ignoreCase = true) ||
-                    evidence == "EDGE_RECOVERED"
-            DeferredIntentDomain.ALL -> true
-        }
-    }
-
-    /** INV-NEG-016 / Q14: media observation must be strictly after restartDispatchAt. */
-    private fun isPostDispatchRestartResolvedEvidence(
-        record: EdgeRecoveryRecord,
-        evidence: String?
-    ): Boolean {
-        val dispatchAt = record.restartDispatchAtMs ?: return false
-        val observedAt = record.mediaRestoredObservedAtMs ?: return false
-        if (observedAt <= dispatchAt) return false
-        return evidence == "ICE_CONNECTED" ||
-            evidence == "MEDIA_RESTORED" ||
-            evidence == "EDGE_RECOVERED"
-    }
-
     private fun noteMediaRestored(record: EdgeRecoveryRecord) {
         record.mediaRestored = true
         val now = clock()
@@ -1100,39 +1351,6 @@ class ConferenceEdgeRecoveryController(
     private fun clearMediaRestoredFact(record: EdgeRecoveryRecord) {
         record.mediaRestored = false
         record.mediaRestoredObservedAtMs = null
-    }
-
-    private fun closeObligation(
-        record: EdgeRecoveryRecord,
-        reason: ObligationCloseReason,
-        closeEvidence: String? = null
-    ) {
-        if (record.obligationClosedAtMs != null) return
-        if (!canClose(record, reason, closeEvidence)) {
-            val domain = record.deferredReason?.toDeferredIntentDomain()?.name
-                ?: if (record.iceRestartIssued) "RESTART_FRESHNESS" else "NONE"
-            onLog(
-                "RECOVERY_OBLIGATION_CLOSE_HELD session=${record.key.sessionId} " +
-                    "remote=${record.key.remoteModuleId} attempt=${record.recoveryAttemptId} " +
-                    "reason=$reason evidence=${closeEvidence ?: "NONE"} " +
-                    "domain=$domain disposition=${record.mediaActionDisposition} " +
-                    "deferredReason=${record.deferredReason ?: "NONE"} " +
-                    "iceRestartIssued=${record.iceRestartIssued} " +
-                    "restartDispatchAtMs=${record.restartDispatchAtMs ?: "NONE"} " +
-                    "mediaRestoredObservedAtMs=${record.mediaRestoredObservedAtMs ?: "NONE"}"
-            )
-            return
-        }
-        logObligationCloseRequested(record, reason, closeEvidence)
-        expireDeferredIceRestartIntent(record, "OBLIGATION_CLOSE:$reason")
-        cancelDeadline(record.key)
-        record.obligationClosedAtMs = clock()
-        record.obligationCloseReason = reason
-        record.hasPendingCompletionDecision = false
-        onLog(
-            "RECOVERY_OBLIGATION_CLOSED session=${record.key.sessionId} " +
-                "remote=${record.key.remoteModuleId} reason=$reason"
-        )
     }
 
     /**
@@ -1188,7 +1406,12 @@ class ConferenceEdgeRecoveryController(
             // Only close from failed-media residency. Active Attempt N+1 after SUPERSEDE
             // must not be killed by a stale timer from the prior failed entry.
             if (!current.phase.isFailedMediaRecovery()) return@schedule
-            closeObligation(current, ObligationCloseReason.OBLIGATION_DEADLINE, "OBLIGATION_DEADLINE")
+            RecoveryCompletionPolicy.closeObligation(
+                completionMutationHost,
+                current,
+                ObligationCloseReason.OBLIGATION_DEADLINE,
+                "OBLIGATION_DEADLINE"
+            )
             notifyChanged(key.sessionId)
         }, delayMs, TimeUnit.MILLISECONDS)
         deadlineTimers[key] = future
@@ -1200,9 +1423,9 @@ class ConferenceEdgeRecoveryController(
 
     /**
      * Capability materiality notification from Coordinator (ADR-0022 R28-G).
-     * Fact writers MUST NOT call this — only [TalkbackCoordinator] after signature comparison.
+     * Fact writers MUST NOT call this 鈥?only [TalkbackCoordinator] after signature comparison.
      *
-     * §13.2.4 Gap-2: when obligation is CLOSED, fresh [RecoveryResurrectionEvidence] may admit a
+     * 搂13.2.4 Gap-2: when obligation is CLOSED, fresh [RecoveryResurrectionEvidence] may admit a
      * Successor Obligation Episode. OPEN path MUST NOT bump [obligationGeneration].
      */
     fun onRecoveryReachabilityChanged(
@@ -1282,7 +1505,7 @@ class ConferenceEdgeRecoveryController(
         evidence: String = "ICE_CONNECTED"
     ) {
         val record = edges[ConferenceEdgeKey(sessionId, remoteModuleId)] ?: return
-        markRecovered(record, evidence)
+        RecoveryCompletionPolicy.markRecovered(completionMutationHost, record, evidence)
     }
 
     private fun reevaluateOpenObligation(
@@ -1300,6 +1523,35 @@ class ConferenceEdgeRecoveryController(
                     "attempt=${record.recoveryAttemptId} trigger=$trigger " +
                     "wakeupBinding=${record.wakeupBinding?.logLabel()}"
             )
+            val fencedIntentId = record.iceRestartIntentId
+            val productionDrainSuppressed = fencedIntentId != null &&
+                Pr52cDebugInjection.shouldSuppressProductionDeferredDrain(
+                    sessionId,
+                    remoteModuleId,
+                    fencedIntentId,
+                    trigger.name
+                )
+            if (productionDrainSuppressed) {
+                onLog(
+                    "DEFERRED_INTENT_VALIDATION_FENCE session=$sessionId remote=$remoteModuleId " +
+                        "intentId=$fencedIntentId seam=${trigger.name} action=suppress_production_drain"
+                )
+            } else if (
+                record.deferredIntentHoldReason == DeferredIntentHoldReason.DISPATCH &&
+                isNegotiationDeferredIceRestartSlot(record)
+            ) {
+                retryHeldDeferredIntentDrain(sessionId, remoteModuleId, trigger.name)
+            } else if (
+                hasDeferredMediaAction(record) &&
+                record.mediaActionOwner == MediaActionOwner.HOST_RESTART
+            ) {
+                resolveMediaActionOwner(
+                    record = record,
+                    recoveryReason = RecoveryReason.NETWORK_RECOVERY,
+                    immediate = false,
+                    trigger = trigger.name
+                )
+            }
         }
         if (
             trigger == RecoveryReevaluateTrigger.LINK_READY ||
@@ -1315,8 +1567,66 @@ class ConferenceEdgeRecoveryController(
                 "capabilityAfter=${signature.formatCapabilityLabel()} " +
                 "controlPlaneStarted=$controlPlane"
         )
+        refreshControlReconciliationFact(record)
         runCompletionEvaluationStub(record, snapshot, signature, trigger)
+        emitCompletionObservations(record, snapshot, trigger)
+        if (trigger == RecoveryReevaluateTrigger.DELIVERY_CONFIRMED) {
+            val waiting = signature.waitingReason?.name ?: "NONE"
+            val finalDecision = when {
+                record.phase == EdgeRecoveryPhase.RECOVERED -> "RECOVERED"
+                waiting != "NONE" -> "WAITING($waiting)"
+                else -> record.phase.name
+            }
+            onLog(
+                "RECOVERY_PROJECTION_RESULT session=$sessionId edge=$remoteModuleId " +
+                    "deliveryConfirmedOutcome=${record.deliveryConfirmedOutcome?.name ?: "NONE"} " +
+                    "mediaState=${snapshot.mediaRouteConnected} " +
+                    "controlPlaneStarted=${record.controlPlaneStarted()} " +
+                    "peerSignaling=${snapshot.peerSignalingReachable} " +
+                    "authority=${snapshot.authorityReachable} " +
+                    "finalDecision=$finalDecision"
+            )
+        }
         notifyChanged(sessionId)
+    }
+
+    /** PR5-2b: compute + emit Q6-2 control reconciliation fact; store on record for CompletionPolicy. */
+    private fun refreshControlReconciliationFact(record: EdgeRecoveryRecord) {
+        val membershipConverged = queryMembershipEpochConverged(record.channelId, record.key.sessionId)
+        val fact = ControlReconciliationEvaluator.evaluate(
+            record = record,
+            membershipEpochConverged = membershipConverged,
+            clock = clock
+        )
+        record.controlReconciliationFact = fact
+        RecoveryControlReconciliationFact.emit(record, fact, onLog)
+    }
+
+    /** PR5-0: read-only completion projection 鈥?no state mutation. */
+    private fun emitCompletionObservations(
+        record: EdgeRecoveryRecord,
+        snapshot: EdgeReachabilitySnapshot,
+        trigger: RecoveryReevaluateTrigger
+    ) {
+        RecoveryAttemptOwner.reconcileFromFacts(record, "OBS:$trigger")
+        val key = record.key
+        val iceConnected = isIceConnected(key.sessionId, key.remoteModuleId)
+        val mediaUnavailableAdvisory =
+            isMediaUnavailable(key.sessionId, key.remoteModuleId) ||
+                (iceConnected && !record.mediaRestored && !snapshot.mediaRouteConnected)
+        val result = CompletionObservationProjection.project(
+            record = record,
+            snapshot = snapshot,
+            iceConnected = iceConnected,
+            mediaUnavailableAdvisory = mediaUnavailableAdvisory,
+            hasUncoveredDeferredIntent = hasDeferredMediaAction(record)
+        )
+        val sink = CompletionObservationProjection.testLogSink()
+        CompletionObservationProjection.logObservations(
+            result = result,
+            trigger = trigger,
+            logSink = sink ?: onLog
+        )
     }
 
     private fun isFreshRemoteModuleRecoveredEvidence(
@@ -1335,8 +1645,8 @@ class ConferenceEdgeRecoveryController(
     }
 
     /**
-     * ADR-0022 §13.2.4: admit Successor Obligation Episode (gen+1 + first attempt).
-     * B-13.2.4-1: admission ≠ beginRecovery fusion — resolve/dispatch separately (M1, INV-REC-023).
+     * ADR-0022 搂13.2.4: admit Successor Obligation Episode (gen+1 + first attempt).
+     * B-13.2.4-1: admission 鈮?beginRecovery fusion 鈥?resolve/dispatch separately (M1, INV-REC-023).
      */
     private fun admitSuccessorObligationEpisode(
         record: EdgeRecoveryRecord,
@@ -1365,7 +1675,7 @@ class ConferenceEdgeRecoveryController(
         )
         // M1: same resolve path as R1 / SUPERSEDE; immediate=false; watchdog only after dispatch.
         admitted.mediaActionOwner = MediaActionOwner.PENDING
-        clearMediaActionDeferral(admitted)
+        clearDeferralFields(admitted)
         val recoveryReason = RecoveryReason.NETWORK_RECOVERY
         if (admitted.initiatesReattach) {
             if (
@@ -1648,7 +1958,7 @@ class ConferenceEdgeRecoveryController(
         notifyChanged(sessionId)
     }
 
-    @Deprecated("Use onRecoveryReattachAccepted — Membership must not call Recovery", ReplaceWith("onRecoveryReattachAccepted(sessionId, remoteModuleId, recoveryReason)"))
+    @Deprecated("Use onRecoveryReattachAccepted 鈥?Membership must not call Recovery", ReplaceWith("onRecoveryReattachAccepted(sessionId, remoteModuleId, recoveryReason)"))
     fun onReattachAccepted(
         sessionId: String,
         remoteModuleId: String,
@@ -1699,7 +2009,7 @@ class ConferenceEdgeRecoveryController(
 
     /**
      * Requester-side REATTACH reject (ADR-0022 R28-L INV-REC-007).
-     * Reject is a reevaluate trigger — never direct [markRecovered].
+     * Reject is a reevaluate trigger 鈥?never direct [markRecovered].
      */
     fun onRecoveryReattachOutboundRejected(
         sessionId: String,
@@ -1777,14 +2087,14 @@ class ConferenceEdgeRecoveryController(
         val key = ConferenceEdgeKey(sessionId, remoteModuleId)
         val record = edges[key] ?: return
         cancelDebounce(key)
-        // R28-H.2: debouncing is suspicion only — reconnect clears HEALTHY, never starts recovery / RECOVERED.
+        // R28-H.2: debouncing is suspicion only 鈥?reconnect clears HEALTHY, never starts recovery / RECOVERED.
         if (record.phase == EdgeRecoveryPhase.DISCONNECTED_DEBOUNCING) {
             clearDebouncingSuspicion(record)
             notifyChanged(sessionId)
             return
         }
         // Terminal monotonicity: late ICE after CLOSED(RECOVERED) must not reopen / rewrite phase
-        // (soak gap2-casea: RECOVERED → controlPlaneStarted=false → ICE_RESTARTING poisoned UI).
+        // (soak gap2-casea: RECOVERED 鈫?controlPlaneStarted=false 鈫?ICE_RESTARTING poisoned UI).
         if (record.phase == EdgeRecoveryPhase.RECOVERED && !record.edgeObligationOpen()) {
             onLog(
                 "IGNORE_LATE_ICE_AFTER_RECOVERED session=$sessionId remote=$remoteModuleId " +
@@ -1798,7 +2108,7 @@ class ConferenceEdgeRecoveryController(
             record.phase = EdgeRecoveryPhase.CONNECTED
             return
         }
-        // ADR-0022 R28-E: record media fact, then completion evaluation — never direct RECOVERED.
+        // ADR-0022 R28-E: record media fact, then completion evaluation 鈥?never direct RECOVERED.
         noteMediaRestored(record)
         notifyAttemptLineageObservation(record, "transport_recovered_on_ice_connected")
         runIceRestorationCompletionEvaluation(record)
@@ -1806,7 +2116,7 @@ class ConferenceEdgeRecoveryController(
 
     /**
      * R28-H.2: ICE reconnects while still [EdgeRecoveryPhase.DISCONNECTED_DEBOUNCING].
-     * Clear suspicion → HEALTHY. MUST NOT beginRecovery / REATTACH / RECOVERED.
+     * Clear suspicion 鈫?HEALTHY. MUST NOT beginRecovery / REATTACH / RECOVERED.
      */
     private fun clearDebouncingSuspicion(record: EdgeRecoveryRecord) {
         val key = record.key
@@ -1829,7 +2139,7 @@ class ConferenceEdgeRecoveryController(
     }
 
     /**
-     * ICE restoration → completion evaluation (ADR-0022 R28-E / #83).
+     * ICE restoration 鈫?completion evaluation (ADR-0022 R28-E / #83).
      * With [EdgeRecoveryRecord.controlPlaneStarted], ICE CONNECTED MAY yield RECOVERED.
      */
     private fun runIceRestorationCompletionEvaluation(record: EdgeRecoveryRecord) {
@@ -1848,12 +2158,13 @@ class ConferenceEdgeRecoveryController(
             )
             return
         }
+        refreshControlReconciliationFact(record)
         if (record.phase.isFailedMediaRecovery() && record.edgeObligationOpen()) {
             reEvaluateContinuationAfterTerminal(record)
             return
         }
         // R28-E: before control-plane, keep the fact; do not complete the edge.
-        // WAITING is not terminal — schedule control-plane continuation (ADR-0022).
+        // WAITING is not terminal 鈥?schedule control-plane continuation (ADR-0022).
         if (!controlPlane) {
             continueControlPlaneRecoveryAfterMediaRestored(record)
             return
@@ -1870,13 +2181,8 @@ class ConferenceEdgeRecoveryController(
             )
             return
         }
-        val evidence = if (isIceConnected(key.sessionId, key.remoteModuleId)) {
-            "ICE_CONNECTED"
-        } else {
-            "MEDIA_RESTORED"
-        }
-        logCompletionEvidenceAccepted(record, evidence)
-        if (markRecovered(record, evidence)) {
+        val snapshot = buildCompletionEvaluationSnapshot(record)
+        if (tryCompletionFromFrozenPredicate(record, snapshot, RecoveryReevaluateTrigger.ICE_RESTORED)) {
             onLog(
                 "RECOVERY_DECISION session=${key.sessionId} edge=${key.remoteModuleId} " +
                     "attempt=${record.recoveryAttemptId} trigger=${RecoveryReevaluateTrigger.ICE_RESTORED} " +
@@ -1887,11 +2193,11 @@ class ConferenceEdgeRecoveryController(
 
     /**
      * Media path is restored but the attempt has not crossed the control-plane boundary.
-     * MUST schedule a next action — never leave obligation OPEN with no owner (soak ea6466f1).
+     * MUST schedule a next action 鈥?never leave obligation OPEN with no owner (soak ea6466f1).
      *
      * REATTACH_THEN_ICE_RESTART (initiatesReattach): when E2 equivalent control-plane evidence
      * is already satisfied (reattach delivery + peer signaling path + media live), reuse the
-     * same CONTROL_PLANE_BOUNDARY exit as ICE_RESTART_ONLY — do not wait forever for accept.
+     * same CONTROL_PLANE_BOUNDARY exit as ICE_RESTART_ONLY 鈥?do not wait forever for accept.
      */
     private fun continueControlPlaneRecoveryAfterMediaRestored(record: EdgeRecoveryRecord) {
         val key = record.key
@@ -1913,14 +2219,14 @@ class ConferenceEdgeRecoveryController(
                     "attempt=${record.recoveryAttemptId} trigger=${RecoveryReevaluateTrigger.ICE_RESTORED} " +
                     "decision=WAIT_FOR_CONTROL_PLANE approved=true"
             )
-            // Route / inbound handlers own reattach dispatch — do not duplicate here.
+            // Route / inbound handlers own reattach dispatch 鈥?do not duplicate here.
             scheduleWatchdog(record)
             notifyChanged(key.sessionId)
             return
         }
         // ICE_RESTART_ONLY participant edge: do not flap transport when ICE is already CONNECTED.
         // Q13 B-3+B-1: media_path_active_without_restart is observation-only while a NEGOTIATION
-        // deferred ICE-restart intent remains uncovered — forbid short-circuit into ICE_RESTARTING.
+        // deferred ICE-restart intent remains uncovered 鈥?forbid short-circuit into ICE_RESTARTING.
         if (isIceConnected(key.sessionId, key.remoteModuleId) && record.mediaRestored) {
             if (isDeferredIceRestartIntent(record)) {
                 onLog(
@@ -1984,67 +2290,6 @@ class ConferenceEdgeRecoveryController(
         runIceRestorationCompletionEvaluation(record)
     }
 
-    /**
-     * @return true iff obligation closed as [ObligationCloseReason.RECOVERED]
-     * (callers MUST NOT log decision=RECOVERED on false).
-     */
-    private fun markRecovered(record: EdgeRecoveryRecord, closeEvidence: String = "EDGE_RECOVERED"): Boolean {
-        val key = record.key
-        val current = edges[key] ?: return false
-        if (
-            record.recoveryAttemptId != current.recoveryAttemptId ||
-            record.obligationGeneration != current.obligationGeneration
-        ) {
-            onLog(
-                "IGNORE_STALE_TERMINAL_FACT session=${key.sessionId} remote=${key.remoteModuleId} " +
-                    "factAttempt=${record.recoveryAttemptId} factGen=${record.obligationGeneration} " +
-                    "currentAttempt=${current.recoveryAttemptId} currentGen=${current.obligationGeneration} " +
-                    "evidence=$closeEvidence"
-            )
-            return false
-        }
-        // Exclusive close already stamped (e.g. OBLIGATION_DEADLINE on scheduler thread).
-        // MUST NOT rewrite phase→RECOVERED; that poisons successor freshness (phase==RECOVERED).
-        if (current.obligationClosedAtMs != null) {
-            onLog(
-                "IGNORE_STALE_TERMINAL_FACT session=${key.sessionId} remote=${key.remoteModuleId} " +
-                    "factAttempt=${record.recoveryAttemptId} factGen=${record.obligationGeneration} " +
-                    "reason=obligation_already_closed closeReason=${current.obligationCloseReason} " +
-                    "evidence=$closeEvidence"
-            )
-            return false
-        }
-        // INV-REC-027/028: do not enter RECOVERED while uncovered deferred / pre-dispatch evidence.
-        if (!canClose(record, ObligationCloseReason.RECOVERED, closeEvidence)) {
-            val domain = record.deferredReason?.toDeferredIntentDomain()?.name
-                ?: if (record.iceRestartIssued) "RESTART_FRESHNESS" else "NONE"
-            onLog(
-                "RECOVERY_COMPLETION_HELD session=${key.sessionId} remote=${key.remoteModuleId} " +
-                    "attempt=${record.recoveryAttemptId} evidence=$closeEvidence domain=$domain " +
-                    "phase=${record.phase} deferredReason=${record.deferredReason ?: "NONE"} " +
-                    "iceRestartIssued=${record.iceRestartIssued} " +
-                    "restartDispatchAtMs=${record.restartDispatchAtMs ?: "NONE"} " +
-                    "mediaRestoredObservedAtMs=${record.mediaRestoredObservedAtMs ?: "NONE"}"
-            )
-            return false
-        }
-        cancelDebounce(key)
-        cancelWatchdog(key)
-        cancelDeadline(key)
-        val oldPhase = record.phase
-        record.phase = EdgeRecoveryPhase.RECOVERED
-        logPhaseTransition(record, oldPhase, record.phase, "EDGE_RECOVERED")
-        closeObligation(record, ObligationCloseReason.RECOVERED, closeEvidence)
-        val durationMs = clock() - record.recoveryStartedAtMs
-        onLog(
-            "RECOVERY_EDGE_RECOVERED session=${key.sessionId} remote=${key.remoteModuleId} " +
-                "attempt=${record.recoveryAttemptId} durationMs=$durationMs"
-        )
-        notifyAttemptLineageObservation(record, "edge_recovered")
-        notifyChanged(key.sessionId)
-        return true
-    }
-
     fun cancelSession(sessionId: String, reason: String) {
         cancelledSessions[sessionId] = clock() + tombstoneTtlMs
         edges.keys.filter { it.sessionId == sessionId }.forEach { cancelEdge(it, reason) }
@@ -2074,6 +2319,39 @@ class ConferenceEdgeRecoveryController(
         terminalReevaluateDedup.clear()
         cancelledSessions.clear()
         cancelledChannels.clear()
+        deferredIntentAuthority.clearAll()
+    }
+
+    /**
+     * Slice-1: before media-domain re-admission clears deferral fields, committed negotiation
+     * intents must pass through DeferredIntentAuthority.requestSupersede (no silent clear).
+     */
+    private fun supersedeCommittedNegotiationIntentIfPresent(
+        record: EdgeRecoveryRecord,
+        reason: String
+    ) {
+        val intentId = record.iceRestartIntentId ?: return
+        if (deferredIntentAuthority.executionState(intentId) == null) {
+            val fenceArmed =
+                Pr52cDebugInjection.fencedIntentId(record.key.sessionId, record.key.remoteModuleId) ==
+                    intentId ||
+                    record.deferredReason == DeferredReason.NEGOTIATION_SETTLING
+            if (!fenceArmed && record.deferredIntentHoldReason == null) return
+            deferredIntentAuthority.registerCreated(
+                intentId = intentId,
+                sessionId = record.key.sessionId,
+                remoteModuleId = record.key.remoteModuleId,
+                fenceArmed = fenceArmed
+            )
+        }
+        if (record.deferredIntentHoldReason == DeferredIntentHoldReason.DISPATCH) {
+            deferredIntentAuthority.markHeldDispatch(intentId)
+        }
+        deferredIntentAuthority.requestSupersede(
+            intentId = intentId,
+            reason = reason,
+            requestingDomain = DeferredIntentAuthority.RequestingDomain.MEDIA
+        )
     }
 
     private fun beginRecovery(
@@ -2161,7 +2439,18 @@ class ConferenceEdgeRecoveryController(
                 "immediate=$immediate recoveryReason=$recoveryReason"
         )
         record.mediaActionOwner = MediaActionOwner.PENDING
-        clearMediaActionDeferral(record)
+        // J-X Slice-1: MEDIA EDGE_STARTED must not silently wipe committed NEGOTIATION intent.
+        supersedeCommittedNegotiationIntentIfPresent(
+            record,
+            reason = "EDGE_STARTED:${trigger.name}"
+        )
+        releaseDeferredIntentSlot(
+            record = record,
+            reason = "EDGE_STARTED:${trigger.name}",
+            domain = DeferredIntentAuthority.RequestingDomain.MEDIA,
+            kind = DeferredIntentAuthority.ReleaseKind.SUPERSEDE
+        )
+        clearDeferralFields(record)
         if (initiatesReattach) {
             applyReattachDispatchOutcome(
                 record = record,
@@ -2239,7 +2528,40 @@ class ConferenceEdgeRecoveryController(
                         "baselineCapability=false admissionSeq=$seq " +
                         "gateBlock=$block"
                 )
+                // J-X-3: committed negotiation intent starts ARMED; supersede releases
+                // via RELEASED_BY_SUPERSEDE (debug validation fence is an additional overlay).
+                deferredIntentAuthority.registerCreated(
+                    intentId = intentId,
+                    sessionId = record.key.sessionId,
+                    remoteModuleId = record.key.remoteModuleId,
+                    fenceArmed = true
+                )
             }
+            return
+        }
+        val admissionProjection = evaluateRecoveryAdmission(
+            record.key.sessionId,
+            record.key.remoteModuleId
+        )
+        if (admissionProjection.decision != AdmissionDecisionProjection.DISPATCH_NOW) {
+            val waitingReason = admissionProjection.toRecoveryWaitingReason()
+            onLog(
+                "RECOVERY_WAITING session=${record.key.sessionId} edge=${record.key.remoteModuleId} " +
+                    "reason=${waitingReason ?: admissionProjection.decision} " +
+                    "confidence=${admissionProjection.confidence} " +
+                    "admissionReason=${admissionProjection.reason} " +
+                    "lastInboundAgeMs=${admissionProjection.lastInboundAgeMs}"
+            )
+            recordMediaActionDeferred(
+                record = record,
+                owner = MediaActionOwner.HOST_RESTART,
+                reason = DeferredReason.MEDIA_NOT_READY,
+                wakeupBinding = WakeupBinding(
+                    sourceType = WakeupSourceType.ROUTE_CONVERGED,
+                    sourceKey = edgeWakeupKey(record.key.sessionId, record.key.remoteModuleId)
+                ),
+                trigger = "ADMISSION_CONFIDENCE:${admissionProjection.decision}"
+            )
             return
         }
         record.phase = EdgeRecoveryPhase.ICE_RESTARTING
@@ -2354,7 +2676,7 @@ class ConferenceEdgeRecoveryController(
                 ObligationCloseReason.CONFERENCE_TERMINATED
             else -> ObligationCloseReason.MEMBERSHIP_LEFT
         }
-        closeObligation(record, closeReason, reason)
+        RecoveryCompletionPolicy.closeObligation(completionMutationHost, record, closeReason, reason)
         onLog(
             "RECOVERY_EDGE_CANCELLED session=${key.sessionId} remote=${key.remoteModuleId} " +
                 "reason=$reason"
@@ -2545,6 +2867,49 @@ class ConferenceEdgeRecoveryController(
         )
     }
 
+    private fun buildCompletionEvaluationSnapshot(record: EdgeRecoveryRecord): EdgeReachabilitySnapshot {
+        val key = record.key
+        val iceConnected = isIceConnected(key.sessionId, key.remoteModuleId)
+        return EdgeReachabilitySnapshot(
+            linkReady = true,
+            peerDiscovered = true,
+            peerSignalingReachable = canDispatchRecoveryMediaAction(key.sessionId, key.remoteModuleId),
+            mediaRouteConnected = iceConnected || record.mediaRestored,
+            authorityReachable = true
+        )
+    }
+
+    private fun tryCompletionFromFrozenPredicate(
+        record: EdgeRecoveryRecord,
+        snapshot: EdgeReachabilitySnapshot,
+        trigger: RecoveryReevaluateTrigger,
+        evidence: String? = null
+    ): Boolean {
+        refreshControlReconciliationFact(record)
+        val key = record.key
+        val iceConnectedProbe = isIceConnected(key.sessionId, key.remoteModuleId)
+        val iceConnectedForPredicate =
+            iceConnectedProbe || trigger == RecoveryReevaluateTrigger.ICE_RESTORED
+        val mediaUnavailableAdvisory =
+            isMediaUnavailable(key.sessionId, key.remoteModuleId) ||
+                (iceConnectedForPredicate && !record.mediaRestored && !snapshot.mediaRouteConnected)
+        val observation = RecoveryCompletionPolicy.evaluate(
+            record = record,
+            snapshot = snapshot,
+            iceConnected = iceConnectedForPredicate,
+            mediaUnavailableAdvisory = mediaUnavailableAdvisory,
+            hasUncoveredDeferredIntent = hasDeferredMediaAction(record)
+        )
+        RecoveryCompletionPolicy.logCompletionDecision(completionMutationHost, observation, trigger)
+        if (!CompletionObservationProjection.controlReconciliationCompleted(record)) return false
+        if (observation.candidate != CompletionObservationProjection.CompletionCandidate.RECOVERED) {
+            return false
+        }
+        val closeEvidence = evidence ?: completionEvidenceFromReachability(record, snapshot, trigger)
+        logCompletionEvidenceAccepted(record, closeEvidence, snapshot)
+        return RecoveryCompletionPolicy.markRecovered(completionMutationHost, record, closeEvidence)
+    }
+
     /** P2-B re-evaluate completion evaluation (ADR-0022 R28-C/E). */
     private fun runCompletionEvaluationStub(
         record: EdgeRecoveryRecord,
@@ -2552,15 +2917,11 @@ class ConferenceEdgeRecoveryController(
         signature: RecoveryCapabilitySignature,
         trigger: RecoveryReevaluateTrigger
     ) {
-        if (record.controlPlaneStarted() && snapshot.canCompleteRecovery()) {
-            val evidence = completionEvidenceFromReachability(record, snapshot, trigger)
-            logCompletionEvidenceAccepted(record, evidence, snapshot)
-            if (markRecovered(record, evidence)) {
-                onLog(
-                    "RECOVERY_DECISION session=${record.key.sessionId} edge=${record.key.remoteModuleId} " +
-                        "attempt=${record.recoveryAttemptId} trigger=$trigger decision=RECOVERED approved=true"
-                )
-            }
+        if (tryCompletionFromFrozenPredicate(record, snapshot, trigger)) {
+            onLog(
+                "RECOVERY_DECISION session=${record.key.sessionId} edge=${record.key.remoteModuleId} " +
+                    "attempt=${record.recoveryAttemptId} trigger=$trigger decision=RECOVERED approved=true"
+            )
             return
         }
         if (record.phase.isFailedMediaRecovery() && hasResurrectionEvidence(snapshot, trigger)) {
@@ -2673,7 +3034,7 @@ class ConferenceEdgeRecoveryController(
 
     /**
      * FAILED is not terminal while obligation OPEN (ADR-0022).
-     * CHECKING / discovery are early resurrection signals — CONNECTED is not required.
+     * CHECKING / discovery are early resurrection signals 鈥?CONNECTED is not required.
      */
     private fun hasResurrectionEvidence(
         snapshot: EdgeReachabilitySnapshot,
@@ -2693,13 +3054,13 @@ class ConferenceEdgeRecoveryController(
     }
 
     /**
-     * R28-M: FAILED + obligation OPEN — route ICE restoration through continuation re-evaluate,
+     * R28-M: FAILED + obligation OPEN 鈥?route ICE restoration through continuation re-evaluate,
      * not direct supersede / beginRecovery.
      */
     private fun reEvaluateContinuationAfterTerminal(record: EdgeRecoveryRecord) {
         val key = record.key
         val trigger = RecoveryReevaluateTrigger.ICE_RESTORED
-        // ADR-0032 § 9: ICE may only populate the media plane. Reached only after
+        // ADR-0032 搂 9: ICE may only populate the media plane. Reached only after
         // mediaRestored, so the non-media planes are known-good for this continuation.
         val snapshot = EdgeReachabilitySnapshot(
             linkReady = true,
@@ -2810,7 +3171,7 @@ class ConferenceEdgeRecoveryController(
 
     /**
      * Appendix C-3.1: supersede from FAILED residency must enter ownership lifecycle (C-10).
-     * Mirrors [beginRecovery] admission after attempt open — without incrementing attempt again.
+     * Mirrors [beginRecovery] admission after attempt open 鈥?without incrementing attempt again.
      */
     private fun admitSupersededRecoveryAttempt(
         record: EdgeRecoveryRecord,
@@ -2826,7 +3187,18 @@ class ConferenceEdgeRecoveryController(
                 "immediate=false recoveryReason=$recoveryReason pathway=SUPERSEDE"
         )
         record.mediaActionOwner = MediaActionOwner.PENDING
-        clearMediaActionDeferral(record)
+        // J-X Slice-1: same EDGE_STARTED ownership gate as beginRecovery (no silent clear).
+        supersedeCommittedNegotiationIntentIfPresent(
+            record,
+            reason = "EDGE_STARTED:SUPERSEDE:$trigger"
+        )
+        releaseDeferredIntentSlot(
+            record = record,
+            reason = "EDGE_STARTED:SUPERSEDE:$trigger",
+            domain = DeferredIntentAuthority.RequestingDomain.MEDIA,
+            kind = DeferredIntentAuthority.ReleaseKind.SUPERSEDE
+        )
+        clearDeferralFields(record)
         if (record.initiatesReattach) {
             if (
                 RecoveryAction.DISPATCH_REATTACH in signature.permittedActions &&
@@ -2838,7 +3210,7 @@ class ConferenceEdgeRecoveryController(
                     trigger = trigger
                 )
             } else {
-                // Action gate blocked (transport/discovery/signaling) — never the media
+                // Action gate blocked (transport/discovery/signaling) 鈥?never the media
                 // route (ADR-0032 INV-REC-010).
                 recordMediaActionDeferred(
                     record = record,
@@ -2871,7 +3243,7 @@ class ConferenceEdgeRecoveryController(
         val previousObligationOpen = record.obligationClosedAtMs == null &&
             record.obligationOpenedAtMs != null
         terminalReevaluateDedup.remove(record.key)
-        recoveryOfferDeliveryPolicy.clearDeliveryState(record)
+        recoveryOfferDeliveryPolicy.supersedeLineage(record, trigger)
         // Drop prior failed-residency deadline; next FAILED stamps a fresh one (R28-H.1).
         // Also cancel the superseded attempt's watchdog so it cannot emit FAILED (#79).
         cancelDeadline(record.key)
@@ -2886,10 +3258,14 @@ class ConferenceEdgeRecoveryController(
         record.recoveryViaInboundReattach = false
         record.reattachDeliveryState = ReattachDeliveryState.QUEUED
         record.reattachNonce = null
+        record.outboundDispatchAttemptId = null
+        record.outboundDispatchObligationGeneration = null
+        record.attemptContext = null
+        record.controlReconciliationFact = null
         record.recoveryStartedAtMs = clock()
         expireDeferredIceRestartIntent(record, "SUPERSEDE:$trigger")
         record.mediaActionOwner = MediaActionOwner.PENDING
-        clearMediaActionDeferral(record)
+        clearDeferralFields(record)
         onLog(
             formatRecoveryAttemptOpenedLog(
                 sessionId = record.key.sessionId,
@@ -2918,5 +3294,155 @@ class ConferenceEdgeRecoveryController(
             scheduleWatchdog(record)
         }
         notifyAttemptLineageObservation(record, "attempt_superseded", previousAttempt)
+    }
+
+    /**
+     * PR5-2c-C E.14.14: debug-only deferred negotiation intent (authority edge).
+     * Does not synthesize production recovery triggers.
+     */
+    fun debugCreateDeferredNegotiationIntent(
+        sessionId: String,
+        channelId: String,
+        remoteModuleId: String,
+        admissionSeq: Long,
+        gateBlock: IceRestartGateBlockReason = IceRestartGateBlockReason.OFFER_AWAITING_ANSWER
+    ): String? {
+        onLog(
+            "DEBUG_CREATE_DEFERRED_INTENT session=$sessionId remote=$remoteModuleId " +
+                "gateBlock=$gateBlock mode=ICE_RESTART"
+        )
+        val key = ConferenceEdgeKey(sessionId, remoteModuleId)
+        val record = edges[key]?.takeIf { it.edgeObligationOpen() }
+            ?: openNewRecoveryObligation(
+                key = key,
+                channelId = channelId,
+                phase = EdgeRecoveryPhase.RECOVERY_PENDING,
+                initiatesReattach = false,
+                trigger = "DEBUG_CREATE_DEFERRED_INTENT"
+            )
+        val intentId = allocateIceRestartIntentId(record)
+        record.deferredGateBlockReason = gateBlock
+        recordMediaActionDeferred(
+            record = record,
+            owner = MediaActionOwner.HOST_RESTART,
+            reason = DeferredReason.NEGOTIATION_SETTLING,
+            wakeupBinding = WakeupBinding(
+                sourceType = WakeupSourceType.NEGOTIATION_CAN_EXECUTE,
+                sourceKey = edgeWakeupKey(sessionId, remoteModuleId)
+            ),
+            trigger = "DEBUG_CREATE_DEFERRED_INTENT"
+        )
+        record.deferAdmissionObservationSeq = admissionSeq
+        onLog(
+            "DEFERRED_INTENT_CREATED session=$sessionId remote=$remoteModuleId " +
+                "intentId=$intentId attemptId=${record.recoveryAttemptId} " +
+                "obligationGen=${record.obligationGeneration} " +
+                "baselineCapability=false admissionSeq=$admissionSeq " +
+                "gateBlock=$gateBlock"
+        )
+        Pr52cDebugInjection.armValidationFence(sessionId, remoteModuleId, intentId)
+        onLog(
+            "DEFERRED_INTENT_VALIDATION_FENCE_ARMED session=$sessionId remote=$remoteModuleId " +
+                "intentId=$intentId suppressProductionDrain=true"
+        )
+        deferredIntentAuthority.registerCreated(
+            intentId = intentId,
+            sessionId = sessionId,
+            remoteModuleId = remoteModuleId,
+            fenceArmed = true
+        )
+        return intentId
+    }
+
+    /** PR5-2c-C E.14.14: release dispatch via dispatch-readiness seam (not negotiation wakeup). */
+    fun debugReleaseDispatchReadiness(sessionId: String, remoteModuleId: String) {
+        onLog(
+            "DEBUG_RELEASE_DISPATCH session=$sessionId remote=$remoteModuleId " +
+                "seam=${Pr52cDebugInjection.DEBUG_RELEASE_SEAM}"
+        )
+        Pr52cDebugInjection.releaseDispatch(sessionId, remoteModuleId)
+        val dispatchReady = isRecoveryDispatchReady(sessionId, remoteModuleId)
+        onLog(
+            "DEBUG_RELEASE_DISPATCH_READINESS_OBSERVED session=$sessionId remote=$remoteModuleId " +
+                "dispatchReady=$dispatchReady seam=${Pr52cDebugInjection.DEBUG_RELEASE_SEAM}"
+        )
+        retryHeldDeferredIntentDrain(
+            sessionId = sessionId,
+            remoteModuleId = remoteModuleId,
+            seamTrigger = Pr52cDebugInjection.DEBUG_RELEASE_SEAM
+        )
+    }
+
+    /**
+     * ADR-0022 搂E.16.2 Phase-3A FA-3 Option A: explicit supersede stimulus.
+     * Requires HELD(DISPATCH); does not expand DeferredIntentAuthority scope.
+     */
+    fun debugExplicitSupersedeDeferredIntent(
+        sessionId: String,
+        remoteModuleId: String
+    ): Boolean {
+        val key = ConferenceEdgeKey(sessionId, remoteModuleId)
+        val record = edges[key]
+        if (record == null) {
+            onLog(
+                "DEBUG_EXPLICIT_SUPERSEDE_REJECT session=$sessionId remote=$remoteModuleId " +
+                    "reason=no_edge stimulus=DEBUG_EXPLICIT_SUPERSEDE"
+            )
+            return false
+        }
+        val intentId = record.iceRestartIntentId
+        if (intentId == null) {
+            onLog(
+                "DEBUG_EXPLICIT_SUPERSEDE_REJECT session=$sessionId remote=$remoteModuleId " +
+                    "reason=no_intent stimulus=DEBUG_EXPLICIT_SUPERSEDE"
+            )
+            return false
+        }
+        if (deferredIntentAuthority.executionState(intentId) == null) {
+            deferredIntentAuthority.registerCreated(
+                intentId = intentId,
+                sessionId = sessionId,
+                remoteModuleId = remoteModuleId,
+                fenceArmed = true
+            )
+        }
+        if (record.deferredIntentHoldReason == DeferredIntentHoldReason.DISPATCH) {
+            deferredIntentAuthority.markHeldDispatch(intentId)
+        }
+        val state = deferredIntentAuthority.executionState(intentId)
+        if (state != DeferredIntentAuthority.ExecutionState.HELD_DISPATCH) {
+            onLog(
+                "DEBUG_EXPLICIT_SUPERSEDE_REJECT session=$sessionId remote=$remoteModuleId " +
+                    "intentId=$intentId reason=not_held_dispatch state=${state ?: "NONE"} " +
+                    "stimulus=DEBUG_EXPLICIT_SUPERSEDE"
+            )
+            return false
+        }
+        onLog(
+            "DEBUG_EXPLICIT_SUPERSEDE session=$sessionId remote=$remoteModuleId " +
+                "intentId=$intentId oldState=HELD_DISPATCH " +
+                "stimulus=DEBUG_EXPLICIT_SUPERSEDE EXERCISE_MODE=OWNERSHIP_ISOLATION"
+        )
+        val result = deferredIntentAuthority.requestSupersede(
+            intentId = intentId,
+            reason = "DEBUG_EXPLICIT_SUPERSEDE",
+            requestingDomain = DeferredIntentAuthority.RequestingDomain.TEST
+        )
+        if (result !is DeferredIntentAuthority.SupersedeResult.Accepted) {
+            onLog(
+                "DEBUG_EXPLICIT_SUPERSEDE_REJECT session=$sessionId remote=$remoteModuleId " +
+                    "intentId=$intentId reason=authority_rejected stimulus=DEBUG_EXPLICIT_SUPERSEDE"
+            )
+            return false
+        }
+        // Same post-supersede slot release as EDGE_STARTED 鈥?ownership fact already emitted.
+        releaseDeferredIntentSlot(
+            record = record,
+            reason = "DEBUG_EXPLICIT_SUPERSEDE",
+            domain = DeferredIntentAuthority.RequestingDomain.TEST,
+            kind = DeferredIntentAuthority.ReleaseKind.SUPERSEDE
+        )
+        clearDeferralFields(record)
+        return true
     }
 }

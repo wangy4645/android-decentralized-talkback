@@ -60,6 +60,30 @@ data class EdgeAttemptLineageRaw(
     val obligationGeneration: Long = 0L
 )
 
+/** PR5-2b: Q6-2 control reconciliation snapshot on edge record. */
+internal data class ControlReconciliationFact(
+    val controlHandshakeCompleted: Boolean,
+    val sessionEpochMatched: Boolean,
+    val membershipEpochConverged: Boolean,
+    val computedAtMs: Long,
+    val attemptId: Long,
+    val obligationGeneration: Long
+) {
+    val result: Boolean =
+        controlHandshakeCompleted && sessionEpochMatched && membershipEpochConverged
+
+    fun mismatchReason(): String? = when {
+        !controlHandshakeCompleted -> "CONTROL_HANDSHAKE_PENDING"
+        !sessionEpochMatched -> "SESSION_EPOCH_MISMATCH"
+        !membershipEpochConverged -> "MEMBERSHIP_EPOCH_MISMATCH"
+        else -> null
+    }
+
+    fun isCurrentFor(record: EdgeRecoveryRecord): Boolean =
+        attemptId == record.recoveryAttemptId &&
+            obligationGeneration == record.obligationGeneration
+}
+
 data class EdgeRecoveryFacts(
     val recoveringRemoteModuleIds: Set<String> = emptySet(),
     val anyRecovering: Boolean = false,
@@ -147,10 +171,6 @@ internal fun DeferredReason.toDeferredIntentDomain(): DeferredIntentDomain = whe
     DeferredReason.AUTHORITY_NOT_READY -> DeferredIntentDomain.CONTROL
 }
 
-/**
- * Step A-1 / B3: finer gate block under umbrella [DeferredReason.NEGOTIATION_SETTLING].
- * Diagnostic only — both reasons share wakeup [WakeupSourceType.NEGOTIATION_CAN_EXECUTE] (W-1).
- */
 enum class IceRestartGateBlockReason {
     /** Waiting Answerer transaction commit → capability recompute (P1). */
     ANSWERER_SETTLING,
@@ -161,6 +181,18 @@ enum class IceRestartGateBlockReason {
      * (`HAVE_LOCAL_OFFER`). Logs/binding only — not a second capability owner (INV-NEG-020).
      */
     OFFER_AWAITING_ANSWER,
+}
+
+/** PR5-2c-C: distinguish HELD(negotiation) vs HELD(dispatch_not_ready). */
+internal enum class DeferredIntentHoldReason {
+    NEGOTIATION,
+    DISPATCH
+}
+
+/** PR5-2c-C: drain entry — negotiation wakeup vs dispatch-readiness retry. */
+internal enum class DeferredIntentDrainTrigger {
+    NEGOTIATION_CAN_EXECUTE,
+    DISPATCH_READINESS_RETRY
 }
 
 /** Step A-1 observation: Coordinator probe for Negotiation Stabilization Gate. */
@@ -237,9 +269,14 @@ enum class RecoveryOfferDeliveryPhase {
     PENDING,
     RETRY_PENDING,
     CONFIRMED,
-    EXHAUSTED;
+    EXHAUSTED,
+    /** ADR-0022 §E.17: lineage existed and was explicitly terminated (not adoption). */
+    SUPERSEDED;
 
     fun isAwaitingAck(): Boolean = this == PENDING || this == RETRY_PENDING
+
+    /** INV-REC-032: NONE is initial only; terminal states must stay distinguishable. */
+    fun isTerminal(): Boolean = this == CONFIRMED || this == EXHAUSTED || this == SUPERSEDED
 }
 
 enum class ReattachDeliveryState {
@@ -257,6 +294,15 @@ enum class InboundReattachLineageVerdict {
     STALE_OBLIGATION_GENERATION,
     OBLIGATION_CLOSED
 }
+
+/** Inbound recovery-offer delivery identity (PR5-2c-Q1-7 / INV-PR52c-008). */
+data class InboundReattachDeliveryIdentity(
+    val offerLineageId: String,
+    val obligationGeneration: Long,
+    val deliveryAttemptId: Long,
+    val from: String,
+    val to: String
+)
 
 /** Outbound REATTACH reject reasons that require completion reevaluation (ADR-0022 R28-L INV-REC-007). */
 enum class OutboundReattachRejectReason {
@@ -300,6 +346,10 @@ internal data class EdgeRecoveryRecord(
      * Drain may consume only capability events with seq strictly greater than this.
      */
     var deferAdmissionObservationSeq: Long? = null,
+    /** PR5-2c-C: HELD(negotiation) vs HELD(dispatch_not_ready); null while waiting first drain. */
+    var deferredIntentHoldReason: DeferredIntentHoldReason? = null,
+    /** PR5-2c-C: audit counter for dispatch-readiness retries (same lineage). */
+    var deferredIntentDrainRetryCount: Int = 0,
     /** True when current attempt crossed inbound [onRecoveryReattachAccepted] (C-1.1 handoff guard). */
     var recoveryViaInboundReattach: Boolean = false,
     var epochRefreshUsed: Boolean = false,
@@ -336,7 +386,13 @@ internal data class EdgeRecoveryRecord(
     var recoveryOfferDeliveryPhase: RecoveryOfferDeliveryPhase = RecoveryOfferDeliveryPhase.NONE,
     var recoveryOfferLineageId: String? = null,
     var recoveryOfferDeliveryAttemptId: Long = 0L,
-    var recoveryOfferLastDispatchAtMs: Long? = null
+    var recoveryOfferLastDispatchAtMs: Long? = null,
+    /** ADR-0035 PR4: last confirmed handler outcome from RECOVERY_REATTACH_ACK. */
+    var deliveryConfirmedOutcome: com.talkback.core.model.RecoveryHandlerOutcome? = null,
+    /** PR5-1: attempt-scoped state owned by RecoveryAttemptOwner (orthogonal to episode phase). */
+    var attemptContext: RecoveryAttemptContext? = null,
+    /** PR5-2b: last emitted control reconciliation fact (ADR-0022 Q6-2). */
+    var controlReconciliationFact: ControlReconciliationFact? = null
 ) {
     /** True while this record owns an active recovery attempt (ADR-0022 P0.5). */
     fun hasActiveAttempt(): Boolean = phase.isActivelyRecovering()

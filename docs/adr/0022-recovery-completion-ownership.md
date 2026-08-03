@@ -4460,6 +4460,6792 @@ Peer need restart + gate blocked
 
 ---
 
+## Appendix E — Completion Convergence Grill (Q1 CLOSED 2026-07-30)
+
+**Status:** **Q1–Q4 CLOSED (A)** — **Q5 CLOSED (A)** — **PR5-0/1/2/2b PASS** — **Q6 FULLY CLOSED (A/A/C/A/A)** — **Q7 FULLY CLOSED (A/B/A)** — **Q7 implementation AUTHORIZED** — **PR5-3 BLOCKED** — **Next: Q7 implementation slice → soak Gate A → PR5-3**.
+
+**Entry:** PR4 Delivery Contract soak **PASS** (`logs/signal-path-20260730-183447`, session `103c9ef2-bb0d-44c4-aac9-d3c3d22244a1`). Cross-ref: [ice-restart-offer-delivery-investigation.md](../investigations/ice-restart-offer-delivery-investigation.md) §Session Handoff.
+
+**Frozen upstream (do not reopen):** PR1–PR4 delivery chain; ADR-0035 `DELIVERY_CONFIRMED` semantics; Appendix D Negotiation Deferred Drain (`df476d9`).
+
+**Normative chain (frozen with Q1-A):**
+
+```text
+Transport facts
+      |
+      v
+Delivery facts
+      |
+      v
+Recovery facts
+      |
+      v
+Episode Owner
+      |
+      v
+Completion Policy
+      |
+      v
+closeObligation / terminal completion
+```
+
+**Out of scope until Q2 closed:** code changes; UVCP mapping rewrite; SYNCING timeout; PR4 ACK contract changes; transport ingress repair.
+
+---
+
+### E.1 Background facts (frozen)
+
+Session `103c9ef2-bb0d-44c4-aac9-d3c3d22244a1` — `logs/signal-path-20260730-183447`.
+
+**M02 → M03 (success path):**
+
+```text
+ICE_RESTORED
+        |
+        v
+DELIVERY_CONFIRMED(ALREADY_SATISFIED)
+        |
+        v
+RECOVERY_REEVALUATE
+        |
+        v
+RECOVERED
+```
+
+**M03 → M02 (convergence gap):**
+
+```text
+ICE CONNECTED
+        +
+mediaUnavailable=true
+        +
+obligationOpen=true
+        |
+        v
+FAILED_MEDIA_RECOVERY(attempt_timeout)
+```
+
+**Frozen asymmetry:**
+
+```text
+peer media fact
+        ≠
+local completion decision
+```
+
+**Investigation framing (do not collapse):**
+
+```text
+Delivery confirmed?
+        |
+        v
+Recovery obligation owner?
+        |
+        v
+Who owns completion decision?
+        |
+        v
+Which invariant allows close?
+```
+
+**Carry-forward separations:**
+
+```text
+peer fact              ≠ local completion decision
+delivery fact            ≠ recovery completion
+media connected          ≠ obligation satisfied
+```
+
+**PR4 lesson:** missing observable fact ≠ failure. PR4 closed `no ACK → DELIVERY_EXHAUSTED` with `handler processed → ACK(ALREADY_SATISFIED) → DELIVERY_CONFIRMED`. ADR-0022 may require an analogous **completion fact** — not a policy rewrite that shortcuts layering.
+
+---
+
+### E.2 ADR-0022-Q1 — Recovery Completion Authority — **CLOSED: A** (2026-07-30)
+
+**Decision:** **A — Episode Owner Single Writer.**
+
+**Rationale:** Not preference — the only natural closure under established layering (Transport → Delivery → Recovery facts → Episode Owner → Completion Policy → close).
+
+#### Q1 frozen record
+
+| Item | Decision |
+|------|----------|
+| Completion authority | **Episode Owner Single Writer** |
+| `closeObligation` writer | Episode owner |
+| Policy inputs | recovery facts / local completion facts |
+| Forbidden inputs | UI state · delivery state · peer command |
+| peer `RECOVERED` | **fact**, not close command |
+| ACK / `DELIVERY_CONFIRMED` | **delivery fact**, not completion signal |
+| `ICE_CONNECTED` | **media fact**, not completion predicate |
+
+#### A-model semantics (frozen)
+
+```text
+Peer Edge
+    |
+    | emits facts
+    v
+
+Episode Owner
+    |
+    | evaluates Completion Policy
+    v
+
+RECOVERED | WAITING | CONTINUE_RECOVERY | FAILED
+```
+
+Delivery chain position (PR4 — unchanged):
+
+```text
+RECOVERY_REATTACH_ACK
+        |
+        v
+DELIVERY_CONFIRMED
+        |
+        v
+RECOVERY_REEVALUATE
+        |
+        v
+Completion Policy
+```
+
+**Frozen separations:**
+
+```text
+DELIVERY_CONFIRMED        ≠ RECOVERED
+RECOVERY_REEVALUATE       ≠ closeObligation
+```
+
+#### FORBIDDEN shortcuts (frozen)
+
+```text
+ACK → closeObligation                         ❌
+ICE_CONNECTED → closeObligation               ❌
+peer RECOVERED → local obligation close       ❌
+```
+
+#### C / D — explicitly rejected
+
+**C — Any Edge Success:** Rejected. Produces asymmetric terminal state (`M02 recovered` while `M03 obligation OPEN + media unavailable`). Not a mesh / conference general model.
+
+**D — Media Projection Owner:** Rejected. Soak counterexample: `ICE CONNECTED + control pending + obligation OPEN`. Reintroduces PR4-excluded shortcut `media fact → completion`. Violates `media connected ≠ recovery completed`.
+
+**B — Authority / Host Owner:** Not selected. Mesh / single-call local truth + handoff complexity outweigh unified-host benefit for **close authority** (authority may still emit facts).
+
+#### E.2.1 Frozen sentence
+
+```text
+Completion authority consumes recovery facts.
+It does not consume UI state,
+delivery state,
+or peer assertions as completion commands.
+```
+
+---
+
+### E.3 ADR-0022-Q2 — RECOVERED Predicate Contract (OPEN)
+
+**Core question:**
+
+> Episode Owner 在消费 recovery facts 后，什么 invariant 满足时可以将 obligation 标记为 `RECOVERED`？
+
+**Grill constraint (carry Q1):**
+
+```text
+facts → policy → completion
+
+not:
+
+state projection → completion
+delivery → completion
+peer assertion → completion
+```
+
+**Cross-ref (existing body — do not reopen without Q2 decision):** Main ADR `canClose(obligation, evidence)` (M-1); Q13 B-1/B-3 (`media_path_active_without_restart` observation-only); Q14 C-3 (post-dispatch restart-resolved evidence); Appendix D INV-NEG-021 (EXECUTED ≠ RECOVERED). Q2 **names** the predicate contract under Q1-A — may align with or refine these, not bypass them.
+
+**Soak anchor (`103c9ef2`, M03→M02):** `ICE CONNECTED` + `mediaUnavailable=true` + `obligationOpen=true` + `REATTACH_REQUESTED` → `FAILED_MEDIA_RECOVERY(attempt_timeout)`. Predicate gap — not delivery gap.
+
+---
+
+#### Q2-1 — Delivery Confirmation Predicate — **CLOSED: A** (2026-07-30)
+
+**Scope:** Completion predicate only — **do not** reopen PR4 ACK contract.
+
+**PR4 frozen upstream:**
+
+```text
+RECOVERY_REATTACH_ACK
+    |
+    v
+DELIVERY_CONFIRMED
+
+DELIVERY_CONFIRMED = peer received and handler processed
+DELIVERY_CONFIRMED ≠ recovery completed
+```
+
+**Core question:**
+
+> Episode Owner 在允许 `RECOVERED` 前，delivery uncertainty 是否必须已经关闭？
+
+##### Candidates
+
+| Option | Model | Verdict |
+|--------|-------|---------|
+| **A** | Delivery uncertainty **MUST** close before `RECOVERED` | **SELECTED** |
+| **B** | Delivery optional — media + control sufficient; delivery telemetry only | **Rejected** — `Delivery: UNKNOWN` + `Recovery: RECOVERED` semantic conflict |
+| **C** | Split by `handlerOutcome` — `ACCEPTED` optional, `ALREADY_SATISFIED` mandatory | **Rejected** — both mean peer handler consumed intent; dual completion paths |
+| **D** | Delivery timeout ignorable if other facts satisfied | **Rejected** — `failure to prove handled ≠ proof of recovery` |
+
+##### Q2-1-A frozen predicate
+
+When the active recovery attempt issued a scoped delivery lineage:
+
+```text
+RECOVERED requires:
+
+deliveryState == CONFIRMED
+AND
+mediaRecoveryEvidenceSatisfied
+AND
+controlReconciliationCompleted
+AND
+topologyPredicateSatisfied          // Q2-4 OPEN
+```
+
+**Semantics:**
+
+```text
+offer sent
++
+no ACK
++
+media happens to recover
+    ⇒
+NOT RECOVERED
+```
+
+Recovery intent peer-consumption must be **proven** before completion — aligns with PR4: `DELIVERY_CONFIRMED` closes delivery uncertainty; completion policy must not ignore that uncertainty.
+
+**Counterexample blocked:**
+
+```text
+M02: ICE_CONNECTED + media OK
+M03: offer never handled
+=> RECOVERED   ❌
+```
+
+##### FORBIDDEN shortcuts (Q2-1)
+
+```text
+ICE_CONNECTED + media OK → RECOVERED                    ❌
+ALREADY_SATISFIED → RECOVERED                           ❌
+delivery timeout + other facts → RECOVERED              ❌
+```
+
+`DELIVERY_CONFIRMED` → mandatory `RECOVERY_REEVALUATE` input (PR4); **also** mandatory completion predicate input when scoped lineage exists (Q2-1-A).
+
+---
+
+#### Q2-2 — Media Recovery Predicate — **CLOSED: A** (2026-07-30)
+
+**Core question:**
+
+> Episode Owner 在判断 `RECOVERED` 时，`ICE_CONNECTED` 是否足够代表 media recovery?
+
+**Frozen fact:**
+
+```text
+ICE_CONNECTED
+    ≠
+media path usable
+```
+
+**Soak (`103c9ef2`, M03→M02):**
+
+```text
+ICE_CONNECTED
++
+mediaUnavailable=true
++
+FAILED_MEDIA_RECOVERY
+```
+
+##### Candidates
+
+| Option | Model | Verdict |
+|--------|-------|---------|
+| **A** | Media readiness **required**; ICE necessary but not sufficient | **SELECTED** |
+| **B** | `ICE_CONNECTED` ⇒ media OK | **Rejected** — reproduces soak (`ICE_CONNECTED` + `mediaUnavailable`) |
+| **C** | Media not part of completion (`control + delivery only`) | **Rejected** — allows `control recovered + no audio = RECOVERED` |
+| **D** | Other | — |
+
+##### Q2-2-A frozen predicate
+
+```text
+RECOVERED requires:
+
+ICE_CONNECTED
+AND
+!mediaUnavailable
+AND
+mediaRecoveryEvidenceSatisfied
+```
+
+**Layering:**
+
+```text
+ICE_CONNECTED
+        |
+        v
+transport fact
+
+media path active / mediaRestored
+        |
+        v
+recovery fact
+```
+
+**Admissible completion inputs:** `mediaRestored` event · capture/send/receive path ready · existing media health evidence (per policy).
+
+**Forbidden:**
+
+```text
+ICE_CONNECTED → RECOVERED                         ❌
+```
+
+**Q2-2c (aligns Q13 B-1):** `media_path_active_without_restart` remains **observation-only** — MUST NOT enter `CompletionEvidence` / `canClose` as sole media proof.
+
+##### Frozen sentence
+
+```text
+ICE state is transport evidence.
+Media availability is recovery evidence.
+Completion consumes recovery evidence, not transport projection.
+```
+
+---
+
+#### Q2-3 — Control Plane Predicate — **CLOSED: A** (2026-07-30)
+
+**Core question:**
+
+> `REATTACH_REQUESTED + ICE_CONNECTED` 是否允许 `RECOVERED`?
+
+**Soak (`103c9ef2`, M03→M02):**
+
+```text
+REATTACH_REQUESTED
+        +
+ICE_CONNECTED
+        +
+mediaUnavailable=true
+        +
+obligation OPEN
+```
+
+##### Candidates
+
+| Option | Model | Verdict |
+|--------|-------|---------|
+| **A** | Control pending must **converge** before `RECOVERED` candidate | **SELECTED** |
+| **B** | `REATTACH_REQUESTED + ICE_CONNECTED` ⇒ `RECOVERED` candidate | **Rejected** — ICE ≠ restart intent consumed / generation matched |
+| **C** | `ACK(ALREADY_SATISFIED)` ⇒ control recovered | **Rejected** — violates PR4: handler outcome ≠ completion; only `RECOVERY_REEVALUATE` input |
+| **D** | Other | — |
+
+##### Q2-3-A frozen predicate
+
+```text
+RECOVERED requires:
+
+no outstanding recovery control reconciliation
+OR
+controlReconciliationCompleted
+```
+
+**Chain:**
+
+```text
+REATTACH_REQUESTED
+        |
+        v
+CONTROL_RECONCILED
+        |
+        v
+candidate RECOVERED
+```
+
+While control reconciliation outstanding: policy output = `WAITING` or `CONTINUE_RECOVERY` — **not** `RECOVERED`, even if ICE already CONNECTED.
+
+**`DELIVERY_CONFIRMED(ALREADY_SATISFIED)`:** delivery fact → mandatory `RECOVERY_REEVALUATE` input; does **not** substitute for `controlReconciliationCompleted`.
+
+---
+
+#### Q2-1 .. Q2-3 partial stack (frozen)
+
+```text
+Facts
+ ├── DELIVERY_CONFIRMED              // Q2-1-A
+ ├── ICE_CONNECTED                   // transport
+ ├── !mediaUnavailable               // Q2-2-A
+ ├── mediaRecoveryEvidenceSatisfied  // Q2-2-A
+ ├── controlReconciliationCompleted  // Q2-3-A
+ └── topologyPredicateSatisfied      // Q2-4-A
+
+          ↓
+
+Completion Policy (Episode Owner)
+
+          ↓
+
+RECOVERED | WAITING | CONTINUE_RECOVERY | FAILED
+```
+
+Attempt-terminal semantics (Q2-5-A) frozen below.
+
+**Soak read (`103c9ef2` M03→M02):**
+
+```text
+delivery confirmed (peer direction)
+        +
+ICE connected
+        +
+obligation still OPEN
+        |
+        v
+media + control predicates not satisfied
+        |
+        v
+FAILED_MEDIA_RECOVERY(attempt_timeout)   // Q2-5-A: attempt-terminal
+```
+
+---
+
+#### Q2-4 — Topology Convergence Predicate — **CLOSED: A** (2026-07-30)
+
+**Frozen constraint:**
+
+```text
+peer RECOVERED
+        ≠
+local RECOVERED
+```
+
+Recovery is a **local Episode** lifecycle. Peer completion means remote side observed completion facts — **not** a local close command.
+
+**Core question:**
+
+> Mesh topology convergence 是否是 `RECOVERED` 必要条件？peer `RECOVERED` / roster epoch 如何参与？
+
+**Design constraint:** Topology facts enter Completion Policy — mesh state MUST NOT become a second completion authority.
+
+##### Candidates
+
+| Option | Model | Verdict |
+|--------|-------|---------|
+| **A** | Topology convergence **required**; peer `RECOVERED` is **fact input** only | **SELECTED** |
+| **B** | Peer `RECOVERED` ⇒ topology satisfied | **Rejected** — elevates peer completion to topology authority; roster epoch stale may still close |
+| **C** | Topology not part of completion (delivery + media + control only) | **Rejected** — membership stale / generation mismatch can leave topology unresolved after apparent audio recovery |
+| **D** | Host / anchor topology authority closes all edges | **Rejected** — recentralizes completion; conflicts Q1-A Episode Owner Single Writer |
+
+##### Q2-4-A frozen predicate
+
+```text
+RECOVERED requires:
+
+deliveryConfirmed
+AND
+mediaRecoveryEvidenceSatisfied
+AND
+controlReconciliationCompleted
+AND
+topologyPredicateSatisfied
+```
+
+**`topologyPredicateSatisfied` (topologyConverged):**
+
+```text
+local membership view consistent
+AND
+expected peer edge generation satisfied
+AND
+roster / topology epoch converged
+```
+
+**Peer state role:**
+
+```text
+peer RECOVERED
+        |
+        v
+topology evidence input     ✅
+
+peer RECOVERED
+        |
+        v
+close local obligation      ❌
+```
+
+**Mesh asymmetry (allowed):**
+
+```text
+M02: edge M03 recovered
+M03: edge M02 still pending
+```
+
+Each edge owns its own recovery episode — no cross-close.
+
+##### FORBIDDEN shortcuts (Q2-4)
+
+```text
+peer RECOVERED → local closeObligation           ❌
+roster UI shows connected → RECOVERED            ❌
+anchor topology state → all episodes complete    ❌
+```
+
+##### Layering (aligns PR4-Q4 / INV-DELIVERY-010)
+
+```text
+Handler
+   |
+   v
+Delivery fact
+   |
+   v
+Recovery facts
+   |
+   v
+Topology projection
+   |
+   v
+Episode Completion Policy
+   |
+   +--> RECOVERED
+   +--> WAITING
+   +--> CONTINUE_RECOVERY
+   +--> FAILED
+```
+
+---
+
+#### Q2-5 — `FAILED_MEDIA_RECOVERY` Terminal Semantics — **CLOSED: A** (2026-07-30)
+
+**Scope:** Attempt failure vs episode failure boundary — not UI display.
+
+**Soak gap (`103c9ef2`, M03→M02):**
+
+```text
+ICE_CONNECTED
++
+DELIVERY_CONFIRMED (peer direction)
++
+mediaUnavailable=true
+        |
+        v
+attempt_timeout
+        |
+        v
+FAILED_MEDIA_RECOVERY
+```
+
+**Core question:**
+
+> `attempt_timeout` 是否等价于 episode 完成失败，还是仅当前 recovery attempt 失败？
+
+##### Candidates
+
+| Option | Model | Verdict |
+|--------|-------|---------|
+| **A** | Attempt-terminal — **not** auto completion-terminal | **SELECTED** |
+| **B** | `attempt_timeout` ⇒ `closeObligation(FAILED)` | **Rejected** — premature terminal (ICE up, media delayed → timeout → close → later media recovers) |
+| **C** | Infinite `CONTINUE_RECOVERY` — obligation zombie | **Rejected** — no R28-H terminal convergence |
+| **D** | Host / peer decides final failure | **Rejected** — violates Q1-A Episode Owner Single Writer |
+
+##### Q2-5-A frozen semantics
+
+```text
+FAILED_MEDIA_RECOVERY
+=
+current recovery attempt terminal failure
+
+FAILED_MEDIA_RECOVERY
+≠
+episode permanently closed
+```
+
+**Flow:**
+
+```text
+RecoveryAttempt
+        |
+        | timeout
+        v
+RECOVERY_ATTEMPT_FAILED   (attempt terminal fact)
+
+        |
+        v
+Episode Owner evaluates:
+
+   CONTINUE_RECOVERY
+   WAITING
+   FINAL_FAILURE (R28-H)
+```
+
+**Episode under OPEN obligation:**
+
+```text
+Episode OPEN
+   |
+   RecoveryAttempt#1
+   |
+   +--> FAILED_MEDIA_RECOVERY
+          |
+          +--> CONTINUE_RECOVERY
+          +--> WAITING
+          +--> FINAL_FAILED (via R28-H / Completion Policy)
+```
+
+**R28-H mapping (frozen):**
+
+```text
+R28-H owns final episode closure.
+FAILED_MEDIA_RECOVERY = RecoveryAttempt terminal fact.
+```
+
+```text
+attempt timeout
+        |
+        v
+RECOVERY_ATTEMPT_FAILED
+        |
+        v
+Completion Policy / R28-H
+        |
+        +--> continue
+        +--> wait
+        +--> final failure
+```
+
+Aligns with PR2: `delivery retry exhausted ≠ recovery completion failed`.
+
+##### FORBIDDEN shortcuts (Q2-5)
+
+```text
+attempt_timeout → closeObligation                    ❌
+FAILED_MEDIA_RECOVERY → RECOVERED impossible forever ❌
+peer timeout → local completion                      ❌
+```
+
+Timer MUST NOT directly close obligation — Episode Owner + R28-H decide terminal outcome.
+
+---
+
+#### Q2 FORBIDDEN (frozen with Q1 + Q2-4 + Q2-5)
+
+```text
+DELIVERY_CONFIRMED → closeObligation              ❌
+ICE_CONNECTED → closeObligation                   ❌
+peer RECOVERED → closeObligation                  ❌
+roster UI / projection → RECOVERED                ❌
+anchor topology → all episodes complete           ❌
+attempt_timeout → closeObligation                 ❌
+UVCP / presence projection → closeObligation        ❌
+```
+
+---
+
+#### Q2 decision output — **CLOSED** (2026-07-30)
+
+**Success — `canClose(RECOVERED)`:**
+
+```text
+canClose(obligation, evidence) :=
+  deliveryState == CONFIRMED            // Q2-1-A (when scoped lineage issued)
+  AND ICE_CONNECTED                     // Q2-2-A transport
+  AND !mediaUnavailable                 // Q2-2-A
+  AND mediaRecoveryEvidenceSatisfied    // Q2-2-A
+  AND controlReconciliationCompleted    // Q2-3-A
+  AND topologyPredicateSatisfied        // Q2-4-A
+  AND no uncovered deferred intent (Appendix D / M-1)
+```
+
+**Failure — attempt terminal (Q2-5-A):**
+
+```text
+attempt_timeout
+        |
+        v
+RECOVERY_ATTEMPT_FAILED / FAILED_MEDIA_RECOVERY
+        |
+        v
+Completion Policy / R28-H
+        |
+        +--> CONTINUE_RECOVERY
+        +--> WAITING
+        +--> FINAL_FAILURE (episode close — R28-H authority)
+```
+
+`FAILED_MEDIA_RECOVERY` does **not** auto-close obligation; subsequent facts may still satisfy success predicate above.
+
+---
+
+### E.4 Grill status (Q1–Q2)
+
+| Item | Status |
+|------|--------|
+| ADR-0022-Q1 Recovery Completion Authority | **CLOSED — A** |
+| ADR-0022-Q2 RECOVERED Predicate Contract | **CLOSED — A×5** |
+
+---
+
+### E.5 ADR-0022-Q3 — Recovery Attempt vs Episode Completion State Machine — **CLOSED: A** (2026-07-30)
+
+**Scope:** Structural separation — **not** predicate re-grill (Q2 frozen).
+
+**Frozen from Q1/Q2:**
+
+```text
+RecoveryAttempt != Episode
+Attempt terminal != Episode terminal
+Facts != Completion command
+```
+
+**Core question:**
+
+> 是否需要显式拆分 Recovery Attempt State 与 Episode Completion State，避免 `FAILED_MEDIA_RECOVERY`、`WAITING`、`RECOVERED` 在同一状态空间混用？
+
+**Soak anchor (`103c9ef2`, M03→M02):**
+
+```text
+Episode: OPEN
+Attempt: REATTACH_REQUESTED → timeout → FAILED_MEDIA_RECOVERY
+```
+
+Single-state-machine risk:
+
+```text
+FAILED_MEDIA_RECOVERY → ? → RECOVERED
+```
+
+Ambiguity: attempt failed vs episode failed vs retry allowed vs UVCP display.
+
+---
+
+#### Q3-1 — Explicit dual state domains? — **CLOSED: A**
+
+| Option | Model | Verdict |
+|--------|-------|---------|
+| **A** | **Dual state domains** — Attempt lifecycle + Episode completion lifecycle | **SELECTED** |
+| **B** | Single enhanced state machine (`RECOVERING` / `RECOVERY_FAILED` / `RECOVERED`) | **Rejected** — attempt retry and episode failure mixed again |
+| **C** | Episode-only — no attempt state | **Rejected** — PR2 delivery lineage + PR4 ACK prove attempt is independent |
+| **D** | Other | — |
+
+##### Recovery Attempt State (Q3-A)
+
+Describes **one recovery attempt** lifecycle:
+
+```text
+ATTEMPT_IDLE
+ATTEMPT_REQUESTED
+ATTEMPT_DISPATCHING
+ATTEMPT_WAITING_DELIVERY
+ATTEMPT_NEGOTIATING
+ATTEMPT_FAILED
+ATTEMPT_SUCCEEDED
+```
+
+##### Episode Completion State (Q3-A)
+
+Describes **recovery obligation** lifecycle:
+
+```text
+OPEN
+RECOVERY_EVALUATING
+RECOVERED
+CONTINUE_RECOVERY
+WAITING
+FAILED_FINAL
+CLOSED
+```
+
+**Relationship (frozen):**
+
+```text
+Attempt
+   |
+   | produces facts
+   v
+Completion Policy
+   |
+   v
+Episode Completion State
+```
+
+**Forbidden:**
+
+```text
+Attempt state directly mutates Episode state    ❌
+```
+
+---
+
+#### Q3-2 — Where does `FAILED_MEDIA_RECOVERY` live? — **CLOSED: A** (aligns Q2-5-A)
+
+| Placement | Verdict |
+|-----------|---------|
+| **A** | `RecoveryAttemptState.ATTEMPT_FAILED`; Episode stays `OPEN` → Completion Policy decides | **SELECTED** |
+| **B** | Episode state `FAILED_MEDIA_RECOVERY` | **Rejected** — violates Q2-5-A |
+
+Legacy log name `FAILED_MEDIA_RECOVERY` maps to **attempt terminal fact**; episode completion state uses `FAILED_FINAL` / R28-H close reasons — not mixed attempt label as episode terminal.
+
+---
+
+#### Q3-3 — Where does `RECOVERED` live? — **CLOSED: A**
+
+| State | Owner |
+|-------|-------|
+| `RECOVERED` | **EpisodeCompletionState only** |
+| `ATTEMPT_SUCCEEDED` | Recovery Attempt only |
+
+```text
+successful attempt ≠ completed episode
+```
+
+Example: Attempt#1 success but topology pending → Episode ≠ `RECOVERED`.
+
+---
+
+#### Q3-4 — UVCP consumes which state? — **CLOSED: A**
+
+```text
+UVCP ← Completion Projection ← EpisodeCompletionState + Recovery facts
+```
+
+**Forbidden:**
+
+```text
+ATTEMPT_SUCCEEDED → UI CONNECTED    ❌
+AttemptState → UVCP directly        ❌
+```
+
+Aligns PR4-Q4 / INV-DELIVERY-010: projection reads completion layer, not attempt layer.
+
+---
+
+#### Q3-5 — Terminal taxonomy — **CLOSED: A** (aligns R28-H)
+
+```text
+Attempt terminal:
+    ATTEMPT_SUCCEEDED
+    ATTEMPT_FAILED
+
+Episode terminal:
+    RECOVERED
+    FAILED_FINAL
+```
+
+Do **not** use `FAILED_MEDIA_RECOVERY` as a global / episode terminal label.
+
+---
+
+#### Q3-A frozen model
+
+```text
+Recovery Attempt
+        |
+        | facts
+        v
+Completion Policy
+        |
+        v
+Episode Completion
+```
+
+**Overall structure:**
+
+```text
+                 Recovery Episode
+                       |
+              owns obligation lifecycle
+                       |
+        +--------------+--------------+
+        |                             |
+        v                             v
+
+Recovery Attempt              Completion State
+
+REQUESTED / DISPATCHING         OPEN
+WAITING_DELIVERY                RECOVERY_EVALUATING
+NEGOTIATING                     WAITING
+ATTEMPT_FAILED                  CONTINUE_RECOVERY
+ATTEMPT_SUCCEEDED               RECOVERED
+                                FAILED_FINAL
+                                CLOSED
+
+        |
+        +---- facts ---->
+                  Completion Policy
+```
+
+---
+
+### E.6 Grill status (Q1–Q3)
+
+| Item | Status |
+|------|--------|
+| ADR-0022-Q1 Recovery Completion Authority | **CLOSED — A** |
+| ADR-0022-Q2 RECOVERED Predicate Contract | **CLOSED — A×5** |
+| ADR-0022-Q3 Attempt / Episode state machine | **CLOSED — A** |
+
+---
+
+### E.7 ADR-0022-Q4 — Code Migration Boundary — **CLOSED: A×5** (2026-07-30)
+
+**Scope:** Freeze **ownership / boundary only** — no implementation, no state-machine rewrite in this round.
+
+**Frozen upstream (Q1–Q3):**
+
+```text
+Recovery Attempt State
+        |
+        | facts
+        v
+Completion Policy
+        |
+        v
+Episode Completion State
+```
+
+**Forbidden:**
+
+```text
+Attempt state ─────X────> Episode state mutation
+ACK / ICE / UI  ─────X────> closeObligation
+```
+
+**Q4 question:**
+
+> 现有类中哪些职责属于 Attempt Owner，哪些属于 Episode Completion Owner？
+
+**Risk today:** recovery logic may simultaneously orchestrate attempts, track delivery, judge media recovery, close obligation, and drive UI projection.
+
+**Code anchors (as-built):** `ConferenceEdgeRecoveryController`, `TalkbackCoordinator`, recovery handlers in Coordinator ingress path.
+
+---
+
+#### Q4-1 — Recovery Attempt Owner — **CLOSED: A**
+
+**Owns attempt states:** `ATTEMPT_IDLE` · `REQUESTED` · `DISPATCHING` · `WAITING_DELIVERY` · `NEGOTIATING` · `ATTEMPT_FAILED` · `ATTEMPT_SUCCEEDED`
+
+| Option | Model | Verdict |
+|--------|-------|---------|
+| **A** | `ConferenceEdgeRecoveryController` / `RecoveryAttemptContext` owns attempt state | **SELECTED** |
+| **B** | `TalkbackCoordinator` owns attempt + episode | **Rejected** — god object |
+| **C** | `RecoveryDeliveryPolicy` owns attempt | **Rejected** — delivery ≠ recovery lifecycle |
+| **D** | Each Handler maintains own attempt | **Rejected** — handler emits facts only |
+
+**Frozen `RecoveryAttemptOwner` owns:**
+
+```text
+attemptId
+delivery lineage
+attempt phase
+attempt terminal result
+```
+
+**Does NOT own:**
+
+```text
+closeObligation
+RECOVERED
+FAILED_FINAL
+```
+
+---
+
+#### Q4-2 — Episode Completion Owner — **CLOSED: A**
+
+**Owns episode states:** `OPEN` · `RECOVERY_EVALUATING` · `WAITING` · `CONTINUE_RECOVERY` · `RECOVERED` · `FAILED_FINAL` · `CLOSED`
+
+| Option | Model | Verdict |
+|--------|-------|---------|
+| **A** | Episode Owner / **Completion Policy** owns episode completion state | **SELECTED** |
+| **B** | Recovery Controller owns episode completion | **Rejected** — conflicts Q1-A single writer for close |
+| **C** | Delivery Policy owns completion | **Rejected** — delivery ≠ completion |
+| **D** | UVCP Projection owns completion | **Rejected** — projection ≠ authority |
+
+**Frozen chain:**
+
+```text
+CompletionPolicy.evaluate(facts)
+        |
+        v
+EpisodeCompletionState transition
+```
+
+**Recovery Controller MAY:**
+
+```text
+report facts
+request reevaluation
+```
+
+**Recovery Controller MUST NOT:**
+
+```text
+episode.close() / closeObligation() as completion authority
+```
+
+---
+
+#### Q4-3 — `TalkbackCoordinator` boundary — **CLOSED: A**
+
+**As-built surface (examples):** `attemptConferencePeerOffer()`, `handleGroupJoin()`, recovery ACK ingress, obligation close paths.
+
+| Option | Model | Verdict |
+|--------|-------|---------|
+| **A** | Coordinator remains **facade** — route events; owners hold truth | **SELECTED** |
+| **B** | Extract all recovery state out of Coordinator immediately | Deferred — behavior risk |
+| **C** | Coordinator keeps all state | **Rejected** — god object |
+| **D** | Handlers call Episode Owner directly | **Rejected** — bypasses orchestration seam |
+
+**Target routing:**
+
+```text
+TalkbackCoordinator
+        |
+        +--> RecoveryAttemptOwner (Controller / attempt context)
+        |
+        +--> CompletionPolicy (episode completion)
+```
+
+Coordinator: receive events · route · **no completion truth**.
+
+---
+
+#### Q4-4 — Handler boundary — **CLOSED: A**
+
+| Option | Model | Verdict |
+|--------|-------|---------|
+| **A** | Handler → **Fact** only | **SELECTED** |
+| **B** | Handler → Completion decision | **Rejected** |
+
+**Handler MAY emit:**
+
+```text
+RECOVERY_HANDLER_ACCEPTED
+RECOVERY_HANDLER_REJECTED
+handlerOutcome
+```
+
+**Handler MUST NOT:**
+
+```text
+closeObligation()
+markRecovered()
+setUVCPConnected()
+```
+
+---
+
+#### Q4-5 — Migration order — **CLOSED: A**
+
+| Option | Sequence | Verdict |
+|--------|----------|---------|
+| **A** | observation → owner split → transition migration → remove old mutation | **SELECTED** |
+| **B** | State machine refactor first | **Rejected** — couples structure + behavior |
+| **C** | UI first | **Rejected** |
+| **D** | Delivery first | **Rejected** — PR4 delivery closed |
+
+Avoid simultaneous `state split + behavior change`.
+
+---
+
+#### Q4 frozen target architecture
+
+```text
+                 Transport
+                    |
+                    v
+              Recovery Facts
+                    |
+        +-----------+------------+
+        |                        |
+        v                        v
+
+Recovery Attempt Owner     Episode Completion Owner
+(ConferenceEdgeRecoveryController)   (Completion Policy)
+        |                        |
+ ATTEMPT_* states          OPEN / RECOVERED / FAILED_FINAL
+
+        \                        /
+         \                      /
+          ---- Completion Policy
+
+                    |
+                    v
+              Completion Projection
+                    |
+                    v
+                 UVCP
+```
+
+#### Q4 FORBIDDEN (frozen)
+
+```text
+RecoveryController.closeObligation() as completion authority    ❌
+Handler.markRecovered()                                         ❌
+ACK handler mutate Episode                                      ❌
+DeliveryPolicy own completion                                   ❌
+UVCP drive recovery                                             ❌
+```
+
+---
+
+### E.8 Grill status (Q1–Q4)
+
+| Item | Status |
+|------|--------|
+| ADR-0022-Q1 .. Q4 | **CLOSED — A** |
+
+---
+
+### E.9 ADR-0022-Q5 — Implementation Authorization — **CLOSED: A** (2026-07-30)
+
+**Scope:** PR slicing · owner migration order · per-PR risk boundary · acceptance evidence. **No predicate/state semantics re-grill** (Q1–Q4 frozen). **No code in Q5 round** — authorization only.
+
+**Core question:**
+
+> 如何把已冻结的 Attempt / Episode 双状态域迁入现有 runtime，而不引入 completion 行为漂移？
+
+**Frozen upstream:**
+
+```text
+PR2 Delivery        CLOSED
+PR3 Admission       CLOSED
+PR4 Delivery ACK    CLOSED
+
+ADR-0022 Q1 Authority      CLOSED
+ADR-0022 Q2 Predicate      CLOSED
+ADR-0022 Q3 State Machine  CLOSED
+ADR-0022 Q4 Ownership      CLOSED
+```
+
+**Implementation target chain:**
+
+```text
+Facts
+  ↓
+RecoveryAttemptOwner
+  ↓
+CompletionPolicy
+  ↓
+EpisodeCompletionProjection
+  ↓
+UVCP
+```
+
+---
+
+#### Q5-1 — First PR scope / phased slices — **CLOSED: A**
+
+**Decision:** Phased small PRs — **Observation → Ownership split** (minimal risk).
+
+| PR | Scope | Runtime behavior |
+|----|-------|------------------|
+| **PR5-0** | Completion **observation layer** — decision logs · attempt/episode state **projection** · analyzer validation | **0 change** to `closeObligation` · `RECOVERED` · UVCP |
+| **PR5-1** | **Attempt owner migration** — `ConferenceEdgeRecoveryController` / `RecoveryAttemptContext` owns `REQUESTED` … `ATTEMPT_SUCCEEDED` | Attempt terminal **≠** `RECOVERED` |
+| **PR5-2** | **Episode completion owner** — `CompletionPolicy` sole writer of `closeObligation` / `markRecovered` / `markFailedFinal` | Facts → `evaluate()` → episode transition |
+| **PR5-3** | **UVCP projection cleanup** — UVCP reads `EpisodeCompletionState` + facts; **not** `AttemptState` | Attempt terminal **❌** → UVCP |
+
+**PR5-0 goal:** prove `existing behavior == new projection output` before owner migration.
+
+**PR5-1 migration FROM:** scattered Coordinator / Handler / delivery callbacks → **TO:** Controller + attempt context.
+
+**PR5-2 migration FROM:** `controller.closeObligation()` · `handler.markRecovered()` · ACK close paths → **TO:** `CompletionPolicy.evaluate(facts)`.
+
+---
+
+#### Q5-2 — Single big PR? — **CLOSED: A**
+
+| Option | Verdict |
+|--------|---------|
+| **A** | Small phased PRs | **SELECTED** |
+| **B** | Single full refactor PR | **Rejected** — shortcuts hard to prove; soak regression hard to bisect |
+| **C** | Logs only, no owner migration | **Rejected** — Q4 ownership separation unused |
+| **D** | Other | — |
+
+---
+
+#### Q5-3 — Migration invariants (frozen during all PR5 slices)
+
+**INV-MIG-001:**
+
+```text
+DELIVERY_CONFIRMED ≠ RECOVERED
+```
+
+**INV-MIG-002:**
+
+```text
+ATTEMPT_SUCCEEDED ≠ Episode CLOSED
+```
+
+**INV-MIG-003:**
+
+```text
+UVCP never consumes attempt terminal
+```
+
+**INV-MIG-004:**
+
+```text
+Only CompletionPolicy writes terminal episode state
+```
+
+---
+
+#### Q5-4 — First implementation PR runtime change? — **CLOSED: A**
+
+| Option | Verdict |
+|--------|---------|
+| **A** | **PR5-0** — projection + logs + tests only; **zero runtime behavior change** | **SELECTED** |
+| **B** | Direct Controller owner migration first | **Rejected** — behavior + structure coupled |
+| **C** | Direct `closeObligation` caller change first | **Rejected** — bypasses projection evidence |
+| **D** | Other | — |
+
+**Authorized first slice:** PR5-0 only. Owner migration (PR5-1+) gated on PR5-0 soak replay PASS.
+
+---
+
+#### Q5-5 — Acceptance criteria (frozen)
+
+**PR5-0 PASS requires:**
+
+**Soak replay** — e.g. `103c9ef2` M03→M02 pattern:
+
+```text
+ICE_CONNECTED + delivery confirmed + obligation OPEN
+```
+
+New projection MUST show:
+
+```text
+WAITING / CONTINUE_RECOVERY
+```
+
+NOT:
+
+```text
+RECOVERED
+```
+
+**PR4 regression** — preserve:
+
+```text
+ALREADY_SATISFIED → DELIVERY_CONFIRMED → RECOVERY_REEVALUATE
+```
+
+FORBIDDEN:
+
+```text
+ACK → closeObligation
+```
+
+**UVCP regression** — preserve:
+
+```text
+media connected + completion pending
+    ⇒ SYNCING / RECONNECTING
+```
+
+**Analyzer:** completion decision log + attempt/episode projection fields validate against frozen Q2 predicate without mutating runtime.
+
+---
+
+#### Q5 FORBIDDEN (carry Q1–Q4)
+
+```text
+PR5-0 changes closeObligation / RECOVERED / UVCP mapping     ❌
+Attempt success → RECOVERED in any PR before PR5-2 complete  ❌
+ACK / ICE / UI → closeObligation outside CompletionPolicy      ❌
+Single PR mixing projection + owner migration + UVCP         ❌
+```
+
+---
+
+### E.10 Implementation status (2026-07-30)
+
+| Item | Status |
+|------|--------|
+| ADR-0022-Q1 .. Q4 | **CLOSED — A** |
+| ADR-0022-Q5 Implementation authorization | **CLOSED — A** (Q5-1 .. Q5-5) |
+| **PR5-0** Observation layer | **CLOSED** — projection + UT + soak (`CompletionObservationProjection`) |
+| **PR5-1** Attempt owner migration | **CLOSED** — `RecoveryAttemptOwner`; soak `signal-path-20260730-193030` |
+| **PR5-2** Completion writer migration | **PASS** — `RecoveryCompletionPolicy` sole terminal writer; soak `signal-path-20260730-195856` |
+| **PR5-2b** Control fact wiring | **PASS** — `RECOVERY_CONTROL_RECONCILIATION_FACT` + Q6-2 predicate; UT PASS; soak Gate B/C PASS |
+| **PR5-2b** Soak Gate A | **BLOCKED** — `membershipEpochConverged=false` (source-plane mismatch); **not** writer / predicate defect |
+| **PR5-3** UVCP projection cleanup | **BLOCKED** — gated on Q7 closure + Gate A PASS |
+| **ADR-0022-Q7** Membership authority domain | **FULLY CLOSED (A/B/A)** — implementation **AUTHORIZED** — see E.12 |
+
+**Do not label PR5-2 as FAILED** — that misattributes participant control-plane convergence to writer migration.
+
+#### PR5-2 writer migration PASS (soak `signal-path-20260730-195856`)
+
+Session `e1e74bc9-8f96-42c5-af77-7b91cd0b66eb`. Authority edge **M02→M03** gold chain:
+
+```text
+ALREADY_SATISFIED
+        ↓
+DELIVERY_CONFIRMED
+        ↓
+RECOVERY_REEVALUATE (trigger=DELIVERY_CONFIRMED)
+        ↓
+RECOVERY_COMPLETION_DECISION writer=CompletionPolicy candidate=RECOVERED
+        ↓
+RECOVERY_EDGE_RECOVERED
+        ↓
+OBLIGATION_CLOSED reason=RECOVERED
+```
+
+**Not** `ACK → RECOVERED` shortcut. PR4 + PR5-0 + PR5-1 + PR5-2 layers chained.
+
+**Known limitation (tracked separately, not PR5-2):**
+
+Participant recovery **M03→M02** — transport / delivery / ICE / media satisfied; `controlPlaneStarted=false` → predicate `WAITING (CONTROL_RECONCILIATION_PENDING)` → `attempt_timeout` → `OBLIGATION_DEADLINE`. Reclassify Case E as **predicate blocked** (missing control reconciliation fact), not writer wrong. Soak validates frozen Q2-3: `REATTACH_REQUESTED + ICE_CONNECTED ≠ RECOVERED`.
+
+**Observer M01→M03 SYNC** — out of PR5-2 scope; **PR5-3** UVCP / observer projection (`Facts → Completion Projection → UVCP`; no UVCP-driven completion).
+
+**Next action:** **Q7 implementation slice** (`MembershipAuthorityResolver` per Q7-1/2/3) → soak Gate A re-verify → **PR5-3**. **Do not** reopen Q6/Q7; **do not** create new topology authority (Q7-3-C deferred).
+
+---
+
+### E.11 ADR-0022-Q6 — Control Reconciliation Predicate Grill
+
+**Status:** **Q6 FULLY CLOSED** — PR5-2b **PASS**. **Q7 FULLY CLOSED** — **implementation AUTHORIZED**.
+
+**Architectural framing:** The gap is not “whether recovery succeeded” but:
+
+```text
+participant local episode:
+    transport/media restored
+    delivery confirmed
+    BUT control authority not yet reconciled
+```
+
+Q6 defines **what fact proves control-plane consistency was re-established after recovery** — not a new “success shortcut.”
+
+**Frozen invariants (carry from PR4 / PR5-2):**
+
+```text
+control fact → CompletionPolicy
+CompletionPolicy → RECOVERED decision
+
+FORBIDDEN:
+ACK → recovered
+ICE → recovered
+UI → recovered
+peer assertion → recovered
+```
+
+#### Background freeze (soak `e1e74bc9-8f96-42c5-af77-7b91cd0b66eb`, M03→M02)
+
+```text
+DELIVERY_CONFIRMED
+ICE_CONNECTED
+mediaRestored=true
+
+BUT
+
+controlPlaneStarted=false
+        ↓
+CompletionPolicy
+        ↓
+WAITING (CONTROL_RECONCILIATION_PENDING)
+```
+
+Current behavior matches frozen ADR-0022 Q2. Q6 answers only:
+
+```text
+controlReconciliationCompleted = ?
+```
+
+**Frozen upstream (do not reopen in Q6):** PR5-2 writer / `CompletionPolicy` authority; Q2 predicate **shape** (extend definition only via Q6 closure); PR4 `DELIVERY_CONFIRMED`; UVCP mapping (PR5-3).
+
+---
+
+#### Q6-1 — Control reconciliation fact **ownership** — **CLOSED: A** (2026-07-30)
+
+> Who **produces** `controlReconciliationCompleted`?
+
+**Constraint:**
+
+```text
+Fact producer ≠ Completion authority
+
+Producer: observes runtime → publishes fact
+CompletionPolicy: consumes fact → decides completion
+
+FORBIDDEN:
+CompletionPolicy → query controller/session/topology → self-emit fact
+```
+
+**Decision:** **A — Recovery Controller / `ConferenceEdgeRecoveryController` side** (aligned with PR5-1 attempt fact ownership; Q6 adds control reconciliation **fact emission**, not attempt state mutation).
+
+**Normative chain:**
+
+```text
+RecoveryAttemptOwner / ConferenceEdgeRecoveryController
+        observes
+    transport · session · control handshake · epoch · membership
+        ↓
+    emit RECOVERY_CONTROL_RECONCILIATION_FACT (controlReconciled=true|false)
+        ↓
+    CompletionPolicy.evaluate()
+```
+
+| Option | Model | Verdict |
+|--------|-------|---------|
+| **A** | Controller derives from control-plane facts | **SELECTED** |
+| **B** | CompletionPolicy probes session/topology/controller | **Rejected** — God-object; violates Q1/Q4 fact/decision split |
+| **C** | Handler / ACK sets `controlReconciled=true` on receipt | **Rejected** — PR4: ACK proves handled, not local control converged |
+| **D** | UVCP / projection infers from UI CONNECTED | **Rejected** — violates `Completion → UVCP` one-way |
+
+**Q6-1 decision matrix:**
+
+| Invariant | A | B | C | D |
+|-----------|---|---|---|---|
+| CompletionPolicy sole episode writer | ✅ | ❌ | ❌ | ❌ |
+| Fact / decision separation | ✅ | ❌ | ❌ | ❌ |
+| PR4 Handler boundary | ✅ | ⚠️ | ❌ | ❌ |
+| Mesh decentralized (no central truth) | ✅ | ⚠️ | ❌ | ❌ |
+| Participant recovery asymmetry | ✅ | ⚠️ | ❌ | ❌ |
+| UVCP one-way | ✅ | ⚠️ | ⚠️ | ❌ |
+
+**INV-Q6-001:**
+
+> `controlReconciliationCompleted` MUST be produced by Recovery Controller (or delegated fact writer on controller side). CompletionPolicy, Handler/ACK, and UVCP MUST NOT emit or infer this fact.
+
+**Implementation verification (future soak):**
+
+PASS:
+
+```text
+RECOVERY_CONTROL_RECONCILIATION_FACT controlReconciled=true
+        ↓
+RECOVERY_COMPLETION_DECISION writer=CompletionPolicy candidate=RECOVERED
+        ↓
+closeObligation (via CompletionPolicy only)
+```
+
+FAIL if any:
+
+```text
+ACK_RECEIVED → controlReconciled=true
+CompletionPolicy.queryController() / internal topology probe
+UVCP_CONNECTED → closeObligation
+```
+
+---
+
+#### Q6-2 — Control reconciliation **predicate** — **CLOSED: C** (2026-07-30)
+
+> When may Recovery Controller emit `RECOVERY_CONTROL_RECONCILIATION_FACT` with `controlReconciliationCompleted=true`?
+
+**Frozen upstream:** Q6-1 owner A · Q2-3 `control reconciliation ≠ ICE_CONNECTED` · Q2-4 `topologyPredicate` independent.
+
+**Semantic distinction (do not conflate):**
+
+| Layer | Question |
+|-------|----------|
+| Link / transport | path exists? |
+| Session | local episode coherent? |
+| Mesh control view | recovery control state coherent with peer? |
+
+**Decision:** **C — Full control convergence** (edge-scoped; **not** a substitute for Q2-4 topology).
+
+**Frozen definition:**
+
+```text
+controlReconciliationCompleted :=
+    controlHandshakeCompleted
+    AND sessionEpochMatched
+    AND membershipEpochConverged
+```
+
+**Semantics:**
+
+```text
+ICE          → transport exists
+Delivery     → peer handled recovery offer
+Control recon → recovery control state coherent (this predicate)
+Topology     → mesh membership view consistent (Q2-4, separate)
+RECOVERED    → CompletionPolicy only
+```
+
+**Runtime mapping (implementation target):**
+
+| Sub-fact | Source |
+|----------|--------|
+| `controlHandshakeCompleted` | recovery control exchange (e.g. control-plane boundary / handshake seam) |
+| `sessionEpochMatched` | `RecoveryAttemptContext` / session snapshot vs active attempt |
+| `membershipEpochConverged` | CTA / roster snapshot epoch alignment for this edge |
+
+**Q6-2 candidate matrix:**
+
+| Option | Definition | Verdict |
+|--------|------------|---------|
+| **A** | handshake + local session edge installed | **Rejected** — mesh membership epoch stale risk |
+| **B** | handshake + session epoch + obligation generation matched | **Rejected** — roster/topology split still possible |
+| **C** | handshake + session epoch + membership epoch converged | **SELECTED** |
+| **D** | peer reports RECOVERED | **Rejected** — peer completion ≠ local evidence |
+
+**Q6-2 decision matrix:**
+
+| Invariant | A | B | C | D |
+|-----------|---|---|---|---|
+| No ICE shortcut | ⚠️ | ✅ | ✅ | ❌ |
+| No lineage split | ❌ | ✅ | ✅ | ❌ |
+| Mesh / decentralized | ❌ | ⚠️ | ✅ | ❌ |
+| Clear split from Q2-4 topology | ✅ | ✅ | ✅ | ❌ |
+| Explains soak `e1e74bc9` M03→M02 | ⚠️ | ✅ | ✅ | ❌ |
+| Long-term extension | ⚠️ | ⚠️ | ✅ | ❌ |
+
+**Explicit exclusions (Q6-2 C does NOT subsume):**
+
+```text
+mediaRecoveryEvidenceSatisfied     → Q2-2 (frozen)
+topologyPredicateSatisfied       → Q2-4 (frozen)
+RECOVERED / obligation close     → CompletionPolicy only
+```
+
+**INV-Q6-002:**
+
+> `controlReconciliationCompleted` MUST mean edge control convergence (handshake + session epoch + membership epoch). MUST NOT be set from `ICE_CONNECTED`, `ACK(ALREADY_SATISFIED)`, peer RECOVERED assertion, or UVCP/UI observation.
+
+**Soak `e1e74bc9` (M03→M02):** `ICE_CONNECTED` + delivery + media true but `controlHandshakeCompleted=false` (maps to current `controlPlaneStarted=false`) ⇒ `controlReconciled=false` ⇒ `WAITING` — **expected under C**.
+
+**Implementation verification (future soak):**
+
+PASS:
+
+```text
+RECOVERY_CONTROL_RECONCILIATION_FACT
+    handshake=true sessionEpochMatched=true membershipEpochConverged=true
+        ↓
+RECOVERY_COMPLETION_DECISION writer=CompletionPolicy candidate=RECOVERED
+        ↓
+closeObligation (CompletionPolicy only)
+```
+
+FAIL if any:
+
+```text
+ICE_CONNECTED → controlReconciled=true
+ACK(ALREADY_SATISFIED) → controlReconciled=true
+peer RECOVERED → controlReconciled=true
+```
+
+**Note:** Current projection uses `controlPlaneStarted()` as interim `controlReconciled` proxy — implementation under Q6 must align emit path with frozen C without changing Q2 predicate **AND** structure.
+
+---
+
+#### Q6-3 — Control vs topology **boundary** — **CLOSED: A** (2026-07-30)
+
+> Does `topologyPredicateSatisfied` subsume `controlReconciliationCompleted`, or remain an independent AND gate?
+
+**Frozen upstream:**
+
+```text
+Q2-4 topologyPredicateSatisfied =
+    local membership view consistent
+    AND expected peer edge generation satisfied
+    AND roster/topology epoch converged
+
+Q6-2 controlReconciliationCompleted =
+    controlHandshakeCompleted
+    AND sessionEpochMatched
+    AND membershipEpochConverged
+```
+
+Shared epoch/membership vocabulary MUST NOT imply a single “unified convergence flag.”
+
+**Decision:** **A — Independent AND** — separate facts, separate producers, separate predicates; CompletionPolicy consumes both.
+
+**Frozen `canClose` composition (Q6-3 extends Q2; no merge):**
+
+```text
+canClose :=
+    deliveryConfirmed
+    AND mediaRecoveryEvidenceSatisfied
+    AND controlReconciliationCompleted
+    AND topologyPredicateSatisfied
+    AND … (existing Q2 gates unchanged)
+```
+
+**Semantic split:**
+
+| Predicate | Question | Scope |
+|-----------|----------|-------|
+| **Control** (`controlReconciliationCompleted`) | Is **this recovery edge’s** control state coherent with peer? | peer ↔ local recovery session (handshake, session epoch, obligation lineage) |
+| **Topology** (`topologyPredicateSatisfied`) | Is **mesh membership view** consistent? | whole channel membership graph (roster epoch, expected peers, edge generation) |
+
+**Completion chain (frozen):**
+
+```text
+Transport     → ICE_CONNECTED
+Delivery      → DELIVERY_CONFIRMED
+Media         → mediaRecoveryEvidenceSatisfied
+Control facts → controlReconciliationCompleted
+Topology facts→ topologyPredicateSatisfied
+        ↓
+CompletionPolicy.evaluate()
+        ↓
+RECOVERED
+```
+
+**Q6-3 candidate matrix:**
+
+| Option | Model | Verdict |
+|--------|-------|---------|
+| **A** | `controlReconciliationCompleted AND topologyPredicateSatisfied` | **SELECTED** |
+| **B** | Topology includes control (handshake, session epoch, membership epoch) | **Rejected** — topology answers “who is connected”, not “recovery protocol complete” |
+| **C** | Control includes full roster/topology convergence | **Rejected** — control becomes global mesh state; breaks local edge recovery |
+| **D** | `control OR topology` (best-effort) | **Rejected** — allows premature RECOVERED |
+
+**Q6-3 decision matrix:**
+
+| Invariant | A | B | C | D |
+|-----------|---|---|---|---|
+| Control / topology layering | ✅ | ❌ | ❌ | ❌ |
+| Mesh scalability | ✅ | ⚠️ | ❌ | ❌ |
+| No premature RECOVERED | ✅ | ⚠️ | ⚠️ | ❌ |
+| Consistent with frozen Q2-4 | ✅ | ❌ | ❌ | ❌ |
+| Participant recovery (e.g. `e1e74bc9`) | ✅ | ⚠️ | ❌ | ❌ |
+
+**INV-Q6-003:**
+
+> `controlReconciliationCompleted` and `topologyPredicateSatisfied` MUST remain independent boolean predicates in `canClose`. MUST NOT derive one from the other. MUST NOT replace either with a unified `RecoveryReady` flag.
+
+**Soak illustration:** M03→M02 may have `topology=true` while `control=false` ⇒ `WAITING` — valid under A. Conversely `control=true` + `topology=false` (e.g. M02↔M03 control OK but M01 roster lag) ⇒ MUST NOT RECOVERED.
+
+**Implementation verification (future soak):**
+
+PASS:
+
+```text
+RECOVERY_CONTROL_RECONCILIATION_FACT controlReconciled=true
+TOPOLOGY_CONVERGED_FACT topologySatisfied=true   (or equivalent Q2-4 observation)
+        ↓
+RECOVERY_COMPLETION_DECISION writer=CompletionPolicy candidate=RECOVERED
+```
+
+FAIL if any:
+
+```text
+topologyEpochMatched → controlReconciled=true
+controlHandshakeCompleted → topologySatisfied=true
+(controlReconciled OR topologySatisfied) alone → RECOVERED
+```
+
+---
+
+#### Q6-4 — `ALREADY_SATISFIED` role — **CLOSED: A** (2026-07-30)
+
+> Does `handlerOutcome=ALREADY_SATISFIED` have any special standing in the control predicate?
+
+**Frozen upstream:**
+
+```text
+PR4-Q2:
+    handlerOutcome=ALREADY_SATISFIED → DELIVERY_CONFIRMED
+
+PR4-Q3:
+    DELIVERY_CONFIRMED → RECOVERY_REEVALUATE (not RECOVERED)
+
+Q6-2:
+    controlReconciliationCompleted :=
+        controlHandshakeCompleted
+        AND sessionEpochMatched
+        AND membershipEpochConverged
+```
+
+**Decision:** **A — Pure delivery outcome** — `ALREADY_SATISFIED` is delivery-confirmation evidence only; MUST NOT be consumed as control-reconciliation evidence.
+
+**Frozen semantics:**
+
+```text
+handlerOutcome=ALREADY_SATISFIED
+    only means:
+        delivery obligation was handled
+
+enters:
+    DELIVERY_CONFIRMED
+        ↓
+    RECOVERY_REEVALUATE
+        ↓
+    CompletionPolicy.evaluate()
+
+but:
+    controlReconciliationCompleted
+    MUST be computed independently
+```
+
+**Semantic chain (frozen):**
+
+```text
+ALREADY_SATISFIED
+        |
+        v
+deliveryConfirmed=true
+        |
+        v
+evaluate independently:
+    controlHandshake?
+    sessionEpoch?
+    membershipEpoch?
+        |
+        v
+WAITING / RECOVERED
+```
+
+**Full fact chain (Q6-4 extends PR4 + Q6-1..Q6-3):**
+
+```text
+RECOVERY_REATTACH_ACK
+        |
+        +-- handlerOutcome=ALREADY_SATISFIED
+                    |
+                    v
+          DELIVERY_CONFIRMED
+
+Control Controller independently emits:
+    RECOVERY_CONTROL_RECONCILIATION_FACT
+
+Topology Controller independently emits:
+    RECOVERY_TOPOLOGY_CONVERGED_FACT (or Q2-4 equivalent)
+                    |
+                    v
+            CompletionPolicy.evaluate()
+                    |
+                    v
+        RECOVERED / WAITING / CONTINUE
+```
+
+**Q6-4 candidate matrix:**
+
+| Option | Model | Verdict |
+|--------|-------|---------|
+| **A** | `ALREADY_SATISFIED` → delivery only; control predicate independent | **SELECTED** |
+| **B** | `ALREADY_SATISFIED` as partial control hint (`peer already has recovery state`) | **Rejected** — handler sees offer-processing result, not control convergence; stale epoch risk |
+| **C** | Split by recovery type / context (delivery vs control hint) | **Rejected** — implicit mini completion machine on ACK payload; violates PR4-Q2 |
+| **D** | `ALREADY_SATISFIED` → direct RECOVERED candidate | **Rejected** — PR4-Q3: `DELIVERY_CONFIRMED ≠ RECOVERED` |
+
+**Q6-4 decision matrix:**
+
+| Invariant | A | B | C | D |
+|-----------|---|---|---|---|
+| PR4 compatibility | ✅ | ❌ | ❌ | ❌ |
+| Control predicate purity | ✅ | ❌ | ⚠️ | ❌ |
+| No false RECOVERED | ✅ | ❌ | ⚠️ | ❌ |
+| ACK contract stable | ✅ | ❌ | ❌ | ❌ |
+| Mesh extension | ✅ | ⚠️ | ❌ | ❌ |
+
+**INV-Q6-004:**
+
+> `handlerOutcome=ALREADY_SATISFIED` MUST be treated as **DeliveryConfirmation evidence** only. MUST NOT set, imply, or shortcut `controlReconciliationCompleted`. MUST NOT bypass `CompletionPolicy.evaluate()` toward `closeObligation`.
+
+**Soak `e1e74bc9` (M03→M02 participant):**
+
+```text
+ICE_CONNECTED=true
+media=true
+ACK(ALREADY_SATISFIED) → deliveryConfirmed=true
+controlPlaneStarted=false → controlReconciled=false
+        ⇒ WAITING(CONTROL_RECONCILIATION_PENDING)
+```
+
+Correct under A — delivery satisfied does not imply control reconciled.
+
+**Implementation verification (future soak):**
+
+PASS:
+
+```text
+ACK(ALREADY_SATISFIED)
+    +
+controlHandshakeCompleted=true
+sessionEpochMatched=true
+membershipEpochConverged=true
+    +
+topologyPredicateSatisfied=true
+        ↓
+CompletionPolicy
+        ↓
+RECOVERED
+```
+
+FAIL if any:
+
+```text
+ACK(ALREADY_SATISFIED) → controlReconciliationCompleted=true
+DROP_DUPLICATE_ICE_CONNECTED → control recovered
+handlerOutcome → closeObligation (bypass CompletionPolicy)
+```
+
+---
+
+#### Q6-5 — Control failure **evolution** — **CLOSED: A** (2026-07-30)
+
+> When completion-required control fact is not satisfied, how does Episode evolve from waiting to continue recovery or final failure?
+
+**Frozen upstream:**
+
+```text
+Q2-5:
+    FAILED_MEDIA_RECOVERY = attempt terminal failure ≠ episode terminal
+
+Q3:
+    Attempt state ≠ Episode completion state
+
+Q6-2:
+    controlReconciliationCompleted :=
+        controlHandshakeCompleted
+        AND sessionEpochMatched
+        AND membershipEpochConverged
+
+Q6-4:
+    ALREADY_SATISFIED ≠ control reconciliation
+```
+
+Therefore:
+
+```text
+ICE_CONNECTED + DELIVERY_CONFIRMED + MEDIA_OK
+but controlReconciliationCompleted=false
+    ⇒ MUST NOT RECOVERED
+```
+
+**Decision:** **A — Policy-driven WAITING / CONTINUE_RECOVERY / FAILED_FINAL** — `controlReconciliationCompleted=false` is a CompletionPolicy input fact only; episode terminal outcome is decided by Episode Owner via policy (attempt history, retry budget, deadline, uncovered intent).
+
+**Frozen model:**
+
+```text
+controlReconciliationCompleted=false
+        ↓
+CompletionPolicy.evaluate()
+        ↓
+WAITING
+or CONTINUE_RECOVERY
+or FAILED_FINAL
+```
+
+`controlReconciliationCompleted=false` does **NOT** imply `RECOVERED` or `FAILED_FINAL` by itself.
+
+**State examples (frozen):**
+
+| Situation | Episode outcome |
+|-----------|-----------------|
+| `control=false`, attempt active | `WAITING` |
+| `control=false`, attempt=FAILED, retry budget remains | `CONTINUE_RECOVERY` |
+| `control=false`, episode deadline expired | `FAILED_FINAL` |
+
+**Q3 dual-state alignment (frozen):**
+
+```text
+Attempt:  REQUESTED → FAILED (attempt terminal)
+
+Facts ↓
+
+Episode:  OPEN → CONTINUE_RECOVERY → FAILED_FINAL
+```
+
+**Q6-5 candidate matrix:**
+
+| Option | Model | Verdict |
+|--------|-------|---------|
+| **A** | Policy-driven `WAITING` / `CONTINUE_RECOVERY` / `FAILED_FINAL` | **SELECTED** |
+| **B** | `control=false` → always `WAITING` | **Rejected** — zombie obligation; no resource release; violates Q2-5 (`attempt_timeout` → policy decision) |
+| **C** | `attempt_timeout` → immediate `FAILED_FINAL` | **Rejected** — violates Q2-5-A: attempt terminal ≠ episode terminal |
+| **D** | Host/peer authority forces close or fail | **Rejected** — violates Q1 Episode Owner single writer; peer/host command ≠ local completion authority |
+
+**Q6-5 decision matrix:**
+
+| Invariant | A | B | C | D |
+|-----------|---|---|---|---|
+| Q3 attempt/episode separation | ✅ | ⚠️ | ❌ | ❌ |
+| No zombie obligation | ✅ | ❌ | ✅ | ⚠️ |
+| Mesh participant recovery | ✅ | ❌ | ❌ | ❌ |
+| Episode Owner authority | ✅ | ⚠️ | ❌ | ❌ |
+| R28-H alignment | ✅ | ❌ | ❌ | ❌ |
+
+**INV-Q6-005:**
+
+> `controlReconciliationCompleted=false` MUST be consumed only as a CompletionPolicy predicate input. Episode Owner MUST NOT map it directly to `RECOVERED` or `FAILED_FINAL`. Terminal episode outcomes (`WAITING`, `CONTINUE_RECOVERY`, `FAILED_FINAL`) MUST follow frozen Q3 + Q2-5 policy (retry budget, deadline, uncovered intent).
+
+**Soak `e1e74bc9` (M03→M02):** transport + delivery + media satisfied; `control=false` → `WAITING` → `attempt_timeout` → `OBLIGATION_DEADLINE` — **expected under A** (not writer regression; missing control fact emit + policy path).
+
+**Forbidden chains (Q6 final — carry forward):**
+
+```text
+control=false → RECOVERED                    ❌
+ATTEMPT_FAILED → FAILED_FINAL (direct)       ❌
+ALREADY_SATISFIED → closeObligation / fail   ❌
+peer RECOVERED → local RECOVERED             ❌
+```
+
+---
+
+#### Q6 closure summary — **FULLY CLOSED** (2026-07-30)
+
+| Question | Decision | Frozen invariant |
+|----------|----------|------------------|
+| **Q6-1** Ownership | **A** | Recovery Controller owns control fact emit — INV-Q6-001 |
+| **Q6-2** Predicate | **C** | handshake + session epoch + membership epoch — INV-Q6-002 |
+| **Q6-3** Boundary | **A** | control AND topology independent — INV-Q6-003 |
+| **Q6-4** ACK semantics | **A** | `ALREADY_SATISFIED` = delivery only — INV-Q6-004 |
+| **Q6-5** Failure evolution | **A** | policy-driven WAITING / CONTINUE / FINAL — INV-Q6-005 |
+
+**Complete model (frozen):**
+
+```text
+Recovery Facts
+    |
+    +-- deliveryConfirmed
+    +-- mediaRecoveryEvidenceSatisfied
+    +-- controlReconciliationCompleted
+    +-- topologyPredicateSatisfied
+            ↓
+    CompletionPolicy.evaluate()
+            ↓
+    RECOVERED | WAITING | CONTINUE_RECOVERY | FAILED_FINAL
+            ↓
+    Episode Completion (Episode Owner)
+            ↓
+    UVCP Projection (PR5-3 — not yet migrated)
+```
+
+**Architectural closure (soak `e1e74bc9` M03→M02):**
+
+Reclassified from “unknown why not recovered” to **“missing `RECOVERY_CONTROL_RECONCILIATION_FACT` implementation wiring”** — predicate + writer path correct; fact producer gap.
+
+**Implementation sequence (updated 2026-07-30):**
+
+1. ~~**PR5-2b control fact wiring**~~ — **DONE** (`RECOVERY_CONTROL_RECONCILIATION_FACT`; Q6-2 predicate; soak Gate B/C PASS)
+2. ~~**ADR-0022-Q7-1**~~ — **DONE** (authority domain = channel GROUP topology; INV-Q7-001/002)
+3. ~~**ADR-0022-Q7-1/2/3**~~ — **DONE** (authority domain A; resolver seam B; digest source A)
+4. **Q7 implementation slice** — `MembershipAuthorityResolver` + soak Gate A
+5. **PR5-3 UVCP projection migration**
+
+**Do not:** reopen Q6/Q7; create new topology authority; Coordinator as topology truth owner.
+
+#### Q6 closure target (predicate + episode — frozen)
+
+**Frozen (Q6-1 .. Q6-5):**
+
+```text
+controlReconciliationCompleted :=
+    controlHandshakeCompleted
+    AND sessionEpochMatched
+    AND membershipEpochConverged
+    (owner: Recovery Controller — INV-Q6-001)
+
+handlerOutcome=ALREADY_SATISFIED
+    → DELIVERY_CONFIRMED only (INV-Q6-004)
+    → MUST NOT imply controlReconciliationCompleted
+
+canClose :=
+    deliveryConfirmed
+    AND mediaRecoveryEvidenceSatisfied
+    AND controlReconciliationCompleted      -- INV-Q6-003: independent AND
+    AND topologyPredicateSatisfied          -- INV-Q6-003: independent AND
+    AND … (existing Q2 gates unchanged)
+
+controlReconciliationCompleted=false
+    → CompletionPolicy input only (INV-Q6-005)
+    → WAITING | CONTINUE_RECOVERY | FAILED_FINAL (Episode Owner policy)
+
+CompletionPolicy
+    ↓
+RECOVERED | WAITING | CONTINUE_RECOVERY | FAILED_FINAL
+```
+
+**Grill sequence:** **Q6 FULLY CLOSED** — Q6-1 (A) · Q6-2 (C) · Q6-3 (A) · Q6-4 (A) · Q6-5 (A).
+
+---
+
+### E.12 ADR-0022-Q7 — Membership Authority Domain for Control Reconciliation — **FULLY CLOSED** (2026-07-30)
+
+**Status:** **Q7 FULLY CLOSED** — **Q7-1 (A)** · **Q7-2 (B)** · **Q7-3 (A)**. **Implementation AUTHORIZED.** **Do not** reopen Q7 grill without new field evidence.
+
+**Semantic correction (frozen):**
+
+```text
+conference roster convergence        ≠ membership authority convergence
+membershipEpochConverged             = channel membership authority alignment
+Resolver consumes observation cache  ≠ Resolver owns topology authority
+```
+
+**Wrong fix (FORBIDDEN):**
+
+```text
+queryMembershipEpochConverged(groupSessionId)   // ad-hoc sessionId swap ❌
+TalkbackCoordinator inline topology truth        ❌
+Resolver-owned digest cache (second truth store) ❌
+New ChannelTopologyAuthority in Q7 slice           ❌
+```
+
+**Correct fix (Q7 implementation):**
+
+```text
+MembershipAuthorityResolver(context)
+    → read lastSeenAuthorityDigestByChannel[channelId]   // Q7-3-A
+    → compare local GROUP MembershipView
+    → membershipEpochConverged boolean
+```
+
+**Entry:** PR5-2b control fact wiring **PASS** (soak `1cb3a3e4` Gate B/C PASS; Gate A BLOCKED by source-plane mismatch).
+
+**PR5-2b soak verdict:**
+
+| Gate | Result | Meaning |
+|------|--------|---------|
+| **B** | **PASS** | `controlReconciliationCompleted=false` → `WAITING` → SYNCING (ADR-0022 protection works) |
+| **C** | **PASS** | ICE + media + delivery satisfied; no shortcut to `RECOVERED` |
+| **A** | **BLOCKED** | `membershipEpochConverged=false` persists → no `OBLIGATION_CLOSED reason=RECOVERED` |
+
+**Root cause (field evidence — not predicate defect):**
+
+Two membership worlds coexist on the same channel:
+
+| Plane | Session | `rosterEpoch` | `memberHash` | `membershipDigestAligned` |
+|-------|---------|---------------|--------------|---------------------------|
+| **A — GROUP / channel topology** | `grp:CH-01` | **3** | **-925203082** | **true** (21:45:20 M02) |
+| **B — Conference topology** | `1cb3a3e4` | **1** | (conference-frozen) | — |
+
+Q6-2 asks: *after recovery, is control-plane membership consistent?*
+
+Current wiring asks: *does the **conference session** digest match channel authority digest?*
+
+Those are **not the same question**.
+
+**Wiring gap (soak `1cb3a3e4`):**
+
+```text
+refreshControlReconciliationFact(record)
+        ↓
+queryMembershipEpochConverged(conferenceSessionId)
+        ↓
+membershipDigestAlignedWithAuthority(conferenceSession)
+        ↓
+localDigest  ← TopologyDigest.fromSession(CONFERENCE)  rosterEpoch=1
+authorityDigest ← lastSeenAuthorityDigestByChannel[CH-01]  rosterEpoch=3 (from M01 GROUP HELLO)
+        ↓
+membershipEpochConverged=false  reason=MEMBERSHIP_EPOCH_MISMATCH
+```
+
+Meanwhile GROUP plane on M02: `membershipDigestAligned=true`, transport + delivery + media **PASS**, CompletionPolicy writer **PASS** — only membership **fact source** fails.
+
+**Architectural issue (not a one-line bug):**
+
+```text
+sessionId == membership authority domain          ❌ false assumption
+```
+
+Recovery completion MUST NOT implicitly bind `membershipEpochConverged` to whichever `TalkbackSession` owns the conference UUID.
+
+---
+
+#### Q7-1 — Membership authority domain — **CLOSED: A** (2026-07-30)
+
+> For `controlReconciliationCompleted`, which **membership authority domain** supplies `membershipEpochConverged`?
+
+**Decision:** **A — Channel GROUP topology authority**
+
+```text
+membershipEpochConverged :=
+    recovery participant view
+    matches
+    channel membership authority digest
+```
+
+Authority chain (frozen):
+
+```text
+Channel Membership Authority (GROUP / channel topology)
+        |
+        v
+MembershipAuthorityResolver          // Q7-2-B: independent seam; Coordinator injects
+        |
+        v
+TopologyDigest compare
+        |
+        v
+RECOVERY_CONTROL_RECONCILIATION_FACT.membershipEpochConverged
+```
+
+**Frozen upstream (do not reopen):** Q6-2 predicate shape (`handshake AND sessionEpoch AND membership epoch`); PR5-2 CompletionPolicy sole writer; PR5-2b fact emit path; Q6-4 (`ALREADY_SATISFIED` ≠ control).
+
+**CompletionPolicy MUST remain ignorant of:**
+
+```text
+GROUP vs CONFERENCE vs session id
+```
+
+It consumes only:
+
+```text
+controlReconciliationCompleted = true | false
+membershipEpochConverged       = true | false   // opaque to Policy
+```
+
+**Q7-1 candidate matrix:**
+
+| Option | Domain for `membershipEpochConverged` | Verdict |
+|--------|----------------------------------------|---------|
+| **A** | Channel GROUP topology authority digest (`membershipDigestAlignedWithAuthority` on GROUP session for channel) | **SELECTED** |
+| **B** | Conference session as membership authority | **Rejected** — second authority; GROUP vs CONFERENCE roster split |
+| **C** | `groupEpochMatched AND conferenceEpochMatched` | **Rejected** — permanent WAITING when conference snapshot lags (soak `1cb3a3e4`) |
+| **D** | Remove membership gate from Q6-2 | **Rejected** — reverts to ICE+delivery → RECOVERED; violates Q6-2-C |
+
+**Q7-1 decision matrix:**
+
+| Criterion | A | B | C | D |
+|-----------|---|---|---|---|
+| Aligns with existing GROUP authority | ✅ | ❌ | ⚠️ | ❌ |
+| Q6-2 predicate unchanged | ✅ | ⚠️ | ⚠️ | ❌ |
+| Recovery does not own membership | ✅ | ❌ | ⚠️ | ❌ |
+| Soak Case B (conference epoch lag) | ✅ | ⚠️ | ❌ | ❌ |
+| Mesh / channel extensibility | ✅ | ❌ | ⚠️ | ❌ |
+
+**Rationale (A):** Recovery edge = **channel membership** + **conference recovery transport**. Conference lifecycle roster ≠ mesh topology authority. Soak `1cb3a3e4`: GROUP `membershipDigestAligned=true` while conference `rosterEpoch=1` — fact must reflect **authority convergence**, not conference snapshot age.
+
+**INV-Q7-001 (frozen):**
+
+> `CompletionPolicy` and `ControlReconciliationEvaluator` MUST NOT branch on membership domain (`SessionType.GROUP` vs `SessionType.CONFERENCE`, conference `sessionId`, or roster epoch sources). They consume only `controlReconciliationCompleted` / projection booleans.
+
+Forbidden:
+
+```kotlin
+CompletionPolicy { if (conferenceEpoch == ...) … }   ❌
+```
+
+**INV-Q7-002 (frozen):**
+
+> `MembershipAuthorityResolver` (or equivalent Q7-2-named seam) is the **sole** producer of `membershipEpochConverged` for control reconciliation. MUST NOT derive membership fact from `TopologyDigest.fromSession(conferenceSession)` directly in recovery controller wiring.
+
+Forbidden:
+
+```text
+ConferenceSession → membership fact          ❌
+conferenceSessionId → membershipDigestAlignedWithAuthority(conference)   ❌
+```
+
+Required:
+
+```text
+MembershipAuthorityResolver(channelId, recoveryContext)
+        → membershipEpochConverged boolean
+```
+
+---
+
+---
+
+#### Q7-3 — Authority digest source ownership — **CLOSED: A** (2026-07-30)
+
+> Does `MembershipAuthorityResolver` consume **cache of authority observation** or **authoritative topology snapshot**?
+
+**Decision:** **A — `lastSeenAuthorityDigestByChannel` as current implementation source**
+
+```text
+MembershipAuthorityResolver consumes
+    latest observed channel authority digest (observation cache)
+
+NOT
+    authoritative topology snapshot owner (deferred: Q7-3-C evolution)
+```
+
+**Authority read path (frozen):**
+
+```text
+GROUP HELLO / snapshotApplied
+        |
+        v
+lastSeenAuthorityDigestByChannel[channelId]
+        |
+        v
+MembershipAuthorityResolver.resolveAuthorityDigest(channelId)
+        |
+        v
+compare vs localMembershipView (GROUP TopologyDigest)
+```
+
+**Frozen semantics:**
+
+> `MembershipAuthorityResolver` consumes the latest **observed** channel authority digest. It does **not** create, mutate, or own topology authority state.
+
+**Q7-3 candidate matrix:**
+
+| Option | Authority digest source | Verdict |
+|--------|-------------------------|---------|
+| **A** | `lastSeenAuthorityDigestByChannel` (Coordinator observation cache from authority HELLO) | **SELECTED** |
+| **B** | Resolver maintains its own digest cache | **Rejected** — duplicate truth store |
+| **C** | Formal `ChannelTopologyAuthority` / topology snapshot seam | **Deferred evolution** — out of Q7 slice |
+| **D** | Conference snapshot | **Rejected** — violates Q7-1-A |
+
+**Risk acknowledged (A):** `lastSeen` = last observed authority digest, not guaranteed current if HELLO delayed. Q7 fixes **wrong domain** and **wrong producer**; observation freshness remains upstream.
+
+**INV-Q7-004 (frozen):**
+
+> `MembershipAuthorityResolver` is a **consumer** of authority observation facts, not an authority state owner. MUST NOT mutate roster, epoch, membership election, or topology reconciliation.
+
+**INV-Q7-005 (frozen):**
+
+> `lastSeenAuthorityDigestByChannel` is an **observation cache only**. MUST NOT be treated as topology mutation authority. Coordinator MAY **write** cache from HELLO; Resolver **reads** for convergence comparison only.
+
+**Future evolution (deferred):** Q7-3-C — formal `ChannelTopologyAuthority` snapshot. Track separately; do not block Q7 implementation.
+
+**Q7-3 FORBIDDEN:**
+
+```text
+Resolver-owned digest cache (option B)                          ❌
+New ChannelTopologyAuthority / snapshot lifecycle in Q7 slice   ❌
+Reopen Q7-1 / Q7-2                                              ❌
+Resolver drives membership mutation / reconciliation            ❌
+Change CompletionPolicy / Q6-2 predicate / UVCP                   ❌
+```
+
+---
+
+#### Q7 implementation boundary — **AUTHORIZED** (2026-07-30)
+
+> Who owns `MembershipAuthorityResolver`, and how does recovery obtain `membershipEpochConverged`?
+
+**Decision:** **B — Independent `MembershipAuthorityResolver` seam; `TalkbackCoordinator` injects implementation**
+
+```text
+MembershipAuthorityResolver = membershipEpochConverged fact owner
+```
+
+**Frozen upstream:** Q7-1-A; INV-Q7-001; INV-Q7-002.
+
+**Architectural goal:** Resolver MUST NOT become an invisible Coordinator. Coordinator routes and injects; Resolver **reads** channel authority and **produces** convergence fact only.
+
+**Fact producer ownership (frozen with Q7-2):**
+
+| Fact | Owner |
+|------|-------|
+| ICE / transport state | Transport |
+| Delivery fact | Handler |
+| Attempt state | `RecoveryAttemptOwner` |
+| Membership convergence | **`MembershipAuthorityResolver`** |
+| Completion decision | `CompletionPolicy` |
+
+**Q7-2 candidate matrix:**
+
+| Option | Owner / structure | Verdict |
+|--------|---------------------|---------|
+| **A** | `TalkbackCoordinator` wrapper — `coordinator.membershipDigestAligned(channelId)` | **Rejected** — acceptable short-term but stacks topology truth on Coordinator; drifts toward Q4-forbidden “Coordinator owns truth” |
+| **B** | Independent `MembershipAuthorityResolver` in `core/session`; Coordinator injects | **SELECTED** — explicit producer seam; preserves ADR-0022 layering |
+| **C** | `GroupMeshReconciler` owns resolver | **Rejected** — read-fact vs drive-reconciliation blur; reconciler ≠ fact provider |
+| **D** | `ConferenceEdgeRecoveryController` inline | **Rejected** — violates INV-Q7-002; God object |
+
+**Q7-2 decision matrix:**
+
+| Criterion | A | B | C | D |
+|-----------|---|---|---|---|
+| Single fact producer (INV-Q7-002) | ⚠️ | ✅ | ⚠️ | ❌ |
+| Coordinator not topology truth owner | ❌ | ✅ | ⚠️ | ❌ |
+| Recovery package domain-agnostic | ⚠️ | ✅ | ⚠️ | ❌ |
+| Aligns with Q4 migration boundary | ❌ | ✅ | ⚠️ | ❌ |
+| Clear migration from `membershipDigestAlignedWithAuthority` | ✅ | ✅ | ⚠️ | ❌ |
+
+**Frozen structure (Q7-2-B):**
+
+```text
+                 +------------------------+
+                 | MembershipAuthority    |
+                 | Resolver               |
+                 +------------------------+
+                         |
+                         v
+                  TopologyDigest compare
+
+ConferenceEdgeRecoveryController
+        |
+        v
+ queryMembershipEpochConverged(context)
+        |
+        v
+MembershipAuthorityResolver.isMembershipEpochConverged(context)
+```
+
+**API seam (frozen):**
+
+```kotlin
+data class RecoveryMembershipContext(
+    val channelId: String,
+    val conferenceSessionId: String?,   // log / correlation only — NOT authority lookup
+    val localMembershipView: MembershipView
+)
+
+interface MembershipAuthorityResolver {
+    fun resolveAuthorityDigest(channelId: String): TopologyDigest?
+    fun isMembershipEpochConverged(context: RecoveryMembershipContext): Boolean
+}
+```
+
+`conferenceSessionId` MUST NOT be used for digest authority lookup (Q7-1-A domain = channel only).
+
+**Wiring change (frozen intent):**
+
+```text
+queryMembershipEpochConverged(conferenceSessionId)     ❌ old
+queryMembershipEpochConverged(RecoveryMembershipContext) ✅ new
+```
+
+`recoveryContext` carries at minimum: `channelId`, `conferenceSessionId` (logging), `localMembershipView` — resolver uses **channelId** + local view for convergence (Q7-1-A).
+
+**INV-Q7-003 (frozen):**
+
+> `MembershipAuthorityResolver` is the **sole owner** of `membershipEpochConverged` production for control reconciliation. `TalkbackCoordinator` MAY inject resolver implementation but MUST NOT remain the long-term inline producer of membership convergence facts via ad-hoc wrapper methods called from recovery controller.
+
+**Migration note:** Existing `membershipDigestAlignedWithAuthority()` logic MAY move **into** resolver implementation (one-time clear migration) — not a workaround sessionId swap.
+
+---
+
+#### Q7-3 — Authority digest source ownership — **OPEN**
+
+> Where does `MembershipAuthorityResolver` read channel membership authority digest from?
+
+**Frozen upstream:** Q7-1-A (domain = channel GROUP topology); Q7-2-B (resolver owns fact production); INV-Q7-001..003.
+
+**Do not implement resolver until Q7-3 closed.** Q7-3 decides **digest source** only — not resolver API (Q7-2), not predicate, not CompletionPolicy.
+
+**Question:** Is `lastSeenAuthorityDigestByChannel[channelId]` (from authority HELLO on GROUP plane) sufficient as authority source, or must resolver consume a formal `ChannelTopologyAuthority` / topology snapshot seam?
+
+**Why this matters:** Determines whether mesh topology authority remains stable under conference recovery and future membership mutations (ADR-0023 boundary).
+
+**Candidate matrix (initial — grill in Q7-3):**
+
+| Option | Authority digest source | Notes |
+|--------|-------------------------|-------|
+| **A** | `lastSeenAuthorityDigestByChannel` (current Coordinator cache from authority HELLO) | Minimal change; field-proven in soak |
+| **B** | GROUP session `TopologyDigest.fromSession` + same authority cache for comparison | Local view from GROUP session; authority from cache |
+| **C** | Formal topology snapshot / `ChannelTopologyAuthority` read seam | Strongest ownership; may require new snapshot API |
+| **D** | Conference session or inline Coordinator read in controller | **Rejected** |
+
+**Q7-3 FORBIDDEN:**
+
+```text
+Implement MembershipAuthorityResolver before Q7-3 freeze              ❌
+Reopen Q7-1 authority domain or Q7-2 resolver ownership               ❌
+Resolver drives membership mutation / reconciliation                  ❌
+Change CompletionPolicy / Q6-2 predicate / UVCP                       ❌
+```
+
+---
+
+#### Q7 implementation boundary (after Q7-3 freeze only)
+
+**Allowed (narrow):**
+
+| Change | Scope |
+|--------|-------|
+| **Add** | `MembershipAuthorityResolver` + `RecoveryMembershipContext` |
+| **Migrate** | `membershipDigestAlignedWithAuthority()` comparison into resolver; read `lastSeenAuthorityDigestByChannel` (Q7-3-A) |
+| **Modify** | `queryMembershipEpochConverged(RecoveryMembershipContext)` |
+| **Modify** | `refreshControlReconciliationFact` — build context; call resolver |
+
+**Verification target (soak Gate A):**
+
+```text
+old: Conference epoch=1, Authority epoch=3 → membershipEpochConverged=false
+new: Resolver(channel CH-01) + GROUP-aligned local view → true
+```
+
+**Not allowed:**
+
+```text
+❌ canClose predicate shape
+❌ CompletionPolicy
+❌ ALREADY_SATISFIED semantics
+❌ ICE / delivery / retry logic
+❌ UVCP (PR5-3)
+❌ Delete or bypass membership gate (Q7-1-D)
+❌ New topology authority / roster mutation / membership election
+❌ Resolver-owned digest cache
+```
+
+**Implementation success chain (soak Gate A — ADR-0022 closure target):**
+
+```text
+RECOVERY_CONTROL_RECONCILIATION_FACT
+    membershipEpochConverged: false → true
+        ↓
+RECOVERY_COMPLETION_DECISION
+    candidate: WAITING → RECOVERED
+        ↓
+RECOVERY_OBLIGATION_CLOSED
+    reason=RECOVERED
+```
+
+Goal is **not** merely UI green — prove completion ownership chain closes when channel authority is aligned.
+
+**Wiring target (frozen):**
+
+```text
+ConferenceEdgeRecoveryController
+        ↓
+RecoveryMembershipContext(channelId, conferenceSessionId?, localView)
+        ↓
+MembershipAuthorityResolver.isMembershipEpochConverged(context)   // Q7-2-B
+        ↓
+lastSeenAuthorityDigestByChannel[channelId]   // Q7-3-A observation read
+        vs
+TopologyDigest.fromSession(GROUP session)     // localMembershipView
+        ↓
+ControlReconciliationEvaluator (unchanged)
+        ↓
+CompletionPolicy (unchanged)
+```
+
+---
+
+#### Q7 acceptance criteria (frozen with Q7-1)
+
+**Case A — Normal recovery (Gate A PASS):**
+
+```text
+RECOVERY_CONTROL_RECONCILIATION_FACT
+    controlHandshakeCompleted=true
+    sessionEpochMatched=true
+    membershipEpochConverged=true
+        ↓
+RECOVERY_COMPLETION_DECISION writer=CompletionPolicy candidate=RECOVERED
+        ↓
+RECOVERY_OBLIGATION_CLOSED reason=RECOVERED
+```
+
+**Case B — Conference epoch lags channel authority (must NOT block):**
+
+```text
+GROUP:     rosterEpoch=3, membershipDigestAligned=true
+Conference: rosterEpoch=1 (lifecycle-frozen)
+```
+
+Channel authority already aligned → `membershipEpochConverged=true` → completion MAY proceed. **Must not** block solely because conference session epoch is stale.
+
+**Case C — True topology divergence (must block):**
+
+```text
+M02 local digest: epoch=3
+M03 peer view:    epoch=2   (channel authority not converged)
+```
+
+→ `membershipEpochConverged=false` → `WAITING` → SYNCING. **Must not** RECOVERED.
+
+---
+
+#### Q7 FORBIDDEN (carry Q6 + PR5-2b + Q7)
+
+```text
+Ad-hoc sessionId substitution (conference → group) without resolver seam   ❌
+Coordinator as long-term membership fact producer (Q7-2-A drift)          ❌
+Resolver inline in Controller (Q7-2-D)                                    ❌
+Resolver-owned digest cache (Q7-3-B)                                      ❌
+New topology authority in Q7 slice (Q7-3-C deferred)                      ❌
+GroupMeshReconciler as fact owner (Q7-2-C)                                ❌
+Widen / delete membership gate (Q7-1 option D)                            ❌
+ICE_CONNECTED / DELIVERY / ACK → membershipEpochConverged=true          ❌
+CompletionPolicy branches on GROUP vs CONFERENCE session type             ❌
+ConferenceSession → membership fact (INV-Q7-002)                            ❌
+Reopen Q6 predicate shape or PR5-2 writer migration                       ❌
+```
+
+---
+
+#### Q7 closure summary — **FULLY CLOSED** (2026-07-30)
+
+| Question | Decision | Frozen invariant |
+|----------|----------|------------------|
+| **Q7-1** Authority domain | **A** | Channel GROUP topology authority — INV-Q7-001, INV-Q7-002 |
+| **Q7-2** Resolver ownership | **B** | Independent `MembershipAuthorityResolver` seam — INV-Q7-003 |
+| **Q7-3** Digest source | **A** | `lastSeenAuthorityDigestByChannel` observation read — INV-Q7-004, INV-Q7-005 |
+
+**Deferred evolution:** Q7-3-C formal `ChannelTopologyAuthority` snapshot — separate track; not blocking Q7 impl.
+
+**Complete membership fact chain (frozen):**
+
+```text
+GROUP HELLO → lastSeenAuthorityDigestByChannel
+        +
+RecoveryMembershipContext (channelId + local GROUP view)
+        ↓
+MembershipAuthorityResolver.isMembershipEpochConverged()
+        ↓
+RECOVERY_CONTROL_RECONCILIATION_FACT.membershipEpochConverged
+        ↓
+ControlReconciliationEvaluator (Q6-2 — unchanged)
+        ↓
+CompletionPolicy (unchanged)
+```
+
+**Architectural closure:** PR5-2b Gate A BLOCKED reclassified from “recovery failed” to “membership fact read wrong session plane” — Q7 fixes producer + source without reopening Q6.
+
+**Next:** Q7 implementation slice → soak Gate A → PR5-3 UVCP.
+
+---
+
+#### Q7 closure target
+
+| Question | Status | Target |
+|----------|--------|--------|
+| **Q7-1** Membership authority domain | **CLOSED — A** | INV-Q7-001, INV-Q7-002 |
+| **Q7-2** Resolver ownership / seam | **CLOSED — B** | INV-Q7-003; `RecoveryMembershipContext` |
+| **Q7-3** Authority digest source | **CLOSED — A** | INV-Q7-004, INV-Q7-005 |
+| **Q7 implementation** | **AUTHORIZED** | Resolver + soak Gate A |
+| **PR5-3 UVCP** | **BLOCKED** | After Gate A PASS |
+
+**Field references:**
+
+- PR5-2b soak: `logs/signal-path-20260730-195856` (conference `1cb3a3e4`; GROUP `grp:CH-01` epoch 3 aligned; conference epoch 1; Gate B/C PASS, Gate A BLOCKED)
+- PR5-2 authority gold chain: same log dir, session `e1e74bc9` (pre-PR52b; Gate A PASS when control + membership aligned)
+
+---
+
+### E.13 PR5-2c — Recovery Delivery Lineage Convergence — **Q1 CLOSED** (2026-07-31)
+
+**Status:** **PR5-2c-Q1 CLOSED / FROZEN** (Q1-1..Q1-7, INV-PR52c-001..008). **PR5-2c-A inbound delivery fix IMPLEMENTED + SOAK PASS** (2026-07-31). **PR5-2c-A CLOSED** — Gate A/B PASS on `logs/pr52c-a-dual-canonical-20260731-153100` (session `f31341c9`). CompletionPolicy / Attempt Owner / Q7 adapter **UNCHANGED**.
+
+**Problem (field):** `ALREADY_SATISFIED` on participant but `ACK_SKIPPED(STALE_OBLIGATION_GENERATION)` → host `deliveryConfirmed=false` while control + membership already true (`logs/pr52b-q7-b-20260731-131605`).
+
+**Architectural fact (frozen):**
+
+```text
+attempt lifecycle        ≠  delivery obligation lifecycle
+ATTEMPT_SUPERSEDED       ≠  DELIVERY_CONFIRMED
+ALREADY_SATISFIED        ≠  deliveryConfirmed
+```
+
+**Q1-1 Delivery obligation identity — CLOSED: A**
+
+```text
+(sessionId, remoteModuleId, obligationGeneration, offerLineageId)
+```
+
+`recoveryAttemptId` = correlated metadata, **not** sole ACK acceptance key.
+
+**Q1-2 ACK identity — CLOSED:** same as delivery obligation + `deliveryAttemptId` + edge (`from`/`to`).
+
+**Q1-3 Supersede后旧 ACK — CLOSED: A**
+
+Pending delivery obligation **not** auto-cancelled on attempt supersede. Valid ACK for `(obligationGen, offerLineageId)` may confirm pending even if `currentAttemptId` advanced.
+
+**Q1-4 ALREADY_SATISFIED — CLOSED:** produces **valid ACK** → `DELIVERY_CONFIRMED` fact; **not** direct `deliveryConfirmed` on handler.
+
+**Q1-5 DELIVERY_CONFIRMED writer — CLOSED:** sole `DeliveryFactWriter` / delivery plane exit (not Attempt Owner, not CompletionPolicy).
+
+**Allowed chain:**
+
+```text
+RECOVERY_OFFER_SENT → Handler ALREADY_SATISFIED → valid ACK
+    → DeliveryFactWriter → DELIVERY_CONFIRMED
+    → CompletionPolicy → RECOVERED → OBLIGATION_CLOSED
+```
+
+**FORBIDDEN (PR5-2c carry Q6-4):**
+
+```text
+ALREADY_SATISFIED → RECOVERED / deliveryConfirmed directly     ❌
+ATTEMPT_SUPERSEDED → deliveryConfirmed                         ❌
+currentAttemptId mismatch alone → ACK stale                    ❌
+old ACK → new obligationGeneration                             ❌
+```
+
+**INV-PR52c-001:** Delivery obligation key = `(edge, obligationGeneration, offerLineageId)`.
+
+**INV-PR52c-002:** `attempt SUPERSEDED ≠ delivery obligation CANCELLED`.
+
+**INV-PR52c-003:** Recovery obligation closure is **directional** (Q1-6 layer-1 A, 2026-07-31). Local closed state for `(local → remote)` MUST NOT, by itself, invalidate valid inbound delivery `(remote → local)`; inbound ACK judged on inbound delivery lineage identity.
+
+**INV-PR52c-004:** Close reason ≠ inbound delivery validity by default (Q1-6 layer-2 C2). `OBLIGATION_DEADLINE` invalidates **late** inbound delivery facts. `RECOVERED` MUST NOT quarantine valid opposite-direction delivery. `MEMBERSHIP_LEFT` / `CONFERENCE_TERMINATED` → session/membership validity (not auto delivery reject).
+
+**INV-PR52c-005:** Local `RECOVERED` MUST NOT impose a temporal cutoff on valid opposite-direction delivery (Q1-7.1 T-A). Inbound ACK acceptance = inbound delivery identity + pending validity, not opposite-direction close time.
+
+**INV-PR52c-006:** Directional recovery episode (Q1-7.2 R-C): if `deliveryRequired == true`, `RECOVERED` requires `deliveryConfirmed == true`; if `deliveryRequired == false`, `RECOVERED` MAY coexist with `deliveryConfirmed == false`. Q6-4 preserved.
+
+**INV-PR52c-007:** Attempt supersession MUST NOT invalidate an otherwise valid delivery obligation (Q1-7.3a S-A). Inbound ACK MUST NOT reject solely because `ack.recoveryAttemptId != currentRecoveryAttemptId`. Delivery identity rules remain authoritative.
+
+**INV-PR52c-008:** Obligation generation bump invalidates **same-direction** orphan / new delivery for the old generation; it MUST NOT quarantine valid **opposite-direction** inbound delivery (Q1-7.3b G-C). Inbound ACK MUST NOT reject solely because `inbound.obligationGeneration < receiver.edge.obligationGeneration`. Accept only when inbound matches a still-valid pending delivery obligation `(from, to, obligationGeneration, offerLineageId, deliveryAttemptId)`; otherwise `STALE` / `INVALID` — old generation MUST NOT be permanently legalized without matching pending.
+
+**Directional delivery acceptance (Q1-6 + Q1-7 consolidated):**
+
+```text
+Inbound ACK acceptance authority = delivery obligation identity + pending validity
+
+MUST NOT reject solely because:
+  • local opposite-direction obligationClosed / RECOVERED
+  • ack.recoveryAttemptId != currentRecoveryAttemptId
+  • inbound.obligationGeneration < receiver.currentObligationGeneration
+
+MUST reject when:
+  • inbound identity does not match any valid pending delivery obligation
+  • OBLIGATION_DEADLINE late-fact rules (INV-PR52c-004)
+  • session/membership invalid (MEMBERSHIP_LEFT / CONFERENCE_TERMINATED)
+
+Three lifecycles — IDs must not cross-terminate:
+  Attempt lifecycle     → supersede
+  Delivery lifecycle    → pending → confirmed / explicitly invalidated
+  Episode lifecycle     → waiting → recovered / failed
+```
+
+**Implementation note:** `pendingDelivery.obligationGeneration == ack.obligationGeneration` — **not** `ack.obligationGeneration == currentAttempt.obligationGeneration` or `receiver.edge.obligationGeneration`.
+
+**Field reference:** `logs/pr52b-q7-b-20260731-131605/DELIVERY_LINEAGE_REPORT` (M02→M03 session `a8d1874b`).
+
+#### E.13.1 PR5-2c-A soak status board (2026-07-31, post dual-canonical PASS)
+
+```text
+PR5-2c-Q1 lineage identity        CLOSED / FROZEN ✅
+
+PR5-2c-A inbound delivery fix     CLOSED / SOAK PASS ✅
+  Gate A Delivery                 PASS
+  Gate B Completion               PASS
+
+Q7 adapter                        SOAK PASS ✅
+Q7-3 Digest Source                OPEN (non-blocking)
+
+PR5-2c-C deferred intent          CLOSED / IMPLEMENTATION VERIFIED ✅ (§E.14.19)
+PR5-2c-D signal path / D1 ingress CLOSED / FIELD_VERIFIED ✅ (§E.15.15)
+
+CompletionPolicy                  UNCHANGED ✅
+Attempt Owner                     UNCHANGED ✅
+UVCP                              UNCHANGED ✅
+
+Current blocker:
+  none on D1 / C individually
+
+Next candidate:
+  Joint D1 + PR5-2c-C Recovery Regression §E.16  OPEN
+  J-X §E.16.1 SEMANTICS CLOSED; Slice-1 CLOSED / VERIFIED
+  §E.16.2 Field Authorization Contract          FROZEN
+  Phase-3 field                                 NOT AUTHORIZED
+  PR5-3 / UVCP                                  BLOCKED until JOINT PASS
+```
+
+**Dual canonical PASS** (`logs/pr52c-a-dual-canonical-20260731-153100`, session `f31341c9-760e-48f3-953f-9fed1a2b1fd3`, M03 WiFi flap):
+
+```text
+M02 → M03
+RECOVERY_DELIVERY_PENDING (L1)
+        ↓
+M03 RECOVERY_REATTACH_ACK_SENT (ALREADY_SATISFIED)
+        ↓
+M02 RECOVERY_DELIVERY_CONFIRMED
+        ↓
+deliveryConfirmed=true
+        ↓
+CompletionPolicy candidate=RECOVERED
+        ↓
+RECOVERY_OBLIGATION_CLOSED reason=RECOVERED
+```
+
+**Old failure eliminated:** no `ACK_SKIPPED(OBLIGATION_CLOSED)` → no `DELIVERY_EXHAUSTED` on this edge. **CompletionPolicy unchanged** — delivery fact entered completion input correctly (`Delivery fact first. Completion consumes fact.`).
+
+**Field invariants exercised (soak):** INV-PR52c-001 (delivery identity ≠ attempt alone), INV-PR52c-003/005 (no peer-wide closure quarantine), INV-PR52c-007 (lineage across attempt), INV-PR52c-008 (no blind generation STALE).
+
+**Caveat (regression hardening, non-blocking):** prior ordering-race precondition (`M03→M02 RECOVERED` then `M02→M03` inbound) **not replayed** in `153100`. Slice验收 covers: *legal opposite-direction delivery not rejected by closure / attempt / generation*. Optional future case: T1 local `RECOVERED` → T2 reverse `DELIVERY_PENDING` → T3 ACK accepted.
+
+**Prior FAIL (root cause, fixed):** `logs/pr52c-a-dual-canonical-20260731-142413` (session `51d57892`) — `ACK_SKIPPED(OBLIGATION_CLOSED)` before fix; see E.13.3.
+
+**TEST-INFRA-001:** Gate evaluator must normalize delivery edge keys (`remote=` vs `to=` vs `peerKey`) before counting `DELIVERY_PENDING` / `DELIVERY_CONFIRMED`. Observer-only; not runtime. Script: `scripts/analyze-pr52c-a-dual-canonical.ps1`.
+
+**Inbound responder chain — SOAK PASS** (`logs/pr52c-a-canonical-short-20260731-141428`, session `7001bdb9-3de1-4c06-879f-059352fe5d48`, M03 short WiFi flap ~22s):
+
+```text
+M03 → M02
+RECOVERY_REATTACH_RECEIVED (offerLineageId=L9)
+        ↓
+DROP_DUPLICATE_ICE_CONNECTED (localIce=CONNECTED)
+        ↓
+ALREADY_SATISFIED
+        ↓
+RECOVERY_REATTACH_ACK_SENT
+```
+
+Initiator-side delivery fact closure (same soak, M03 log):
+
+```text
+M03
+RECOVERY_DELIVERY_CONFIRMED
+handlerOutcome=ALREADY_SATISFIED
+offerLineageId=L9
+```
+
+**Outbound host delivery — not failure evidence** (M03 old package): M02→M03 `offerLineageId=L5` → `DELIVERY_PENDING` → M03 `ACK_SKIPPED(STALE_OBLIGATION_GENERATION)` → M02 `DELIVERY_EXHAUSTED`. Lineage rules must **not** be relaxed to force ACK arrival.
+
+**Long flap reference** (`logs/pr52c-a-canonical-20260731-140736`): VALID gate but A-1 NOT EXERCISED (`ACCEPT_ICE_RESTART`, `localIce=FAILED`); superseded by short-flap evidence for inbound ALREADY_SATISFIED.
+
+#### E.13.2 PR5-2c-A dual canonical gate — **CLOSED / PASS** (2026-07-31)
+
+**Canonical soak:** M02 host Conference CH-01; M01 + M03 joined; M03 short WiFi flap (~12s); M02 online.
+
+**Target chain (M02 authority → M03 edge):**
+
+```text
+M02 → M03
+offer / DELIVERY_PENDING
+        ↓
+M03 ALREADY_SATISFIED
+        ↓
+M03 RECOVERY_REATTACH_ACK_SENT
+        ↓
+M02 RECOVERY_DELIVERY_CONFIRMED
+        ↓
+CompletionPolicy candidate=RECOVERED
+        ↓
+OBLIGATION_CLOSED reason=RECOVERED
+```
+
+**PASS evidence:** `logs/pr52c-a-dual-canonical-20260731-153100` (session `f31341c9`).
+
+**Prior FAIL (pre-fix):** `logs/pr52c-a-dual-canonical-20260731-142413` — ordering race; see E.13.3.
+
+**PR5-2c-A CLOSED** → **PR5-2c-C CLOSED** §E.14.19. Do **not** expand PR5-2c-A scope further.
+
+#### E.13.3 Field evidence — cross-edge completion ordering race (2026-07-31)
+
+**LogDir:** `logs/pr52c-a-dual-canonical-20260731-142413`  
+**Session:** `51d57892-837f-4f6a-b109-2d1582026563`  
+**Build:** M01 + M02 + M03 all `pr52c-a`  
+**Trigger:** M03 WiFi OFF ~18s (14:25:05 → 14:25:23)
+
+**Frozen causal chain (not lineage failure):**
+
+```text
+M03 → M02:
+    OBLIGATION_CLOSED(reason=RECOVERED)
+    deliveryConfirmed=false
+    trigger=ICE_RESTORED
+            ↓
+M02 → M03:
+    DELIVERY_PENDING(offerLineageId=L1) ×3
+            ↓
+M03:
+    RECOVERY_DELIVERY_ACK_SKIPPED(reason=OBLIGATION_CLOSED)
+    (not STALE_OBLIGATION_GENERATION)
+            ↓
+M02:
+    DELIVERY_EXHAUSTED
+```
+
+**Architectural warning (field fact, not yet normative):**
+
+> `OBLIGATION_CLOSED(reason=RECOVERED)` ≠ “this edge no longer needs to handle any inbound delivery still in flight.”
+
+When `deliveryConfirmed=false`, another direction may still have a **legal pending delivery obligation** arriving after closure on the participant→authority view.
+
+**UI correlation:** M01/M02 show M03 `SYNCING` (`obligationOpen=true`, `DELIVERY_EXHAUSTED` on M02); M02 log shows M03 `finalPresence=SYNCING` with ICE still `CONNECTED`.
+
+**Code touchpoint (observation only):** `ConferenceEdgeRecoveryController.evaluateInboundReattachLineage` returns `OBLIGATION_CLOSED` when `record.obligationClosedAtMs != null` on the **local edge record for `remoteModuleId`** — closure on M03's `remote=M02` episode precedes M02's outbound `L1` offers to M03.
+
+#### E.13.4 Grill — Q1-6 / Q1-7 (2026-07-31)
+
+**Status:** **Q1-6 CLOSED (A/C2).** **Q1-7 CLOSED (T-A / R-C / S-A / G-C).** **PR5-2c-Q1-7 FROZEN.** **PR5-2c-A implemented + soak PASS** (2026-07-31).
+
+##### Q1-6 layer-1 — Directional closure vs inbound delivery — **CLOSED: A** (2026-07-31)
+
+Recovery episode **directionality** is a semantic constraint:
+
+```text
+M03 → M02   local initiator episode   CLOSED(RECOVERED)
+        ≠
+M02 → M03   peer initiator episode    inbound L1 still legal pending
+```
+
+`remote=M02` + `obligationClosedAtMs` on M03 **MUST NOT**, by itself, reject all inbound recovery delivery from M02.
+
+**Decision A:** Closure blocks **local-direction completion only**; valid inbound delivery (opposite direction) may still ACK.
+
+Closure is **completion state**, not **peer-level quarantine**. Aligns with delivery key `(session, from, to, obligationGeneration, offerLineageId)`.
+
+**INV-PR52c-003:** Recovery obligation closure is **directional**. Local closed state for `(local → remote)` MUST NOT, by itself, invalidate valid inbound delivery `(remote → local)`. Inbound ACK MUST be evaluated on inbound delivery lineage identity.
+
+**Implementation gap (observation):** **CLOSED** (2026-07-31). `evaluateInboundReattachLineage` directional acceptance implemented; soak `153100` PASS. Prior gap: `obligationClosedAtMs` peer-wide + `senderObligationGeneration < record.obligationGeneration` without pending match.
+
+##### Q1-6 layer-2 — Close **reason** vs inbound invalidation — **CLOSED: C2** (2026-07-31)
+
+Two dimensions — **not** unified because both are “close”:
+
+```text
+RECOVERED              → local-direction success; ≠ inbound delivery invalid
+OBLIGATION_DEADLINE    → local obligation expired; late inbound facts rejected
+MEMBERSHIP_LEFT /
+CONFERENCE_TERMINATED  → session/membership lifecycle; inbound validity via separate rules
+```
+
+**Decision C2:**
+
+| Close reason | Inbound delivery effect |
+|--------------|-------------------------|
+| `RECOVERED` | **Does not** quarantine valid opposite-direction inbound delivery |
+| `OBLIGATION_DEADLINE` | **Rejects** late inbound delivery (extends existing late-fact semantics) |
+| `MEMBERSHIP_LEFT` / `CONFERENCE_TERMINATED` | **Not** auto delivery reject; session/membership validity rules apply |
+
+**Why not B2:** coupling completion close reason to delivery quarantine ignores frozen delivery key `(session, from, to, obligationGeneration, offerLineageId)`. Ask: *is this inbound obligation still in a valid session/membership context?* — not *was peer edge record ever CLOSED?*
+
+**INV-PR52c-004:** Close reason does not by itself determine inbound delivery validity, except `OBLIGATION_DEADLINE` invalidates **late** inbound delivery facts. `RECOVERED` MUST NOT quarantine a valid opposite-direction delivery obligation. `MEMBERSHIP_LEFT` and `CONFERENCE_TERMINATED` remain subject to independent session/membership validity rules.
+
+##### Q1-7 — `RECOVERED` prerequisites & ACK temporal boundary — **CLOSED / FROZEN** (2026-07-31)
+
+```text
+Q1-7.1  T-A   CLOSED
+Q1-7.2  R-C   CLOSED
+Q1-7.3a S-A   CLOSED
+Q1-7.3b G-C   CLOSED
+
+PR5-2c-Q1-7 = FROZEN / IMPLEMENTATION-READY
+```
+
+**Q1-7.1 ACK after opposite-direction RECOVERED — CLOSED: T-A** (2026-07-31)
+
+Local `RECOVERED` fully decoupled from inbound delivery validity. Valid inbound `DELIVERY_PENDING` → ACK **MUST** be accepted regardless of local close time on opposite direction.
+
+```text
+T1: local→remote RECOVERED  (closes local-direction completion only)
+T2: remote→local legal DELIVERY_PENDING
+T3: ACK MUST be accepted
+```
+
+Not T-C (`offerSentAt < localRecoveredAt`) — would reintroduce cross-direction temporal coupling.
+
+**INV-PR52c-005** (see §E.13 invariant block).
+
+##### Q1-7.2 `RECOVERED` vs `deliveryConfirmed` — **CLOSED: R-C** (2026-07-31)
+
+Distinguish **delivery obligation exists** vs **delivery fact confirmed**:
+
+```text
+deliveryRequired = false
+    → no outbound delivery obligation on this directional episode
+    → RECOVERED MAY hold with deliveryConfirmed=false
+
+deliveryRequired = true
+    → delivery is required completion fact
+    → deliveryConfirmed=false ⇒ NOT RECOVERED
+```
+
+Field (`dual-canonical`, M03→M02 @ ICE_RESTORED): `deliveryRequired=false`, `candidate=RECOVERED`, `OBLIGATION_CLOSED(RECOVERED)`, `deliveryConfirmed=false` — **legal**. Do not read `deliveryConfirmed=false` as “RECOVERED illegal” without checking `deliveryRequired`.
+
+**INV-PR52c-006** (see §E.13 invariant block). Q6-4 preserved: `ALREADY_SATISFIED` ≠ `deliveryConfirmed` ≠ `RECOVERED`.
+
+**Race root cause (reconfirmed):** not `deliveryConfirmed=false → RECOVERED`, but `obligationClosedAtMs` applied as peer-wide closure → inbound `ACK_SKIPPED`. Fix = **directional delivery acceptance**, not CompletionPolicy rewrite.
+
+##### Q1-7.3 ACK after attempt supersede / obligation generation bump
+
+**Q1-7.3a Attempt supersede — CLOSED: S-A** (2026-07-31)
+
+```text
+attempt supersede ≠ delivery cancellation ≠ delivery identity invalidation
+```
+
+Inbound ACK MUST accept when `(from, to, obligationGeneration, offerLineageId, deliveryAttemptId)` matches pending delivery — **even if** `ack.recoveryAttemptId != currentRecoveryAttemptId`.
+
+**INV-PR52c-007.** Keeps boundaries: attempt lifecycle (supersede) · delivery lifecycle (pending→confirmed) · episode lifecycle (waiting→recovered) — **IDs must not cross-terminate**.
+
+**Q1-7.3b Obligation generation bump — CLOSED: G-C** (2026-07-31)
+
+Stricter than supersede: generation bump changes obligation episode identity. Bump invalidates **same-direction** orphan / new delivery for the old generation; it does **not** auto-cancel opposite-direction pending delivery obligations.
+
+```text
+generation bump
+    ↓
+invalidates same-direction old-episode new/isolated delivery
+    ↓
+opposite-direction inbound delivery
+    ↓
+matches valid pending (from, to, obligationGeneration, offerLineageId, deliveryAttemptId)
+    → ACCEPT → ACK → DELIVERY_CONFIRMED
+else
+    → STALE / INVALID
+```
+
+`receiver.currentObligationGeneration` MUST NOT alone determine inbound ACK staleness. Old generation without matching pending delivery MUST NOT be permanently legalized by G-C.
+
+**INV-PR52c-008** (see §E.13 invariant block). Consistent with INV-PR52c-001, 002, 003, 005, 007.
+
+**Implementation gap (observation):** **CLOSED** (2026-07-31). See E.13.4 inbound lineage gate note above.
+
+#### E.13.5 Separate observation — M03→M01 mesh (do not merge with E.13.3)
+
+Same soak, **independent** completion path:
+
+```text
+M03 → M01: DELIVERY_CONFIRMED + ALREADY_SATISFIED
+        ↓
+candidate=CONTINUE_RECOVERY (ATTEMPT_TERMINAL_OPEN_OBLIGATION)
+        ↓
+ICE_RESTARTING → FAILED_MEDIA:attempt_timeout → attempt supersede
+```
+
+Track separately from cross-edge ordering race; different completion predicates / attempt terminal rules.
+
+---
+
+### E.14 PR5-2c-C — Deferred Intent Convergence (**CLOSED** 2026-08-01)
+
+**Status:** **PR5-2c-C CLOSED / IMPLEMENTATION VERIFIED** — deterministic validation #3 §E.14.19. Field soak #1/#2/#3 **NOT EXERCISED**; soak #4 **BLOCKED BY TESTABILITY** §E.14.13 (not implementation blocker). **PR5-2c-A CLOSED**.
+
+**Scope (this knife):**
+
+```text
+RECOVERY_DELIVERY_PENDING
+        ↓
+ICE / control / membership restored
+        ↓
+DEFERRED_INTENT_CREATED
+        ↓
+OFFER_AWAITING_ANSWER
+        ↓
+never uncovered → DEFERRED_INTENT_UNCOVERED → SYNCING
+```
+
+**Frozen field evidence (pre-PR5-2c-C):**
+
+```text
+attemptId=2  intentId=R1  gateBlock=OFFER_AWAITING_ANSWER
+iceConnected=true  controlReconciled=true
+membershipEpochConverged=true  topologySatisfied=true
+deliveryConfirmed=false
+→ DEFERRED_INTENT_UNCOVERED  obligationOpen=true  finalPresence=SYNCING
+```
+
+Ref: `logs/signal-path-20260729-185201`, `logs/signal-path-20260729-191529` (D1_NO_REMOTE_RECEIVE — offer never at peer ingress; `HAVE_LOCAL_OFFER` stuck).
+
+**Out of scope (do not patch in this knife):**
+
+```text
+CompletionPolicy ❌   Q7 Resolver ❌   Delivery lineage ❌ (PR5-2c-A CLOSED)
+Attempt Owner ❌ (unless intent ownership proof requires)   UVCP ❌
+timeout-as-primary convergence ❌   ALREADY_SATISFIED shortcut ❌
+deliveryConfirmed shortcut ❌
+```
+
+**Discipline:** same as Q7 / Q1 — **authority / ownership / fact semantics first**, then patch. Do not fix `OFFER_AWAITING_ANSWER` by shortening timeout or blind ACK — that masks negotiation deadlock.
+
+**Upstream frozen (do not reopen):** Appendix D Negotiation Deferred Drain (Q1–Q5 / INV-NEG-018..022); Q10–Q13 completion domain match (INV-REC-026..029); PR5-2c-A delivery plane.
+
+#### E.14.1 Status board
+
+```text
+PR5-2c-A                         CLOSED / SOAK PASS ✅
+
+PR5-2c-C
+  Design                           FROZEN ✅
+  Implementation                   VERIFIED ✅
+  Deterministic PASS               ✅ §E.14.19
+
+Field soak:
+  #1                               NOT EXERCISED
+  #2                               NOT EXERCISED
+  #3                               NOT EXERCISED
+
+soak #4                          BLOCKED BY TESTABILITY ⚠️
+                                   (not an implementation blocker)
+
+deterministic validation #1      NEAR-PASS §E.14.15
+deterministic validation #2      NEAR-PASS §E.14.17
+deterministic validation #3      PASS §E.14.19 (Gate A/B/C ✅)
+§E.14.18 fence lifecycle fix     LANDED — UT 6 PASS
+
+Next:
+  PR5-2c-D / D1 Signal Path Grill §E.15 (not PR5-3)
+  (optional field observation — not soak PASS)
+
+Do NOT run soak #4 as WiFi flap
+
+Q7 adapter                       SOAK PASS ✅
+Q6                               CLOSED
+CompletionPolicy                 UNCHANGED ✅
+
+Deliverable: LogDir + PR52C_C_DEFERRED_INTENT_REPORT.txt
+Scripts: soak-pr52c-c.ps1 / analyze-pr52c-c-deferred-intent.ps1
+```
+
+#### E.14.10 Field gate — frozen acceptance (2026-07-31)
+
+**First judge:** intent lifecycle + drain ownership + retry fencing — **not** UI / SYNCING pill.
+
+**Gate A:**
+
+```text
+CREATED
+  → DEFERRED_INTENT_HELD(dispatch_not_ready)
+  → DEFERRED_INTENT_DRAIN_RETRY
+  → REPROBE(pass: negotiationExecutable=true dispatchReady=true)
+  → EXECUTED | DISPATCHED
+```
+
+**Gate B:**
+
+```text
+DRAIN_RETRY = dispatch seam wakeup
+NOT synthesizing NEGOTIATION_CAN_EXECUTE
+retry fence: intentId + attemptId + obligationGen + admissionSeq
+DRAIN_ATTEMPT trigger=DISPATCH_READINESS_RETRY
+```
+
+**Gate C:** `DEFERRED_INTENT_REPROBE_RESULT` present when `DRAIN_RETRY` exercised.
+
+**Classifications (not all are C failures):**
+
+| Verdict | Meaning |
+|---------|---------|
+| `PASS_HELD_DISPATCH_CHAIN` | Gate A+B+C |
+| `H_PROD_NEGOTIATION_HOLD` | `WAIT_NEGOTIATION_CAPABILITY` / `OFFER_AWAITING_ANSWER` — negotiation not ready |
+| `D1_TRANSPORT_SIGNAL_PATH` | Local accept without peer ingress — not C target |
+| `PARTIAL_HELD_NO_RETRY` | HELD(dispatch) without `DRAIN_RETRY` |
+
+`NEGOTIATION_CAN_EXECUTE` on PASS soak should appear only on first negotiation capability rising edge (before successful `DRAIN_RETRY` execute path).
+
+**Allowed wakeup sequence:**
+
+```text
+NEGOTIATION_CAN_EXECUTE → HELD(dispatch) → DISPATCH_READINESS_RETRY
+```
+
+**Forbidden:**
+
+```text
+dispatchReady → fake NEGOTIATION_CAN_EXECUTE → drain
+```
+
+**SOAK PASS entry:** Gate A + Gate B + Gate C all **PASS** → `PR5-2c-C SOAK PASS`. Classification `PASS_HELD_DISPATCH_CHAIN`.
+
+**On FAIL — localize only to:** (1) intent lifecycle, (2) negotiation wakeup, (3) dispatch readiness seam, (4) retry fence. Do **not** expand into CompletionPolicy, delivery lineage, PR5-2c-A, or Q7 adapter.
+
+**Out of scope for C verdict:** `SYNCING` / UI pill (observation only).
+
+**Deliverable:** `LogDir` + `PR52C_C_DEFERRED_INTENT_REPORT.txt` — analyzed by `scripts/analyze-pr52c-c-deferred-intent.ps1`.
+
+#### E.14.11 Field soak evidence — NOT EXERCISED (not implementation failure)
+
+**Discipline:** soak runs that do not enter the PR5-2c-C state space are **field exercise evidence** only — **not** Gate verdict against implementation. Gate A **FAIL** here means **target lifecycle absent**, not `drainPendingIceRestart()` defect.
+
+##### E.14.11.1 Field soak #1 (2026-07-31)
+
+**LogDir:** `logs/pr52c-c-20260731-193228`  
+**Session:** `da0f8aaf-6e90-4704-a5be-51141ba9cd5b`  
+**Trigger:** M03 WiFi flap; M02 host Conference CH-01
+
+```text
+Result:           NOT EXERCISED
+Implementation:   NOT FAILED
+Classification:     NO_DEFERRED_INTENT
+Gate: A FAIL (target absent) | B/C PASS (vacuous)
+```
+
+**Actual path:** `RECOVERY_MEDIA_ACTION_DEFERRED` (`MEDIA_NOT_READY`, `ADMISSION_CONFIDENCE:WAITING_STALE`) → `PEER_REACHABILITY_RESTORED` → `RECOVERY_ICE_RESTART_DISPATCHED` `intentId=NONE`.
+
+**Not entered:** negotiation-domain `DEFERRED_INTENT_CREATED` → `NEGOTIATION_CAN_EXECUTE` → `HELD(dispatch_not_ready)` → `DRAIN_RETRY`.
+
+**Boundary — do NOT conflate:**
+
+| Soak #1 | PR5-2c-C |
+|---------|----------|
+| `RECOVERY_MEDIA_ACTION_DEFERRED` / `MEDIA_NOT_READY` | negotiation `DEFERRED_INTENT_*` lifecycle |
+| `intentId=NONE` | must have `intentId=R*` |
+| admission / media readiness gating | negotiation lineage + drain ownership |
+| recovery action admission | deferred ICE restart intent (Appendix D) |
+
+**UI (observation only):** M01→M03 SYNCING; M03→M01 SYNCING; M03→M02 RECONNECTING — `obligationOpen=true` + edge recovering (G-PRES-E).
+
+##### E.14.11.2 Field soak #2 (2026-07-31)
+
+**LogDir:** `logs/pr52c-c-20260731-194504`  
+**Session:** `8f22dda3-3e04-4d6b-9f67-ee8abc7c33aa`  
+**Trigger:** M03 WiFi flap (shorter window vs #1); M02 host Conference CH-01
+
+```text
+PR5-2c-C Field Soak #2
+
+Log:    pr52c-c-20260731-194504
+
+Result:           NOT EXERCISED
+Implementation:   NOT FAILED
+Classification:     NO_DEFERRED_INTENT
+
+Gate:
+  A  FAIL (target lifecycle absent)
+  B  PASS (vacuous)
+  C  PASS (vacuous)
+```
+
+PR5-2c-C field soak #2 did **not** exercise `HELD(dispatch_not_ready)` lifecycle.
+
+**Observed (authority M02→M03):**
+
+- authority path used admission/media defer — **not** negotiation deferred intent
+- `DEFERRED_INTENT_CREATED` **absent** on M02 authority edge (analyzer scope)
+- ICE restart dispatched directly with `intentId=NONE`
+
+**Therefore:**
+
+- no evidence against C implementation
+- no Gate A execution evidence obtained
+- **not** PASS; **not** implementation FAIL
+
+**New evidence vs soak #1 — topology / role split:**
+
+```text
+M01→M03:
+    DEFERRED_INTENT_CREATED
+    intentId=R2
+    gateBlock=OFFER_AWAITING_ANSWER
+
+M02 authority→M03:
+    RECOVERY_MEDIA_ACTION_DEFERRED
+    intentId=NONE
+```
+
+Deferred intent exists on **M01→M03**, not on **M02 authority→M03**. This is **not** evidence that `drainPendingIceRestart()` failed to consume HELD intent — the **target edge / role** did not enter PR5-2c-C lifecycle.
+
+**M02 `NEGOTIATION_CAN_EXECUTE`:** 2× at session stable — `intentId=NONE` (not tied to open deferred intent).
+
+##### E.14.11.3 Field soak #3 (2026-07-31)
+
+**LogDir:** `logs/pr52c-c-20260731-195305`  
+**Session:** `43c214d2-33d4-4637-980a-13721e036e02`  
+**Trigger:** M03 short WiFi flap rounds; M02 host Conference CH-01 (authority-edge targeting per §E.14.12 pre-soak #3)
+
+```text
+PR5-2c-C Field Soak #3
+
+Log:    pr52c-c-20260731-195305
+
+Result:           NOT EXERCISED
+Implementation:   NOT FAILED
+Classification:     NO_DEFERRED_INTENT
+
+Gate:
+  A  FAIL (target lifecycle absent)
+  B  PASS (vacuous)
+  C  PASS (vacuous)
+```
+
+**M02 authority→M03:** `RECOVERY_MEDIA_ACTION_DEFERRED` (`MEDIA_NOT_READY`) → `PEER_REACHABILITY_RESTORED` → `RECOVERY_ICE_RESTART_DISPATCHED` `intentId=NONE` (attempt=3). No `DEFERRED_INTENT_CREATED` / `HELD(dispatch)` on authority edge.
+
+**M01→M03:** `DEFERRED_INTENT_CREATED` `intentId=R3` `gateBlock=OFFER_AWAITING_ANSWER` — participant path only (mis-path §E.14.10 / soak #2 pattern).
+
+**M02 four-token order:** `NEGOTIATION_CAN_EXECUTE` (stable, `intentId=NONE`) → `MEDIA_NOT_READY` → `DISPATCHED intentId=NONE` — no CREATED, no HELD.
+
+##### E.14.11.4 Repeated topology asymmetry — soak #1/#2/#3 (2026-07-31)
+
+Field soak #3 confirmed **repeated topology asymmetry** — not a missed one-off event.
+
+**Default recovery topology under M03 WiFi flap:** authority edge prefers **admission/media domain**, not negotiation intent domain.
+
+**Consistent across soak #1/#2/#3 — M02 authority→M03:**
+
+```text
+MEDIA / ADMISSION path
+    ↓
+RECOVERY_MEDIA_ACTION_DEFERRED
+    ↓
+PEER_REACHABILITY_RESTORED
+    ↓
+RECOVERY_ICE_RESTART_DISPATCHED
+    intentId=NONE
+```
+
+**Participant edge (e.g. M01→M03) in same sessions:**
+
+```text
+NEGOTIATION intent path
+    ↓
+DEFERRED_INTENT_CREATED
+    ↓
+gateBlock=OFFER_AWAITING_ANSWER
+```
+
+**Role selection (field evidence, not design verdict):**
+
+```text
+participant owns deferred negotiation
+authority owns immediate recovery dispatch
+```
+
+**Therefore:**
+
+- absence of `HELD(dispatch_not_ready)` on authority edge is due to **exercise topology**, not implementation evidence
+- **not** PASS; **not** implementation FAIL
+- PR5-2c-C field validation has shifted from **verify implementation** to **construct correct state-machine entry** on authority edge
+
+**PR5-2c-C remaining unknown (post soak #3):**
+
+```text
+NOT unknown:
+    ❌ intent lineage cut / HELD retry fence / fake NEG wakeup / dispatch retry impl
+
+Unknown:
+    ⚪ how to exercise authority-owned negotiation deferred intent
+       + dispatch gap in field (exerciseability)
+```
+
+#### E.14.12 Field soak #4 — test entry spec (BLOCKED BY TESTABILITY — see §E.14.13)
+
+**Do not claim soak #4 executed** via phone-only WiFi flap / membership leave. Soak #1/#2/#3 proved flap → admission/media → `intentId=NONE`; another flap yields **NOT EXERCISED ×N** only, not PR5-2c-C evidence.
+
+PR5-2c-C has moved from **code verification** to **test entry construction**. Target chain unchanged:
+
+```text
+DEFERRED_INTENT_CREATED
+    gateBlock=OFFER_AWAITING_ANSWER
+        ↓
+NEGOTIATION_CAN_EXECUTE
+        ↓
+dispatchReady=false
+        ↓
+DEFERRED_INTENT_HELD(dispatch_not_ready)
+```
+
+##### E.14.12.1 Invariants — do not trigger
+
+```text
+M02 = authority (host)
+M03 = target participant
+CH-01 = active conference
+```
+
+**Do not trigger:**
+
+```text
+WiFi flap
+membership leave
+conference restart
+```
+
+These prefer **Admission / Media Recovery** and bypass negotiation deferred intent.
+
+##### E.14.12.2 Phase 0 — steady baseline
+
+```text
+M02 host + M01 participant + M03 participant
+membership aligned | media connected | control stable
+no pending recovery intent (log confirm)
+```
+
+##### E.14.12.3 Phase 1 — M02→M03 negotiation pending (intent owner = authority)
+
+**Goal:** M02 becomes **intent owner** — not recovery-driven media path.
+
+**Must observe on M02→M03:**
+
+```text
+DEFERRED_INTENT_CREATED
+remote=M03
+intentId=Rx
+gateBlock=OFFER_AWAITING_ANSWER
+```
+
+**Key state:** `local offer exists` + `waiting remote answer` — not generic recovery.
+
+**Method A (best — debug hook):**
+
+```text
+M02: createIceRestartIntent(remote=M03)
+M03: hold / delay answer
+```
+
+Expect M02: `HAVE_LOCAL_OFFER` → `OFFER_AWAITING_ANSWER` → `DEFERRED_INTENT_CREATED`.
+
+**Method B (no hook):** ICE restart on M02→M03 edge — offer generated, signaling send ok, **answer path delayed**. **Do not break transport** (→ `MEDIA_NOT_READY`).
+
+##### E.14.12.4 Phase 2 — inject dispatch gap (core)
+
+After `NEGOTIATION_CAN_EXECUTE`, create window where `dispatchReady=false`:
+
+```text
+drainPendingIceRestart()
+    probe.executable=true
+    dispatchReady=false
+    → DEFERRED_INTENT_HELD reason=dispatch_not_ready
+```
+
+**Dispatch gap injection priority:**
+
+1. **First:** admission debug — `canDispatchRecoverySignal=false` while `negotiationExecutable=true` (cleanest).
+2. **Second:** `signaling reachable=false` without destroying offer state (avoid re-entering `OFFER_AWAITING_ANSWER` instead of dispatch hold).
+
+##### E.14.12.5 Soak #4 pass rules
+
+**Entry (before Gate A scores):** must have simultaneously:
+
+```text
+DEFERRED_INTENT_CREATED > 0
+remote=M03
+gateBlock=OFFER_AWAITING_ANSWER
+```
+
+Otherwise: `NO_DEFERRED_INTENT` — continue staging.
+
+**Core marker:** `DEFERRED_INTENT_HELD reason=dispatch_not_ready` on M02→M03 — then Gate A/B/C per §E.14.10.
+
+**Gate B after HELD:** `DEFERRED_INTENT_DRAIN_RETRY` `trigger=DISPATCH_READINESS_RETRY` — **not** `NEGOTIATION_CAN_EXECUTE` re-consumption.
+
+**Gate C after HELD:** `DRAIN_RETRY` → `DEFERRED_INTENT_REPROBE_RESULT` + fence match.
+
+**Analyzer:** `analyze-pr52c-c-deferred-intent.ps1` emits `AuthorityIntentOwnership` block (M02→M03 vs participant contrast) to avoid re-analyzing “participant has intent, authority does not.”
+
+##### E.14.12.6 Quick log triage
+
+M02→M03 grep **order:**
+
+```text
+DEFERRED_INTENT_CREATED → NEGOTIATION_CAN_EXECUTE → DEFERRED_INTENT_HELD → RECOVERY_ICE_RESTART_DISPATCHED
+```
+
+**Deliverable:** `LogDir` + `PR52C_C_DEFERRED_INTENT_REPORT.txt` via `soak-pr52c-c.ps1` / `analyze-pr52c-c-deferred-intent.ps1`.
+
+**Verification path (do not skip stages):**
+
+```text
+DESIGN FROZEN
+        ↓
+IMPLEMENTATION READY
+        ↓
+AUTHORITY-OWNED ENTRY EXERCISE  ← soak #4
+        ↓
+HELD(dispatch) lifecycle proof
+```
+
+Do **not** seek entry from random recovery events. **Do not expand implementation scope** for soak #4.
+
+##### E.14.12.7 Soak #4 execution checklist (frozen)
+
+**Pre-check:**
+
+```text
+M02 = authority | M03 = remote target | CH-01 = active
+DEFERRED_INTENT_CREATED(remote=M03) == 0  (no stale intent)
+```
+
+**Phase 1 accept (M02→M03 only):**
+
+```text
+DEFERRED_INTENT_CREATED
+    intentId=R*
+    gateBlock=OFFER_AWAITING_ANSWER
+    attemptId + obligationGen + admissionSeq present
+```
+
+**Phase 1 reject:** `RECOVERY_MEDIA_ACTION_DEFERRED` + `intentId=NONE` (admission path — not C entry).
+
+**Phase 2:** after `NEGOTIATION_CAN_EXECUTE` — `probe.executable=true`, keep `dispatchReady=false` → `DEFERRED_INTENT_HELD reason=dispatch_not_ready`.
+
+**Success evidence chain:**
+
+```text
+CREATED (OFFER_AWAITING_ANSWER)
+  → NEGOTIATION_CAN_EXECUTE (probe=true, dispatch=false)
+  → HELD(dispatch_not_ready)
+  → DRAIN_RETRY (trigger=DISPATCH_READINESS_RETRY)
+  → REPROBE_RESULT
+  → EXECUTED
+```
+
+**PASS:** `AuthorityIntentOwnership` M02→M03 `created=YES` + `gateBlock=OFFER_AWAITING_ANSWER` **AND** Gate A `HELD(dispatch_not_ready)` — then Gate B/C.
+
+**Still NOT EXERCISED:** `topology_split=YES` (M01 has CREATED, M02 `intentId=NONE`) → `soak4_entry=FAIL` — no implementation verdict.
+
+**Focus:** M02→M03 ownership entry only — do not be misled by M01 participant intent.
+
+##### E.14.12.8 Soak #4 execution timeline (durations frozen)
+
+**LogDir (current run):** `logs/pr52c-c-20260731-200832` — clear via `soak-pr52c-c.ps1 -ClearOnly` before each attempt.
+
+**Clock:** all durations below are **wall-clock holds**, not “wait until UI shows X”.
+
+| Phase | Start | Action | Hold / duration | Stop when | M02→M03 log checkpoint |
+|-------|-------|--------|-----------------|-----------|------------------------|
+| **0. Baseline** | T0 | M02 host CH-01; M01+M03 join | **60s** stable | all three media/control stable | no `DEFERRED_INTENT_CREATED remote=M03` |
+| **0b. Pre-check** | T0+60s | read M02 logcat snippet only | **0s** (snapshot) | — | `CREATED remote=M03` count = 0 |
+| **1a. Intent (hook)** | T0+60s | M02: `createIceRestartIntent(M03)` | immediate | offer logged | `HAVE_LOCAL_OFFER` or `gateBlock=OFFER_AWAITING_ANSWER` within **10s** |
+| **1a. Hold answer** | after offer | M03: hold/delay answer | **15–30s** | M02 shows `DEFERRED_INTENT_CREATED` | `intentId=R*` + `gateBlock=OFFER_AWAITING_ANSWER` within **30s** of offer |
+| **1b. Intent (no hook)** | T0+60s | trigger M02→M03 ICE restart with **signaling ok, answer delayed** | see note | **reject** if `RECOVERY_MEDIA_ACTION_DEFERRED` appears | same CREATED line as 1a |
+| **1b. Answer delay** | after M02 offer send | keep M03 able to **receive** but **do not complete answer** | **15–30s** | CREATED on M02 (not only M01) | if only M01 CREATED → stop attempt (topology_split) |
+| **2. Negotiation rise** | after CREATED | allow answer / capability to complete on M03 | **5–15s** | `NEGOTIATION_CAN_EXECUTE` on M02 with `intentId=R*` (not NONE) | within **15s** of answer release |
+| **2b. Dispatch gap** | within **3s** of NEG | inject `dispatchReady=false` (admission debug preferred) | **10–20s** | `DEFERRED_INTENT_HELD reason=dispatch_not_ready` | within **20s** of NEG; if `DISPATCHED intentId=NONE` first → gap missed |
+| **3. Drain chain** | after HELD | release dispatch gate; do not kill apps | **30–60s** | `DRAIN_RETRY` → `REPROBE_RESULT` → `EXECUTED` | observe through **60s** |
+| **End** | — | collect logs | — | — | run analyzer |
+
+**Method 1b note (no debug hook — current field APK):** **do not use M03 WiFi OFF** (proven → `MEDIA_NOT_READY` in soak #1–#3). Requires engineering injection or signaling-only delay tooling. If unavailable, run Phase 0 + pre-check only; record `exerciseability blocked — no authority intent hook`.
+
+**Per-attempt spacing:** if attempt fails (media defer or topology_split), wait **≥90s** stable before next attempt; max **2 attempts** per log session.
+
+**Do not:** WiFi flap ≥3s, membership leave, conference restart, kill app mid-CREATED.
+
+**Collect:**
+
+```powershell
+.\scripts\soak-pr52c-c.ps1 -CollectOnly -LogDir logs\pr52c-c-20260731-200832
+.\scripts\analyze-pr52c-c-deferred-intent.ps1 -LogDir logs\pr52c-c-20260731-200832
+```
+
+**First read:** `AuthorityIntentOwnership` → `soak4_entry` / `topology_split`.
+
+#### E.14.13 Testability boundary — **CLOSED** (2026-07-31)
+
+**Ruling:** PR5-2c-C **cannot be field-exercised** by uncontrolled network flap alone.
+
+**Proven path (soak #1/#2/#3 — do not repeat as soak #4):**
+
+```text
+WiFi flap
+    ↓
+recovery / admission / media domain
+    ↓
+RECOVERY_MEDIA_ACTION_DEFERRED / intentId=NONE dispatch
+```
+
+**Bypasses PR5-2c-C state space:**
+
+```text
+NEGOTIATION deferred intent
+    ↓
+dispatch gap
+    ↓
+HELD(dispatch_not_ready)
+```
+
+**Required for field exercise (not available on phone-only field APK):**
+
+```text
+authority-owned negotiation intent injection
+    OR
+deterministic signaling delay (hold answer on M03)
+    PLUS
+dispatch readiness injection (dispatchReady=false while negotiationExecutable=true)
+```
+
+**soak #4 status:** **BLOCKED BY TESTABILITY** — **not** implementation blocker.
+
+**Field soak role after #1/#2/#3:** supplementary topology evidence only; **cannot** close Gate A/B/C without §E.14.14 instrumentation.
+
+**Verification path to SOAK PASS:**
+
+```text
+IMPLEMENTATION READY
+    ↓
+UT + integration tests (existing)
+    ↓
+debug injection soak (§E.14.14)
+    ↓
+IMPLEMENTATION VERIFIED / SOAK PASS
+```
+
+#### E.14.14 Debug injection — authorized slice (**LANDED** 2026-07-31)
+
+**Scope:** debug build instrumentation only — **no production semantics change**.
+
+**Allowed:** debug intent creation; `canDispatchRecoverySignal` override; dispatch seam trigger via `retryHeldDeferredIntentDrain`.
+
+**Forbidden:** CompletionPolicy; Negotiation Gate truth mutation; Attempt Owner; delivery lineage.
+
+**Code:** `Pr52cDebugInjection.kt`; `ConferenceEdgeRecoveryController.debugCreateDeferredNegotiationIntent` / `debugReleaseDispatchReadiness`; `TalkbackCoordinator.debugPr52c*`; UT `Pr52cDebugInjectionValidationTest` + `Pr52cDeferredIntentHoldTest` (**6 PASS** 2026-07-31).
+
+**Log hygiene:** dispatch-readiness retry terminal reason = `DRAIN_AFTER_DISPATCH_READINESS_RETRY` (not `DRAIN_AFTER_NEGOTIATION_CAN_EXECUTE`) — keeps Gate B field grep clean.
+
+**Field trigger (debug APK, M02 host in CH-01):**
+
+```text
+adb shell am broadcast -a com.talkback.appprod.debug.PR52C_CREATE --es remote M03
+adb shell am broadcast -a com.talkback.appprod.debug.PR52C_BLOCK_DISPATCH --es remote M03
+adb shell am broadcast -a com.talkback.appprod.debug.PR52C_NEG_EXECUTE --es remote M03
+adb shell am broadcast -a com.talkback.appprod.debug.PR52C_RELEASE_DISPATCH --es remote M03
+```
+
+**Naming:** instrumented run = **PR5-2c-C deterministic validation run #1** (not soak #4 / not WiFi flap).
+
+**Expected chain:** `DEBUG_CREATE_DEFERRED_INTENT` → `DEFERRED_INTENT_CREATED` → `NEGOTIATION_CAN_EXECUTE` → `HELD(dispatch)` → `DRAIN_RETRY` → `REPROBE_RESULT` → `EXECUTED`.
+
+**Field soak #1/#2/#3:** remain `NOT EXERCISED (expected)`; Gate closure via deterministic validation + existing UT.
+
+**Deterministic validation run #1 (2026-07-31 20:42 UTC+8):**
+
+```text
+LogDir=logs/pr52c-c-deterministic-20260731-202600
+M02: INSTALL_FAILED_USER_RESTRICTED (old APK; broadcasts delivered, no DEBUG_* / DEFERRED_*)
+M01/M03: APK updated
+Classification: NO_DEFERRED_INTENT (no CH-01 host obligation on M02 at trigger time)
+```
+
+**Rerun checklist:** M02 USB install approved → `adb install -r talkback-app-debug.apk` → M02 host CH-01 60s steady → four adb broadcasts → collect → analyze.
+
+#### E.14.15 Deterministic validation #1 — **NEAR-PASS** (2026-07-31)
+
+**Log:** `logs/pr52c-c-deterministic-20260731-210418`
+
+**Result:** NEAR-PASS — not implementation failure; test isolation insufficient for EXECUTED closure.
+
+**Verified:**
+
+```text
+DEBUG_CREATE_DEFERRED_INTENT
+DEFERRED_INTENT_CREATED (gateBlock=OFFER_AWAITING_ANSWER)
+NEGOTIATION_CAN_EXECUTE
+DEFERRED_INTENT_HELD (hold=DISPATCH / dispatch_not_ready)
+DEFERRED_INTENT_DRAIN_RETRY (trigger=DISPATCH_READINESS_RETRY)
+DEFERRED_INTENT_REPROBE_RESULT (mandatory reprobe)
+Gate B PASS (no fake NEGOTIATION_CAN_EXECUTE on DRAIN_RETRY)
+Gate C PASS
+```
+
+**Not verified:**
+
+```text
+DEFERRED_INTENT_EXECUTED after debug dispatch readiness release
+reprobe dispatchReady=true at closure (debug block held dispatch through reprobe window)
+```
+
+**Reason:** production recovery seams raced with debug release before `DEBUG_RELEASE_DISPATCH`:
+
+```text
+PEER_REACHABILITY_RESTORED
+MEDIA_NOT_READY deferral
+production dispatch wakeup → RECOVERY_ICE_RESTART_DISPATCHED (intentId=R1)
+```
+
+without `DEFERRED_INTENT_EXECUTED` terminal log.
+
+**Accurate status:**
+
+```text
+HELD(dispatch) creation          VERIFIED ✅
+dispatch-readiness retry         VERIFIED ✅
+retry fencing                    VERIFIED ✅
+reprobe requirement              VERIFIED ✅
+terminal EXECUTED closure        NOT VERIFIED ⚠️
+```
+
+**Infrastructure fixes landed during #1:**
+
+- debug receiver `RECEIVER_EXPORTED` (adb broadcast permission)
+- `runOnCoordinatorSync` sets `onCoordinatorThread` (nested drain deadlock)
+
+**Do not:** mark PR5-2c-C PASS; do not relax Gate A; do not force `dispatchReady=true`.
+
+#### E.14.16 Validation fence — intent-scoped production drain suppression (**LANDED** 2026-07-31)
+
+**Problem:** deterministic validation must not disable production seams globally; only fence **drain retry** for the armed debug `intentId`.
+
+**Mechanism:** `Pr52cDebugInjection` validation fence armed on `debugCreateDeferredNegotiationIntent`:
+
+```text
+DEFERRED_INTENT_VALIDATION_FENCE_ARMED intentId=R*
+suppressProductionDrain=true
+```
+
+While armed, production wakeups log:
+
+```text
+DEFERRED_INTENT_VALIDATION_FENCE action=suppress_production_drain
+```
+
+and do **not** invoke `retryHeldDeferredIntentDrain` / `resolveMediaActionOwner` for that intent.
+
+**Only authorized closure seam:**
+
+```text
+DEBUG_RELEASE_DISPATCH  (not ROUTE_CONVERGED alias)
+        |
+        v
+retryHeldDeferredIntentDrain
+        |
+        v
+DEFERRED_INTENT_EXECUTED
+```
+
+**Preserves:** real transport, signaling, negotiation probe, dispatch-readiness truth (debug block still gates `canDispatchRecoveryMediaAction`).
+
+**Forbidden for validation:**
+
+- force `dispatchReady=true`
+- direct `debugDrainPendingIceRestart()` bypass
+- global disable of `PEER_REACHABILITY_RESTORED`
+
+**Next:** deterministic validation #2 — same four adb broadcasts; expect Gate A PASS with isolated `DEBUG_RELEASE_DISPATCH` closure.
+
+#### E.14.17 Deterministic validation #2 — **NEAR-PASS** (2026-07-31)
+
+**Log:** `logs/pr52c-c-deterministic-20260731-214922`
+
+**Result:** NEAR-PASS — fence suppress on production drain wakeup **VERIFIED**; `DEBUG_RELEASE_DISPATCH` did **not** produce `DRAIN_RETRY` → no `EXECUTED`.
+
+**Verified:**
+
+```text
+DEFERRED_INTENT_CREATED
+NEGOTIATION_CAN_EXECUTE
+DEFERRED_INTENT_HELD (hold=DISPATCH)
+DEBUG_RELEASE_DISPATCH
+DEFERRED_INTENT_VALIDATION_FENCE action=suppress_production_drain (PEER_REACHABILITY_RESTORED)
+```
+
+**Not verified:**
+
+```text
+DEFERRED_INTENT_DRAIN_RETRY (seam=DEBUG_RELEASE_DISPATCH)
+DEFERRED_INTENT_EXECUTED
+```
+
+**Root cause (not negotiation / dispatch truth failure):**
+
+```text
+PEER_REACHABILITY_RESTORED
+        ↓
+runCompletionEvaluationStub → resolveMediaActionOwner (outside wakeup fence)
+        ↓
+RECOVERY_MEDIA_ACTION_DEFERRED deferredReason=MEDIA_NOT_READY
+        ↓
+isNegotiationDeferredIceRestartSlot=false
+        ↓
+debugRelease → retryHeldDeferredIntentDrain silently returns (not_negotiation_deferred_slot)
+```
+
+Additionally: `clearValidationFence()` at end of `debugReleaseDispatchReadiness` allowed production `PEER_REACHABILITY_RESTORED` drain → `RECOVERY_ICE_RESTART_DISPATCHED` without `DEFERRED_INTENT_EXECUTED`.
+
+#### E.14.18 Fence lifecycle + media-resolve suppression fix (**LANDED** 2026-07-31)
+
+**Fix 1 — explicit DEBUG_RELEASE retry seam (no forced dispatchReady):**
+
+```text
+DEBUG_RELEASE_DISPATCH
+        ↓
+releaseDispatch (unblock canDispatchRecoveryMediaAction)
+        ↓
+DEBUG_RELEASE_DISPATCH_READINESS_OBSERVED dispatchReady=<truth>
+        ↓
+retryHeldDeferredIntentDrain(seam=DEBUG_RELEASE_DISPATCH)
+        ↓
+DEFERRED_INTENT_DRAIN_RETRY → REPROBE → EXECUTED
+```
+
+**Fix 2 — fence lifecycle deferred to terminal outcome:**
+
+```text
+clearValidationFence only on:
+  EXECUTED (after DEFERRED_INTENT_EXECUTED)
+  STALE_DISCARD / EXPIRED (expireDeferredIceRestartIntent)
+NOT on debugReleaseDispatchReadiness return
+HELD(dispatch) after retry → fence remains armed
+```
+
+**Fix 3 — extend fence to production media resolve:**
+
+```text
+resolveMediaActionOwner + recordMediaActionDeferred
+        ↓
+if fenced intentId + production seam
+        ↓
+suppress (log DEFERRED_INTENT_VALIDATION_FENCE action=suppress_production_media_*)
+```
+
+Preserves production `PEER_REACHABILITY_RESTORED` semantics globally; only intent-scoped validation fence suppresses side effects for armed `intentId`.
+
+**UT:** `Pr52cDeferredIntentHoldTest` (5) + `Pr52cDebugInjectionValidationTest` (1) — **6 PASS**.
+
+**Next:** deterministic validation #3 — expect full Gate A chain with `DRAIN_RETRY.seam=DEBUG_RELEASE_DISPATCH`.
+
+#### E.14.19 Deterministic validation #3 — **PASS** / **PR5-2c-C formal close** (2026-08-01)
+
+**Frozen status:**
+
+```text
+PR5-2c-C
+
+DESIGN                         FROZEN ✅
+IMPLEMENTATION                 VERIFIED ✅
+
+Verified by:
+  deterministic validation #3
+
+Log:
+  logs/pr52c-c-deterministic-20260801-061545
+
+Classification:
+  PASS_HELD_DISPATCH_CHAIN
+```
+
+**Discipline:** deterministic injection proves **state machine contract + ownership + retry fencing** — **not** field soak PASS. Natural WiFi flap does not guarantee entry into `HELD(dispatch)` state space (soak #4 BLOCKED BY TESTABILITY). Future field runs = **field observation** — not `soak PASS`.
+
+**Result:** Gate A/B/C **PASS** — `CLASSIFICATION: PASS_HELD_DISPATCH_CHAIN`
+
+**Verified chain (M02→M03 intentId=R1):**
+
+```text
+DEFERRED_INTENT_CREATED (gateBlock=OFFER_AWAITING_ANSWER)
+        ↓
+NEGOTIATION_CAN_EXECUTE
+        ↓
+DEFERRED_INTENT_HELD (hold=DISPATCH dispatch_not_ready)
+        ↓
+PEER_REACHABILITY_RESTORED → fence suppress (drain + media_resolve)
+        ↓
+DEBUG_RELEASE_DISPATCH
+        ↓
+DEBUG_RELEASE_DISPATCH_READINESS_OBSERVED dispatchReady=true
+        ↓
+DEFERRED_INTENT_DRAIN_RETRY seam=DEBUG_RELEASE_DISPATCH retryCount=1
+        ↓
+DEFERRED_INTENT_REPROBE_RESULT trigger=DISPATCH_READINESS_RETRY
+        negotiationExecutable=true dispatchReady=true
+        ↓
+RECOVERY_ICE_RESTART_DISPATCHED intentId=R1
+        ↓
+DEFERRED_INTENT_EXECUTED
+        ↓
+DEFERRED_INTENT_VALIDATION_FENCE_CLEARED reason=EXECUTED
+```
+
+**Gate B:** `DRAIN_RETRY.seam=DEBUG_RELEASE_DISPATCH` — not `NEGOTIATION_CAN_EXECUTE` / not `PEER_REACHABILITY_RESTORED`. fake NEG on DRAIN_RETRY: **0**.
+
+**Gate C:** mandatory reprobe with `negotiationExecutable=true dispatchReady=true` at closure.
+
+#### Acceptance — C-Q1 Ownership — **PASS** ✅
+
+```text
+Negotiation Gate
+    = truth + wakeup contract
+
+Obligation Episode
+    = intent persistence + drain lifecycle
+```
+
+No ownership migration.
+
+#### Acceptance — C-Q2 Drain admission — **PASS** ✅
+
+```text
+NEGOTIATION_CAN_EXECUTE
+        |
+        v
+probe executable
+        +
+dispatch readiness
+        |
+        v
+EXECUTE
+
+dispatchReady=false
+        |
+        v
+HELD(dispatch)
+```
+
+#### Acceptance — C-Q3 Retry fencing — **PASS** ✅
+
+```text
+HELD(dispatch)
+        |
+        v
+DEBUG_RELEASE_DISPATCH
+        |
+        v
+DRAIN_RETRY
+        |
+        v
+REPROBE
+
+DRAIN_RETRY.seam != NEGOTIATION_CAN_EXECUTE
+DRAIN_RETRY.seam != PEER_REACHABILITY_RESTORED
+DRAIN_RETRY.seam = DEBUG_RELEASE_DISPATCH
+```
+
+#### Regression — frozen items unchanged
+
+| Item | Status |
+|------|--------|
+| CompletionPolicy | unchanged ✅ |
+| Delivery lineage | unchanged ✅ |
+| Attempt Owner | unchanged ✅ |
+| Appendix D Q5 lineage cut | preserved ✅ |
+| Q1-7 delivery acceptance | no impact ✅ |
+| B3 recovery completion semantics | no impact ✅ |
+
+**Next:** PR5-2c-C **CLOSED** → PR5-2c-D / next blocker.
+
+#### E.14.2 C-Q1 — Deferred intent owner — **CLOSED: C′ split** (2026-07-31)
+
+**Decision:** **Do not reopen Appendix D Q1.** Freeze **C′ split ownership**:
+
+```text
+Deferred Intent Ownership
+
+Obligation Episode (ConferenceEdgeRecoveryController)
+    owns:
+        create
+        retain
+        expire
+        intentId lifecycle
+        drain execution ownership
+
+Negotiation Gate (Coordinator probe + capability seams)
+    owns:
+        negotiation truth
+        OFFER_AWAITING_ANSWER meaning
+        wakeup contract
+        NEGOTIATION_CAN_EXECUTE projection
+```
+
+**Normative chain:**
+
+```text
+Intent ownership      = Obligation Episode
+Execution permission  = Negotiation Gate (probe.executable at drain re-probe)
+```
+
+**Forbidden:**
+
+```text
+OFFER_AWAITING_ANSWER
+        ↓
+Negotiation Gate
+        ↓
+delete / recreate intent
+```
+
+Would split obligation hygiene (`closeObligation` / `expireDeferred`), lose intent lineage, contradict INV-NEG-018.
+
+**Allowed:**
+
+```text
+EdgeRecoveryController.drainPendingIceRestart()
+        ↓
+computeIceRestartGateProbe()  (re-probe at drain)
+        ↓
+NEGOTIATION_CAN_EXECUTE? (wakeup event — Coordinator)
+        ↓
+execute current intent slot (Episode-owned)
+```
+
+#### INV-PR52c-C-001
+
+> Deferred intent lifecycle MUST remain owned by Obligation Episode. Negotiation Gate MUST NOT own deferred intent persistence.
+
+中文：Deferred intent 生命周期必须由 Obligation Episode 持有；Negotiation Gate 不得持有 deferred intent 持久化。
+
+#### INV-PR52c-C-002
+
+> Negotiation Gate owns the truth of whether a deferred negotiation action may execute, but does not own the lifecycle of the deferred obligation.
+
+中文：Negotiation Gate 拥有「deferred negotiation 动作是否可执行」的真值，但不拥有 deferred obligation 的生命周期。
+
+**Cross-ref:** Appendix D Q1 (lifecycle owner = Obligation Episode); INV-NEG-018..020. **Separate from delivery:** Q1 `attempt supersede ≠ delivery cancel` does **not** apply to negotiation intent lineage — see C-Q3.
+
+#### E.14.3 C-Q2 — Consume trigger — **CLOSED: B** (2026-07-31)
+
+**Decision:** **Option B** — aligns with C′ split ownership:
+
+```text
+Negotiation Gate     → execution permission (probe.executable)
+Recovery Dispatch    → dispatch permission (may send the action)
+```
+
+Neither substitutes for the other.
+
+**Frozen drain execution:**
+
+```text
+Wakeup (negotiation domain):
+    ONLY NEGOTIATION_CAN_EXECUTE
+
+Execute permission:
+    probe.executable
+    AND
+    recovery dispatch readiness
+```
+
+Normative:
+
+```text
+NEGOTIATION_CAN_EXECUTE
+        +
+dispatchReady
+        ↓
+DEFERRED_INTENT_EXECUTED
+```
+
+#### INV-PR52c-C-003
+
+> Deferred intent MUST NOT be consumed solely because recovery observation facts become satisfied. `NEGOTIATION_CAN_EXECUTE` remains the only negotiation-domain wakeup event. Execution additionally requires recovery dispatch readiness.
+
+中文：不得仅因 recovery observation facts 满足而消费 deferred intent。`NEGOTIATION_CAN_EXECUTE` 仍是唯一 negotiation domain wakeup 事件；执行 additionally 需要 recovery dispatch readiness。
+
+**Recovery observation facts** (`ICE_CONNECTED`, `CONTROL_RECONCILED`, `MEMBERSHIP_CONVERGED`, `TOPOLOGY_READY`, …) MAY **trigger reevaluation** — MUST NOT **force execute**.
+
+**Forbidden:**
+
+```text
+ICE_CONNECTED → drainPendingIceRestart() → send offer
+```
+
+Would repeat transport-restored-but-negotiation-not-established leak.
+
+**Dispatch readiness** belongs to **Recovery dispatch domain** (ADR-0032), **not** Completion domain:
+
+```text
+dispatch readiness ≈
+    canDispatchRecoverySignal()      // link + discovery + signaling reachable
+    + admission projection DISPATCH_NOW
+
+NOT completion facts:
+    iceConnected / controlReconciled / membershipEpochConverged
+```
+
+**Forbidden:**
+
+```text
+dispatchReady=true → override NEGOTIATION_CAN_EXECUTE
+```
+
+**State machine (frozen):**
+
+```text
+DEFERRED_INTENT_CREATED
+        ↓
+WAITING_NEGOTIATION_CAPABILITY
+        ↓ NEGOTIATION_CAN_EXECUTE
+CHECK_DISPATCH_READINESS
+        ↓                    ↓
+ dispatchReady          dispatchNotReady
+        ↓                    ↓
+ EXECUTED              HELD (retry/wakeup)
+```
+
+`HELD` ≠ `EXPIRED` ≠ `CANCELLED`.
+
+**Field slice (OFFER_AWAITING_ANSWER + all completion facts true):** under C-Q2, remains `DEFERRED_INTENT_HELD` / `reason=NEGOTIATION_NOT_EXECUTABLE` — not `RECOVERED`, not consumed.
+
+**Implementation:** dispatch readiness + `HELD(dispatch)` enforced in `drainPendingIceRestartInternal` — **VERIFIED** §E.14.19 deterministic #3.
+
+#### E.14.4 C-Q3.1 — Supersede / lineage cut — **CLOSED: A (adopt Appendix D Q5)** (2026-07-31)
+
+**Decision:** **Full adopt Appendix D Q5.** No `intentId` migrate exception for PR5-2c-C.
+
+**Negotiation intent lineage ≠ delivery obligation lineage** — different identity, different invariants.
+
+```text
+attempt SUPERSEDE
+        ↓
+expireDeferredIceRestartIntent(SUPERSEDE:*)
+        ↓
+old intentId terminal → STALE_DISCARD(SUPERSEDED)
+        ↓
+clear deferred state
+        ↓
+successor attempt → next defer → new intentId + new DEFER_ADMISSION baseline
+
+ADMIT_SUCCESSOR
+        ↓
+expireDeferredIceRestartIntent(ADMIT_SUCCESSOR)
+        ↓
+lineage cut (same rule)
+```
+
+**Delivery domain (do not transfer):**
+
+```text
+INV-PR52c-007: attempt supersede ≠ delivery obligation cancel
+delivery identity: (session, from, to, obligationGeneration, offerLineageId, …)
+```
+
+**Negotiation domain:**
+
+```text
+Appendix D Q5: attempt supersede = negotiation lineage cut
+intent identity: (intentId, baseline, admissionSeq) + drain fence (attemptId, obligationGen)
+```
+
+**Cannot derive:** delivery retains lineage → negotiation retains lineage.
+
+**Reject migrate (option B):** ambiguous late `NEGOTIATION_CAN_EXECUTE` / late answer fencing; new attempt admission context; contradicts INV-NEG-022 + UT `r1Defer_supersede_r2_lateR1Event_doesNotExecuteR1`.
+
+#### INV-PR52c-C-004
+
+> Negotiation deferred intent lineage MUST NOT migrate across attempt supersede or admission successor. A superseded intentId is terminal and cannot execute. A successor attempt MUST establish a new intent identity and a new admission baseline.
+
+中文：Negotiation deferred intent lineage 不得跨 attempt supersede 或 admission successor 迁移；被 supersede 的 intentId 终态且不可执行；successor attempt 必须建立新 intent identity 与新 admission baseline。
+
+**Cross-ref:** INV-NEG-022; Appendix D Q5.
+
+#### E.14.5 C-Q3.2 — HELD retry fencing — **CLOSED: B** (2026-07-31)
+
+**Decision:** **Option B** — dispatch-readiness **event-driven retry** on `HELD(dispatch_not_ready)`; **not** timer polling; **not** fake `NEGOTIATION_CAN_EXECUTE`.
+
+```text
+HELD(dispatch_not_ready)
+        ↓ dispatch-readiness seam
+DEFERRED_INTENT_DRAIN_RETRY
+        ↓ fence: intentId + attemptId + obligationGen + admissionSeq
+re-probe: probe.executable AND dispatchReady
+        ↓              ↓
+    EXECUTED    HELD(negotiation | dispatch)
+```
+
+#### INV-PR52c-C-005
+
+> A deferred intent held by recovery dispatch readiness MAY retry on a dispatch-readiness transition. Such retry MUST: preserve the same valid intent lineage; re-probe negotiation capability; re-evaluate dispatch eligibility. Such retry MUST NOT: synthesize `NEGOTIATION_CAN_EXECUTE`; consume stale negotiation capability; revive superseded intent lineage.
+
+中文：因 recovery dispatch readiness 而 HELD 的 deferred intent 可在 dispatch-readiness 转换时 retry；retry 必须保持同一有效 intent lineage、re-probe negotiation capability、re-evaluate dispatch eligibility；不得伪造 `NEGOTIATION_CAN_EXECUTE`、不得消费 stale negotiation capability、不得复活已 supersede 的 intent lineage。
+
+**HELD(dispatch_not_ready):** same `intentId`, `attemptId`, `admissionSeq`; `retryCount++` audit only — NOT new intentId, NOT new admission baseline, NOT fake negotiation event.
+
+**HELD(negotiation):** strict — only `NEGOTIATION_CAN_EXECUTE` may advance from `WAITING_NEGOTIATION_CAPABILITY`. **Forbidden:** `dispatchReady → drain → override probe=false`.
+
+**Timer polling rejected** (option C): loses event semantics; duplicate-offer risk; weakens baseline fencing; contradicts Appendix D event-driven model (INV-NEG-020).
+
+**Capability seq on retry:** retry is **not** a new negotiation capability consume — `capabilityEventObservationSeq` null or dispatch-readiness observation; MUST NOT use stale pre-baseline capability seq as permission.
+
+#### E.14.6 PR5-2c-C frozen summary (2026-07-31; **CLOSED** 2026-08-01)
+
+| Question | Decision | Verified |
+|----------|----------|----------|
+| C-Q1 | **C′ split** — Episode owns lifecycle; Negotiation Gate owns truth + wakeup projection | ✅ §E.14.19 |
+| C-Q2 | **B** — wakeup = `NEGOTIATION_CAN_EXECUTE` only; EXECUTED = `probe.executable` AND dispatch readiness | ✅ §E.14.19 |
+| C-Q3.1 | **A** — adopt Appendix D Q5 lineage cut (no intentId migrate) | ✅ (unchanged) |
+| C-Q3.2 | **B** — dispatch-readiness seam → `DRAIN_RETRY` on same lineage | ✅ §E.14.19 |
+
+**Invariants:** INV-PR52c-C-001..005.
+
+#### E.14.7 State transition — before / after (implementation guide)
+
+**Before (as-built gaps):**
+
+```text
+DEFERRED_INTENT_CREATED
+        ↓
+drain on NEGOTIATION_CAN_EXECUTE only
+        ↓
+re-probe probe.executable only (no dispatch check)
+        ↓
+EXECUTED | REJECTED(gate_not_executable) — intent stays deferred, no HELD reason
+```
+
+No `HELD(dispatch_not_ready)`; no dispatch-readiness retry; supersede path already cuts lineage (Q5).
+
+**After (PR5-2c-C target):**
+
+```text
+                    DEFERRED_INTENT_CREATED
+                            ↓
+              WAITING_NEGOTIATION_CAPABILITY
+                            |
+            +---------------+---------------+
+            | only NEGOTIATION_CAN_EXECUTE  |
+            +---------------+---------------+
+                            ↓
+                 CHECK_DISPATCH_READINESS
+                            |
+            +---------------+---------------+
+            |                               |
+     dispatchReady                   dispatchNotReady
+            |                               |
+            ↓                               ↓
+    re-probe executable              HELD(dispatch_not_ready)
+            |                               |
+            ↓                               | dispatch-readiness seam
+        EXECUTED                            ↓
+                            DEFERRED_INTENT_DRAIN_RETRY
+                            (fence + re-probe both planes)
+                                    |
+                    +---------------+---------------+
+                    |                               |
+             both ready                      still blocked
+                    |                               |
+                    ↓                               ↓
+                EXECUTED              HELD(negotiation|dispatch)
+
+WAITING_NEGOTIATION_CAPABILITY:
+    probe=false → stay waiting (no dispatch retry path)
+
+SUPERSEDE / ADMIT_SUCCESSOR:
+    any state → lineage cut (C-Q3.1) — not mixed into HELD retry
+```
+
+**Log tokens (add):** `DEFERRED_INTENT_HELD`, `DEFERRED_INTENT_DRAIN_RETRY`, `DEFERRED_INTENT_REPROBE_RESULT` (may fold into existing `DEFERRED_INTENT_DRAIN_ATTEMPT`).
+
+#### E.14.8 Implementation slice — authorized scope (2026-07-31)
+
+**May change:**
+
+1. `drainPendingIceRestart()` — HELD dispatch path, retry, fence, mandatory re-probe + dispatch readiness.
+2. Dispatch seam hooks — `ROUTE_CONVERGED`, signaling reachable, admission `DISPATCH_NOW` → `DEFERRED_INTENT_DRAIN_RETRY` when `HELD(dispatch_not_ready)`.
+3. Observation / logging — tokens above.
+
+**Forbidden:**
+
+```text
+CompletionPolicy             ❌
+deliveryConfirmed semantics  ❌
+Q7 resolver                  ❌
+Attempt Owner lifecycle      ❌
+Appendix D intent lineage    ❌
+```
+
+**Do not mix:** HELD retry hooks into attempt supersede / `openNewRecoveryObligation` paths — separate seam from attempt transition.
+
+**Landed (2026-07-31):** `drainPendingIceRestartInternal` — negotiation re-probe then dispatch readiness; `DEFERRED_INTENT_HELD` / `DRAIN_RETRY`; `retryHeldDeferredIntentDrain`; `reevaluateOpenObligation` dispatch seam; UT `Pr52cDeferredIntentHoldTest`.
+
+**Field soak scripts:** `scripts/soak-pr52c-c.ps1` (ClearOnly / CollectOnly / AnalyzeOnly); `scripts/analyze-pr52c-c-deferred-intent.ps1` (Gate A/B/C + H-prod classification).
+
+#### E.14.9 Field classification hint (not verdict)
+
+`OFFER_AWAITING_ANSWER` + `DEFERRED_INTENT_UNCOVERED` may be:
+
+```text
+H-prod  — negotiation seam never flips probe.executable (correct gate hold)
+D1      — local offer never reached peer; answer path never runs (transport delivery)
+```
+
+**Next:** PR5-2c-C **CLOSED** → **PR5-2c-D** §E.15 (D1 Signal Path Grill).
+
+---
+
+### E.15 PR5-2c-D — Signal Path / D1 Remote Ingress (**CLOSED / FIELD_VERIFIED** 2026-08-01)
+
+**Status:** **D1 CLOSED / FIELD_VERIFIED** §E.15.15. Grill **CLOSED** §E.15.3–§E.15.10. Implementation **PASS** §E.15.11–§E.15.12. Deterministic UT **PASS**. Field validation **PASS** (`PASS_D1_INGRESS_RETRY_CHAIN`, Option A run `logs/d1-ingress-miss-20260801-142717`). **Do not expand D1 / do not reopen without new field defect.**
+
+**User-visible blocker (post PR5-2c-A/C):**
+
+```text
+M02 SEND / LOCAL_ACCEPT
+        ↓
+M03 无 ingress（D1_NO_REMOTE_RECEIVE）
+        ↓
+HAVE_LOCAL_OFFER / OFFER_AWAITING_ANSWER
+        ↓
+intent 长时间 uncovered
+        ↓
+UI SYNCING（honest projection — not UVCP defect）
+```
+
+PR5-2c-A closed **delivery lineage / ACK acceptance**. PR5-2c-C closed **deferred intent state machine** (deterministic). Neither proves **remote ingress** for recovery signaling during peer interface rebuild window.
+
+**Scope (phase 1 Grill):** §E.15.3–§E.15.10 — **CLOSED**.
+
+**Scope (phase 2 Implementation):** §E.15.11–§E.15.14 — **CLOSED / PASS**.
+
+**Scope (phase 3 Field):** §E.15.15 — **CLOSED / FIELD_VERIFIED**.
+
+```text
+dispatch
+        ↓
+signaling transport
+        ↓
+remote ingress
+        ↓
+answer / capability observation
+```
+
+**Out of scope (do not patch in PR5-2c-D without explicit grill reopen):**
+
+```text
+CompletionPolicy ❌
+PR5-2c-C drain / deferred intent ❌
+Delivery lineage (PR5-2c-A) ❌
+Q7 membership resolver ❌
+UVCP / PR5-3 ❌
+NEGOTIATION_CAN_EXECUTE semantics ❌
+```
+
+**Discipline:** fixing SYNCING by UVCP timeout or forcing `NEGOTIATION_CAN_EXECUTE` **masks** D1 — forbidden.
+
+**Fact separation (carry — do not collapse):**
+
+```text
+LOCAL_ACCEPT           ≠  REMOTE_INGRESS_CONFIRMED
+REMOTE_INGRESS_CONFIRMED  ≠  NEGOTIATION_CAN_EXECUTE
+```
+
+`LOCAL_ACCEPT` = sender transport accepted outbound. `REMOTE_INGRESS_CONFIRMED` = peer ingress ladder progressed (UDP → decode → recovery classify → handler). `NEGOTIATION_CAN_EXECUTE` = negotiation gate probe after ingress + SDP path.
+
+Ref field evidence: `logs/signal-path-20260729-185201`, `logs/signal-path-20260729-191529`; investigation [ice-restart-offer-delivery-investigation.md](../investigations/ice-restart-offer-delivery-investigation.md) §D1 ingress subclass **D1-A** (peer interface down / unbound rebind window).
+
+#### E.15.1 Status board
+
+```text
+PR5-2c-D / D1
+  Grill                            CLOSED ✅ §E.15.3–§E.15.10
+  D1-Q1 ownership                  CLOSED D §E.15.3
+  D1-Q1d retry-after-miss          CLOSED ✅ §E.15.10
+  Slice-1..2C                      CLOSED / PASS ✅
+  Deterministic UT                 PASS ✅
+  Option A injection               VERIFIED ✅ §E.15.14
+  Field validation                 PASS ✅ §E.15.15
+  D1 delivery ownership            CLOSED / FIELD_VERIFIED ✅
+
+Upstream frozen:
+  PR5-2c-A CLOSED ✅
+  PR5-2c-C CLOSED / VERIFIED ✅
+  ADR-0035 PR1–PR4 delivery contract CLOSED ✅
+  PR2 retry = mitigation not ingress repair (investigation frozen)
+
+Next (outside D1 / C code):
+  Joint D1 + PR5-2c-C Recovery Regression §E.16  OPEN
+  J-X §E.16.1 SEMANTICS CLOSED; Slice-1 CLOSED / VERIFIED
+  §E.16.2 Field Authorization Contract          FROZEN
+  Phase-3 field                                 NOT AUTHORIZED
+  PR5-3 / UVCP                                  BLOCKED until JOINT PASS
+  Do NOT expand D1 or C / do NOT reopen without new field defect
+```
+
+#### E.15.2 As-built seam audit (pre-grill — not verdict)
+
+Observation-only ingress ladder exists (`OfferDeliveryObservation`: `UDP_DATAGRAM_RECEIVED` → `SIGNAL_ENVELOPE_DECODED` → `RECOVERY_REATTACH_CLASSIFIED` → `REMOTE_RECEIVE` → `RECOVERY_HANDLER_ENTER`). **No** `REMOTE_INGRESS_CONFIRMED` fact feeds recovery policy today.
+
+Delivery retry today (`RecoveryOfferDeliveryPolicy` on `EdgeRecoveryRecord`):
+
+```text
+onOutboundDeliveryPending → scheduleDeliveryRetry(timer)
+onDeliveryHint(reachability) → evaluateDeliveryRetry
+maxDeliveryAttempts → DELIVERY_EXHAUSTED → Episode WAITING
+```
+
+Retry policy is **episode-adjacent** (lineage + `recoveryOfferDeliveryPhase` on record). Trigger inputs: **timer backstop** + **sender-local reachability hints** + **admission gate** at dispatch — **not** peer ingress readiness observation.
+
+Sender dispatch eligibility (`canDispatchRecoverySignal` / `peerSignalingReachable`) is **sender-local recent inbound** — does **not** observe peer's ingress rebuild after `NETWORK_LOST` (investigation §Root cause refined). This is the suspected **ownership seam gap**, not proof that option D is correct.
+
+#### E.15.3 D1-Q1 — Ingress fact + retry ownership — **CLOSED: D** (2026-08-01)
+
+> When M02 has `LOCAL_ACCEPT` / `SENT` but M03 produces **no** `RECOVERY_REATTACH` ingress within the delivery observation window, **who owns** the fact *remote ingress not yet established*, and **who decides** the next recovery signal attempt?
+
+**Decision:** **Option D — split ownership.** **Do not merge** with D1-Q1d dispatch policy (retry timing) — ownership frozen here; policy grilled separately §E.15.4.
+
+**Frozen ownership:**
+
+```text
+Transport / Signal ingress plane
+    owns:
+        REMOTE_INGRESS_OBSERVED
+        REMOTE_INGRESS_ABSENT(window)
+
+Recovery delivery policy
+    owns:
+        retry / exhaustion policy
+    consumes:
+        ingress facts
+        LOCAL_ACCEPT
+        ACK / DELIVERY_CONFIRMED
+
+Obligation Episode
+    owns:
+        offerLineageId
+        deliveryAttemptId
+        obligation lineage
+        phase / persistence
+
+Coordinator
+    does NOT become delivery-policy owner
+```
+
+**Frozen fact separation (INV-D1-001):**
+
+```text
+LOCAL_ACCEPT              ≠  REMOTE_INGRESS_OBSERVED
+peerSignalingReachable    ≠  remote ingress readiness
+REMOTE_INGRESS_OBSERVED   ≠  NEGOTIATION_CAN_EXECUTE
+```
+
+> `peerSignalingReachable` is sender-local recent inbound — not peer inbound socket / binding readiness after `NETWORK_LOST`.
+
+**Rejected:**
+
+| Option | Why rejected |
+|--------|--------------|
+| A | Transport owns retry → duplicates Episode lineage / recovery terminal risk |
+| B | Coordinator as policy brain → blurs Episode persistence; forbidden §E.15 |
+| C | Episode alone → lacks ingress observation feed without Transport fact producer |
+
+**Grill carry-forward (not D1-Q1 scope — deferred):**
+
+```text
+D1-Q1a  normative lifecycle names — partial in D freeze (OBSERVED / ABSENT(window))
+D1-Q1b  same offerLineageId on retry — PR2 carry; grill under D1-Q1d-e
+D1-Q1c  OfferDeliveryObservation → fact producer — implied by Transport owner
+```
+
+#### E.15.4 D1-Q1d — Dispatch policy vs ingress miss — **CLOSED: retry-after-miss** (2026-08-01)
+
+**Decision:** **retry-after-miss** — not `block-until-ready`. Full normative chain §E.15.10.
+
+**Rationale:** decentralized mesh — sender cannot verify peer inbound socket / binding readiness at dispatch time. `REMOTE_INGRESS_READY → allow dispatch` invents unverifiable peer-ready fact.
+
+**Rejected:** `block-until-ready` at dispatch (§E.15.4 grill rationale retained in §E.15.10).
+
+#### E.15.5 D1-Q1d-e1 — Observation window — **CLOSED: C** (2026-08-01)
+
+> What closes the `REMOTE_INGRESS` observation window?
+
+**Decision:** **C — lineage-scoped observation window + bounded deadline.** Window is strictly **delivery-lineage scoped** — does not pollute peer-wide or episode-global state.
+
+**Normative window lifecycle:**
+
+```text
+window.open
+    = LOCAL_ACCEPT
+      (offerLineageId, deliveryAttemptId)
+
+window.close
+    = first REMOTE_INGRESS_OBSERVED
+      for the same correlation
+    OR bounded deadline
+    OR lineage superseded
+    OR DELIVERY_CONFIRMED
+    OR DELIVERY_EXHAUSTED
+```
+
+**On close without ingress:**
+
+```text
+window closes without ingress
+        ↓
+REMOTE_INGRESS_ABSENT(window)
+        ↓
+RecoveryDeliveryPolicy (consumes fact)
+        ↓
+retry opportunity
+```
+
+#### INV-D1-002 — per-lineage windows (not peer-wide timer)
+
+```text
+M02 → M03 : L1 / deliveryAttemptId=3
+M02 → M04 : L7 / deliveryAttemptId=1
+```
+
+Each `(offerLineageId, deliveryAttemptId)` has an **independent** observation window. M03 ingress miss **MUST NOT** affect M04 window state.
+
+#### INV-D1-003 — ABSENT is not a permanent fact
+
+`REMOTE_INGRESS_ABSENT(window)` means:
+
+> within this **bounded window**, no ingress was observed for this correlation.
+
+**NOT:**
+
+> M03 currently has no ingress capability.
+
+Subsequent delivery attempts **MUST NOT** inherit a prior `ABSENT`. Each window produces its own observation outcome.
+
+#### INV-D1-004 — ABSENT does not change lineage identity
+
+`ABSENT(window)` is a **delivery observation fact** on:
+
+```text
+offerLineageId + deliveryAttemptId + ABSENT(window)
+```
+
+**Forbidden side effects:**
+
+```text
+ABSENT → bump obligationGeneration
+ABSENT → supersede recovery attempt
+ABSENT → new intentId
+```
+
+**Discipline (carry PR5-2c-A/C):**
+
+```text
+Observation ≠ Lineage transition ≠ Completion
+```
+
+#### E.15.6 D1-Q1d-e2 — Late ingress after window close — **CLOSED** (2026-08-01)
+
+**Core principle:**
+
+```text
+WINDOW_CLOSE = observation boundary
+```
+
+Not a state that late ingress may reopen.
+
+> After `REMOTE_INGRESS_ABSENT(window)` is emitted, how is late `REMOTE_INGRESS_OBSERVED` handled?
+
+**Decision:** late ingress **never** reverses window-close facts or policy actions already derived from them.
+
+**Frozen rule:**
+
+```text
+ABSENT(window) already emitted
+        ↓
+late REMOTE_INGRESS_OBSERVED
+        ↓
+observation-only
+```
+
+**Forbidden:**
+
+```text
+revoke REMOTE_INGRESS_ABSENT already emitted
+cancel retry opportunity already produced from ABSENT
+DELIVERY_EXHAUSTED → DELIVERY_CONFIRMED via late ingress
+trigger NEGOTIATION_CAN_EXECUTE
+rewrite obligation / attempt / intent lineage
+```
+
+**Rejected exception:** `ABSENT` emitted but retry not yet dispatched → late ingress **cannot** cancel retry. Would create ordering race:
+
+```text
+deadline → ABSENT → retry scheduled
+              ↕
+         late ingress
+```
+
+Window deadline is the **cut point** — ingress after close **MUST NOT** reverse policy facts.
+
+**Lifecycle matrix (frozen):**
+
+```text
+OPEN
+ └─ ingress observed → REMOTE_INGRESS_OBSERVED → window close
+ └─ deadline without ingress → ABSENT(window) → CLOSED
+
+CLOSED / ABSENT
+ └─ late ingress → OBSERVATION_ONLY
+
+EXHAUSTED
+ └─ late ingress → DISCARD (PR2 late ACK carry)
+
+SUPERSEDED
+ └─ late ingress → OBSERVATION_ONLY
+```
+
+#### INV-D1-005 — late ingress ≠ delivery confirmation
+
+```text
+late ingress          ≠  delivery confirmation
+delivery confirmation = pending delivery identity match (PR5-2c-A)
+```
+
+No conflict with `DELIVERY_CONFIRMED` identity rules.
+
+**D1-Q1d-e2d (carry INV-D1-003):** `ABSENT(window)` on `(L*, N)` **MUST NOT** block a **new** `(L', N')` observation window.
+
+#### E.15.7 D1-Q1d-e3 — Retry trigger union — **CLOSED** (2026-08-01)
+
+**Decision:** **Single primary retry trigger** — `REMOTE_INGRESS_ABSENT(window)` emit. Timer is **window deadline only**. Reachability hints **re-evaluate open window only**. `LOCAL_ACCEPT` is **never** a retry trigger.
+
+**Frozen primary chain:**
+
+```text
+REMOTE_INGRESS_ABSENT(window)
+        ↓
+RecoveryDeliveryPolicy.evaluateRetry()
+        ↓
+retry opportunity
+```
+
+**Timer role (not retry trigger):**
+
+```text
+timer = bounded observation-window deadline
+        ↓
+window.close without ingress
+        ↓
+ABSENT(window)
+```
+
+**NOT:** `timer → retry` parallel path.
+
+**Reachability hint role:**
+
+```text
+PEER_REACHABILITY_RESTORED / route hint
+    = re-evaluate OPEN window only
+    ≠ retry permission
+    ≠ REMOTE_INGRESS_OBSERVED
+```
+
+**LOCAL_ACCEPT:**
+
+```text
+LOCAL_ACCEPT ≠ retry trigger
+```
+
+#### INV-D1-006 — one retry opportunity per ABSENT (dedupe)
+
+For the same `(offerLineageId, deliveryAttemptId)`:
+
+```text
+FORBIDDEN:
+  ABSENT → retry opportunity #1
+  timer  → retry opportunity #2   (duplicate path)
+```
+
+One `ABSENT(window)` emit → one `evaluateRetry()` consumption → one retry scheduling decision (subject to dedupe inside policy).
+
+**End-to-end chain (frozen):**
+
+```text
+LOCAL_ACCEPT
+    ↓
+OPEN observation window
+    ├── REMOTE_INGRESS_OBSERVED → close
+    └── deadline
+          ↓
+       ABSENT(window)
+          ↓
+       evaluateRetry()
+          ↓
+       retry opportunity
+          ↓
+       admission / dispatch gate
+          ↓
+       dispatch | hold | exhausted
+```
+
+#### INV-D1-007 — delivery fact ≠ dispatch permission
+
+```text
+REMOTE_INGRESS_ABSENT  ≠  canDispatchRecoverySignal
+```
+
+`ABSENT` is a **delivery observation fact** — does not grant dispatch permission. Preserves PR5-2c-C dispatch readiness semantics (no D1 fix leaking into deferred-intent drain).
+
+**e3a resolution:** `ABSENT` emit is sufficient to enter `evaluateRetry()`; **dispatch** still requires admission + dispatch gate at retry dispatch time.
+
+#### E.15.8 D1-Q1d-e4 — Exhaustion / `deliveryAttemptId` budget — **CLOSED** (2026-08-01)
+
+**Three concepts (frozen — do not collapse):**
+
+```text
+offerLineageId      = delivery budget / lifecycle scope
+deliveryAttemptId   = single observation window / dispatch correlation
+ABSENT(window)      = one retry opportunity (not budget consumption)
+```
+
+**Budget scope (PR2 carry):** `maxDeliveryAttempts = 3` **per `offerLineageId`**. Same `offerLineageId` on ingress-absent retries until `DELIVERY_EXHAUSTED`.
+
+**Frozen cycle (example L1):**
+
+```text
+L1 / N1
+  LOCAL_ACCEPT → window → ABSENT
+  → at most one retry dispatch → N2
+
+L1 / N2
+  LOCAL_ACCEPT → window → ABSENT
+  → at most one retry dispatch → N3
+
+L1 / N3
+  LOCAL_ACCEPT → window → ABSENT
+  → DELIVERY_EXHAUSTED
+```
+
+#### INV-D1-008 — budget consumed on dispatch, not on ABSENT
+
+```text
+ABSENT(window) emit     → retry opportunity (evaluateRetry)
+budget increment        → on actual retry DISPATCH only
+```
+
+If admission / dispatch gate blocks dispatch at retry time, **MUST NOT** burn a delivery attempt merely because the observation window closed.
+
+#### INV-D1-009 — EXHAUSTED fence
+
+Once `DELIVERY_EXHAUSTED(L1)`:
+
+```text
+L1 + any N*
+  REMOTE_INGRESS_ABSENT     → DISCARD
+  REMOTE_INGRESS_OBSERVED   → DISCARD
+```
+
+**Forbidden:** re-enter retry; reverse exhaustion into completion or negotiation permission.
+
+`DELIVERY_EXHAUSTED` → Episode `WAITING` only (PR2) — no negotiation intent side effects.
+
+#### INV-D1-010 — supersede = Q5 lineage cut (not budget inherit)
+
+```text
+L1 → SUPERSEDE → old L1 stale → new L2 → fresh delivery budget
+```
+
+**Forbidden:**
+
+```text
+L1 exhausted → supersede → L2 inherits attempt #3
+```
+
+New `offerLineageId` = independent delivery lineage. Avoids mixing **attempt supersede** with **delivery cancel** (PR5-2c-A discipline).
+
+#### E.15.9 D1-Q1d-e5 — PR3 admission / dispatch gate boundary — **CLOSED** (2026-08-01)
+
+**Decision:** PR3 admission + dispatch gates apply at **every dispatch** (initial + retry). Admission is **gate only** — **never** retry trigger.
+
+**Frozen dispatch gate stack:**
+
+```text
+REMOTE_INGRESS_ABSENT(window)
+        ↓
+evaluateRetry()
+        ↓
+┌──────────────────────────────┐
+│ Dispatch gates (each dispatch) │
+│ ① PR3 admission              │
+│ ② canDispatchRecoverySignal  │
+│ ③ PR5-2c-C dispatch readiness* │
+└──────────────────────────────┘
+        ↓
+   dispatch | HOLD/DEFER
+```
+
+`*` **PR5-2c-C `dispatchReady`** applies only when edge is in **negotiation-deferred domain** — **do not** merge PR5-2c-C state machine into D1 delivery ownership slice.
+
+#### INV-D1-011 — admission is gate, not trigger
+
+```text
+admission PASS   ≠ retry trigger
+admission FAIL   ≠ discard ABSENT
+admission FAIL   → RETRY_DEFERRED / HOLD
+admission recovery → MUST NOT auto-retry without new ABSENT(window)
+```
+
+**Only retry trigger (carry §E.15.7):** `REMOTE_INGRESS_ABSENT(window)`.
+
+#### INV-D1-012 — blocked gate does not consume budget
+
+```text
+ABSENT → evaluateRetry → admission BLOCKED
+        → HOLD/DEFER
+        → no dispatch
+        → no deliveryAttemptId / budget consumption
+```
+
+Budget advances **only** on actual dispatch (carry INV-D1-008).
+
+#### INV-D1-013 — admission ≠ ingress truth
+
+```text
+admission PASS  → infer REMOTE_INGRESS_OBSERVED     ❌
+admission FAIL  → invalidate ABSENT                ❌
+ABSENT          → bypass admission on retry           ❌
+```
+
+**Fact separation (carry):**
+
+```text
+LOCAL_ACCEPT            ≠ REMOTE_INGRESS_OBSERVED
+peerSignalingReachable  ≠ remote ingress readiness
+admission               ≠ ingress fact
+```
+
+#### E.15.10 D1-Q1d — Frozen summary (**CLOSED: retry-after-miss** 2026-08-01)
+
+```text
+D1-Q1       CLOSED / D ✅
+D1-Q1d-e1   CLOSED / C ✅
+D1-Q1d-e2   CLOSED ✅
+D1-Q1d-e3   CLOSED ✅
+D1-Q1d-e4   CLOSED ✅
+D1-Q1d-e5   CLOSED ✅
+────────────────────────
+D1-Q1d      CLOSED / retry-after-miss ✅
+```
+
+**End-to-end normative chain:**
+
+```text
+LOCAL_ACCEPT
+    ↓
+lineage-scoped observation window (offerLineageId, deliveryAttemptId)
+    ├── REMOTE_INGRESS_OBSERVED → window close → delivery progression
+    └── deadline without ingress
+          ↓
+       REMOTE_INGRESS_ABSENT(window)
+          ↓
+       evaluateRetry()                    [sole primary retry trigger]
+          ↓
+       admission + dispatch gates
+          ├── blocked → HOLD/DEFER (no budget burn)
+          └── allowed → dispatch
+                         ↓
+                    next deliveryAttemptId
+                    (budget on dispatch only; max 3 per offerLineageId)
+```
+
+**Invariants index:** INV-D1-001..013 (§E.15.3, §E.15.5–§E.15.9).
+
+#### E.15.11 Implementation authorization (**AUTHORIZED** 2026-08-01)
+
+**Grill gate satisfied:**
+
+```text
+D1-Q1 + D1-Q1d-e1..e5 CLOSED ✅
+```
+
+**IN scope (strict):**
+
+```text
+1. Ingress fact producer
+   Transport/Signal → REMOTE_INGRESS_OBSERVED / REMOTE_INGRESS_ABSENT(window)
+   (upgrade OfferDeliveryObservation path from log-only to fact emission)
+
+2. RecoveryDeliveryPolicy retry consumption
+   ABSENT(window) → evaluateRetry() (primary trigger; timer = window deadline only)
+
+3. Admission / dispatch gate wiring
+   PR3 admission + canDispatchRecoverySignal at initial AND retry dispatch
+   BLOCKED → RETRY_DEFERRED/HOLD without budget burn
+
+4. Delivery budget / exhaustion writer
+   per offerLineageId max 3; dispatch-only consumption; EXHAUSTED fence
+
+5. UT + field replay instrumentation
+   replay criterion: logs/signal-path-20260729-185201 (D1_NO_REMOTE_RECEIVE)
+```
+
+**OUT of scope (forbidden in this slice):**
+
+```text
+CompletionPolicy ❌
+PR5-2c-C drain / deferred intent machine ❌
+Delivery lineage identity rules (PR5-2c-A) — no reopen ❌
+Q7 membership resolver ❌
+UVCP ❌
+Attempt Owner lifecycle rewrite ❌
+block-until-ready / REMOTE_INGRESS_READY dispatch gate ❌
+```
+
+**Field replay gate (pre-IMPLEMENTATION VERIFIED):**
+
+```text
+M02→M03 recovery L1:
+  ingress-absent fact consumed → retry policy decision
+  not timer-only retry regression
+  budget not burned on admission HOLD
+  (full chain may still D1 if peer ingress window > budget — PR2 mitigation boundary)
+```
+
+**Scripts:** `scripts/analyze-d1-delivery.ps1`, `scripts/soak-d1-field-replay.ps1`, `scripts/analyze-ice-restart-offer-delivery.ps1`, `scripts/analyze-recovery-delivery.ps1`.
+
+#### E.15.12 Implementation CLOSED + Field replay #1 (**2026-08-01**)
+
+**Implementation status:**
+
+```text
+D1 Slice-1..2C             CLOSED / PASS ✅
+D1 deterministic UT        PASS ✅
+D1 implementation          CLOSED / PASS ✅
+D1 field replay #1         NOT EXERCISED ⚪ (ABSENT path)
+```
+
+**Field replay #1** — `logs/d1-field-replay-20260801-132831`
+
+```text
+Result:           NOT EXERCISED (ABSENT path)
+Classification:   OBSERVED_DIRECT_RECOVERY
+Implementation:   NOT FAILED
+
+Evidence:
+  LOCAL_ACCEPT
+      ↓
+  REMOTE_INGRESS_OBSERVED (M03 ×2)
+      ↓
+  no REMOTE_INGRESS_ABSENT
+      ↓
+  no retry evaluation
+```
+
+**Proven in field:** ingress producer emits `REMOTE_INGRESS_OBSERVED` on peer REMOTE_RECEIVE; window does not spuriously emit ABSENT when OBSERVED wins before deadline (INV e2).
+
+**Not proven:** ABSENT(window) → evaluateRetry → admission → dispatch chain (retry-after-miss).
+
+**Analyzer classes (updated):**
+
+| Class | Meaning |
+|-------|---------|
+| `PASS_D1_INGRESS_RETRY_CHAIN` | ABSENT → retry full chain |
+| `OBSERVED_DIRECT_RECOVERY` | ingress direct recovery; no ABSENT |
+| `NO_INGRESS_FACT` | LOCAL_ACCEPT with neither OBSERVED nor ABSENT |
+| `LEGACY_TIMER_ONLY` | old timer/hint driven retry |
+| `NOT_EXERCISED` | no recovery LOCAL_ACCEPT window |
+
+Do **not** call OBSERVED-only runs `NO_INGRESS_FACT` / `D1_NO_INGRESS_FACT`.
+
+**Superseded by:** Option A field validation §E.15.14–§E.15.15 (`PASS_D1_INGRESS_RETRY_CHAIN`). Replay #1 remains valid evidence that OBSERVED closes the window without spurious ABSENT.
+
+#### E.15.13 Cross-ref — PR5-2c-C boundary
+
+PR5-2c-D addresses **why ingress never starts** (transport/signaling path). PR5-2c-C addressed **what happens after** negotiation capability exists but dispatch readiness lags. Do not merge D1 transport failure into deferred-intent drain patches.
+
+#### E.15.14 Option A — `dropRecoveryOfferIngress` (deterministic ABSENT path)
+
+**Purpose:** exercise the ABSENT ownership chain without WiFi flap / reachability noise.
+
+**Injection (DEBUG only):**
+
+```text
+M03 arm:  com.talkback.appprod.debug.D1_ARM_DROP_INGRESS
+M03 clear: com.talkback.appprod.debug.D1_CLEAR_INGRESS_MISS
+hook: UdpSignalingChannel after classifyInbound, before REMOTE_RECEIVE
+drop: GROUP_JOIN + joinIntent=RECOVERY_REATTACH only
+```
+
+**Expected chain:**
+
+```text
+LOCAL_ACCEPT(L,N)
+  → (no REMOTE_INGRESS_OBSERVED for dropped attempt)
+  → REMOTE_INGRESS_ABSENT(window)
+  → RECOVERY_DELIVERY_RETRY_EVALUATE(trigger=REMOTE_INGRESS_ABSENT)
+  → ADMISSION PASS
+  → RECOVERY_DELIVERY_RETRY_ADMITTED
+  → dispatch(N+1)
+  → LOCAL_ACCEPT(L,N+1)
+```
+
+**Gates:**
+
+| Gate | Require |
+|------|---------|
+| D1-A | `REMOTE_INGRESS_ABSENT` exists |
+| D1-B | ABSENT → evaluateRetry → admission → dispatch |
+| D1-C | attempt budget N success → N+1 |
+| D1-D | no timer/hint/LOCAL_ACCEPT-driven retry evaluate |
+
+**Fences (must hold):**
+
+1. Producer: not both `REMOTE_INGRESS_ABSENT` and `REMOTE_RECEIVE` for the same `(offerLineageId, deliveryAttemptId)`.
+2. Policy: retry evaluate only with `trigger=REMOTE_INGRESS_ABSENT`.
+
+**Scripts:** `scripts/soak-d1-ingress-miss.ps1`, `scripts/analyze-d1-delivery.ps1`.
+
+**Out of scope (do not modify for Option A):** `RecoveryDeliveryPolicy` semantics, `CompletionPolicy`, `ConferenceEdgeRecoveryController` lifecycle, PR5-2c-C drain, UVCP.
+
+**Pass upgrades field status from** `implementation PASS / field ABSENT NOT EXERCISED` **to** `D1 delivery ownership VERIFIED` when classification = `PASS_D1_INGRESS_RETRY_CHAIN` under injection.
+
+**Field run #1 (Option A) — `logs/d1-ingress-miss-20260801-142717` (**2026-08-01**):**
+
+```text
+Classification:   PASS_D1_INGRESS_RETRY_CHAIN
+fieldStatus:      FIELD_VERIFIED
+Gate D1-A..D:     PASS
+Fence 1:          PASS
+DROP_INGRESS:     3 (attempt 1/2/3)
+OBSERVED(peer):   0
+REMOTE_RECEIVE:   0
+LEGACY_EVAL:      0
+```
+
+Proven: ingress-miss → ABSENT(window) → evaluateRetry(ABSENT) → ADMITTED → dispatch/budget N→N+1; timer/hint observation-only.
+
+#### E.15.15 D1 CLOSED / FIELD_VERIFIED (**2026-08-01**)
+
+**Final freeze:**
+
+```text
+D1 GRILL                         CLOSED ✅
+D1 implementation                CLOSED / PASS ✅
+D1 deterministic validation      PASS ✅
+D1 field validation              PASS ✅
+D1 delivery ownership            FIELD_VERIFIED ✅
+```
+
+**Field evidence:** `logs/d1-ingress-miss-20260801-142717` — classification `PASS_D1_INGRESS_RETRY_CHAIN`; Gate D1-A..D PASS; Fence 1/2 PASS; `LEGACY_EVAL=0`; `DELIVERY_EXHAUSTED` after budget under sticky drop (expected).
+
+**Normative note:** `PASS_D1_INGRESS_RETRY_CHAIN` was achieved via real M02→M03 Android/UDP path. Option A (`dropRecoveryOfferIngress`) is **DEBUG deterministic fault injection only** — production delivery ownership does **not** depend on debug injection. Injection proves the ownership chain under ingress miss; it is not a product feature.
+
+**Do not:**
+
+```text
+expand D1 scope
+reopen D1 grill without new field defect
+patch CompletionPolicy / PR5-2c-C / UVCP "to fix D1"
+treat SYNCING / OFFER_AWAITING_ANSWER as D1 failure after this close
+```
+
+**Next:** Joint D1 + PR5-2c-C Recovery Regression §E.16 (**OPEN**). **PR5-3 / UVCP BLOCKED** until joint PASS. **PR5-2c-D / D1 itself: CLOSED. No further D1 code change required.**
+
+### E.16 Joint D1 + PR5-2c-C Recovery Regression (**OPEN** 2026-08-01)
+
+**Purpose:** prove D1 and PR5-2c-C do not interfere inside the **same recovery episode**, before PR5-3 / UVCP projection migration.
+
+**Status:**
+
+```text
+PR5-2c-A                         CLOSED / SOAK PASS ✅
+PR5-2c-C                         CLOSED / VERIFIED ✅
+D1                               CLOSED / FIELD_VERIFIED ✅
+
+Joint D1 + C Regression          OPEN
+J-X Cross-domain intent ownership (§E.16.1)
+J-X-1                            CLOSED = C (explicit supersede)
+J-X-2                            CLOSED = D (DeferredIntentAuthority)
+J-X-3                            CLOSED = B/B/B (evidence/fence/budget)
+J-X-4                            CLOSED = B (HELD supersede via authority)
+J-X-5                            CLOSED = B (no inherit dispatchReady)
+J-X-6                            CLOSED = B (late observe only)
+J-X-7                            CLOSED = C (SUPERSEDED terminal; retention separate)
+J-X semantics pack               CLOSED
+DeferredIntentAuthority Slice-1  CLOSED / VERIFIED (Phase-1/2)
+§E.16.2 Field Auth Contract      FROZEN
+Phase-3 field Joint soak         NOT AUTHORIZED
+PR5-3 / UVCP                     BLOCKED UNTIL JOINT PASS
+```
+
+**Discipline:** **Do not modify D1 or C production ownership code** for this regression. Reuse existing deterministic injections only:
+
+```text
+D1 Option A:  M03 dropRecoveryOfferIngress (DEBUG)
+C:            existing PR5-2c-C debug create / block-dispatch / neg-execute / release-dispatch
+```
+
+**What is verified (exactly four concerns):**
+
+1. **D1 ingress miss must not falsely enter C** — ABSENT → delivery retry must not invent `NEGOTIATION_CAN_EXECUTE` / `DEFERRED_INTENT_HELD(dispatch)` unless negotiation domain conditions are truly met.
+2. **C must not swallow D1 retry** — when both domains are active, D1 `ABSENT → delivery retry` and C `NEGOTIATION_CAN_EXECUTE → HELD(dispatch) → dispatch-readiness retry` remain independent wakeups (no cross-domain impersonation).
+3. **Fence correlation must not cross-contaminate** — D1 `(offerLineageId, deliveryAttemptId)` vs C `(intentId, attemptId, obligationGen, admissionSeq)` stay correct across supersede / retry / completion.
+4. **CompletionPolicy must not close early** — hard guard:
+
+```text
+D1 delivery recovered  ≠  C negotiation recovered  ≠  Episode RECOVERED
+```
+
+**Suggested scenario (same episode) - orchestration after `200519` / `201352`:**
+
+```text
+M02 host / M03 target / CH-01
+ClearOnly → stable meeting → Arm D1 → START orchestrator FIRST → flap
+scripts/run-joint-d1-c-orchestrator.ps1:
+  Live preempt: ATTEMPT_REQUESTED/WAKEUP(M03) BEFORE prod ICE_RESTART_DISPATCHED(NONE)
+  CREATE → CREATED + VALIDATION_FENCE_ARMED → BLOCK
+  NEG hard gate: CREATED+FENCE + DISPATCHED(NONE,attemptA)=0 else ABORT_INVALID_EXERCISE
+  NEG → MUST HELD(DISPATCH) before any CLEAR
+  LOCAL_ACCEPT(L*)+DROP = D1 correlation only (field: DISPATCHED precedes LOCAL_ACCEPT)
+  D1 ABSENT→EVALUATE→ADMITTED→RETRY → CLEAR DROP → RELEASE → EXECUTED+REPROBE_PASS
+Collect/Analyze
+```
+
+**Injection timing (frozen — orchestration / not production bug):**
+
+- **Too early (before REATTACH):** C-CREATE → `GROUP_MESH` (`145829`).
+- **Too late (after D1 EXHAUSTED):** C → `HELD(NEGOTIATION)` (`150808`).
+- **Sticky DROP through C RELEASE:** `EXECUTED=0` (`151247`).
+- **CREATE after prod `ICE_RESTART_DISPATCHED(NONE)`:** `already_issued` / `STALE_DISCARD`, no `HELD(DISPATCH)` (`153247`, `195948`, `200519`).
+- **`200519`:** CREATED+FENCE→BLOCK→NEG order verified; still loses because same attempt already `DISPATCHED(intentId=NONE)`. Stop retuning CREATED waits.
+- **201352 ownership audit (read-only):** preempt + NEG gate PASS (DISPATCHED(NONE)=0); EDGE_STARTED -> clearMediaActionDeferral() -> MEDIA_NOT_READY silently drops R16 -> NEGOTIATION_CAN_EXECUTE(intentId=NONE) / no HELD. Evidence: logs/joint-d1-c-20260801-201352/R16_OWNERSHIP_AUDIT.txt. Opens §E.16.1 J-X. **No production fix authorized.**
+- **Correct orchestration:** preempt C ownership **before** prod restart transaction; NEG only if `DISPATCHED(NONE,A)=0`; else abort (invalid exercise, not J-B FAIL). Then `HELD(DISPATCH)` → D1 one round → `CLEAR` → `RELEASE` → literal `EXECUTED`+`REPROBE_PASS`.
+- **Discipline:** never CLEAR D1 on first A/E/M glimpse. Do not change C/D1 production code; do not loosen J-B; `DISPATCHED ≠ EXECUTED`.
+
+**Gates:**
+
+| Gate | Require |
+|------|---------|
+| **J-A** | D1 `ABSENT→EVALUATE→ADMITTED→RETRY` (**EXHAUSTED not required**) |
+| **J-B** | C `CREATED → CAN_EXECUTE → HELD(dispatch) → DRAIN_RETRY → REPROBE(pass) → EXECUTED` (**literal** `REPROBE_PASS` + `EXECUTED` required; `DISPATCHED` alone = FAIL; `DISPATCHED ≠ EXECUTED ≠ RECOVERED`) |
+| **J-C** | D1 retry does not forge `NEGOTIATION_CAN_EXECUTE` |
+| **J-D** | C retry does not impersonate D1 `ABSENT` |
+| **J-E** | Both fence correlations correct end-to-end |
+| **J-F** | No premature `RECOVERED` / completion close (**hard gate**) |
+| **J-G** | Final membership / media / signaling consistent |
+
+**Why before PR5-3:** UVCP migration is projection cleanup (`EpisodeCompletionState + facts → UVCP`). If joint regression later finds D1+C timing inconsistency after UVCP moves, root-cause attribution collapses across D1 / C / CompletionPolicy / UVCP. Joint PASS is the **PR5-3 baseline**.
+
+**Pass upgrades next to:**
+
+```text
+JOINT-RECOVERY-REGRESSION PASS
+        ↓
+PR5-3 Grill
+        ↓
+UVCP migration
+        ↓
+field regression
+```
+
+**Tooling (production code unchanged):**
+
+```text
+scripts/soak-joint-d1-c.ps1          ClearOnly / CollectOnly / AnalyzeOnly + TEST_STEPS
+scripts/analyze-joint-d1-c.ps1       Gates J-A..J-G → JOINT_D1_C_REPORT.txt
+```
+
+**Report contract:**
+
+```text
+J-A D1 ingress retry chain       PASS|FAIL
+J-B C deferred drain chain       PASS|FAIL  (EXECUTED+REPROBE_PASS mandatory)
+J-C D1→C trigger purity         PASS|FAIL
+J-D C→D1 trigger purity         PASS|FAIL
+J-E correlation/fence            PASS|FAIL
+J-F completion safety             PASS|FAIL  <-- HARD GATE
+J-G final recovery consistency    PASS|FAIL
+
+CLASSIFICATION (priority):
+  FAIL_COMPLETION_SAFETY
+    > FAIL_CROSS_DOMAIN_CONTAMINATION
+    > FAIL_D1_CHAIN / FAIL_C_CHAIN
+    > NOT_EXERCISED
+  PASS_JOINT_D1_C  → only unlock for PR5-3 / UVCP
+
+J-B note: DISPATCHED-only → FAIL_C_CHAIN / CONDITIONAL_FAIL (do not unlock PR5-3).
+Field `logs/joint-d1-c-20260801-150355`: J-A/E PASS (L2+R3 same episode); J-B FAIL (DISPATCHED without EXECUTED+REPROBE_PASS) → overall NOT CLOSED.
+```
+
+**J-F FAIL ⇒ entire Joint Regression FAIL** even if J-A..J-E / J-G PASS.
+
+---
+#### E.16.1 J-X Grill — Cross-domain deferred intent ownership boundary (**SEMANTICS CLOSED** 2026-08-01; Slice-1 CLOSED / VERIFIED)
+
+**Status:**
+
+```text
+J-X semantics package                       CLOSED (J-X-1 through J-X-7)
+J-X-1  explicit supersede                   CLOSED = C
+J-X-2  DeferredIntentAuthority              CLOSED = D
+J-X-3  evidence/fence/budget                CLOSED = B/B/B
+J-X-4  HELD may supersede                   CLOSED = B
+J-X-5  no evidence inheritance              CLOSED = B
+J-X-6  late event observation only          CLOSED = B
+J-X-7  SUPERSEDED execution terminal        CLOSED = C
+
+DeferredIntentAuthority Slice-1             CLOSED / VERIFIED ✅
+  Phase-1 UT                                PASS
+  Phase-2 deterministic Joint               PASS
+  Phase-3 field Joint soak                  NOT AUTHORIZED ⚪
+
+Production domains:
+  D1 / PR5-2c-C / CompletionPolicy / DeliveryPolicy   FROZEN
+
+Joint J-B                                   NOT VERIFIED
+PR5-3 / UVCP                                BLOCKED
+
+Authorization Gate:
+
+  §E.16.2                                FROZEN
+  Production domains (D1/C/Completion/Delivery)  FROZEN
+  Phase-3A Field                         AUTHORIZED (2026-08-01)
+
+  Bound run card:
+    Authorize Phase-3A Field
+    EXERCISE_MODE=OWNERSHIP_ISOLATION
+    stimulus=DEBUG_EXPLICIT_SUPERSEDE
+    IntentIdentity=(sessionId, edgeId, intentId)
+
+  In scope under this auth:
+    DEBUG_EXPLICIT_SUPERSEDE harness (debug/test face only)
+    Phase-3A orchestrator + ownershipIsolation analyzer
+    Phase-3A field run scoring ownershipIsolation only
+
+  Still forbidden:
+    J-B semantic changes / PR5-3 unlock
+    D1 / CompletionPolicy / DeliveryPolicy / NEGOTIATION_CAN_EXECUTE changes
+    scoring jb or pr53Unlock from Phase-3A
+```
+
+**Problem definition:**
+
+> May `MEDIA_NOT_READY` / `EDGE_STARTED` supersede an already `CREATED` + `FENCED` NEGOTIATION deferred intent?
+
+**As-built (`201352`, attempt=28, `R16`):**
+
+```text
+NEGOTIATION domain owns R16
+  deferredReason=NEGOTIATION_SETTLING
+  FENCE_ARMED
+        |
+        v
+EDGE_STARTED (ICE_DISCONNECTED)
+        |
+        v
+clearMediaActionDeferral()          <- silent; no ownership transition fact
+        |
+        v
+iceRestartIntentId=null
+        |
+        v
+MEDIA domain re-defers MEDIA_NOT_READY
+        |
+        v
+NEGOTIATION_CAN_EXECUTE intentId=NONE
+        |
+        v
+no DRAIN_ATTEMPT(R16) / no HELD(DISPATCH)
+```
+
+Core defect under Grill:
+
+```text
+MEDIA transition  ->  mutates  ->  NEGOTIATION ownership state
+```
+
+without an auditable supersede/expire fact (violates INV-NEG-003 spirit: deferred ICE-restart intent must not silently vanish).
+
+**Evidence (read-only):** `logs/joint-d1-c-20260801-201352/R16_OWNERSHIP_AUDIT.txt`
+Code seam (map only): `ConferenceEdgeRecoveryController` `EDGE_STARTED` path ~`clearMediaActionDeferral` then `resolveMediaActionOwner` -> `MEDIA_NOT_READY`. Fence suppress checks `iceRestartIntentId` **after** clear, so it never fires.
+
+##### J-X-1 — May one domain clear another domain's committed deferred intent?
+
+| Option | Rule | Notes |
+|--------|------|-------|
+| **A** | Any higher-priority recovery transition may replace/clear | Current behavior; silent `CREATED->FENCED->NONE`; rejects C lifecycle independence |
+| **B** | Never clear; other domain may only observe / create parallel obligation | Too strict for real transport/media reset epochs |
+| **C** | Clear/replace **only via explicit supersede fact** | **FROZEN** |
+
+**J-X-1 = C (CLOSED):**
+
+```text
+Committed deferred intent = owned obligation
+Cross-domain clear/replace REQUIRES explicit supersede, e.g.:
+
+  DEFERRED_INTENT_SUPERSEDED
+    oldIntent=R*
+    oldDomain=NEGOTIATION
+    newDomain=MEDIA
+    reason=EDGE_STARTED|...
+
+Must:
+  - clear fence with named reason
+  - be analyzer-traceable
+  - let Joint distinguish legal supersede vs bug
+```
+
+Rationale: recovery may invalidate an old NEGOTIATION intent after transport/media reset, but **silent `clearMediaActionDeferral()` is forbidden**. The defect is missing ownership transition fact, not the existence of supersede.
+
+##### J-X-2 — Who owns supersede authority?
+
+> When a new recovery domain needs to retire an existing deferred intent, who may emit `DEFERRED_INTENT_SUPERSEDED`?
+
+| Option | Authority | Notes |
+|--------|-----------|-------|
+| **A** | New domain owner (e.g. MEDIA) supersedes itself | Domain-local; easily becomes "MEDIA clears whatever exists" + event (near-current bug) |
+| **B** | Coordinator / orchestration layer | Global view, but re-opens Coordinator-as-policy-brain (conflicts PR5-2c-A/C freeze) |
+| **C** | Existing intent owner (NEGOTIATION) decides keep/supersede | Ownership stable; needs request/ack; owner may be inactive |
+| **D** | Narrow **DeferredIntentAuthority** owns lifecycle transition / legality / audit only | **FROZEN** |
+
+**J-X-2 = D (CLOSED):**
+
+```text
+DeferredIntentAuthority
+
+owns:
+  - lifecycle transition
+  - supersede legality
+  - audit event (DEFERRED_INTENT_SUPERSEDED)
+
+does NOT own:
+  - media recovery policy
+  - negotiation policy
+  - dispatch / CompletionPolicy / delivery
+
+Chain:
+  MEDIA_NOT_READY
+        |
+        v
+  requestSupersede(R*)
+        |
+        v
+  DeferredIntentAuthority
+        |
+        +--> DEFERRED_INTENT_SUPERSEDED
+        |
+        +--> allow new MEDIA obligation (or deny)
+```
+
+Layering:
+
+```text
+Domain  --request transition-->  DeferredIntentAuthority  --owns lifecycle fact-->  Intent state
+```
+
+Rationale: J-X-1 treats deferred intent as a **cross-domain committed obligation**, so its lifecycle needs a dedicated authority. Rejects A (implicit ownership), B (Coordinator brain), C (request/ack complexity + inactive owner).
+
+**Does not authorize moving** RecoveryDeliveryPolicy / CompletionPolicy / ConferenceEdgeRecoveryController ownership. Authority is **transition legality + audit only**.
+
+##### J-X-3 — After supersede, how are old-intent evidence / fence / budget handled?
+
+```text
+R* (NEGOTIATION)  --DEFERRED_INTENT_SUPERSEDED-->  R*+1 (new domain / new intent)
+```
+
+Old intent must not vanish, and must not keep executing.
+
+###### J-X-3a — Evidence
+
+| Option | Rule | Notes |
+|--------|------|-------|
+| **A** | Delete old evidence | Conflicts J-X-1 audit; cannot explain missing EXECUTED |
+| **B** | Retain as immutable historical terminal `SUPERSEDED` | **FROZEN** — `SUPERSEDED ≠ FAILED ≠ EXECUTED` |
+| **C** | Keep as active observation | Dual-owner risk; must not drain/retry/affect completion |
+
+**J-X-3a = B:** retain `intentId`, `createdAt`, `ownerDomain`, `supersededAt`, `supersedeReason`, optional `replacementIntentId` as immutable history.
+
+###### J-X-3b — Fence
+
+| Option | Rule | Notes |
+|--------|------|-------|
+| **A** | Auto-clear with no event | Replays current bug |
+| **B** | Explicit release in same supersede transaction | **FROZEN** — `ARMED → RELEASED_BY_SUPERSEDE` + `FENCE_RELEASED(reason=SUPERSEDED)` |
+| **C** | Keep fence forever | Meaningless once intent cannot execute |
+
+**J-X-3b = B:** fence lifecycle completes with supersede fact (not silent clear).
+
+###### J-X-3c — Budget
+
+| Option | Rule | Notes |
+|--------|------|-------|
+| **A** | Consume old budget on supersede | Wrong: supersede ≠ dispatch |
+| **B** | Freeze old budget; no consume; no inheritance | **FROZEN** — replacement starts new lifecycle |
+| **C** | Migrate budget to replacement intent | Cross-domain pollution (NEG failure burns MEDIA retry) |
+
+**J-X-3c = B:** `supersede ≠ retry`, `supersede ≠ attempt++`.
+
+**J-X-3 = B/B/B (CLOSED):**
+
+```text
+DeferredIntentAuthority
+
+ACTIVE
+  |
+  | supersede
+  v
+SUPERSEDED
+  |
+  +-- evidence retained (immutable terminal)
+  +-- fence RELEASED_BY_SUPERSEDE (explicit)
+  +-- budget frozen (no consume, no inherit)
+```
+
+##### J-X-4 — May supersede occur while the intent is in `HELD(DISPATCH)`?
+
+```text
+CREATED -> BLOCK(DISPATCH_NOT_READY) -> HELD(DISPATCH)
+  -> MEDIA_NOT_READY / EDGE_STARTED ?
+```
+
+| Option | Rule | Notes |
+|--------|------|-------|
+| **A** | Forbidden — HELD is commitment boundary; must EXECUTE or EXPLICIT FAIL | Stable HELD; risk of stuck HOLD when transport epoch changes |
+| **B** | Allowed only via DeferredIntentAuthority + auditable supersede | **FROZEN** |
+| **C** | Forbidden until timeout then supersede | Introduces timer-as-authority; conflicts D1/C discipline |
+
+**J-X-4 = B (CLOSED):**
+
+```text
+HELD(DISPATCH)
+  = dispatch obligation exists + currently blocked
+  ≠ immutable execution promise
+  ≠ EXECUTED
+
+HELD allows supersede ONLY through DeferredIntentAuthority
+
+Must emit:
+  DEFERRED_INTENT_SUPERSEDED
+    oldState=HELD
+    reason=...
+
+Same J-X-3 transaction rules:
+  evidence -> SUPERSEDED terminal
+  fence -> RELEASED_BY_SUPERSEDE
+  budget -> frozen
+
+Forbidden:
+  direct clear
+  implicit replacement
+  silent fence removal
+```
+
+Principle: deeper state increases **audit requirements**, not a hard ban on mutation.
+
+##### J-X-5 — May replacement inherit prior HELD dispatch-readiness evidence?
+
+```text
+R16 HELD(DISPATCH) / dispatchReady=true
+  -> SUPERSEDED
+  -> R17 replacement
+```
+
+| Option | Rule | Notes |
+|--------|------|-------|
+| **A** | Inherit / carry dispatchReady to replacement | Faster; stale if transport/signaling epoch changed |
+| **B** | No inherit — old evidence historical only; replacement re-probes | **FROZEN** |
+| **C** | Conditional inherit (same edge/session/epochs + TTL) | Expands J-X into capability-cache / TTL authority |
+
+**J-X-5 = B (CLOSED):**
+
+```text
+intent evidence  ≠  capability truth
+
+Replacement intent:
+  - inherits no dispatch readiness evidence
+  - inherits no NEGOTIATION_CAN_EXECUTE state
+  - may reference old evidence for audit only
+
+Old evidence:
+  immutable historical observation
+  not execution permission
+
+R17 must:
+  obtain fresh NEGOTIATION_CAN_EXECUTE (edge rising-edge)
+  fresh-probe dispatchReady
+```
+
+Protects J-B from:
+
+```text
+R16 dispatchReady=true -> R17 reuse -> fake EXECUTED
+```
+
+##### J-X-6 — May SUPERSEDED old intent still emit late events?
+
+```text
+R16 SUPERSEDED -> R17 replacement
+late: CAN_EXECUTE / DRAIN_RETRY / DISPATCH_RESULT / ICE_RESTART_DISPATCHED ?
+```
+
+| Option | Rule | Notes |
+|--------|------|-------|
+| **A** | Fully discard all late events | Simple; weak audit (e.g. late DISPATCH_SUCCESS unexplained) |
+| **B** | Observation-only; execution/mutation forbidden | **FROZEN** |
+| **C** | Allow some late events to revive old intent | Breaks SUPERSEDE as ownership transition / terminal lifecycle |
+
+**J-X-6 = B (CLOSED):**
+
+```text
+Evidence: immutable
+Intent lifecycle: authoritative
+Late observation: allowed
+Late mutation: forbidden
+
+SUPERSEDED
+  |
+  +-- late event -> audit fact (e.g. DEFERRED_INTENT_LATE_EVENT_OBSERVED /
+  |                            DISPATCH_RESULT_AFTER_SUPERSEDE)
+  |
+  +-- state mutation ❌
+  +-- drain trigger ❌
+  +-- retry trigger ❌
+  +-- completion evidence ❌
+
+Forbidden for SUPERSEDED old intent:
+  DEFERRED_INTENT_DRAIN_RETRY (as transition)
+  NEGOTIATION_CAN_EXECUTE transition
+  DISPATCH permission
+  EXECUTED transition
+  RECOVERED transition
+```
+
+J-B closure guarantee:
+
+```text
+R16: SUPERSEDED; late events ignored for execution
+R17: fresh ownership + capability + dispatch evidence
+```
+
+##### J-X-7 — Is SUPERSEDED terminal, or are CANCELLED / EXPIRED required?
+
+| Option | Rule | Notes |
+|--------|------|-------|
+| **A** | SUPERSEDED is sole execution terminal | Simple; retention/purge may pollute intent state later |
+| **B** | SUPERSEDED is intermediate; requires CANCELLED/EXPIRED | Extra cleanup/timeout owners; complexity vs J-X-2 |
+| **C** | Split: SUPERSEDED = execution terminal; retention/purge separate | **CLOSED** |
+
+**J-X-7 = C (CLOSED):**
+
+```text
+Intent execution lifecycle (DeferredIntentAuthority owns):
+
+  CREATED -> HELD -> EXECUTED (-> COMPLETED)
+                 \-> SUPERSEDED ★ terminal
+
+No execution-state:
+  CANCELLED transition
+  EXPIRED execution state
+
+Retention lifecycle (independent; not intent execution):
+
+  SUPERSEDED -> RETENTION_EXPIRED -> PURGED
+
+Invariants:
+  SUPERSEDED MUST NOT re-enter executable states
+  Retention expiration MUST NOT imply execution failure
+```
+
+Authority split:
+
+```text
+DeferredIntentAuthority owns:
+  CREATED / HELD / SUPERSEDED / EXECUTED
+
+does NOT own:
+  storage retention / purge
+```
+
+**J-X semantics pack (J-X-1 through J-X-7) CLOSED.**
+
+##### Implementation Authorization — DeferredIntentAuthority Slice-1 (**CLOSED / VERIFIED** 2026-08-01)
+
+**Purpose:** authorize the **minimum** production slice that realizes J-X-1..7. Slice-1 ownership path is closed; Phase-3 field soak remains **NOT AUTHORIZED**.
+
+**Pipeline (ordered):**
+
+```text
+Implementation Authorization (this section)
+        ↓
+DeferredIntentAuthority slice
+        ↓
+Unit / deterministic validation
+        ↓
+Joint soak re-run
+        ↓
+J-B: HELD(DISPATCH) -> DRAIN_RETRY -> REPROBE_PASS -> EXECUTED
+        ↓
+PR5-3 unlock (only after Joint PASS)
+```
+
+###### Slice-1 IN (allowed)
+
+```text
+DeferredIntentAuthority
+
+owns:
+  requestSupersede()
+  validate transition legality
+  emit:
+    DEFERRED_INTENT_SUPERSEDED
+    (and J-X-3 fence RELEASED_BY_SUPERSEDE / FENCE_RELEASED(reason=SUPERSEDED)
+     in the same supersede transaction)
+
+SUPERSEDED handling:
+  old intent state = SUPERSEDED (execution terminal)
+  late event = audit only (J-X-6)
+  replacement = no evidence / CAN_EXECUTE inheritance (J-X-5)
+```
+
+###### Slice-1 OUT (remain frozen)
+
+```text
+RecoveryDeliveryPolicy
+CompletionPolicy
+D1 ingress producer
+PR5-2c-C drain algorithm
+NEGOTIATION_CAN_EXECUTE semantics
+dispatch readiness rules
+UVCP / PR5-3 projection
+retention / purge storage lifecycle (J-X-7 retention plane)
+```
+
+###### Acceptance gate — do NOT field-run first
+
+**1) UT (required):**
+
+```text
+CREATED -> SUPERSEDED                         PASS
+HELD -> SUPERSEDED                            PASS
+SUPERSEDED + late event                       audit only PASS
+SUPERSEDED -> EXECUTED                        reject PASS
+SUPERSEDED -> HELD                            reject PASS
+replacement no evidence copy                  PASS
+```
+
+**2) Deterministic Joint (required after UT):**
+
+```text
+R16: CREATED -> HELD -> SUPERSEDED; late events ignored for execution
+R17: fresh ownership + fresh capability + fresh evidence
+```
+
+**3) Field Joint soak (only after 1+2):**
+
+```text
+J-B closure: HELD(DISPATCH) -> DRAIN_RETRY -> REPROBE_PASS -> EXECUTED(R*)
+```
+
+Until Phase-3 field soak is explicitly authorized: Joint J-B NOT VERIFIED, PR5-3 BLOCKED, non-Slice-1 production code FROZEN.
+
+**Closure status:** Slice-1 **CLOSED / VERIFIED** (2026-08-01).  
+**Acceptance progress:**
+
+```text
+Phase-1 UT                                      PASS ✅
+  DeferredIntentAuthoritySlice1Test
+Phase-2 deterministic Joint (authority only)    PASS ✅
+  DeferredIntentAuthoritySlice1JointTest
+  R16: CREATED -> HELD(DISPATCH) -> SUPERSEDED via EDGE_STARTED
+       late drain/retry ignored (no EXECUTED)
+  R17: fresh ownership / fence / evidence; no inheritance from R16
+Phase-3 field Joint soak                        NOT AUTHORIZED ⚪
+
+Proven path (replaces silent clear):
+  EDGE_STARTED -> DeferredIntentAuthority -> DEFERRED_INTENT_SUPERSEDED
+  -> FENCE_RELEASED(reason=SUPERSEDE)
+
+Field Authorization prerequisites (when opened):
+  Slice-1 deterministic PASS
+  + explicit field scenario
+  + J-B evidence contract unchanged
+  -> authorize Phase-3 only then
+
+Hold discipline (until Phase-3 Field Authorization):
+  - do not run field soak
+  - do not expand DeferredIntentAuthority scope
+  - do not change C drain / negotiation / dispatchReady semantics
+  - do not unlock PR5-3 early
+  - do not extrapolate deterministic Joint PASS to field PASS
+
+Phase-3 staging (NOT AUTHORIZED — structure only):
+  Phase-3A  Field Joint preflight
+  Phase-3B  Field J-B evidence
+            HELD(dispatch) -> DRAIN_RETRY -> REPROBE -> EXECUTED
+            J-B literal: EXECUTED != DISPATCHED; require HELD(dispatch),
+            DRAIN_RETRY, fresh reprobe pass, dispatch evidence,
+            DEFERRED_INTENT_EXECUTED
+  Phase-3C  PR5-3 unlock review
+```
+
+IN/OUT scope unchanged. Do not expand into NEGOTIATION_CAN_EXECUTE / CompletionPolicy / D1 / UVCP without new authorization.
+
+---
+
+#### E.16.2 Field Authorization Contract (**FROZEN** 2026-08-01)
+
+**Status:**
+
+```text
+§E.16.2                                 FROZEN ✅
+Production domains (D1/C/Completion/Delivery)  FROZEN 🔒
+Phase-3A Field Authorization            AUTHORIZED (2026-08-01)
+  EXERCISE_MODE=OWNERSHIP_ISOLATION
+  stimulus=DEBUG_EXPLICIT_SUPERSEDE
+  IntentIdentity=(sessionId, edgeId, intentId)
+Phase-3A harness                        LANDED (DEBUG_EXPLICIT_SUPERSEDE + UT PASS)
+Phase-3A field result                   PASS ✅
+  evidence=logs/phase3a-ownership-20260802-124028
+Phase-3B Field Authorization            AUTHORIZED (2026-08-02)
+  EXERCISE_MODE=J_B_JOINT
+  J-B execution                         NOT VERIFIED ⚪
+  Phase-3B #1                           ABORT_INVALID_EXERCISE_BUCKET_A
+    evidence=logs/phase3b-jb-joint-20260802-124424
+    note=HELD reached; execution interrupted (REATTACH cut) — not J-B product FAIL
+  Phase-3B #2                           ABORT_INVALID_EXERCISE_BUCKET_B
+    evidence=logs/phase3b-jb-joint-20260802-130019
+    note=HELD not reached; pre-HELD EDGE_STARTED SUPERSEDE — not J-B product FAIL
+    diagnostic=R4_NO_HELD_DIAGNOSTIC.txt
+    (also proves Slice-1 seam: authority supersede + auditable fence)
+  J-F                                   PASS (both rounds)
+  Production                            FROZEN
+  pr53Unlock                            BLOCKED
+  Phase-3B-Retry-A                      CLOSED / PASS_JB_EXECUTION ✅ (2026-08-02)
+    EXERCISE_MODE=J_B_EXECUTION
+    objective=HELD_TO_EXECUTED
+    evidence=logs/phase3b-retry-a-20260802-143254
+    intentId=R5 session=e2025eae-d2e6-4b85-8b4a-ce8a34a39a58
+    chain=CREATED→HELD(DISPATCH)→RELEASE→DRAIN_RETRY→REPROBE_PASS→EXECUTED
+    jb=PASS jf=PASS Pre-HELD=PASS
+    note=proves DeferredIntentAuthority does not block HELD→EXECUTED; J-B NOT relaxed
+  Phase-3C Joint Final Validation       AUTHORIZED (2026-08-02)
+    EXERCISE_MODE=J_B_JOINT
+    objective=SAME_EPISODE_JA_JB_JF
+    gates=J-A + J-B + J-F (hard)
+    Pre-HELD Stability Gate             mandatory
+    pr53Unlock                          BLOCKED until Joint PASS + unlock review
+    field result                        PENDING
+    attempt-1                           ABORT_INVALID_EXERCISE
+      evidence=logs/phase3c-joint-final-20260802-145914
+      note=harness preempted on CREATE-probe leftover (no flap; D1 cleared before L3)
+    attempt-2b                          ABORT_INVALID_EXERCISE_BUCKET_B
+      evidence=logs/phase3c-joint-final-20260802-150548
+      intentId=R10 — SUPERSEDE while CREATED (NEG lost race)
+    attempt-3                           ABORT_INVALID_EXERCISE (harness false Bucket B)
+      evidence=logs/phase3c-joint-final-20260802-151101
+      intentId=R11 — HELD then EDGE SUPERSEDE; gate fixed after
+    attempt-4                           ABORT_INVALID_EXERCISE (PREEMPT_TIMEOUT)
+      evidence=logs/phase3c-joint-final-20260802-151448
+    attempt-5                           ABORT_INVALID_EXERCISE_BUCKET_A ✅ reclass confirmed
+      evidence=logs/phase3c-joint-final-20260802-152331
+      intentId=R12 offerLineageId=L4
+      ja=PASS (ABSENT→EVALUATE→ADMITTED→RETRY)
+      jb=NOT_EXERCISED (post-HELD EDGE SUPERSEDE ~820ms — no execution window)
+      jf=PASS
+      note=NOT product FAIL_C; Slice-1 supersede of HELD correct (auditable, no silent clear)
+  J-Contract Decision                   B ✅ FROZEN (2026-08-02)
+    meaning=single-episode J-A + J-B required for PR5-3 unlock primary evidence
+    A (split evidence)                  SUPPLEMENTARY ONLY — not unlock primary
+  Phase-3C-B Protected Execution Window AUTHORIZED (2026-08-02)
+    EXERCISE_MODE=J_B_JOINT
+    harness-only=J-A complete → topology freeze → HELD→EXECUTED
+    no production / no J-B relax
+    field Attempt-1 (2026-08-02)        FAIL_C ⚠️ VALID exercise (NOT INVALID)
+      log=logs/phase3c-b-20260802-200004
+      ja=PASS ✅ (L5)
+      jb=FAIL ❌ (R14 path exercised; no EXECUTED)
+      jf=PASS ✅
+      vs Attempt-5=Bucket A (HELD→EDGE→SUPERSEDE) — different class
+      path=CREATE→HELD→RELEASE→REPROBE→executable=false
+           →OFFER_AWAITING_ANSWER→HELD(NEGOTIATION)
+      meaning=J-B execution contract exercised; post-release
+              negotiation readiness not satisfied
+      scoring-bug=DEBUG_FORCED_REPROBE must NOT count as J-B PASS
+    Phase-3C-B Attempt-2 Harness Fix    AUTHORIZED (2026-08-02)
+      scope=harness-only pre-create STABLE gate + release-after REPROBE accounting
+      OUT=production / DeferredIntentAuthority / D1 / C SM / J-B threshold
+      field Attempt-2 (2026-08-02)        ABORT_INVALID_EXERCISE ⚪ (NOT J-B FAIL)
+        log=logs/phase3c-b-20260802-201450
+        ja=PASS (L6)
+        jb=NOT_EXERCISED
+        code=PRE_CREATE_SIGNALING_NOT_STABLE (120s)
+        class=harness attribution error (GROUP_MESH leaked into CONFERENCE)
+        note=CONFERENCE edge CLOSED (fe1df595|M03); gate matched grp:CH-01|M03
+    Phase-3C-B Attempt-3 Harness Fix    AUTHORIZED (2026-08-02)
+      scope=CONFERENCE_ONLY
+      field Attempt-3 (2026-08-02)        ABORT_INVALID_EXERCISE ⚪ (NOT J-B FAIL)
+        log=logs/phase3c-b-20260802-202550
+        ja=PASS (L7)
+        jb=NOT_EXERCISED
+        code=CONFERENCE_CLOSED (fast-fail; no 120s GROUP hunt)
+        preflight=grp:CH-01|M03 reason=WRONG_SCOPE ✅ rejected
+        note=scope fix VERIFIED; bottleneck=CONFERENCE lifecycle stability
+    Phase-3C-B Environment Gate         CONTRACT FROZEN; Attempt-4b CLOSED; Attempt-4c AUTHORIZED
+      CONFERENCE_STABILITY_GATE before CREATE:
+        scope=CONFERENCE + sessionId + edgeId
+        signalingState=STABLE
+        edgeLifecycle=CONNECTED
+        stableDuration>=5s (5~10s band)
+      purpose=avoid create-during-signaling-churn (not success padding)
+      OUT=production / J-B relax / D1/C
+    Phase-3C-B Attempt-4 (R2 Joint)       CLOSED (2026-08-02)
+      log=logs/phase3c-b-attempt4-20260802-212434
+      result=FAIL_C_CHAIN
+      failureCase=C_OWNERSHIP_OK_EXEC_MISSING
+      ja=NOT_EXERCISED / INVALID PATH (ALREADY_SATISFIED fast path; no ingress-miss chain)
+      jb=NOT VERIFIED (no HELD(DISPATCH) / EXECUTED)
+      r2Ownership=FIELD_VERIFIED ✅ (ADMIT_SUCCESSOR → DEFERRED_INTENT_RELEASED; no silent null)
+      pr53Unlock=BLOCKED
+      meaning=valuable convergence — R2 safe under recovery lifecycle competition;
+              gap remains D1 ingress-miss chain + C HELD→RELEASE→EXECUTED
+    Phase-3C-B Attempt-4b                 CLOSED (2026-08-02)
+      log=logs/phase3c-b-attempt4b-20260802-220150
+      result=ABORT_INVALID_EXERCISE
+      code=JA_TIMEOUT
+      ja=NOT_VERIFIED (L1 + D1_DROP + ABSENT; no EVALUATE/ADMITTED/RETRY)
+      jb=NOT_ENTERED
+      r2Ownership=not_challenged
+      pr53Unlock=BLOCKED
+      offline4c=D1_DIAG_A sub=STIMULATION_WINDOW_LAG+SUPERSEDE_CLEAR_DELIVERY_BEFORE_ABSENT
+      meaning=blocking point back at D1 exercise ingress; not C/ownership
+    Phase-3C-B Attempt-4c                 SUSPENDED (2026-08-03)
+      purpose=D1 ABSENT→ADMISSION diagnostic (harness-only admission trace)
+      harness=scripts/run-phase3c-b-protected-window.ps1 (-Attempt 4c)
+      reason=NOT "proven to fail" — no explicable exercise topology; further
+             rounds cannot produce incremental evidence until R3 + successor
+             suppression primitive land
+      offlineResult=D1_DIAG_A (answered from 4b log; field round adds nothing)
+    PR5-3 Root Cause Grill R3        IMPLEMENTED_PENDING_VALIDATION (2026-08-03) — see §E.17
+      title=Recovery Delivery Obligation Conservation (NOT "supersede fix")
+      scope=termination integrity only
+      semantic=X′ (supersede may legally terminate; adoption NOT implied)
+      invariant=INV-REC-032 obligation conservation
+      authority=RecoveryOfferDeliveryPolicy (controller = requester, not mutator)
+      evidence=logs/phase3c-b-attempt4b-20260802-220150 (103s obligation loss)
+    PR5-3 Root Cause Grill R4        REGISTERED (2026-08-03) — not started
+      title=Successor Adoption Integrity
+      question=when does a successor actually adopt the recovery obligation?
+      owns=adoption point / TRANSFERRED semantics / delivery-vs-deferredIntent kinship
+      note=R3 closure MUST NOT be worded as "supersede semantics clarified"
+    Classification buckets (KEEP — do not merge):
+      FAIL_C                 = product chain real failure
+      ABORT_INVALID_EXERCISE = exercise preconditions not met
+      NOT_EXERCISED          = no J-B evidence produced
+    Field soak               STOPPED (2026-08-02)
+    PR5-3 Root Cause Grill R1        CLOSED / VERIFIED ✅ (read-only 2026-08-02)
+      root=shared mutable storage + non-authoritative mutation
+      primary offender=clearMediaActionDeferral()
+      secondary=EDGE_STARTED semantic overreach
+      NOT root cause=D1 / DeliveryPolicy / CAN_EXECUTE / J-B contract
+    PR5-3 Root Cause Grill R2        IMPLEMENTED / VERIFIED ✅ (decision=A 2026-08-02)
+    Phase-3B Joint field Attempt-4   CLOSED (see Attempt-4 above)
+    Field soak                           STOPPED (Attempt-4b single round only)
+    harness                             scripts/run-phase3c-b-protected-window.ps1 (-Attempt 4b|4c)
+D1                                     CLOSED ✅
+DeferredIntentAuthority Slice-1         CLOSED / VERIFIED (§E.16.1)
+R2 ownership invariant                    FIELD_VERIFIED ✅ (Attempt-4)
+PR5-3 / UVCP                            BLOCKED 🔒
+Production                              FROZEN (R2 only; no J-B relax / no CompletionPolicy)
+```
+
+**Purpose:** D1 **CLOSED**; Slice-1 **CLOSED**; Grill R1/R2 **VERIFIED**; Attempt-4 / 4b **CLOSED**; Attempt-4c **SUSPENDED**; **Grill R3 IMPLEMENTED_PENDING_VALIDATION** (§E.17 obligation conservation), **R4 REGISTERED**; PR5-3 **BLOCKED**.
+
+**Evidence-model shift (2026-08-03):** Joint is demoted from *sole diagnostic instrument* to *integration confidence gate*. It is **not** cancelled. See §E.17.7.
+
+**Non-goals (still out of scope):**
+
+```text
+- expanding DeferredIntentAuthority beyond Slice-1
+- changing D1 / C drain / Completion / Delivery / NEGOTIATION_CAN_EXECUTE
+- scoring J-B / Joint PASS / PR5-3 unlock from Phase-3A
+```
+
+##### E.16.2.0 Review disposition (consistency check — CLOSED)
+
+Contract-only review. No implementation expansion.
+
+| ID | Check | Disposition |
+|----|-------|-------------|
+| **Review-1** | FA-0 isolates OWNERSHIP_ISOLATION from J-B / EXECUTED / PR5-3 scoring | **CONFIRMED** |
+| **Review-2** | R16 PASS requires CREATED→HELD(DISPATCH)→SUPERSEDED; CREATE→SUPERSEDE alone rejected | **CONFIRMED** |
+| **Review-3** | IntentIdentity = `(sessionId, edgeId, intentId)`; forbid remote/session/attempt alone | **CONFIRMED** |
+| **Review-4** | Phase-3A PASS ≠ Joint PASS ≠ PR5-3 unlock | **CONFIRMED** |
+| **Review-5** | J-A remains PR5-3 hard gate (`J-A = YES`) | **CONFIRMED** |
+| **Review-6** | INVALID / ABORT priority above product FAIL classes | **CONFIRMED** |
+
+##### E.16.2.1 Exercise Mode (FA-0 — hard gate)
+
+Every field run **MUST** declare exactly one mode:
+
+```text
+EXERCISE_MODE =
+  OWNERSHIP_ISOLATION   // Phase-3A
+  |
+  J_B_JOINT             // Phase-3B
+```
+
+Rules:
+
+```text
+mode missing
+or analyzer mode mismatch
+or report lacks EXERCISE_MODE
+        ↓
+ABORT_INVALID_EXERCISE
+        ↓
+NOT product FAIL
+```
+
+**OWNERSHIP_ISOLATION — may evaluate:**
+
+```text
+R16 lifecycle
+SUPERSEDED ownership transition
+fence release
+late event audit-only
+R16/R17 ownership isolation
+```
+
+**OWNERSHIP_ISOLATION — must NOT evaluate:**
+
+```text
+J-B
+EXECUTED (as success criterion)
+PR5-3 unlock
+```
+
+Purpose: prevent Phase-3A (no EXECUTED expected) from being scored as `FAIL_C_CHAIN` by the legacy Joint analyzer.
+
+##### E.16.2.2 Phase-3A — Ownership Isolation
+
+**Objective — prove:**
+
+```text
+DeferredIntentAuthority
+        ↓
+SUPERSEDED
+        ↓
+fence release
+        ↓
+late event isolation
+```
+
+**Objective — do NOT prove (out of Phase-3A):**
+
+```text
+NEGOTIATION_CAN_EXECUTE semantics
+dispatch / drain algorithm
+CompletionPolicy
+D1 retry ownership
+PR5-3 / UVCP
+J-B EXECUTED chain
+```
+
+**R16 contract (PASS requires full chain):**
+
+```text
+CREATED
+   ↓
+HELD(DISPATCH)
+   ↓
+SUPERSEDED
+```
+
+**Forbidden as Phase-3A PASS:**
+
+```text
+CREATED → SUPERSEDE alone
+```
+
+Rationale: must prove an **execution obligation already held** was correctly terminated — not merely create-record cleanup.
+
+**R16 PASS criteria — must exist (same `intentId`, e.g. R16):**
+
+```text
+DEFERRED_INTENT_HELD(... hold=DISPATCH intentId=R16)
+DEFERRED_INTENT_SUPERSEDED(
+  oldIntent=R16
+  oldState=HELD_DISPATCH
+  authority=DeferredIntentAuthority
+)
+FENCE_RELEASED(intentId=R16 reason=SUPERSEDE)
+  // fence release reason token = SUPERSEDE (Slice-1 as-built);
+  // intent execution state = SUPERSEDED
+late event disposition = AUDIT_ONLY
+  (e.g. DEFERRED_INTENT_LATE_EVENT_OBSERVED ... disposition=AUDIT_ONLY
+   and/or late drain/neg signals produce no R16 execution)
+```
+
+**R16 PASS criteria — must NOT exist for R16:**
+
+```text
+DEFERRED_INTENT_DRAIN_RETRY(intentId=R16)
+RECOVERY_ICE_RESTART_DISPATCHED(intentId=R16)
+DEFERRED_INTENT_EXECUTED(intentId=R16)
+obligation close / RECOVERED attributed to R16
+```
+
+**R17 (Phase-3A scope — isolation only):**
+
+```text
+After R16 SUPERSEDED:
+  R17 may be CREATED with fresh ownership / fence / evidence
+  R17 MUST NOT inherit R16 dispatchReady / CAN_EXECUTE / probe / drain eligibility
+Phase-3A does NOT require R17 EXECUTED
+```
+
+**IntentIdentity (correlation key — frozen):**
+
+```text
+IntentIdentity = (sessionId, edgeId, intentId)
+```
+
+**Forbidden as sole aggregation keys:**
+
+```text
+remoteModuleId alone
+sessionId alone
+attemptId alone
+```
+
+R16 and R17 are distinct IntentIdentity values (`old intent ≠ replacement intent`, J-X-5). Analyzer joins **MUST** key on the full triple.
+
+**Phase-3A primary verdict:**
+
+```text
+ownershipIsolation = PASS | FAIL | NOT_EXERCISED
+jb                 = NOT_EXERCISED   (forced under OWNERSHIP_ISOLATION)
+pr53Unlock         = BLOCKED         (forced)
+```
+
+**Unlock ladder (frozen — Phase-3A cannot climb it):**
+
+| Phase | Result meaning | Unlock effect |
+|-------|----------------|---------------|
+| 3A Ownership Isolation | PASS = ownership isolation only | **no** PR5-3 unlock |
+| 3B J-B | PASS = C drain chain only | **partial** (still need J-A + J-F) |
+| 3C Joint regression | PASS = J-A + J-B + J-F | **yes** — unlock review may allow |
+
+```text
+Phase-3A PASS
+  ≠ Joint PASS
+  ≠ PR5-3 unlock
+```
+
+##### E.16.2.3 Phase-3B — J-B Reopen
+
+Entered **only after** Phase-3A PASS **and** explicit **Authorize Phase-3B Field**.
+
+May combine:
+
+```text
+D1 + C + DeferredIntentAuthority
+```
+
+under `EXERCISE_MODE=J_B_JOINT`.
+
+**Separation (frozen after field #1/#2):**
+
+```text
+Question 1 — DeferredIntentAuthority supersede legality
+  → covered by Phase-3A (PASS); do not re-score as J-B
+
+Question 2 — HELD drain execution (J-B only)
+  → HELD(DISPATCH) → DRAIN_RETRY → REPROBE_PASS → EXECUTED
+```
+
+Lifecycle interruptions before/after HELD that prevent Question 2 are
+`ABORT_INVALID_EXERCISE`, not J-B product FAIL.
+
+###### Phase-3B Pre-HELD Stability Gate (exercise contract — FROZEN)
+
+Required path before any J-B scoring:
+
+```text
+R*
+CREATED
+ ↓
+FENCE
+ ↓
+BLOCK
+ ↓
+NEGOTIATION_CAN_EXECUTE
+ ↓
+HELD(DISPATCH)
+```
+
+During this window:
+
+```text
+EDGE_STARTED / SUPERSEDE before HELD
+        → ABORT_INVALID_EXERCISE
+        → jb = NOT_EXERCISED
+        → not product FAIL_C / FAIL_OWNERSHIP
+```
+
+Field classification buckets (observation):
+
+| Bucket | Window | Example | Score |
+|--------|--------|---------|-------|
+| **A** | after HELD | REATTACH / EDGE lifecycle cuts held intent before EXECUTED | `ABORT_INVALID_EXERCISE_BUCKET_A` (not J-B FAIL) |
+| **B** | before HELD | EDGE_STARTED → SUPERSEDED while CREATED | `ABORT_INVALID_EXERCISE_BUCKET_B` (not J-B FAIL; may still evidence Slice-1 seam) |
+
+**J-B evidence contract — unchanged / not relaxed** (only after Pre-HELD gate PASS):
+
+```text
+HELD(DISPATCH)
+        ↓
+DRAIN_RETRY
+        ↓
+REPROBE_PASS
+        ↓
+EXECUTED
+```
+
+Literal:
+
+```text
+DISPATCHED ≠ EXECUTED
+RECOVERY_ICE_RESTART_DISPATCHED alone = FAIL for J-B
+```
+
+Required together for J-B PASS:
+
+```text
+HELD(dispatch)
+DRAIN_RETRY
+fresh reprobe pass
+dispatch evidence (same intentId)
+DEFERRED_INTENT_EXECUTED (same intentId)
+```
+
+**Phase-3B-Retry-A** (PASS 2026-08-02):
+
+```text
+EXERCISE_MODE=J_B_EXECUTION
+objective=HELD_TO_EXECUTED
+field result=PASS_JB_EXECUTION
+evidence=logs/phase3b-retry-a-20260802-143254
+intentId=R5
+acceptance observed:
+  CREATED → BLOCK → NEGOTIATION_CAN_EXECUTE → HELD(DISPATCH)
+  → RELEASE → DRAIN_RETRY → REPROBE_PASS → EXECUTED
+jb=PASS jf=PASS
+constraints honored:
+  no D1 / no topology perturbation / no EDGE_STARTED before HELD
+does NOT unlock PR5-3 (J-A + J_B_JOINT still required)
+harness:
+  scripts/run-phase3b-retry-a.ps1
+```
+
+##### E.16.2.4 Phase-3C — PR5-3 Qualification
+
+PR5-3 unlock is **not** implied by:
+
+```text
+Slice-1 PASS
+Phase-3A ownershipIsolation PASS
+Phase-3B-Retry-A PASS alone
+Phase-3C Attempt-5 J-A PASS alone
+split evidence (Decision A)
+```
+
+**J-Contract Decision = B (FROZEN 2026-08-02):**
+
+```text
+PR5-3 unlock primary evidence MUST be single-episode Joint:
+  J-A + J-B + J-F under EXERCISE_MODE=J_B_JOINT
+  with a protected HELD→EXECUTED window (harness-only)
+
+Decision A (split: Attempt-5 J-A + Retry-A J-B) =
+  SUPPLEMENTARY evidence only — NOT unlock primary
+```
+
+**PR5-3 unlock requires (frozen under Decision B):**
+
+```text
+Slice-1 CLOSED / VERIFIED
++
+single-episode Joint:
+  J-A PASS
+  J-B PASS   // HELD→RELEASE→DRAIN_RETRY→REPROBE_PASS→EXECUTED same episode as J-A
+  J-F PASS
++
+unlock review
+```
+
+**J-A hard-gate freeze:**
+
+```text
+J-A = YES (still PR5-3 hard gate)
+```
+
+###### E.16.2.4.1 Phase-3C-B — Protected Execution Window (harness contract — FROZEN)
+
+**Status:** contract FROZEN; field **AUTHORIZED** (2026-08-02) — `Authorize Phase-3C-B Protected Execution Window`.
+
+**Problem (Attempt-5):** flap-induced `EDGE_STARTED` legally SUPERSEDEs `HELD_DISPATCH` (~820ms), removing the J-B execution window. Slice-1 behavior is correct; Joint exercise lacks a stable `HELD→EXECUTED` interval.
+
+**Objective (harness-only):**
+
+```text
+same episode / same IntentIdentity + offerLineageId correlation plane
+        ↓
+J-A complete (ABSENT→EVALUATE→ADMITTED→RETRY)
+        ↓
+CREATE R* → BLOCK → NEG → HELD(DISPATCH)
+        ↓
+PROTECTED WINDOW: no harness-driven lifecycle cut
+  (no further flap / no debug supersede / no intentional EDGE stimulus)
+        ↓
+RELEASE → DRAIN_RETRY → REPROBE_PASS → EXECUTED
+        ↓
+J-F: no premature RECOVERED
+```
+
+**Allowed (tooling):**
+
+```text
+reorder / gate timing of adb debug broadcasts
+hold flap complete before C HELD→EXECUTED (or complete J-A then freeze topology)
+abort INVALID if EDGE_STARTED/SUPERSEDE during protected window after HELD
+Pre-HELD Stability Gate remains mandatory
+```
+
+**Forbidden:**
+
+```text
+relax J-B (DISPATCHED ≠ EXECUTED)
+treat SUPERSEDED as EXECUTED
+ban / disable legal DeferredIntentAuthority supersede in production
+change D1 / C drain / CompletionPolicy / DeliveryPolicy / NEGOTIATION_CAN_EXECUTE
+production DeferredIntentAuthority changes
+```
+
+**Classification:**
+
+```text
+EDGE_STARTED|SUPERSEDE after HELD before EXECUTED during protected window
+  → ABORT_INVALID_EXERCISE_BUCKET_A (exercise broken — not FAIL_C)
+  // Phase-3C Attempt-5 class
+
+HELD→RELEASE→REPROBE with negotiationExecutable=false / gate not ready
+  → FAIL_C under VALID exercise (J-B contract exercised; readiness miss)
+  // Phase-3C-B Attempt-1 class — NOT INVALID
+
+HELD→EXECUTED complete + J-A + J-F
+  → PASS_JOINT (eligible for unlock review; pr53Unlock still BLOCKED until review act)
+```
+
+**J-B evidence contract (Attempt-1 lesson — FROZEN):**
+
+```text
+VALID_JB_CHAIN =
+  RELEASE
+      ↓
+  fresh capability observation (post-release)
+      ↓
+  REPROBE_PASS (executable=true AND dispatchReady=true)
+      ↓
+  EXECUTED
+
+FORBIDDEN as J-B PASS evidence:
+  DEBUG_FORCED_REPROBE
+  pre-release probe
+  cached capability
+  (would reintroduce DISPATCHED ≠ EXECUTED class of error)
+```
+
+###### E.16.2.4.2 Phase-3C-B Attempt-2 — Harness Fix Contract (CLOSED field)
+
+**Status:** AUTHORIZED + field **ABORT_INVALID_EXERCISE** (2026-08-02) —  
+`logs/phase3c-b-20260802-201450`. **NOT** counted as J-B FAIL.
+
+**Lesson (harness attribution):** `tag=grp:CH-01|M03` must not satisfy CONFERENCE readiness.  
+`ReadinessIdentity = (scope, sessionId, edgeId)` — same discipline as IntentIdentity.
+
+###### E.16.2.4.3 Phase-3C-B Attempt-3 — Conference-scoped Harness Fix (AUTHORIZED)
+
+**Status:** contract **FROZEN**; harness **AUTHORIZED** (2026-08-02) —  
+`Authorize Phase-3C-B Attempt-3 Harness Fix` (`scope=CONFERENCE_ONLY`). Field PENDING.
+
+**ReadinessIdentity (normative for this exercise):**
+
+```text
+ReadinessIdentity = (scope, sessionId, edgeId)
+CONFERENCE ≠ GROUP_MESH
+same remote/module MUST NOT merge across scopes
+```
+
+**IN (harness-only):**
+
+```text
+1. Conference-scoped STABLE gate — accept ONLY:
+   scope=CONFERENCE
+   AND sessionId=currentEpisode (UUID)
+   AND edgeId=currentConferenceEdge
+   AND signalingState=STABLE
+
+   forbid as readiness evidence:
+     grp:* / GROUP_MESH / stale session / same-remote different-scope
+
+2. CLOSED fast-fail:
+   CONFERENCE edge CLOSED
+     → ABORT_INVALID_EXERCISE(CONFERENCE_CLOSED)
+   MUST NOT wait 120s hunting other scopes
+
+3. Preflight dump (mandatory):
+   ExerciseScope / SelectedSession / SelectedEdge / RejectedCandidates(+reason)
+```
+
+**OUT:**
+
+```text
+production
+DeferredIntentAuthority
+C capability
+D1 policy
+J-B contract / threshold change
+```
+
+**Sequence:** harness scope fix → conference stable preflight → Attempt-3 field → then score J-B.
+
+**Attempt-3 field result:** `ABORT_INVALID_EXERCISE(CONFERENCE_CLOSED)` — scope fix verified (`grp:*` → `WRONG_SCOPE`); J-B not scored. Bottleneck converged to CONFERENCE lifecycle stability (not J-B / C changes).
+
+###### E.16.2.4.4 Phase-3C-B Attempt-4 — R2 Joint Field (CLOSED)
+
+**Status:** field **CLOSED** (2026-08-02).
+
+**Result:** `FAIL_C_CHAIN` / `failureCase=C_OWNERSHIP_OK_EXEC_MISSING` — **not** unlock-eligible.
+
+**Verified:**
+
+```text
+R2 ownership: ADMIT_SUCCESSOR → DEFERRED_INTENT_RELEASED (no silent null)
+J-B contract: still valid (no DISPATCHED==EXECUTED; no HELD/DRAIN_RETRY/REPROBE relax)
+```
+
+**Not verified:**
+
+```text
+J-A ingress-miss chain (ALREADY_SATISFIED fast path)
+J-B HELD(DISPATCH)→RELEASE→EXECUTED
+```
+
+**Episode path observed:** `RECOVERY_REATTACH` → `ALREADY_SATISFIED` → `ADMIT_SUCCESSOR` → supersede (~527ms) — recovery lifecycle competition, not D1+C joint execution.
+
+###### E.16.2.4.5 Phase-3C-B Attempt-4b — Harness-controlled Joint (CLOSED)
+
+**Status:** field **CLOSED** (2026-08-02).
+
+**Log:** `logs/phase3c-b-attempt4b-20260802-220150` (session `e79b1f7a-3a2e-41c9-a2dd-b910a7c971f2`, offerLineageId=L1).
+
+**Result:**
+
+```text
+P0                  PASS (APK SHA256; banner scrolled out)
+J-A                 NOT VERIFIED
+failure             ABORT_INVALID_EXERCISE(JA_TIMEOUT)
+J-B                 NOT ENTERED
+R2 ownership        not challenged
+PR5-3               BLOCKED
+```
+
+**Observed chain (partial):**
+
+```text
+LOCAL_ACCEPT + DELIVERY_PENDING (attempt=1, L1)
+→ REATTACH_ACCEPTED / ATTEMPT_SUPERSEDED (attempt=2, +77ms)
+→ RECOVERY_REMOTE_INGRESS_ABSENT (WINDOW_DEADLINE, +3s)
+→ no RECOVERY_DELIVERY_RETRY_EVALUATE
+```
+
+**Offline Attempt-4c classification (same log):**
+
+```text
+D1_DIAG_A
+sub=STIMULATION_WINDOW_LAG+SUPERSEDE_CLEAR_DELIVERY_BEFORE_ABSENT
+stimulationLagSec=67
+nextAudit=D1_delivery_trigger_audit
+```
+
+**Mechanism (not new production verdict):** `supersedeAttempt()` calls `clearDeliveryState()` before ingress observation window deadline; `onRemoteIngressAbsent()` returns early because `recoveryOfferDeliveryPhase` is no longer `isAwaitingAck()`. Compounded by harness arm→L1 lag (~67s).
+
+**No new production conclusion** — exercise did not reach C/J-B.
+
+###### E.16.2.4.5a Phase-3C-B Attempt-4c — D1 ABSENT→ADMISSION diagnostic (AUTHORIZED)
+
+**Status:** harness **READY**; field **AUTHORIZED** (2026-08-02).
+
+**Authorize text:**
+
+```text
+Authorize Phase-3C-B Attempt-4c
+purpose=D1 ABSENT→ADMISSION diagnostic
+harness-only: admission trace collection after D1_DROP + ABSENT
+no: production change / J-B relax / R2 scope change
+```
+
+**Harness:** `scripts/run-phase3c-b-protected-window.ps1 -Attempt 4c`
+
+**Protocol:**
+
+```text
+1. Conference established
+2. D1_ARM_DROP_INGRESS (M03)
+3. FLAP IMMEDIATELY (M03 WiFi OFF 25–30s then ON)
+4. On ABSENT: collect PostAbsentCollectSec (default 3s) admission trace
+5. Classify: D1_DIAG_A | D1_DIAG_B | D1_DIAG_C
+6. STOP (no CREATE/HELD/J-B)
+```
+
+**Classification branches:**
+
+```text
+D1_DIAG_A  — ABSENT without EVALUATE → D1 delivery trigger audit
+D1_DIAG_B  — EVALUATE without ADMITTED → D1 policy audit (defer reason)
+D1_DIAG_C  — EVALUATE→ADMITTED/RETRY → eligible to continue J-B (future 4b/5)
+```
+
+**Sub-reason tokens (harness):** `STIMULATION_WINDOW_LAG`, `SUPERSEDE_CLEAR_DELIVERY_BEFORE_ABSENT`, `DELIVERY_PHASE_NOT_AWAITING_ACK`, `NO_ABSENT`.
+
+**OUT:** production changes / blind 4b re-run without diagnostic / J-B relax.
+
+###### E.16.2.4.6 Phase-3C-B Environment Gate — Stability Gate (FROZEN)
+
+**Status:** contract **FROZEN** (2026-08-02 operator confirm).
+
+**Do not merge classification buckets:**
+
+```text
+FAIL_C                 = product chain real failure
+ABORT_INVALID_EXERCISE = exercise preconditions not met
+NOT_EXERCISED          = no J-B evidence produced
+```
+
+**CONFERENCE_STABILITY_GATE (harness-only, before CREATE / before Attempt-4 J-B window):**
+
+```text
+scope=CONFERENCE
+AND sessionId=currentEpisode
+AND edgeId=currentConferenceEdge
+AND signalingState=STABLE
+AND edgeLifecycle=CONNECTED
+AND stableDuration >= T   // T in 5~10s; default T=5s
+
+purpose:
+  avoid create-during-signaling-churn
+  (not to inflate pass rate)
+
+fail → ABORT_INVALID_EXERCISE (not FAIL_C)
+```
+
+**OUT:** production / J-B relax / D1 / C change.
+
+Rationale: D1 ingress-miss ownership is part of the Joint contract. Unlocking on C-only would allow:
+
+```text
+C PASS without delivery ownership participation
+→ regression risk on ingress/delivery plane
+```
+
+Until Phase-3C review explicitly allows otherwise, `pr53Unlock=ALLOWED` only when the above set holds under `EXERCISE_MODE=J_B_JOINT`.
+
+##### E.16.2.5 Field Authorization Gates (checklist)
+
+| Gate | Content | Required |
+|------|---------|----------|
+| **FA-0** | `EXERCISE_MODE` declared; analyzer/report mode match | ✅ |
+| **FA-1** | Build identity: APK SHA + build timestamp + git revision + authority-enabled banner/proof token | ✅ |
+| **FA-2** | Scenario anchor IntentIdentity `(sessionId, edgeId, intentId)` — forbid remote/session/attempt alone | ✅ |
+| **FA-3** | Stimulus contract: Phase-3A supersede source fixed to **one** of `DEBUG_EXPLICIT_SUPERSEDE` \| `EDGE_STARTED_SUPERSEDE` | ✅ |
+| **FA-4** | Evidence completeness: missing critical tokens → `NOT_EXERCISED` / `ABORT_INVALID_EXERCISE`, not implementation FAIL | ✅ |
+| **FA-5** | Analyzer classification split: `ownershipIsolation=` / `jb=` / `pr53Unlock=` (no single result covering all) | ✅ |
+| **FA-6** | Regression fence: during field, do not modify D1 / RecoveryDeliveryPolicy / CompletionPolicy / NEGOTIATION_CAN_EXECUTE without new Grill | ✅ |
+
+**FA-1 detail — forbidden evidence:**
+
+```text
+"刚编的应该是这个版本" / verbal build identity
+```
+
+**FA-3 detail — forbidden stimulus:**
+
+```text
+现场临时依赖“看看哪个 event 刚好触发”
+```
+
+Chosen Phase-3A stimulus **MUST** be recorded in the run report before inject. Changing stimulus mid-campaign requires checklist re-freeze, not ad-hoc swap.
+
+**FA-4 examples:**
+
+```text
+DROP aimed at wrong peer / wrong offer class     → ABORT_INVALID_EXERCISE
+no R16 IntentIdentity anchor                     → ABORT_INVALID_EXERCISE / NOT_EXERCISED
+R16 never reached HELD(DISPATCH)                 → ABORT_INVALID_EXERCISE / NOT_EXERCISED
+HELD then silent clear / missing SUPERSEDED fact → FAIL_OWNERSHIP
+SUPERSEDED then late mutation (drain/EXECUTED)   → FAIL_OWNERSHIP
+J_B_JOINT mode missing EXECUTED (valid exercise + Pre-HELD gate PASS) → FAIL_C
+pre-HELD EDGE_STARTED/SUPERSEDE (Bucket B) → ABORT_INVALID_EXERCISE (not FAIL_C)
+post-HELD lifecycle cut before EXECUTED (Bucket A) → ABORT_INVALID_EXERCISE (not FAIL_C)
+```
+
+##### E.16.2.6 Analyzer classification matrix (frozen)
+
+Reports **MUST** expose separately:
+
+```text
+ownershipIsolation = PASS | FAIL | NOT_EXERCISED
+jb                 = PASS | FAIL | NOT_EXERCISED
+pr53Unlock         = ALLOWED | BLOCKED
+```
+
+Plus exercise validity:
+
+```text
+exerciseValidity = VALID | ABORT_INVALID_EXERCISE | NOT_EXERCISED
+```
+
+**Classification priority (highest wins — frozen):**
+
+```text
+ABORT_INVALID_EXERCISE     // env / orchestration / wrong anchor / mode mismatch
+        ↑
+FAIL_SAFETY                // J-F / premature RECOVERED / completion safety
+        ↑
+FAIL_OWNERSHIP             // silent clear, late mutation after SUPERSEDE, isolation breach
+        ↑
+FAIL_D1 / FAIL_C           // product chain incomplete under valid exercise
+        ↑
+PASS
+```
+
+Orchestration defects **MUST NOT** be classified as product FAIL.
+
+Rules:
+
+```text
+OWNERSHIP_ISOLATION mode:
+  jb MUST be NOT_EXERCISED (do not score J-B)
+  pr53Unlock MUST be BLOCKED
+
+J_B_JOINT mode:
+  ownershipIsolation may be PASS from prior Phase-3A evidence
+    or re-asserted in-run; must not be silently ignored if R16 path present
+  jb scored under §E.16.2.3
+  pr53Unlock only after §E.16.2.4 set
+```
+
+Analyzer/harness changes to enforce FA-0/FA-5 remain **not authorized** by this freeze; they require a later explicit auth tied to Phase-3A preparation (still ≠ production domain changes).
+
+##### E.16.2.7 Phase gate (process freeze)
+
+```text
+CURRENT
+
+  Slice-1                         CLOSED / VERIFIED ✅
+  §E.16.2                         FROZEN ✅
+  Production                      FROZEN 🔒
+  Field                           NOT AUTHORIZED 🚫
+  PR5-3 / UVCP                    BLOCKED
+
+
+NEXT (separate human act — not granted here)
+
+  Authorize Phase-3A Field
+    MUST name EXERCISE_MODE=OWNERSHIP_ISOLATION
+    MUST name exactly one FA-3 stimulus:
+      DEBUG_EXPLICIT_SUPERSEDE | EDGE_STARTED_SUPERSEDE
+        ↓
+  Ownership Isolation field (3A)
+
+
+ONLY AFTER Phase-3A PASS
+
+  Authorize Phase-3B Field
+        ↓
+  J-B field (3B)
+
+
+ONLY AFTER J-B + J-F + J-A
+
+  Phase-3C PR5-3 unlock review
+```
+
+**Separation rule (hard):**
+
+```text
+§E.16.2 contract freeze
+        ≠
+Authorize Phase-3A Field
+```
+
+Do not merge these acts. FA-3 **allowed set** is frozen here; **chosen stimulus** is bound only at Authorize Phase-3A Field.
+
+##### E.16.2.8 Freeze checklist (completed)
+
+```text
+[x] Review-1..6 CONFIRMED
+[x] FA-0..FA-6 accepted
+[x] R16 requires CREATED→HELD(DISPATCH)→SUPERSEDED
+[x] IntentIdentity = (sessionId, edgeId, intentId)
+[x] J-A = YES as PR5-3 hard gate
+[x] Classification priority: INVALID above FAIL
+[x] Phase-3A PASS ≠ Joint PASS ≠ PR5-3 unlock
+[x] Field execution remains NOT AUTHORIZED until Authorize Phase-3A Field
+```
+
+**Authorization status after freeze:** §E.16.2 **FROZEN**. Production **FROZEN**. Field **NOT AUTHORIZED**. No Phase-3A authorization implied.
+
+##### E.16.3 PR5-3 Root Cause Grill R1 — Root Cause Map v1 (CLOSED / VERIFIED)
+
+**Status:** **CLOSED / VERIFIED** (read-only audit — 2026-08-02). Field soak **STOPPED**. Production **FROZEN** until R2 targeted slice authorized.
+
+**Root cause (normative):**
+
+```text
+Shared mutable deferred-intent storage + non-authoritative mutation
+
+Primary offender:  clearMediaActionDeferral()
+Secondary:         EDGE_STARTED semantic overreach
+
+NOT root cause:    D1 | RecoveryDeliveryPolicy | NEGOTIATION_CAN_EXECUTE | J-B contract
+```
+
+**Architecture conflict (not “Authority needs more scope”):**
+
+```text
+DeferredIntentAuthority     owns transition semantics → SUPERSEDED fact
+        ≠
+EdgeRecoveryRecord          direct mutation → iceRestartIntentId = null
+
+semantic owner ≠ state owner
+```
+
+**Blocking thesis:** Authority governs supersede **legality** but does **not** own deferred-intent **storage**. `pendingIceRestartIntentId()` reads record slot; `clearMediaActionDeferral()` nulls it outside Authority terminal transition.
+
+**Audit A — Intent mutation inventory** (`ConferenceEdgeRecoveryController.kt`):
+
+| Caller / path | Domain | Authority before clear? | Clears `iceRestartIntentId` |
+|---------------|--------|-------------------------|-----------------------------|
+| `beginRecovery` → EDGE_STARTED | MEDIA | `requestSupersede(MEDIA)` | `clearMediaActionDeferral` |
+| `admitSupersededRecoveryAttempt` | MEDIA | same | same |
+| `supersedeAttempt` | MEDIA/recovery | `expireDeferredIceRestartIntent` logs only | `clearMediaActionDeferral` |
+| `drain` obligation closed / already issued / stale | NEGOTIATION | `expire*` logs only | `clearMediaActionDeferral` |
+| `drain` success → EXECUTED | NEGOTIATION | `markExecuted` after clear+restore | clear → restore → dispatch → null |
+| `ADMIT_SUCCESSOR` new obligation | recovery | `expire` on predecessor | clear on **new** record |
+| `debugExplicitSupersede` | TEST | `requestSupersede(TEST)` | `clearMediaActionDeferral` |
+| `RecoveryCompletionPolicy.close` | ALL domains | `expire(OBLIGATION_CLOSE)` logs | (host callback; clear via other paths) |
+
+**Hidden bug — `expireDeferredIceRestartIntent`:** name says `expire`; implementation **logs only**; mutation happens in separate `clearMediaActionDeferral`. Pattern: audit fact ≠ state transition (same class as D1 observation vs completion).
+
+**Audit B — EDGE_STARTED:** flap → `beginRecovery` → supersede (MEDIA) → unconditional slot clear. D1 indirect via shared record + recovery lifecycle (not direct D1→C call).
+
+**Audit C — Lifecycle:** actual `CREATED→HELD→EDGE_STARTED→clear→NONE`; target `CREATED→HELD→SUPERSEDED(Authority)→slot release only after terminal`.
+
+**G3:** `NEGOTIATION_CAN_EXECUTE=false` conflates negotiation-not-ready vs intent-slot destroyed.
+
+##### E.16.4 PR5-3 Root Cause Grill R2 — Minimal ownership repair (IMPLEMENTED / VERIFIED)
+
+**Status:** **IMPLEMENTED / VERIFIED** (2026-08-02). **decision=A** (Authority-owned clear). R1 answered **why** intent disappears; R2 enforced **INV-DI-001** so committed intent slot cannot be nulled without Authority release.
+
+**IN (delivered):**
+
+```text
+1. INV-DI-001 frozen (below)
+2. releaseIntent(intentId, reason, domain, kind) — sole Authority terminal + slot-release path
+3. Controller: releaseDeferredIntentSlot() — only place that sets record.iceRestartIntentId = null
+4. S1 beginRecovery / EDGE_STARTED → supersede + Authority slot release
+5. S2 drain failure → expire = Authority TERMINAL_DISCARD (not log-only)
+6. S3 completion close → expireDeferredIceRestartIntent → Authority
+7. S4 expire() semantics = terminal transition request
+```
+
+**OUT (unchanged):**
+
+```text
+slot split (Option C — future ADR)
+D1 change
+C drain redesign
+CompletionPolicy change
+field soak / Attempt-4+
+```
+
+**INV-DI-001 (frozen):**
+
+> Committed deferred intent lifecycle state MUST NOT be modified by non-owner direct mutation.
+
+Forbidden without Authority terminal transition:
+
+```kotlin
+record.iceRestartIntentId = null
+```
+
+in controller recovery / media / delivery / completion paths (except `releaseDeferredIntentSlot` after successful `releaseIntent`).
+
+Required path:
+
+```text
+Controller.request release
+    → DeferredIntentAuthority.releaseIntent(...)
+    → DEFERRED_INTENT_RELEASED audit fact
+    → record slot release
+```
+
+**R2 decision disposition:**
+
+| Option | Summary | R2 disposition |
+|--------|---------|----------------|
+| **A** | Authority-owned clear via `releaseIntent` | **IMPLEMENTED** |
+| **B** | Tombstone | **Rejected for R2** — retain history; wider drain surface |
+| **C** | Slot split | **Reject for PR5-3** — architecture refactor |
+
+**Verification (PASS):**
+
+```text
+Phase-1  InvDi001ReleaseIntentTest + DeferredIntentAuthoritySlice1Test
+Phase-2  DeferredIntentAuthoritySlice1JointTest (R16 HELD→SUPERSEDED→slot released)
+Phase-3  Pr52cDeferredIntentHoldTest + DebugExplicitSupersedePhase3aTest
+```
+
+**Next:** **Grill R3** (§E.17) — read-only, no device. Attempt-4c **SUSPENDED**; do **not** run further Joint rounds until R3 closes and the successor-suppression primitive lands. PR5-3 remains BLOCKED.
+
+---
+
+
+#### E.14.9 Field classification hint (not verdict)
+
+`OFFER_AWAITING_ANSWER` + `DEFERRED_INTENT_UNCOVERED` may be:
+
+```text
+H-prod  — negotiation seam never flips probe.executable (correct gate hold)
+D1      — local offer never reached peer; answer path never runs (transport delivery)
+```
+
+Do not treat as single root cause. PR5-2c-C must not merge D1 transport with negotiation consume without seam evidence. **PR5-2c-D / D1** §E.15 — **CLOSED / FIELD_VERIFIED** §E.15.15.
+
+---
+
+### E.17 Recovery Delivery Obligation Conservation — Grill R3 (**IMPLEMENTED_PENDING_VALIDATION** 2026-08-03)
+
+**Naming is normative.** This is *not* a "supersede fix". `supersedeAttempt()` is not the defect; the defect is that a recovery delivery obligation can cease to exist without being settled, abandoned, or adopted. The subject is the **obligation lifecycle**, not the function that happens to end it.
+
+#### E.17.1 Semantic decision — X′ (supersede is legal termination; adoption is NOT implied)
+
+Three candidate semantics were considered for `supersedeAttempt() → clearDeliveryState()`:
+
+| | Semantic | Verdict |
+|---|---|---|
+| **X** | Supersede legally abandons the old lineage because the successor becomes the new recovery path | **REJECTED** — falsified by field evidence (§E.17.5) |
+| **Y** | Supersede must never discard an unresolved delivery obligation; retry must survive | **REJECTED** — would sustain duplicate recovery competition |
+| **X′** | Supersede *may* legally terminate the old lineage, **but** termination must be complete, and successor *creation* does not constitute obligation *adoption* | **ACCEPTED** |
+
+The decisive distinction:
+
+```text
+successor existence  ≠  successor adoption
+```
+
+X was rejected because its premise ("the successor becomes the new recovery path") is empirically false in the observed episode — the successor was gate-blocked 4ms after creation and never dispatched.
+
+#### E.17.2 INV-REC-032 — Recovery Obligation Conservation
+
+> A recovery delivery obligation MUST be conserved. It may remain active, be explicitly settled, or be explicitly abandoned/superseded. It MUST NOT disappear through state reset or authority bypass.
+
+**Requirement 1 — Single authority; projections hold no lifecycle state.**
+
+Delivery lifecycle state MUST have a single authority. Non-authoritative projections MUST NOT retain independent lifecycle copies.
+
+| Component | Role |
+|---|---|
+| `RecoveryOfferDeliveryPolicy` | **authority** — sole writer of delivery lifecycle |
+| `RecoveryIngressObservation` | obligation observer — holds the ingress window, terminated *by* the authority |
+| `RecoveryAttemptContext.deliveryPhase` | **forbidden** — must not hold lifecycle state |
+
+This is R1's convergence applied again: **do not synchronise copies — remove them.**
+
+**Requirement 2 — Terminal states must be distinguishable.**
+
+Terminal transitions MUST NOT collapse into initial/default states. `deliveryPhase = NONE` is invalid as a terminal because `NONE` (never existed) and a terminated lineage (existed, then ended) become indistinguishable — the same information-loss pattern R2 closed for `DeferredIntent`.
+
+R3 introduces exactly one new terminal:
+
+```text
+SUPERSEDED — the lineage existed and was explicitly terminated
+```
+
+`SUPERSEDED` deliberately does **not** express *why* it ended, *whether anyone adopted it*, or *whether recovery succeeded*.
+
+**Requirement 3 — Transfer adoption is a separate invariant (deferred to R4).**
+
+Creation of a successor attempt MUST NOT be treated as obligation adoption. R3 states the prohibition; R4 defines the adoption point.
+
+#### E.17.3 Delivery lineage authority
+
+Current call path — controller mutates state it does not own:
+
+```text
+ConferenceEdgeRecoveryController.supersedeAttempt()
+    → policy.clearDeliveryState(record)       // silent; no fact; observation untouched
+```
+
+Target — single writer, consistent with R1/R2:
+
+```text
+ConferenceEdgeRecoveryController.supersedeAttempt()
+    → policy.supersedeLineage(record, reason)   // request termination
+          ├─ mutate delivery lifecycle → SUPERSEDED
+          ├─ emit audit fact
+          └─ RecoveryIngressObservation.onLineageSuperseded(lineageId)
+```
+
+The controller is a **requester**, not a mutator. Note `RecoveryIngressObservation.onLineageSuperseded()` already exists and already closes open windows as `CLOSED_SUPERSEDED` — it is simply never called from any production path today (test-only).
+
+#### E.17.4 Scope boundary (frozen)
+
+R3 answers **"after supersede, does the system preserve obligation lifecycle integrity?"** — not **"should supersede have happened?"**
+
+| In scope (R3) | Out of scope (→ R4) |
+|---|---|
+| lifecycle closure across authority + observer | whether the successor actually adopts the obligation |
+| terminal-state distinguishability | whether the negotiation gate may block recovery continuation |
+| observation window cleanup | whether deferred intent should block transfer |
+| removal of stale attempt-plane projection | `TRANSFERRED` semantics |
+
+**`TRANSFERRED` MUST NOT be added in R3.** Without a defined adoption point it is a pseudo-state, and it will degrade into `supersede == TRANSFERRED` — which silently reinstates the rejected Semantic X.
+
+#### E.17.5 Evidence — Attempt-4b, 103s obligation loss
+
+`logs/phase3c-b-attempt4b-20260802-220150`, session `e79b1f7a-3a2e-41c9-a2dd-b910a7c971f2`, edge M02→M03, `offerLineageId=L1`:
+
+```text
+22:03:12.039  RECOVERY_DELIVERY_LOCAL_ACCEPTED  L1 attempt=1
+22:03:12.042  RECOVERY_DELIVERY_PENDING         L1 deliveryAttemptId=1
+22:03:12.119  RECOVERY_ATTEMPT_SUPERSEDED       1→2 reason=REATTACH_INBOUND
+              → clearDeliveryState()            L1 delivery silently discarded
+22:03:12.123  ICE_RESTART_GATE_BLOCKED          reason=OFFER_AWAITING_ANSWER
+22:03:12.123  RECOVERY_MEDIA_ACTION_DEFERRED    deferredReason=NEGOTIATION_SETTLING
+22:03:12.123  ICE_RESTART_DEFERRED              intentId=R1 wakeup=NEGOTIATION_CAN_EXECUTE
+              ... 103 seconds, no progress on either lineage ...
+22:03:15.042  RECOVERY_REMOTE_INGRESS_ABSENT    recoveryAttemptId=0 obligationGeneration=0
+              → onRemoteIngressAbsent() early-returns at !isAwaitingAck()
+              → no RECOVERY_DELIVERY_RETRY_EVALUATE
+22:04:55.307  RECOVERY_WAKEUP_EXPIRED           cause=OBLIGATION_CLOSE:MEMBERSHIP_LEFT
+```
+
+**Conclusion:** successor creation did not constitute adoption. The old lineage stopped retrying and the new attempt never dispatched — the recovery obligation was absent for 103 seconds until the local hangup ended the session.
+
+The `recoveryAttemptId=0 obligationGeneration=0` identity on the ABSENT fact is not incidental: it is the observation plane synthesising an identity it never held, i.e. direct evidence that the two planes were never joined.
+
+#### E.17.6 Attribution discipline — no unified retro-explanation
+
+Attempt-4b proves obligation loss **for the delivery-lineage plane only**. It MUST NOT be generalised into an explanation for the seven prior supersede-cut rounds.
+
+```text
+Delivery lineage obligation      — R3 domain; loss demonstrated (4b)
+DeferredIntent obligation        — R2 domain; release VERIFIED correct
+                                   (Phase-3B-Retry-A: CREATED→HELD→RELEASE
+                                    →DRAIN_RETRY→REPROBE_PASS→EXECUTED)
+```
+
+Counter-evidence against a unified attribution: `logs/phase3b-retry-a-20260802-143254` shows `jb=PASS` in an episode with **no D1 injection at all**. J-B is therefore demonstrably functional when the episode is clean; obligation loss cannot be the universal cause of J-B failure.
+
+Permitted statement:
+
+```text
+some supersede paths may violate obligation conservation
+```
+
+Forbidden statement:
+
+```text
+supersede == obligation loss
+```
+
+Rationale: an over-broad causal label absorbs unexamined phenomena exactly the way `ABORT_INVALID_EXERCISE` did across seven rounds. The failure mode is identical; only the direction differs. Whether the two obligation kinds share a root cause is an **R4** question.
+
+#### E.17.7 Consequence for the Joint / PR5-3 evidence model
+
+Seven consecutive rounds failed on the same mechanism (an inbound REATTACH superseding the attempt) and each was classified as an environment problem. Repeated identical mechanism + same causal location + same architectural boundary ⇒ this is an **exercise limitation**, not environment noise.
+
+Root cause of the limitation: the act that establishes the J-A precondition (dropping remote ingress) is itself what triggers the peer's autonomous reattach, which supersedes the attempt and destroys the J-B window. Under the current harness, **J-A and J-B are mutually exclusive within one episode.**
+
+Consequently:
+
+- Joint is **retained** but demoted from *sole diagnostic instrument* to **integration confidence gate**.
+- Joint retains genuine value: it is the only evidence that D1 + C + CompletionPolicy coexist at runtime.
+- Joint's original remit covered **D1 / delivery / C / CompletionPolicy / UVCP**. R3 supplies independent evidence for the **D1↔delivery** leg only. C, CompletionPolicy and UVCP remain **unproven**. Joint is therefore *no longer the sole diagnostic*, **not** *unnecessary*.
+
+**Harness prerequisite — `SUPPRESS_SUCCESSOR_ATTEMPT`:** an experimental isolation primitive that suppresses *successor attempt creation* (not "recovery", not "reconnect delay") so the ingress observation window can complete. Hard requirements:
+
+```text
+SUPPRESS_SUCCESSOR_ATTEMPT(edge, ttlMs)
+  - TTL owned by the primitive (ARM → ACTIVE → EXPIRED); callers cannot leak it
+  - MUST emit EXERCISE_SUCCESSOR_SUPPRESSED { edge, token, ttl, activatedAt }
+  - Joint reports MUST carry topologyMode=NORMAL | EXERCISE_SUPPRESSED_SUCCESSOR
+```
+
+A Joint PASS obtained under suppression proves coexistence **under a counterfactual topology** (a peer that observes ICE failure and does nothing). Production has no such peer. This weaker strength MUST be recorded at the time of the run, not discovered at review.
+
+**PR5-3 layered evidence model:**
+
+```text
+Required:     J-A PASS · J-B PASS · R3 CLOSED · recovery invariants PASS
+Integration:  Joint PASS  OR  ExceptionWaiver
+```
+
+The waiver is not a free-form rationale. It requires a named owner, an expiry, and a usage cap — absent these it becomes the next absorber:
+
+```text
+ExceptionWaiver { owner, reason, affected_gate, createdAt, expiresAt, maxOccurrences }
+```
+
+#### E.17.8 Implementation tasks (R3)
+
+1. Add `SUPERSEDED` to `RecoveryOfferDeliveryPhase`; forbid `NONE` as a terminal.
+2. Replace `clearDeliveryState()` on the supersede path with `policy.supersedeLineage(record, reason)` — mutate + emit fact + call `RecoveryIngressObservation.onLineageSuperseded()`.
+3. Delete `RecoveryAttemptContext.deliveryPhase`; have `RECOVERY_ATTEMPT_STATE` logging read `record.recoveryOfferDeliveryPhase` directly.
+4. UT: after supersede, assert the authority holds a distinguishable terminal **and** no observation window remains `OPEN` (no phantom ABSENT).
+5. UT: assert no `RECOVERY_REMOTE_INGRESS_ABSENT` with `recoveryAttemptId=0` can be produced for a terminated lineage.
+
+#### E.17.9 Closure wording (normative)
+
+R3 closure MUST be worded as:
+
+> R3 establishes supersede **lifecycle integrity** requirements. Whether supersede constitutes a **valid obligation transfer** remains unresolved and is tracked by R4.
+
+It MUST NOT be worded as "supersede semantics clarified" — that phrasing would prematurely close R4 and remove its basis for investigation.
+
+---
+
 ## References
 
 - ADR-0020 — Conference Runtime Projection Contract
@@ -4488,3 +11274,13 @@ Peer need restart + gate blocked
 - R28-L completion observe soak `logs/obs-r28m-completion-20260726-164948` (session `8792302b`; zero completion traces — gate never cleared)
 - R28-L diagnostic failure sample `467cc536` (M03 WiFi flap; `FIRST_OUTBOUND` without `FIRST_INBOUND` — L.1.4 soak replay target)
 - Deferred Drain motivation soak `logs/obs-pres-mediafact-20260729-150053` (G-PRES-E `BLOCKED_BY_COMPLETION`; M02→M03 `ICE_RESTART_DEFERRED` → `WAIT_FOR_NEGOTIATION_INTENT`; Appendix D)
+- PR5-2 writer migration soak `logs/signal-path-20260730-195856` (session `e1e74bc9`, M02→M03 authority RECOVERED via CompletionPolicy; M03→M02 predicate blocked at control reconciliation)
+- PR5-2c dual canonical soak FAIL (pre-fix) `logs/pr52c-a-dual-canonical-20260731-142413` (session `51d57892`; ordering race — fixed by PR5-2c-A)
+- PR5-2c-A dual canonical soak PASS `logs/pr52c-a-dual-canonical-20260731-153100` (session `f31341c9`; Gate A/B PASS; M02→M03 delivery + completion gold chain)
+- PR5-2c-C deterministic PASS `logs/pr52c-c-deterministic-20260801-061545` (§E.14.19)
+- PR5-2c-C field evidence `logs/signal-path-20260729-185201`, `logs/signal-path-20260729-191529` (M02→M03 D1; `OFFER_AWAITING_ANSWER` stuck; Appendix E.14 / E.15)
+- D1 field replay #1 `logs/d1-field-replay-20260801-132831` (§E.15.12 — `OBSERVED_DIRECT_RECOVERY`; ABSENT path NOT EXERCISED; implementation NOT FAILED)
+- D1 Option A field PASS `logs/d1-ingress-miss-20260801-142717` (§E.15.15 — `PASS_D1_INGRESS_RETRY_CHAIN`; D1 **CLOSED / FIELD_VERIFIED**)
+- Joint D1 + PR5-2c-C Recovery Regression §E.16 (**OPEN** — PR5-3 / UVCP blocked until PASS)
+- J-X §E.16.1 (**SEMANTICS CLOSED** J-X-1 through J-X-7); **DeferredIntentAuthority Slice-1 CLOSED / VERIFIED** (Phase-3 field NOT AUTHORIZED) — motivation evidence `logs/joint-d1-c-20260801-201352/R16_OWNERSHIP_AUDIT.txt`
+- §E.16.2 Field Authorization Contract (**FROZEN** — Review-1..6 CONFIRMED; contract freeze ≠ Phase-3A authorization; production FROZEN; field NOT AUTHORIZED)
