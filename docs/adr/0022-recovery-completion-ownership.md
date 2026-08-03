@@ -11264,9 +11264,35 @@ It MUST NOT be worded as "supersede semantics clarified" — that phrasing would
 
 **Diagnostic (non-blocking):** baseline contains legacy `RECOVERY_ATTEMPT_STATE … deliveryPhase=` lines (count=4). Recorded for cleanup; not an R3 correctness failure (P0 confirmed non-authoritative).
 
-**R3 status:** `IMPLEMENTED_PENDING_VALIDATION` → **`VERIFIED`** (obligation conservation demonstrated; R4 adoption question remains open per §E.17.9).
+**R3 status:** `IMPLEMENTED_PENDING_VALIDATION` → **`VERIFIED (obligation-layer replay; field re-run deferred)`** (obligation conservation demonstrated; R4 adoption question remains open per §E.17.9).
 
 Validation confirms delivery obligation conservation under supersede lineage termination. It does not establish successor obligation adoption semantics, which remains tracked by R4.
+
+#### E.18 Control Reconciliation Authority Closure
+
+**Status:** `OPEN`
+
+Completion readiness, control reconciliation, and successor adoption are separate authority domains. A passing completion predicate without wired control authority or adoption semantics shall not be interpreted as full recovery correctness.
+
+**Problem (observed on main):** `ConferenceEdgeRecoveryController` injects `queryMembershipEpochConverged` with anonymous default-open `{ _, _ -> true }`. `MembershipAuthorityResolver` (true authority) is not wired in production. This is not an implementation bug in `ControlReconciliationEvaluator`; it is an **authority dependency not wired**.
+
+| Phase | Goal | Status |
+|---|---|---|
+| E.18.1 Observable gap | Replace anonymous default with named sentinel; emit `CONTROL_RECONCILIATION_MEMBERSHIP_UNWIRED` fact per evaluation; **behavior unchanged** (still returns true) | `OPEN` |
+| E.18.2 Authority wiring | PR-D: inject `MembershipAuthorityResolver` via Coordinator; remove sentinel and default-open | `WAITING` (PR-D) |
+
+**Frozen until R4-impl:** do not introduce `TRANSFERRED`, do not change `obligationGeneration` / `recoveryAttemptId` semantics — `sessionEpochMatched` and `SuccessorObligationAdmissionTest` (G-Resurrect) anchor R4-def.
+
+#### E.19 C0 Completion Characterization (2026-08-03)
+
+**Status:** `LANDED` (PR-C0)
+
+Regression fence for production `RecoveryCompletionPolicy` close gate. Tests land with assertion discipline:
+
+- **INVARIANT** — permanent contract (`post-dispatch freshness`, `NEGOTIATION deferred domain`, stale generation rejection, single-writer seam).
+- **CURRENT_BEHAVIOR** — pins injected/unwired seams; change only via numbered resolution (§E.18).
+
+Files: `RecoveryCompletionPolicyTest`, `CompletionObservationProjectionTest`, `ControlReconciliationEvaluatorTest`, `RecoveryControlReconciliationFactTest`.
 
 ---
 
