@@ -11342,15 +11342,67 @@ delivery lineage SUPERSEDED   ≠  TRANSFERRED
 RECOVERY_OBLIGATION_OPENED    ≠  SUCCESSOR_OBLIGATION_ADOPTED   (until R4-impl emits adoption facts)
 ```
 
+**Non-equivalence ladder (frozen — R4-impl MUST NOT collapse):**
+
+```text
+Admission  ≠  Adoption  ≠  Transfer
+```
+
+The three relations below are normative. Violating any one reintroduces the R3-class failure mode where obligation appears to move without an auditable owner.
+
+**1. Admission ≠ Adoption**
+
+`SUCCESSOR_ADMISSION_ACCEPTED` proves only:
+
+> A successor attempt is **legal** and may participate in the recovery flow (fresh identity allocated; admission checks passed).
+
+It does **not** prove:
+
+- the old lineage has ended (termination is a separate R3 / close-reason fact),
+- obligation has **migrated** to the successor,
+- the successor **bears** the predecessor's obligation.
+
+**G-Resurrect-1 MUST NOT be read as ADOPTION_POINT.** It exercises admission (`RECOVERY_OBLIGATION_OPENED`, `ADMIT_SUCCESSOR_OBLIGATION_EPISODE`) — not `SUCCESSOR_OBLIGATION_ADOPTED`.
+
+**2. Candidate ≠ Confirmed**
+
+`SUCCESSOR_OBLIGATION_ADOPTION_CANDIDATE` is an **eligibility observation** — all ADOPTION_POINT prerequisites (§1–4) are simultaneously satisfied at evaluation time.
+
+It is **not** an ownership fact. A candidate may still fail before confirmation:
+
+```text
+CANDIDATE
+    → negotiation blocked / delivery pending / control unwired
+    → timeout or terminal close
+    → no SUCCESSOR_OBLIGATION_ADOPTED
+```
+
+Emitting `ADOPTED` from `CANDIDATE` alone is forbidden. Only `SUCCESSOR_OBLIGATION_ADOPTED` records confirmed ownership.
+
+**3. Adoption ≠ Transfer**
+
+> Adoption describes **verified ownership establishment** of a recovery obligation by a successor. It does **not** imply that the previous lineage was retroactively transferred, nor does supersede itself imply adoption.
+
+Forbidden implementation shape (reintroduces R3 X′):
+
+```kotlin
+supersedeAttempt() {
+    old.close()
+    new.transfer()   // ← collapses Adoption into Transfer; obligation silently moves
+}
+```
+
+Supersede may **terminate** the old lineage (R3). Adoption must **establish** successor ownership via explicit fact (R4). Transfer semantics (`TRANSFERRED`, `OLD_LINEAGE_TRANSFERRED`) remain **unauthorized** until a future ADR-amended R4-impl explicitly defines them — if ever.
+
 ##### E.20.3 Fact schema (events only — no `TRANSFERRED`)
 
 R4-def registers **event names** for future R4-impl. No enum, state machine field, or runtime emission is introduced in R4-def.
 
-| Fact | Meaning | Does **not** mean |
-|---|---|---|
-| `SUCCESSOR_ADMISSION_ACCEPTED` | New recovery attempt passed admission legality checks; fresh identity allocated. | Obligation ownership transferred. |
-| `SUCCESSOR_OBLIGATION_ADOPTION_CANDIDATE` | All ADOPTION_POINT prerequisites (E.20.2 §1–4) are satisfied; system is eligible to record adoption. | Adoption complete. |
-| `SUCCESSOR_OBLIGATION_ADOPTED` | Ownership transition recorded under R4 authority. **R4-impl target fact.** | Recovery complete / `RECOVERED`. |
+| Fact | Owner (authority) | Meaning | Does **not** mean |
+|---|---|---|---|
+| `SUCCESSOR_ADMISSION_ACCEPTED` | Successor Admission | New recovery attempt passed admission legality checks; fresh identity allocated. | Old lineage ended; obligation migrated; successor bears predecessor obligation. |
+| `SUCCESSOR_OBLIGATION_ADOPTION_CANDIDATE` | R4 adoption evaluation | Eligibility observation: ADOPTION_POINT prerequisites (E.20.2 §1–4) satisfied at evaluation time. | Ownership established; adoption confirmed. |
+| `SUCCESSOR_OBLIGATION_ADOPTED` | R4 ownership authority | Ownership transition recorded under R4 authority. **R4-impl target fact.** | Recovery complete / `RECOVERED`; retroactive transfer of old lineage. |
 
 **Forbidden in R4-def and until R4-impl explicitly authorizes:**
 
@@ -11405,10 +11457,10 @@ Joint `PASS` without `SUCCESSOR_OBLIGATION_ADOPTED` proves integration confidenc
 ##### E.20.6 R4 status board
 
 ```text
-R4 Successor Adoption Integrity
+R4-def Successor Adoption Contract
     REGISTERED
         |
-        +-- R4-def DEFINED (§E.20)     ← this PR
+        +-- R4-def DEFINED (§E.20)     ← semantic contract only
         |
         +-- R4-impl WAITING            ← runtime facts + authority wiring
 ```
