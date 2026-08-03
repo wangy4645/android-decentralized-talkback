@@ -246,3 +246,10 @@ Ownership / semantic review remains:
 
 PR-A does **not** land Coordinator WIP, D1 injection, Membership Q7, Joint/soak harness.
 PR-D WIP recovered to `git stash@{0}`: `P2 HOLD: PR-D coordinator/runtime/udp/service WIP (recovered)`.
+
+## PR-B status (2026-08-03)
+
+PR-A merged as `3518dce` / #102. DeferredIntentAuthority was compile-carried; PR-B consolidates ownership.
+
+Include: DeferredIntentAuthority KDoc ownership freeze + Slice-1 / INV-DI-001 / HELD / explicit-supersede regression tests.
+Exclude: CompletionPolicy, ControlReconciliation, Coordinator WIP, D1, SUPPRESS_SUCCESSOR, Joint harness.
