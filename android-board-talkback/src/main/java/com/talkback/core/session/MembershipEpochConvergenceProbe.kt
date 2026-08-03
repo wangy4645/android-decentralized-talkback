@@ -3,46 +3,27 @@ package com.talkback.core.session
 /**
  * ADR-0022 Appendix E.18: membership epoch authority probe for control reconciliation.
  *
- * DefaultOpenMembershipAuthoritySentinel is compile-closure only; not wired authority.
- * PR-D replaces the default with a resolver-backed probe.
+ * Production Coordinator wires [WiredMembershipEpochProbe]; tests may inject fakes.
  */
 internal interface MembershipEpochConvergenceProbe {
 
-    fun isConverged(channelId: String, conferenceSessionId: String): Boolean
-
-    fun emitUnwiredObservationIfNeeded(
-        record: EdgeRecoveryRecord,
-        channelId: String,
-        conferenceSessionId: String,
-        onLog: (String) -> Unit
-    ) = Unit
-}
-
-/**
- * ADR-0022 E.18.1: named default-open sentinel replacing anonymous default-open lambda.
- * Behavior unchanged (returns true); emits auditable unwired fact per evaluation.
- */
-internal object DefaultOpenMembershipAuthoritySentinel : MembershipEpochConvergenceProbe {
-
-    override fun isConverged(channelId: String, conferenceSessionId: String): Boolean = true
-
-    override fun emitUnwiredObservationIfNeeded(
-        record: EdgeRecoveryRecord,
-        channelId: String,
-        conferenceSessionId: String,
-        onLog: (String) -> Unit
-    ) {
-        onLog(formatUnwiredFact(record, channelId, conferenceSessionId))
-    }
-
-    internal fun formatUnwiredFact(
+    fun probe(
         record: EdgeRecoveryRecord,
         channelId: String,
         conferenceSessionId: String
-    ): String =
-        "CONTROL_RECONCILIATION_MEMBERSHIP_UNWIRED " +
-            "session=${record.key.sessionId} remote=${record.key.remoteModuleId} " +
-            "channelId=$channelId conferenceSessionId=$conferenceSessionId " +
-            "recoveryAttemptId=${record.recoveryAttemptId} " +
-            "obligationGeneration=${record.obligationGeneration}"
+    ): MembershipEpochProbeResult
+}
+
+/**
+ * ADR-0022 E.18.1: compile-closure sentinel when no wired probe is injected.
+ * Returns [MembershipEpochProbeResult.Unwired] — does not claim membership checked.
+ */
+internal object DefaultOpenMembershipAuthoritySentinel : MembershipEpochConvergenceProbe {
+
+    override fun probe(
+        record: EdgeRecoveryRecord,
+        channelId: String,
+        conferenceSessionId: String
+    ): MembershipEpochProbeResult =
+        MembershipEpochProbeResult.Unwired("DEFAULT_OPEN_SENTINEL_NOT_WIRED")
 }

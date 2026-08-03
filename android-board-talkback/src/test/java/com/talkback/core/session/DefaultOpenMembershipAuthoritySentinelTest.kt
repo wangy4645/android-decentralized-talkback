@@ -1,29 +1,34 @@
 package com.talkback.core.session
 
+import com.talkback.core.util.RecoveryControlReconciliationMembershipObservation
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.concurrent.Executors
 
-/** ADR-0022 E.18.1: default-open membership authority sentinel characterization. */
+/** ADR-0022 E.18.1/E.18.2: default-open sentinel explicit Unwired outcome. */
 class DefaultOpenMembershipAuthoritySentinelTest {
 
     @Test
-    fun invariant_isConverged_returnsTrue() {
-        assertTrue(DefaultOpenMembershipAuthoritySentinel.isConverged("CH-1", "sess-1"))
+    fun invariant_probe_returnsUnwired_notChecked() {
+        val record = edgeRecord()
+        val result = DefaultOpenMembershipAuthoritySentinel.probe(
+            record = record,
+            channelId = "CH-e18",
+            conferenceSessionId = "sess-e18"
+        )
+        assertTrue(result is MembershipEpochProbeResult.Unwired)
+        assertEquals("DEFAULT_OPEN_SENTINEL_NOT_WIRED", (result as MembershipEpochProbeResult.Unwired).reason)
     }
 
     @Test
     fun invariant_unwiredFact_includesAttemptAndGeneration() {
-        val record = EdgeRecoveryRecord(
-            key = ConferenceEdgeKey("sess-e18", "M02"),
-            phase = EdgeRecoveryPhase.ICE_RESTARTING,
+        val record = edgeRecord()
+        val line = RecoveryControlReconciliationMembershipObservation.formatUnwired(
+            record = record,
             channelId = "CH-e18",
-            recoveryAttemptId = 3L,
-            recoveryStartedAtMs = 0L,
-            obligationGeneration = 7L
-        )
-        val line = DefaultOpenMembershipAuthoritySentinel.formatUnwiredFact(
-            record, "CH-e18", "sess-e18"
+            conferenceSessionId = "sess-e18",
+            reason = "DEFAULT_OPEN_SENTINEL_NOT_WIRED"
         )
         assertTrue(line.startsWith("CONTROL_RECONCILIATION_MEMBERSHIP_UNWIRED"))
         assertTrue(line.contains("recoveryAttemptId=3"))
@@ -31,7 +36,7 @@ class DefaultOpenMembershipAuthoritySentinelTest {
     }
 
     @Test
-    fun currentBehavior_controllerDefaultProbe_emitsUnwiredAndKeepsMembershipTrue() {
+    fun currentBehavior_controllerDefaultProbe_emitsUnwiredAndDoesNotClaimChecked() {
         val scheduler = Executors.newSingleThreadScheduledExecutor()
         val logs = mutableListOf<String>()
         val controller = ConferenceEdgeRecoveryController(
@@ -40,33 +45,15 @@ class DefaultOpenMembershipAuthoritySentinelTest {
             onRequestReattach = { _, _, _ -> ReattachDispatchOutcome.SENT },
             onIceRestart = { _, _ -> true }
         )
-        val sessionId = "sess-e18"
-        val channelId = "CH-e18"
-        val remote = "M02"
-        val eligibility = EdgeRecoveryEligibility(true, true, true, false)
-        val snapshot = EdgeReachabilitySnapshot(
-            linkReady = true,
-            peerDiscovered = true,
-            peerSignalingReachable = true,
-            mediaRouteConnected = false,
-            authorityReachable = true
-        )
-        val signature = RecoveryCapabilitySignature(
-            permittedActions = setOf(RecoveryAction.DISPATCH_REATTACH)
-        )
         try {
-            controller.onIceStateChanged(
-                sessionId, channelId, remote, "FAILED", eligibility, initiatesReattach = true
-            )
-            controller.onRecoveryReachabilityChanged(
-                sessionId, channelId, remote, snapshot, signature, null,
-                RecoveryReevaluateTrigger.LINK_READY
-            )
+            controller.refreshControlReconciliationForTest(edgeRecord())
             assertTrue(logs.any { it.contains("CONTROL_RECONCILIATION_MEMBERSHIP_UNWIRED") })
             assertTrue(
                 logs.any {
                     it.contains("RECOVERY_CONTROL_RECONCILIATION_FACT") &&
-                        it.contains("membershipEpochConverged=true")
+                        it.contains("membershipProbeDisposition=UNWIRED") &&
+                        it.contains("membershipEpochConverged=false") &&
+                        it.contains("reason=MEMBERSHIP_AUTHORITY_UNWIRED")
                 }
             )
         } finally {
@@ -74,4 +61,14 @@ class DefaultOpenMembershipAuthoritySentinelTest {
             scheduler.shutdownNow()
         }
     }
+
+    private fun edgeRecord(): EdgeRecoveryRecord =
+        EdgeRecoveryRecord(
+            key = ConferenceEdgeKey("sess-e18", "M02"),
+            phase = EdgeRecoveryPhase.ICE_RESTARTING,
+            channelId = "CH-e18",
+            recoveryAttemptId = 3L,
+            recoveryStartedAtMs = 0L,
+            obligationGeneration = 7L
+        )
 }

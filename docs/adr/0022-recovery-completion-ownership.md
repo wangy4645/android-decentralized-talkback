@@ -11272,16 +11272,20 @@ Validation confirms delivery obligation conservation under supersede lineage ter
 
 #### E.18 Control Reconciliation Authority Closure
 
-**Status:** `OPEN` (E.18.1 `LANDED` — behavior intentionally unchanged; E.18.2 `WAITING` PR-D)
+**Status:** `OPEN` (E.18.1 `LANDED`; E.18.2 `VERIFIED` — resolver + probe + Coordinator wiring; field validation pending)
 
 Completion readiness, control reconciliation, and successor adoption are separate authority domains. A passing completion predicate without wired control authority or adoption semantics shall not be interpreted as full recovery correctness.
 
-**Problem (observed on main):** `ConferenceEdgeRecoveryController` used anonymous default-open `queryMembershipEpochConverged = { _, _ -> true }`. Replaced by [DefaultOpenMembershipAuthoritySentinel] in E.18.1. `MembershipAuthorityResolver` (true authority) is not wired in production.
+**Problem (observed on main):** `ConferenceEdgeRecoveryController` used anonymous default-open `queryMembershipEpochConverged = { _, _ -> true }`. Replaced by [DefaultOpenMembershipAuthoritySentinel] in E.18.1. PR-D wires `MembershipAuthorityResolver` via `WiredMembershipEpochProbe` in production Coordinator.
 
 | Phase | Goal | Status |
 |---|---|---|
 | E.18.1 Observable gap | Replace anonymous default with named sentinel; emit `CONTROL_RECONCILIATION_MEMBERSHIP_UNWIRED` fact per evaluation; **behavior unchanged** (still returns true) | `LANDED` (PR-E18) |
-| E.18.2 Authority wiring | PR-D: inject `MembershipAuthorityResolver` via Coordinator; remove sentinel and default-open | `WAITING` (PR-D) |
+| E.18.2 Authority wiring | PR-D: inject `MembershipAuthorityResolver` via Coordinator; `WiredMembershipEpochProbe` with explicit `MembershipEpochProbeResult` (`Checked` / `Unwired`); production Coordinator wired | `VERIFIED` (PR-D) |
+
+**E.18.2 probe semantics (frozen):** `Unwired` is not `Checked(false)`. `Unwired` means no authority answered; `Checked(false)` means authority answered with epoch/hash mismatch. Completion gate requires `Checked` + `converged=true`.
+
+**Facts:** `CONTROL_RECONCILIATION_MEMBERSHIP_UNWIRED`, `CONTROL_RECONCILIATION_MEMBERSHIP_CHECKED` (authorityId, expectedEpoch, observedEpoch, converged).
 
 **Frozen until R4-impl:** do not introduce `TRANSFERRED`, do not change `obligationGeneration` / `recoveryAttemptId` semantics — `sessionEpochMatched` and `SuccessorObligationAdmissionTest` (G-Resurrect) anchor R4-def.
 
@@ -11465,7 +11469,7 @@ R4-def Successor Adoption Contract
         +-- R4-impl WAITING            ← runtime facts + authority wiring
 ```
 
-**Next engineering slice after R4-def:** PR-D Runtime Wiring (§E.18.2 membership authority closure). R4-impl remains blocked until PR-D restores wired control authority and adoption facts have a single emission owner.
+**Next engineering slice after R4-def:** `SUPPRESS_SUCCESSOR_ATTEMPT` → Attempt-4c → Joint / PR5-3 → R4-impl. PR-D (§E.18.2 membership authority closure) is `VERIFIED` on main.
 
 ---
 

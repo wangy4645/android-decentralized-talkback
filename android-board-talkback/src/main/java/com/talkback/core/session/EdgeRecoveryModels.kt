@@ -60,21 +60,32 @@ data class EdgeAttemptLineageRaw(
     val obligationGeneration: Long = 0L
 )
 
+/** E.18.2: whether membership epoch probe produced checked evidence vs unwired gap. */
+internal enum class MembershipEpochProbeDisposition {
+    CHECKED,
+    UNWIRED
+}
+
 /** PR5-2b: Q6-2 control reconciliation snapshot on edge record. */
 internal data class ControlReconciliationFact(
     val controlHandshakeCompleted: Boolean,
     val sessionEpochMatched: Boolean,
     val membershipEpochConverged: Boolean,
+    val membershipProbeDisposition: MembershipEpochProbeDisposition = MembershipEpochProbeDisposition.CHECKED,
     val computedAtMs: Long,
     val attemptId: Long,
     val obligationGeneration: Long
 ) {
     val result: Boolean =
-        controlHandshakeCompleted && sessionEpochMatched && membershipEpochConverged
+        controlHandshakeCompleted &&
+            sessionEpochMatched &&
+            membershipProbeDisposition == MembershipEpochProbeDisposition.CHECKED &&
+            membershipEpochConverged
 
     fun mismatchReason(): String? = when {
         !controlHandshakeCompleted -> "CONTROL_HANDSHAKE_PENDING"
         !sessionEpochMatched -> "SESSION_EPOCH_MISMATCH"
+        membershipProbeDisposition == MembershipEpochProbeDisposition.UNWIRED -> "MEMBERSHIP_AUTHORITY_UNWIRED"
         !membershipEpochConverged -> "MEMBERSHIP_EPOCH_MISMATCH"
         else -> null
     }

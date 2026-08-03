@@ -4,6 +4,7 @@ import com.talkback.core.qos.IceConnectivity
 import com.talkback.core.model.RecoveryHandlerOutcome
 import com.talkback.core.util.RecoveryDeliveryFact
 import com.talkback.core.util.RecoveryControlReconciliationFact
+import com.talkback.core.util.RecoveryControlReconciliationMembershipObservation
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.ScheduledFuture
@@ -14,7 +15,7 @@ import java.util.concurrent.atomic.AtomicLong
  * Per-edge conference recovery policy and state (ADR-0021 R4鈥揜18).
  * Control-plane reattach precedes bounded media ICE restart; termination cancels all edges.
  */
-class ConferenceEdgeRecoveryController(
+class ConferenceEdgeRecoveryController internal constructor(
   private val localModuleId: String = "LOCAL",
     private val debounceMs: Long = 3_000L,
     private val iceRestartTimeoutMs: Long = 10_000L,
@@ -103,10 +104,10 @@ class ConferenceEdgeRecoveryController(
         remoteModuleId: String,
         offerLineageId: String
     ) -> Unit = { _, _, _ -> },
-) {
-    /** PR5-2b / Q7 / ADR-0022 E.18: membership epoch probe for control reconciliation. */
+    /** ADR-0022 E.18.2: membership epoch probe; Coordinator wires [WiredMembershipEpochProbe]. */
     private val membershipEpochProbe: MembershipEpochConvergenceProbe =
-        DefaultOpenMembershipAuthoritySentinel
+        DefaultOpenMembershipAuthoritySentinel,
+) {
     private val edges = ConcurrentHashMap<ConferenceEdgeKey, EdgeRecoveryRecord>()
     private val debounceTimers = ConcurrentHashMap<ConferenceEdgeKey, ScheduledFuture<*>>()
     private val watchdogTimers = ConcurrentHashMap<ConferenceEdgeKey, ScheduledFuture<*>>()
@@ -1508,6 +1509,12 @@ class ConferenceEdgeRecoveryController(
         RecoveryCompletionPolicy.markRecovered(completionMutationHost, record, evidence)
     }
 
+    /** Test seam: seed edge + refresh membership probe / control reconciliation (E.18). */
+    internal fun refreshControlReconciliationForTest(record: EdgeRecoveryRecord) {
+        edges[record.key] = record
+        refreshControlReconciliationFact(record)
+    }
+
     private fun reevaluateOpenObligation(
         record: EdgeRecoveryRecord,
         snapshot: EdgeReachabilitySnapshot,
@@ -1594,15 +1601,41 @@ class ConferenceEdgeRecoveryController(
     private fun refreshControlReconciliationFact(record: EdgeRecoveryRecord) {
         val channelId = record.channelId
         val conferenceSessionId = record.key.sessionId
-        membershipEpochProbe.emitUnwiredObservationIfNeeded(record, channelId, conferenceSessionId, onLog)
-        val membershipConverged = membershipEpochProbe.isConverged(channelId, conferenceSessionId)
+        val probeResult = when {
+            channelId == null ->
+                MembershipEpochProbeResult.Unwired("CHANNEL_CONTEXT_MISSING")
+            else ->
+                membershipEpochProbe.probe(record, channelId, conferenceSessionId)
+        }
+        emitMembershipProbeObservation(record, channelId, conferenceSessionId, probeResult)
         val fact = ControlReconciliationEvaluator.evaluate(
             record = record,
-            membershipEpochConverged = membershipConverged,
+            membershipProbe = probeResult,
             clock = clock
         )
         record.controlReconciliationFact = fact
         RecoveryControlReconciliationFact.emit(record, fact, onLog)
+    }
+
+    private fun emitMembershipProbeObservation(
+        record: EdgeRecoveryRecord,
+        channelId: String?,
+        conferenceSessionId: String,
+        probeResult: MembershipEpochProbeResult
+    ) {
+        when (probeResult) {
+            is MembershipEpochProbeResult.Unwired -> onLog(
+                RecoveryControlReconciliationMembershipObservation.formatUnwired(
+                    record = record,
+                    channelId = channelId,
+                    conferenceSessionId = conferenceSessionId,
+                    reason = probeResult.reason
+                )
+            )
+            is MembershipEpochProbeResult.Checked -> onLog(
+                RecoveryControlReconciliationMembershipObservation.formatChecked(record, probeResult)
+            )
+        }
     }
 
     /** PR5-0: read-only completion projection 鈥?no state mutation. */

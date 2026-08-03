@@ -68,6 +68,10 @@ import com.talkback.core.session.ChannelModeFsm
 import com.talkback.core.session.ChannelReadiness
 import com.talkback.core.session.ConferenceEdgeRecoveryController
 import com.talkback.core.session.ConferenceBootstrapDeferral
+import com.talkback.core.session.DefaultMembershipAuthorityResolver
+import com.talkback.core.session.MembershipAuthorityResolveTrace
+import com.talkback.core.session.RecoveryMembershipContext
+import com.talkback.core.session.WiredMembershipEpochProbe
 import com.talkback.core.session.ConferenceEdgeKey
 import com.talkback.core.session.ConferenceHostEndpointResolver
 import com.talkback.core.session.ConferenceIceConnectedSideEffects
@@ -507,7 +511,29 @@ class TalkbackCoordinator(
                         )
                     }
                 }
-            }
+            },
+            membershipEpochProbe = WiredMembershipEpochProbe(
+                resolver = DefaultMembershipAuthorityResolver { channelId ->
+                    lastSeenAuthorityDigestByChannel[channelId]
+                },
+                resolveContext = { channelId, conferenceSessionId ->
+                    val session = sessions[conferenceSessionId] ?: return@WiredMembershipEpochProbe null
+                    if (session.channelId != channelId) return@WiredMembershipEpochProbe null
+                    RecoveryMembershipContext(
+                        channelId = channelId,
+                        conferenceSessionId = conferenceSessionId,
+                        localMembershipView = TopologyDigest.fromSession(session),
+                        isLocalMembershipAuthority = isMembershipAuthority(session)
+                    )
+                },
+                resolveAuthorityId = { context ->
+                    val session = sessions[context.conferenceSessionId.orEmpty()]
+                    session?.let { resolveMembershipAuthorityId(it) } ?: "UNKNOWN"
+                },
+                onResolveTrace = { outcome ->
+                    MembershipAuthorityResolveTrace.emit(::log, outcome)
+                }
+            )
         )
     }
     private val groupMeshReconciler = GroupMeshReconciler()

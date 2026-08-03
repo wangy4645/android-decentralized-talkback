@@ -23,6 +23,7 @@ object RecoveryControlReconciliationFact {
         sb.append(" controlHandshakeCompleted=").append(fact.controlHandshakeCompleted)
         sb.append(" sessionEpochMatched=").append(fact.sessionEpochMatched)
         sb.append(" membershipEpochConverged=").append(fact.membershipEpochConverged)
+        sb.append(" membershipProbeDisposition=").append(fact.membershipProbeDisposition)
         sb.append(" result=").append(fact.result)
         val mismatch = fact.mismatchReason()
         if (mismatch != null) {
