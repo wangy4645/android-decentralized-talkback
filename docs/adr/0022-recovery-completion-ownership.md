@@ -10136,12 +10136,13 @@ Phase-3B Field Authorization            AUTHORIZED (2026-08-02)
       pr53Unlock=BLOCKED
       offline4c=D1_DIAG_A sub=STIMULATION_WINDOW_LAG+SUPERSEDE_CLEAR_DELIVERY_BEFORE_ABSENT
       meaning=blocking point back at D1 exercise ingress; not C/ownership
-    Phase-3C-B Attempt-4c                 SUSPENDED (2026-08-03)
-      purpose=D1 ABSENT→ADMISSION diagnostic (harness-only admission trace)
+    Phase-3C-B Attempt-4c                 AUTHORIZED (2026-08-03, §E.21)
+      purpose=successor + control-reconciliation baseline observation
       harness=scripts/run-phase3c-b-protected-window.ps1 (-Attempt 4c)
-      reason=NOT "proven to fail" — no explicable exercise topology; further
-             rounds cannot produce incremental evidence until R3 + successor
-             suppression primitive land
+      cases=E.21 Case A (authority unwired) / B (epoch match) / C (epoch mismatch)
+      prerequisite=PR-D merged (#107); NO SUPPRESS_SUCCESSOR_ATTEMPT
+      supersedes=E.16.2.4.5a D1-only diagnostic scope for first baseline run
+      note=goal is observation contract, not PASS; R4-impl not required
       offlineResult=D1_DIAG_A (answered from 4b log; field round adds nothing)
     PR5-3 Root Cause Grill R3        VERIFIED (2026-08-03) — see §E.17
       title=Recovery Delivery Obligation Conservation (NOT "supersede fix")
@@ -10178,7 +10179,7 @@ PR5-3 / UVCP                            BLOCKED 🔒
 Production                              FROZEN (R2 only; no J-B relax / no CompletionPolicy)
 ```
 
-**Purpose:** D1 **CLOSED**; Slice-1 **CLOSED**; Grill R1/R2 **VERIFIED**; Attempt-4 / 4b **CLOSED**; Attempt-4c **SUSPENDED**; **Grill R3 VERIFIED** (§E.17 obligation conservation, P1 replay PASS); **R4 REGISTERED** with **R4-def DONE** (§E.20 adoption contract); PR5-3 **BLOCKED**.
+**Purpose:** D1 **CLOSED**; Slice-1 **CLOSED**; Grill R1/R2 **VERIFIED**; Attempt-4 / 4b **CLOSED**; Attempt-4c **AUTHORIZED** (§E.21 baseline); **Grill R3 VERIFIED** (§E.17 obligation conservation, P1 replay PASS); **R4 REGISTERED** with **R4-def DONE** (§E.20 adoption contract); E.18.2 **VERIFIED** (PR-D #107); PR5-3 **BLOCKED**.
 
 **Evidence-model shift (2026-08-03):** Joint is demoted from *sole diagnostic instrument* to *integration confidence gate*. It is **not** cancelled. See §E.17.7.
 
@@ -10705,7 +10706,7 @@ nextAudit=D1_delivery_trigger_audit
 
 ###### E.16.2.4.5a Phase-3C-B Attempt-4c — D1 ABSENT→ADMISSION diagnostic (AUTHORIZED)
 
-**Status:** harness **READY**; field **AUTHORIZED** (2026-08-02).
+**Status:** harness **READY**; field **AUTHORIZED** (2026-08-02). **Post-PR-D:** first field run follows **§E.21** successor + control-reconciliation observation contract (Cases A/B/C); D1 classification below remains available as sub-audit within the same harness round.
 
 **Authorize text:**
 
@@ -11038,7 +11039,7 @@ Phase-2  DeferredIntentAuthoritySlice1JointTest (R16 HELD→SUPERSEDED→slot re
 Phase-3  Pr52cDeferredIntentHoldTest + DebugExplicitSupersedePhase3aTest
 ```
 
-**Next:** **Grill R3** (§E.17) — read-only, no device. Attempt-4c **SUSPENDED**; do **not** run further Joint rounds until R3 closes and the successor-suppression primitive lands. PR5-3 remains BLOCKED.
+**Next:** Attempt-4c baseline observation (§E.21) after PR-D merge — **no SUPPRESS**. Grill R3 `VERIFIED` (§E.17). PR5-3 remains BLOCKED until Joint path clears.
 
 ---
 
@@ -11272,16 +11273,23 @@ Validation confirms delivery obligation conservation under supersede lineage ter
 
 #### E.18 Control Reconciliation Authority Closure
 
-**Status:** `OPEN` (E.18.1 `LANDED` — behavior intentionally unchanged; E.18.2 `WAITING` PR-D)
+**Status:** `OPEN` (E.18.1 `LANDED`; E.18.2 `VERIFIED`; E.18.3 field validation `OPEN` — see §E.21 Attempt-4c baseline)
 
 Completion readiness, control reconciliation, and successor adoption are separate authority domains. A passing completion predicate without wired control authority or adoption semantics shall not be interpreted as full recovery correctness.
 
-**Problem (observed on main):** `ConferenceEdgeRecoveryController` used anonymous default-open `queryMembershipEpochConverged = { _, _ -> true }`. Replaced by [DefaultOpenMembershipAuthoritySentinel] in E.18.1. `MembershipAuthorityResolver` (true authority) is not wired in production.
+**Problem (observed on main):** `ConferenceEdgeRecoveryController` used anonymous default-open `queryMembershipEpochConverged = { _, _ -> true }`. Replaced by [DefaultOpenMembershipAuthoritySentinel] in E.18.1. PR-D wires `MembershipAuthorityResolver` via `WiredMembershipEpochProbe` in production Coordinator.
 
 | Phase | Goal | Status |
 |---|---|---|
 | E.18.1 Observable gap | Replace anonymous default with named sentinel; emit `CONTROL_RECONCILIATION_MEMBERSHIP_UNWIRED` fact per evaluation; **behavior unchanged** (still returns true) | `LANDED` (PR-E18) |
-| E.18.2 Authority wiring | PR-D: inject `MembershipAuthorityResolver` via Coordinator; remove sentinel and default-open | `WAITING` (PR-D) |
+| E.18.2 Authority wiring | PR-D: inject `MembershipAuthorityResolver` via Coordinator; `WiredMembershipEpochProbe` with explicit `MembershipEpochProbeResult` (`Checked` / `Unwired`); production Coordinator wired | `VERIFIED` (PR-D #107) |
+| E.18.3 Field validation | Prove wired authority path under successor topology (Attempt-4c Cases A/B/C); **not** closure of E.18 | `OPEN` (§E.21) |
+
+**E.18.2 probe semantics (frozen):** `Unwired` is not `Checked(false)`. `Unwired` means no authority answered; `Checked(false)` means authority answered with epoch/hash mismatch. Completion gate requires `Checked` + `converged=true`.
+
+**E.18.3 discipline:** E.18.2 is **structural verification** (resolver + probe + Coordinator wiring + UT). E.18.3 is **field verification** that the production path emits the correct facts under successor stress. E.18 overall remains `OPEN` until E.18.3 exercises complete and are classified.
+
+**Facts:** `CONTROL_RECONCILIATION_MEMBERSHIP_UNWIRED`, `CONTROL_RECONCILIATION_MEMBERSHIP_CHECKED` (authorityId, expectedEpoch, observedEpoch, converged). Aggregated on `RECOVERY_CONTROL_RECONCILIATION_FACT` via `membershipProbeDisposition` (`CHECKED` | `UNWIRED`).
 
 **Frozen until R4-impl:** do not introduce `TRANSFERRED`, do not change `obligationGeneration` / `recoveryAttemptId` semantics — `sessionEpochMatched` and `SuccessorObligationAdmissionTest` (G-Resurrect) anchor R4-def.
 
@@ -11447,10 +11455,13 @@ Attempt-4c / Joint evidence BEFORE R4-def
     → diagnostic only (topology / harness / no-crash)
     → MUST NOT be read as "successor adopted obligation"
 
-Attempt-4c / Joint evidence AFTER R4-def
-    → may evaluate adoption hypotheses against §E.20.2 facts
-    → still requires R4-impl emission of SUCCESSOR_OBLIGATION_ADOPTED for PASS
+Attempt-4c / Joint evidence AFTER R4-def + PR-D
+    → evaluate against §E.21 Case A/B/C observation contract
+    → may evaluate adoption *hypotheses* against §E.20.2 facts
+    → still requires R4-impl emission of SUCCESSOR_OBLIGATION_ADOPTED for adoption PASS
 ```
+
+**Attempt-4c first baseline (§E.21):** run **without** `SUPPRESS_SUCCESSOR_ATTEMPT` to capture natural successor topology before isolation primitive changes the exercise.
 
 Joint `PASS` without `SUCCESSOR_OBLIGATION_ADOPTED` proves integration confidence only, not adoption integrity.
 
@@ -11465,7 +11476,200 @@ R4-def Successor Adoption Contract
         +-- R4-impl WAITING            ← runtime facts + authority wiring
 ```
 
-**Next engineering slice after R4-def:** PR-D Runtime Wiring (§E.18.2 membership authority closure). R4-impl remains blocked until PR-D restores wired control authority and adoption facts have a single emission owner.
+**Next engineering slice (frozen order):**
+
+```text
+PR-D merge (#107)
+    → Attempt-4c baseline observation (§E.21; no SUPPRESS)
+    → classify successor behavior gap
+    → SUPPRESS_SUCCESSOR_ATTEMPT primitive
+    → Joint / PR5-3
+    → R4-impl
+```
+
+PR-D (§E.18.2) is `VERIFIED` on branch #107; E.18.3 field validation `OPEN` until §E.21 exercises are classified.
+
+#### E.21 Attempt-4c Baseline Observation Contract (2026-08-03)
+
+**Status:** `AUTHORIZED` (contract frozen; field run `PENDING` PR-D merge)
+
+**Not a PASS gate.** Attempt-4c answers one question:
+
+> After a successor appears, what state is the **old / new obligation episode** actually in — and does control reconciliation consume wired authority facts correctly?
+
+This round is the first **post-R4-def + post-PR-D** field observation. It does **not** prove successor adoption (R4-impl not landed).
+
+##### E.21.1 Prerequisites and OUT
+
+| Prerequisite | Required |
+|---|---|
+| PR-D merged (`MembershipAuthorityResolver` + `WiredMembershipEpochProbe` on Coordinator) | yes |
+| Grill R3 `VERIFIED` (§E.17) | yes |
+| R4-def `DEFINED` (§E.20) | yes |
+| `SUPPRESS_SUCCESSOR_ATTEMPT` | **no** — baseline must observe natural successor behavior |
+| R4-impl / `SUCCESSOR_OBLIGATION_ADOPTED` emission | **no** |
+| Production code changes for this round | **no** |
+
+**OUT:** interpreting `RECOVERED` as adoption; introducing `TRANSFERRED`; changing generation semantics; merging Case A infrastructure gap with Case C convergence failure in a single verdict field.
+
+**Harness:** `scripts/run-phase3c-b-protected-window.ps1 -Attempt 4c` (extends §E.16.2.4.5a protocol; classification below takes precedence for PR-D-era runs).
+
+##### E.21.2 Shared successor topology (informative)
+
+```text
+predecessor lineage active or closing
+        |
+    supersede / admission event
+        |
+successor attempt admitted (RECOVERY_OBLIGATION_OPENED / G-Resurrect class)
+        |
+control reconciliation evaluates membership probe on successor episode
+        |
+observe: UNWIRED | CHECKED(converged=*) | RECOVERED | adoption facts (none expected)
+```
+
+**Evidence anchors (read-only):**
+
+- `RECOVERY_CONTROL_RECONCILIATION_FACT` — `membershipProbeDisposition`, `membershipEpochConverged`, `reason=`
+- `CONTROL_RECONCILIATION_MEMBERSHIP_UNWIRED` / `CONTROL_RECONCILIATION_MEMBERSHIP_CHECKED`
+- `MEMBERSHIP_AUTHORITY_RESOLVE_TRACE` (when wired path runs)
+- `RECOVERY_COMPLETION_*` / `COMPLETION_CANDIDATE` projection lines
+- **Absence expected:** `SUCCESSOR_OBLIGATION_ADOPTED`, `TRANSFERRED`
+
+##### E.21.3 Case A — Authority Unwired (E.18 protection)
+
+**Purpose:** verify PR-D eliminated silent default-open — infrastructure missing is **not** epoch mismatch.
+
+**Stimulus topology:**
+
+```text
+old lineage → supersede → successor admission
+        → membership authority digest unavailable for channel
+          (no lastSeenAuthorityDigestByChannel entry; local not membership authority)
+```
+
+**MUST observe:**
+
+```text
+CONTROL_RECONCILIATION_MEMBERSHIP_UNWIRED
+RECOVERY_CONTROL_RECONCILIATION_FACT ... membershipProbeDisposition=UNWIRED
+RECOVERY_CONTROL_RECONCILIATION_FACT ... reason=MEMBERSHIP_AUTHORITY_UNWIRED
+```
+
+**MUST NOT observe (on successor episode under test):**
+
+```text
+RECOVERED                          (completion must not claim checked convergence)
+SUCCESSOR_OBLIGATION_ADOPTED       (R4-impl not landed)
+TRANSFERRED                        (frozen)
+membershipEpochConverged=true with membershipProbeDisposition=UNWIRED
+```
+
+**Allowed classification:** `CASE_A_PASS` — E.18 prevents silent-open; gap is **infrastructure missing**, not adoption failure.
+
+##### E.21.4 Case B — Authority Wired + Epoch Match (happy control path)
+
+**Purpose:** verify completion gate correctly **consumes** a checked authority fact.
+
+**Stimulus topology:**
+
+```text
+old lineage → supersede → successor admission
+        → authority digest present and aligned with local TopologyDigest
+```
+
+**MUST observe:**
+
+```text
+CONTROL_RECONCILIATION_MEMBERSHIP_CHECKED
+    authorityId=<A> expectedEpoch=<N> observedEpoch=<N> converged=true
+RECOVERY_CONTROL_RECONCILIATION_FACT ... membershipProbeDisposition=CHECKED
+RECOVERY_CONTROL_RECONCILIATION_FACT ... membershipEpochConverged=true
+```
+
+**Then observe (non-verdict):**
+
+```text
+completion candidate projection → RECOVERED? (may or may not occur in same window)
+```
+
+**Allowed combinations:**
+
+```text
+RECOVERED + no SUCCESSOR_OBLIGATION_ADOPTED   ← valid; R4-impl not required
+no RECOVERED + CHECKED converged=true         ← valid; other completion gates may hold
+```
+
+**MUST NOT write:** `successor adopted obligation` — `RECOVERED` ≠ adoption (§E.20.2).
+
+**Allowed classification:** `CASE_B_PASS` — completion gate correctly consumes wired authority fact.
+
+##### E.21.5 Case C — Authority Wired + Epoch Mismatch (three-state discipline)
+
+**Purpose:** prove `Checked(false)` is distinct from `Unwired` — real convergence failure, not infrastructure gap.
+
+**Stimulus topology:**
+
+```text
+old lineage → supersede → successor admission
+        → authority digest present but rosterEpoch/memberHash ≠ local view
+```
+
+**MUST observe:**
+
+```text
+CONTROL_RECONCILIATION_MEMBERSHIP_CHECKED ... converged=false
+RECOVERY_CONTROL_RECONCILIATION_FACT ... membershipProbeDisposition=CHECKED
+RECOVERY_CONTROL_RECONCILIATION_FACT ... membershipEpochConverged=false
+RECOVERY_CONTROL_RECONCILIATION_FACT ... reason=MEMBERSHIP_EPOCH_MISMATCH
+```
+
+**MUST NOT observe:**
+
+```text
+RECOVERED
+CONTROL_RECONCILIATION_MEMBERSHIP_UNWIRED    (authority answered; not infrastructure gap)
+TRANSFERRED
+```
+
+**Allowed classification:** `CASE_C_PASS` — mismatch not collapsed into unwired or silent-open.
+
+##### E.21.6 Permitted conclusions (this round only)
+
+| Result | May prove | May NOT prove |
+|---|---|---|
+| Case A PASS | E.18 prevents silent default-open; unwired ≠ false | Successor adoption; delivery conservation (use R3 replay) |
+| Case B PASS | Completion gate consumes `CHECKED` authority fact | `SUCCESSOR_OBLIGATION_ADOPTED`; obligation transfer |
+| Case C PASS | Epoch mismatch surfaced as `CHECKED(false)`, not `UNWIRED` | Root cause of epoch lag (diagnostic follow-up) |
+| Any case FAIL | Specific seam mis-wired or fact missing | Product "recovery broken" without case label |
+
+##### E.21.7 Why SUPPRESS stays post-baseline
+
+```text
+PR-D merge
+    → Attempt-4c baseline (this section, no SUPPRESS)
+    → document natural successor behavior under stress
+    → SUPPRESS_SUCCESSOR_ATTEMPT (isolation primitive)
+    → Joint / PR5-3
+    → R4-impl
+```
+
+Running SUPPRESS before baseline destroys the observation:
+
+> How does the system handle a successor **without** experimental suppression?
+
+That baseline informs R4-impl and SUPPRESS primitive design.
+
+##### E.21.8 System state after PR-D (informative)
+
+```text
+Delivery obligation       owner: R3 VERIFIED ✅
+Deferred intent           owner: R1/R2 VERIFIED ✅
+Completion control        authority path: E.18.2 VERIFIED ✅
+Successor adoption        contract: R4-def DEFINED; runtime: R4-impl WAITING ⏳
+```
+
+**Engineering focus shifts from** "why did recovery vanish?" **to** "before recovery completes, does the successor actually bear the obligation it should?" — R4's question. Attempt-4c provides the first field vocabulary for that question without claiming adoption.
 
 ---
 
