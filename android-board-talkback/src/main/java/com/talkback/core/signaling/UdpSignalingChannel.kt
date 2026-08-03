@@ -7,6 +7,7 @@ import com.talkback.core.signaling.link.LinkQualificationTrace
 import com.talkback.core.signaling.link.QualificationFailureReason
 import com.talkback.core.signaling.prr.PrrInboundFactObserver
 import com.talkback.core.ptt.FloorRequestCallsiteTracer
+import com.talkback.core.util.D1IngressMissDebugInjection
 import com.talkback.core.util.TalkbackLog
 import com.talkback.core.util.OfferDeliveryObservation
 import com.talkback.core.util.TransportCapabilityTrace
@@ -137,6 +138,9 @@ class UdpSignalingChannel(
                     srcPort = source.port,
                     socketId = socketId
                 )
+                if (D1IngressMissDebugInjection.consumeDropIfArmed(envelope)) {
+                    continue
+                }
                 if (envelope.type == SignalType.GROUP_JOIN) {
                     OfferDeliveryObservation.emitRemoteReceive(
                         envelope = envelope,

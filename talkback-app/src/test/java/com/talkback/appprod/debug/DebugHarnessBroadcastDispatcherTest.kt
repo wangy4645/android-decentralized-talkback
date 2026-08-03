@@ -4,6 +4,11 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.concurrent.Executors
 
+/**
+ * ANR contract for Joint debug control plane (PR52C / D1 / SUPPRESS).
+ * All DEBUG broadcasts must use [DebugHarnessBroadcastDispatcher] — never
+ * block BroadcastReceiver.onReceive on coordinator sync work.
+ */
 class DebugHarnessBroadcastDispatcherTest {
     @Test
     fun schedule_returnsBeforeWorkCompletes_onCallerThread() {
