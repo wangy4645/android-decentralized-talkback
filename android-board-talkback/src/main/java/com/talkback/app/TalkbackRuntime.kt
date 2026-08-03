@@ -489,6 +489,28 @@ class TalkbackRuntime(
     internal fun testNotifyRemoteModuleRecovered(moduleId: String) {
         coordinator.testNotifyRemoteModuleRecovered(moduleId)
     }
+
+    fun debugPr52cCreateDeferredIntent(remoteModuleId: String): String? =
+        coordinator.debugPr52cCreateDeferredIntent(remoteModuleId)
+
+    fun debugPr52cBlockDispatch(remoteModuleId: String): Boolean =
+        coordinator.debugPr52cBlockDispatch(remoteModuleId)
+
+    fun debugPr52cFireNegotiationCanExecute(remoteModuleId: String): Boolean =
+        coordinator.debugPr52cFireNegotiationCanExecute(remoteModuleId)
+
+    fun debugPr52cReleaseDispatch(remoteModuleId: String): Boolean =
+        coordinator.debugPr52cReleaseDispatch(remoteModuleId)
+
+    fun debugExplicitSupersedeDeferredIntent(remoteModuleId: String): Boolean =
+        coordinator.debugExplicitSupersedeDeferredIntent(remoteModuleId)
+
+    fun debugD1ArmDropRecoveryOfferIngress(): Boolean =
+        coordinator.debugD1ArmDropRecoveryOfferIngress()
+
+    fun debugD1ClearIngressMissInjection(): Boolean =
+        coordinator.debugD1ClearIngressMissInjection()
+
     fun debugSuppressSuccessorAttemptArm(remoteModuleId: String, ttlMs: Long = 180_000L): Boolean =
         coordinator.debugSuppressSuccessorAttemptArm(remoteModuleId, ttlMs)
 

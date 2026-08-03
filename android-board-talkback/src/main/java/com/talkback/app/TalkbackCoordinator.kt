@@ -161,9 +161,11 @@ import com.talkback.core.util.RecoveryDeliveryFact
 import com.talkback.core.util.FloorTrace
 import com.talkback.core.util.GroupTransitionReadinessLog
 import com.talkback.core.util.MeetingRecoveryLog
+import com.talkback.core.util.D1IngressMissDebugInjection
 import com.talkback.core.util.SuppressSuccessorAttemptDebugInjection
 import com.talkback.core.util.PttTimingLog
 import com.talkback.core.util.TalkbackLog
+import com.talkback.core.session.Pr52cDebugInjection
 import com.talkback.app.governance.TalkbackChannelGovernanceHost
 import com.talkback.governance.capability.CapabilityReadiness
 import com.talkback.governance.coordinator.ChannelGovernanceRuntime
@@ -11707,6 +11709,116 @@ class TalkbackCoordinator(
                 isConferenceHostSession(session) &&
                 remoteModuleId in conferenceMemberRemoteIds(session)
         }
+
+    /** DEBUG harness: create deferred negotiation intent (PR52C). Does not change release semantics. */
+    fun debugPr52cCreateDeferredIntent(remoteModuleId: String): String? {
+        val intentId = runOnCoordinatorSyncTimed("PR52C_CREATE", default = null as String?) {
+            val session = activeHostConferenceSessionForRemote(remoteModuleId)
+                ?: return@runOnCoordinatorSyncTimed null
+            val channelId = session.channelId ?: return@runOnCoordinatorSyncTimed null
+            val admissionSeq = negotiationCapabilityObservation.establishDeferredBaseline(
+                session.id,
+                remoteModuleId
+            )
+            conferenceEdgeRecoveryController.debugCreateDeferredNegotiationIntent(
+                sessionId = session.id,
+                channelId = channelId,
+                remoteModuleId = remoteModuleId,
+                admissionSeq = admissionSeq
+            )
+        }
+        if (intentId != null) {
+            log("DEBUG_DISPATCH_COMPLETED action=PR52C_CREATE remote=$remoteModuleId intentId=$intentId")
+        } else {
+            log(
+                "DEBUG_DISPATCH_SKIPPED action=PR52C_CREATE remote=$remoteModuleId " +
+                    "reason=no_host_session_or_timeout"
+            )
+        }
+        return intentId
+    }
+
+    /** DEBUG harness: block deferred dispatch readiness (PR52C). */
+    fun debugPr52cBlockDispatch(remoteModuleId: String): Boolean {
+        val ok = runOnCoordinatorSyncTimed("PR52C_BLOCK_DISPATCH", default = false) {
+            val session = activeHostConferenceSessionForRemote(remoteModuleId)
+                ?: return@runOnCoordinatorSyncTimed false
+            Pr52cDebugInjection.blockDispatch(session.id, remoteModuleId)
+            log("DEBUG_DISPATCH_NOT_READY session=${session.id} remote=$remoteModuleId")
+            true
+        }
+        if (ok) log("DEBUG_DISPATCH_COMPLETED action=PR52C_BLOCK_DISPATCH remote=$remoteModuleId")
+        return ok
+    }
+
+    /** DEBUG harness: force negotiation-can-execute probe then clear (PR52C). */
+    fun debugPr52cFireNegotiationCanExecute(remoteModuleId: String): Boolean {
+        val ok = runOnCoordinatorSyncTimed("PR52C_NEG_EXECUTE", default = false) {
+            val session = activeHostConferenceSessionForRemote(remoteModuleId)
+                ?: return@runOnCoordinatorSyncTimed false
+            Pr52cDebugInjection.forceNegotiationExecutable(session.id, remoteModuleId)
+            recomputeNegotiationCapability(session, remoteModuleId, "DEBUG_INJECTION")
+            Pr52cDebugInjection.clearNegotiationForced(session.id, remoteModuleId)
+            true
+        }
+        if (ok) log("DEBUG_DISPATCH_COMPLETED action=PR52C_NEG_EXECUTE remote=$remoteModuleId")
+        return ok
+    }
+
+    /**
+     * DEBUG harness: release dispatch readiness (PR52C).
+     * Uses the same controller release path as production drain; only the call site is debug.
+     */
+    fun debugPr52cReleaseDispatch(remoteModuleId: String): Boolean {
+        var sawSession = false
+        val ok = runOnCoordinatorSyncTimed("PR52C_RELEASE_DISPATCH", default = false) {
+            val session = activeHostConferenceSessionForRemote(remoteModuleId)
+                ?: return@runOnCoordinatorSyncTimed false
+            sawSession = true
+            conferenceEdgeRecoveryController.debugReleaseDispatchReadiness(session.id, remoteModuleId)
+            true
+        }
+        when {
+            ok -> log("DEBUG_DISPATCH_COMPLETED action=PR52C_RELEASE_DISPATCH remote=$remoteModuleId")
+            sawSession -> { /* TIMEOUT already logged */ }
+            else -> log(
+                "DEBUG_DISPATCH_SKIPPED action=PR52C_RELEASE_DISPATCH " +
+                    "remote=$remoteModuleId reason=no_host_session_or_timeout"
+            )
+        }
+        return ok
+    }
+
+    /** DEBUG harness: Phase-3A explicit supersede of deferred intent. */
+    fun debugExplicitSupersedeDeferredIntent(remoteModuleId: String): Boolean {
+        val ok = runOnCoordinatorSyncTimed("DEBUG_EXPLICIT_SUPERSEDE", default = false) {
+            val session = activeHostConferenceSessionForRemote(remoteModuleId)
+                ?: return@runOnCoordinatorSyncTimed false
+            conferenceEdgeRecoveryController.debugExplicitSupersedeDeferredIntent(
+                session.id,
+                remoteModuleId
+            )
+        }
+        if (ok) log("DEBUG_DISPATCH_COMPLETED action=DEBUG_EXPLICIT_SUPERSEDE remote=$remoteModuleId")
+        return ok
+    }
+
+    /**
+     * DEBUG harness: arm D1 recovery-offer ingress drop on this device.
+     * Ingress miss only — does not alter delivery/retry/observation policy.
+     */
+    fun debugD1ArmDropRecoveryOfferIngress(): Boolean {
+        D1IngressMissDebugInjection.armDropRecoveryOfferIngress()
+        log("D1_DEBUG_ARM_DROP_RECOVERY_INGRESS armed=true")
+        return true
+    }
+
+    /** DEBUG harness: clear D1 ingress-miss injection. */
+    fun debugD1ClearIngressMissInjection(): Boolean {
+        D1IngressMissDebugInjection.clear()
+        log("D1_DEBUG_CLEAR_INGRESS_MISS_INJECTION")
+        return true
+    }
 
     /**
      * Harness: arm SUPPRESS_SUCCESSOR_ATTEMPT on the active host conference edge.

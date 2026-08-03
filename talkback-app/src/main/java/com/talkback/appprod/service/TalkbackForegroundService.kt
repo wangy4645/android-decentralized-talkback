@@ -27,19 +27,23 @@ class TalkbackForegroundService : Service() {
     private lateinit var runtimeManager: TalkbackRuntimeManager
     private var wakeLock: PowerManager.WakeLock? = null
     private var serviceStopped = false
-    private var suppressDebugReceiverRegistered = false
+    private var pr52cDebugReceiverRegistered = false
 
     // Cached pool: one hung debug work must not stall later PendingResult finish paths.
     private val debugBroadcastExecutor = Executors.newCachedThreadPool { r ->
         Thread(r, "talkback-debug-bcast").apply { isDaemon = true }
     }
 
-    private val suppressDebugReceiver = object : BroadcastReceiver() {
+    private val pr52cDebugReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (!BuildConfig.DEBUG || intent == null) return
             val action = intent.action ?: return
             val remote = intent.getStringExtra(EXTRA_DEBUG_REMOTE) ?: "M03"
-            val ttlMs = intent.getLongExtra(EXTRA_DEBUG_TTL_MS, 180_000L)
+            val ttlMs = intent.getLongExtra(
+                EXTRA_DEBUG_TTL_MS,
+                180_000L
+            )
+            // Delivered marker on receive path (before async work) for harness integrity.
             android.util.Log.i(DEBUG_LOG_TAG, "DEBUG_DISPATCH_DELIVERED action=$action remote=$remote")
             val pending = goAsync()
             DebugHarnessBroadcastDispatcher.schedule(
@@ -57,6 +61,20 @@ class TalkbackForegroundService : Service() {
                         return@schedule DebugHarnessBroadcastDispatcher.Outcome.SKIPPED
                     }
                     val ok = when (action) {
+                        ACTION_DEBUG_PR52C_CREATE ->
+                            runtime.debugPr52cCreateDeferredIntent(remote) != null
+                        ACTION_DEBUG_PR52C_BLOCK_DISPATCH ->
+                            runtime.debugPr52cBlockDispatch(remote)
+                        ACTION_DEBUG_PR52C_NEG_EXECUTE ->
+                            runtime.debugPr52cFireNegotiationCanExecute(remote)
+                        ACTION_DEBUG_PR52C_RELEASE_DISPATCH ->
+                            runtime.debugPr52cReleaseDispatch(remote)
+                        ACTION_DEBUG_EXPLICIT_SUPERSEDE ->
+                            runtime.debugExplicitSupersedeDeferredIntent(remote)
+                        ACTION_DEBUG_D1_ARM_DROP_INGRESS ->
+                            runtime.debugD1ArmDropRecoveryOfferIngress()
+                        ACTION_DEBUG_D1_CLEAR_INGRESS_MISS ->
+                            runtime.debugD1ClearIngressMissInjection()
                         ACTION_DEBUG_SUPPRESS_SUCCESSOR_ARM ->
                             runtime.debugSuppressSuccessorAttemptArm(remote, ttlMs)
                         ACTION_DEBUG_SUPPRESS_SUCCESSOR_CLEAR ->
@@ -66,6 +84,7 @@ class TalkbackForegroundService : Service() {
                     if (ok) {
                         DebugHarnessBroadcastDispatcher.Outcome.COMPLETED
                     } else {
+                        // Timed-out / skipped paths already logged by coordinator.
                         DebugHarnessBroadcastDispatcher.Outcome.SKIPPED
                     }
                 }
@@ -81,17 +100,24 @@ class TalkbackForegroundService : Service() {
         startForeground(NOTIFY_ID, buildNotification(getString(R.string.notification_running)))
         if (BuildConfig.DEBUG) {
             val filter = IntentFilter().apply {
+                addAction(ACTION_DEBUG_PR52C_CREATE)
+                addAction(ACTION_DEBUG_PR52C_BLOCK_DISPATCH)
+                addAction(ACTION_DEBUG_PR52C_NEG_EXECUTE)
+                addAction(ACTION_DEBUG_PR52C_RELEASE_DISPATCH)
+                addAction(ACTION_DEBUG_EXPLICIT_SUPERSEDE)
+                addAction(ACTION_DEBUG_D1_ARM_DROP_INGRESS)
+                addAction(ACTION_DEBUG_D1_CLEAR_INGRESS_MISS)
                 addAction(ACTION_DEBUG_SUPPRESS_SUCCESSOR_ARM)
                 addAction(ACTION_DEBUG_SUPPRESS_SUCCESSOR_CLEAR)
             }
             // DEBUG only: exported so adb shell (uid 2000) can trigger field injection.
             ContextCompat.registerReceiver(
                 this,
-                suppressDebugReceiver,
+                pr52cDebugReceiver,
                 filter,
                 ContextCompat.RECEIVER_EXPORTED
             )
-            suppressDebugReceiverRegistered = true
+            pr52cDebugReceiverRegistered = true
         }
     }
 
@@ -124,9 +150,9 @@ class TalkbackForegroundService : Service() {
     }
 
     override fun onDestroy() {
-        if (suppressDebugReceiverRegistered) {
-            runCatching { unregisterReceiver(suppressDebugReceiver) }
-            suppressDebugReceiverRegistered = false
+        if (pr52cDebugReceiverRegistered) {
+            runCatching { unregisterReceiver(pr52cDebugReceiver) }
+            pr52cDebugReceiverRegistered = false
         }
         runCatching { debugBroadcastExecutor.shutdownNow() }
         stopServiceInternal("Service destroyed")
@@ -199,8 +225,8 @@ class TalkbackForegroundService : Service() {
 
     companion object {
         private const val CHANNEL_ID = "talkback_service"
-        private const val NOTIFY_ID = 3001
         private const val DEBUG_LOG_TAG = "Talkback"
+        private const val NOTIFY_ID = 3001
 
         const val EXTRA_MODULE_ID = "moduleId"
         const val EXTRA_ENDPOINT_ID = "endpointId"
@@ -223,6 +249,15 @@ class TalkbackForegroundService : Service() {
 
         const val EXTRA_DEBUG_REMOTE = "remote"
         const val EXTRA_DEBUG_TTL_MS = "ttlMs"
+        const val ACTION_DEBUG_PR52C_CREATE = "com.talkback.appprod.debug.PR52C_CREATE"
+        const val ACTION_DEBUG_PR52C_BLOCK_DISPATCH = "com.talkback.appprod.debug.PR52C_BLOCK_DISPATCH"
+        const val ACTION_DEBUG_PR52C_NEG_EXECUTE = "com.talkback.appprod.debug.PR52C_NEG_EXECUTE"
+        const val ACTION_DEBUG_PR52C_RELEASE_DISPATCH = "com.talkback.appprod.debug.PR52C_RELEASE_DISPATCH"
+        /** ADR-0022 E.16.2 Phase-3A FA-3 Option A. */
+        const val ACTION_DEBUG_EXPLICIT_SUPERSEDE = "com.talkback.appprod.debug.DEBUG_EXPLICIT_SUPERSEDE"
+        /** D1 Option A: arm recovery-offer ingress drop on this device (typically M03). */
+        const val ACTION_DEBUG_D1_ARM_DROP_INGRESS = "com.talkback.appprod.debug.D1_ARM_DROP_INGRESS"
+        const val ACTION_DEBUG_D1_CLEAR_INGRESS_MISS = "com.talkback.appprod.debug.D1_CLEAR_INGRESS_MISS"
         /** Harness: suppress successor obligation admission (Attempt-4c-S). */
         const val ACTION_DEBUG_SUPPRESS_SUCCESSOR_ARM =
             "com.talkback.appprod.debug.SUPPRESS_SUCCESSOR_ATTEMPT_ARM"
