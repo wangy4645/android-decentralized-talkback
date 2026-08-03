@@ -67,8 +67,45 @@ class RecoveryIngressObservationTest {
         RecoveryIngressObservation.fireWindowDeadlineForTest(id, "sess-1")
         assertEquals(1, absentCount())
         assertEquals(0, observedCount())
+        // INV-DELIVERY-OBS-001: deadline must preserve window identity (not synthetic 0,0).
+        assertTrue(
+            factLines.any {
+                it.startsWith("RECOVERY_REMOTE_INGRESS_ABSENT") &&
+                    it.contains("recoveryAttemptId=7") &&
+                    it.contains("obligationGeneration=5") &&
+                    it.contains("deliveryAttemptId=1") &&
+                    it.contains("reason=WINDOW_DEADLINE")
+            }
+        )
+        assertFalse(
+            factLines.any {
+                it.startsWith("RECOVERY_REMOTE_INGRESS_ABSENT") &&
+                    it.contains("recoveryAttemptId=0") &&
+                    it.contains("obligationGeneration=0")
+            }
+        )
         RecoveryIngressObservation.fireWindowDeadlineForTest(id, "sess-1")
         assertEquals(1, absentCount())
+    }
+
+    @Test
+    fun deadlineAbsent_preservesAttemptAndGenerationFromLocalAccepted() {
+        val id = identity(
+            lineage = "L1",
+            deliveryAttemptId = 2L
+        ).copy(recoveryAttemptId = 11L, obligationGeneration = 3L)
+        RecoveryDeliveryFact.emit(RecoveryDeliveryFact.Phase.LOCAL_ACCEPTED, id, "sess-1")
+        RecoveryIngressObservation.fireWindowDeadlineForTest(id, "sess-1")
+        assertEquals(1, absentCount())
+        assertTrue(
+            factLines.any {
+                it.startsWith("RECOVERY_REMOTE_INGRESS_ABSENT") &&
+                    it.contains("offerLineageId=L1") &&
+                    it.contains("recoveryAttemptId=11") &&
+                    it.contains("obligationGeneration=3") &&
+                    it.contains("deliveryAttemptId=2")
+            }
+        )
     }
 
     @Test

@@ -41,22 +41,66 @@ $superseded = Find-Lines "RECOVERY_DELIVERY_LINEAGE_SUPERSEDED"
 if ($LineageId) {
     $superseded = @($superseded | Where-Object { $_ -match "offerLineageId=$LineageId" })
 }
-$phantomAbsent = Find-Lines "RECOVERY_REMOTE_INGRESS_ABSENT.*recoveryAttemptId=0.*obligationGeneration=0"
+$windowClosedSuperseded = Find-Lines "RECOVERY_INGRESS_WINDOW_CLOSED.*state=CLOSED_SUPERSEDED"
 if ($LineageId) {
-    $phantomAbsent = @($phantomAbsent | Where-Object { $_ -match "offerLineageId=$LineageId" })
+    $windowClosedSuperseded = @($windowClosedSuperseded | Where-Object { $_ -match "offerLineageId=$LineageId" })
+}
+$allAbsent = Find-Lines "RECOVERY_REMOTE_INGRESS_ABSENT"
+if ($LineageId) {
+    $allAbsent = @($allAbsent | Where-Object { $_ -match "offerLineageId=$LineageId" })
+}
+
+# Delivery observation hygiene (INV-DELIVERY-OBS-001): three-way ABSENT class.
+# Not R3 reopen - classifies evidence projection, not obligation lifecycle.
+$activeDeadlineMiss = @($allAbsent | Where-Object {
+    $_ -match "reason=WINDOW_DEADLINE" -and
+    $_ -notmatch "recoveryAttemptId=0" -and
+    $_ -notmatch "obligationGeneration=0"
+})
+$identityMissing = @($allAbsent | Where-Object {
+    $_ -match "reason=WINDOW_DEADLINE" -and
+    $_ -match "recoveryAttemptId=0" -and
+    $_ -match "obligationGeneration=0"
+})
+$lateOnly = Find-Lines "RECOVERY_REMOTE_INGRESS_LATE_OBSERVATION_ONLY.*(LINEAGE_SUPERSEDED|CLOSED_SUPERSEDED)"
+if ($LineageId) {
+    $lateOnly = @($lateOnly | Where-Object { $_ -match "offerLineageId=$LineageId" })
+}
+$terminalAfterSupersede = @()
+if ($superseded.Count -gt 0 -or $windowClosedSuperseded.Count -gt 0) {
+    $terminalAfterSupersede = @($allAbsent)
 }
 
 $deliveryVerdict = "UNKNOWN"
 $deliveryNotes = @()
-if ($superseded.Count -gt 0 -and $phantomAbsent.Count -eq 0) {
-    $deliveryVerdict = "PASS"
-    $deliveryNotes += "old lineage explicitly superseded (count=$($superseded.Count))"
-} elseif ($phantomAbsent.Count -gt 0) {
+$deliveryClass = "NONE"
+if ($identityMissing.Count -gt 0) {
     $deliveryVerdict = "FAIL"
-    $deliveryNotes += "phantom ABSENT(0,0) count=$($phantomAbsent.Count)"
+    $deliveryClass = "IDENTITY_MISSING"
+    $deliveryNotes += "IDENTITY_MISSING count=$($identityMissing.Count) (synthetic 0,0 on WINDOW_DEADLINE)"
+} elseif (($superseded.Count -gt 0 -or $windowClosedSuperseded.Count -gt 0) -and $allAbsent.Count -gt 0 -and $lateOnly.Count -eq 0) {
+    $deliveryVerdict = "FAIL"
+    $deliveryClass = "TERMINAL_AFTER_SUPERSEDE"
+    $deliveryNotes += "TERMINAL_AFTER_SUPERSEDE absentAfterSupersede=$($allAbsent.Count)"
+    $terminalAfterSupersede = $allAbsent
+} elseif ($superseded.Count -gt 0 -and $identityMissing.Count -eq 0 -and $allAbsent.Count -eq 0) {
+    $deliveryVerdict = "PASS"
+    $deliveryClass = "SUPERSEDED_CLEAN"
+    $deliveryNotes += "old lineage explicitly superseded (count=$($superseded.Count))"
+} elseif ($activeDeadlineMiss.Count -gt 0) {
+    $deliveryVerdict = "PASS"
+    $deliveryClass = "ACTIVE_WINDOW_DEADLINE_MISS"
+    $deliveryNotes += "ACTIVE_WINDOW_DEADLINE_MISS count=$($activeDeadlineMiss.Count) (D1-expected / active lineage)"
+} elseif ($lateOnly.Count -gt 0) {
+    $deliveryVerdict = "PASS"
+    $deliveryClass = "TERMINAL_AFTER_SUPERSEDE"
+    $deliveryNotes += "TERMINAL_AFTER_SUPERSEDE lateObservationOnly=$($lateOnly.Count) (no ABSENT fact)"
 } elseif ($superseded.Count -eq 0) {
     $deliveryNotes += "no LINEAGE_SUPERSEDED for lineage=$LineageId"
 }
+
+# Back-compat alias
+$phantomAbsent = $identityMissing
 
 $admissionAccepted = Find-Lines "SUCCESSOR_ADMISSION_ACCEPTED"
 $obligationOpened = Find-Lines "RECOVERY_OBLIGATION_OPENED"
@@ -141,6 +185,15 @@ if ([string]::IsNullOrWhiteSpace($ReportPath)) {
     $ReportPath = Join-Path $LogDir "ATTEMPT4C_BASELINE_CLASSIFICATION.txt"
 }
 
+
+# --- Harness integrity (debug control path only; not Case A/B/C) ---
+$releaseDelivered = Find-Lines "DEBUG_DISPATCH_DELIVERED.*PR52C_RELEASE_DISPATCH"
+$releaseCompleted = Find-Lines "DEBUG_DISPATCH_COMPLETED action=PR52C_RELEASE_DISPATCH"
+$releaseTimeout = Find-Lines "DEBUG_DISPATCH_TIMEOUT action=PR52C_RELEASE_DISPATCH"
+$releaseSkipped = Find-Lines "DEBUG_DISPATCH_SKIPPED action=PR52C_RELEASE_DISPATCH"
+$anrKill = Find-Lines "ANR in com.talkback.appprod|Killing .*com.talkback.appprod"
+$releaseStatus = if ($releaseTimeout.Count -gt 0) { "timeout" } elseif ($releaseCompleted.Count -gt 0) { "completed" } elseif ($releaseSkipped.Count -gt 0) { "skipped" } elseif ($releaseDelivered.Count -gt 0) { "delivered" } else { "NONE" }
+$processLifecycle = if ($anrKill.Count -gt 0) { "DEATH_OBSERVED" } else { "ALIVE_OR_UNKNOWN" }
 $sb = New-Object System.Text.StringBuilder
 [void]$sb.AppendLine("Attempt-4c Baseline Classification")
 [void]$sb.AppendLine("logDir=$LogDir")
@@ -150,7 +203,8 @@ $sb = New-Object System.Text.StringBuilder
 [void]$sb.AppendLine("Delivery:")
 [void]$sb.AppendLine("    $deliveryVerdict")
 foreach ($n in $deliveryNotes) { [void]$sb.AppendLine("    notes: $n") }
-[void]$sb.AppendLine("    supersededCount=$($superseded.Count) phantomAbsentCount=$($phantomAbsent.Count)")
+[void]$sb.AppendLine("    class=$deliveryClass")
+[void]$sb.AppendLine("    supersededCount=$($superseded.Count) activeDeadlineMiss=$($activeDeadlineMiss.Count) identityMissing=$($identityMissing.Count) terminalAfterSupersede=$($terminalAfterSupersede.Count)")
 [void]$sb.AppendLine("")
 [void]$sb.AppendLine("SuccessorAdmission:")
 [void]$sb.AppendLine("    $admissionStatus")
@@ -175,6 +229,11 @@ foreach ($l in ($controlFacts | Select-Object -Last 2)) { [void]$sb.AppendLine("
 [void]$sb.AppendLine("Adoption:")
 [void]$sb.AppendLine("    NOT_EVALUATED (R4-impl pending)")
 [void]$sb.AppendLine("    ADOPTION_STATUS=NOT_EVALUATED")
+[void]$sb.AppendLine("")
+[void]$sb.AppendLine("HarnessIntegrity:")
+[void]$sb.AppendLine("    PR52C_RELEASE_DISPATCH: $releaseStatus")
+[void]$sb.AppendLine("    ProcessLifecycle: $processLifecycle")
+[void]$sb.AppendLine("    note: debug control path only - not recovery Case A/B/C")
 [void]$sb.AppendLine("")
 [void]$sb.AppendLine("R4_LEAKAGE:")
 [void]$sb.AppendLine("    $r4Leakage")
