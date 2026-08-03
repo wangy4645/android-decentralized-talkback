@@ -11270,15 +11270,15 @@ Validation confirms delivery obligation conservation under supersede lineage ter
 
 #### E.18 Control Reconciliation Authority Closure
 
-**Status:** `OPEN`
+**Status:** `OPEN` (E.18.1 `LANDED`; E.18.2 `WAITING` PR-D)
 
 Completion readiness, control reconciliation, and successor adoption are separate authority domains. A passing completion predicate without wired control authority or adoption semantics shall not be interpreted as full recovery correctness.
 
-**Problem (observed on main):** `ConferenceEdgeRecoveryController` injects `queryMembershipEpochConverged` with anonymous default-open `{ _, _ -> true }`. `MembershipAuthorityResolver` (true authority) is not wired in production. This is not an implementation bug in `ControlReconciliationEvaluator`; it is an **authority dependency not wired**.
+**Problem (observed on main):** `ConferenceEdgeRecoveryController` used anonymous default-open `queryMembershipEpochConverged = { _, _ -> true }`. Replaced by [DefaultOpenMembershipAuthoritySentinel] in E.18.1. `MembershipAuthorityResolver` (true authority) is not wired in production.
 
 | Phase | Goal | Status |
 |---|---|---|
-| E.18.1 Observable gap | Replace anonymous default with named sentinel; emit `CONTROL_RECONCILIATION_MEMBERSHIP_UNWIRED` fact per evaluation; **behavior unchanged** (still returns true) | `OPEN` |
+| E.18.1 Observable gap | Replace anonymous default with named sentinel; emit `CONTROL_RECONCILIATION_MEMBERSHIP_UNWIRED` fact per evaluation; **behavior unchanged** (still returns true) | `LANDED` (PR-E18) |
 | E.18.2 Authority wiring | PR-D: inject `MembershipAuthorityResolver` via Coordinator; remove sentinel and default-open | `WAITING` (PR-D) |
 
 **Frozen until R4-impl:** do not introduce `TRANSFERRED`, do not change `obligationGeneration` / `recoveryAttemptId` semantics — `sessionEpochMatched` and `SuccessorObligationAdmissionTest` (G-Resurrect) anchor R4-def.
