@@ -115,7 +115,10 @@ object OfferDeliveryObservation {
         srcPort: Int,
         socketId: Long
     ) {
-        val (lineage, attempt, gen) = correlationFromEnvelope(envelope)
+        val correlation = correlationFromEnvelope(envelope)
+        val lineage = correlation.offerLineageId
+        val attempt = correlation.restartAttemptId
+        val gen = correlation.transportGeneration
         val payload = if (envelope.type == SignalType.GROUP_JOIN) {
             GroupSessionPayload.decode(envelope.payload)
         } else {
@@ -145,17 +148,39 @@ object OfferDeliveryObservation {
         }
     }
 
-    fun correlationFromEnvelope(envelope: SignalEnvelope): Triple<String?, Long?, Long?> {
+    data class EnvelopeCorrelation(
+        val offerLineageId: String?,
+        val restartAttemptId: Long?,
+        val transportGeneration: Long?,
+        val deliveryAttemptId: Long?
+    )
+
+    fun correlationFromEnvelope(envelope: SignalEnvelope): EnvelopeCorrelation {
         if (envelope.type != SignalType.GROUP_JOIN) {
-            return Triple(null, null, null)
+            return EnvelopeCorrelation(null, null, null, null)
         }
-        val payload = GroupSessionPayload.decode(envelope.payload) ?: return Triple(null, null, null)
-        return Triple(payload.offerLineageId, payload.restartAttemptId, payload.transportGeneration)
+        val payload = GroupSessionPayload.decode(envelope.payload)
+            ?: return EnvelopeCorrelation(null, null, null, null)
+        return EnvelopeCorrelation(
+            offerLineageId = payload.offerLineageId,
+            restartAttemptId = payload.restartAttemptId,
+            transportGeneration = payload.transportGeneration,
+            deliveryAttemptId = payload.deliveryAttemptId
+        )
     }
 
     /** Peer ingress: after datagram decode, before handler. */
-    fun classifyInbound(envelope: SignalEnvelope, srcHost: String, srcPort: Int, socketId: Long) {
-        val (lineage, attempt, gen) = correlationFromEnvelope(envelope)
+    fun classifyInbound(
+        envelope: SignalEnvelope,
+        srcHost: String,
+        srcPort: Int,
+        socketId: Long,
+        localModuleId: String? = null
+    ) {
+        val correlation = correlationFromEnvelope(envelope)
+        val lineage = correlation.offerLineageId
+        val attempt = correlation.restartAttemptId
+        val gen = correlation.transportGeneration
         val payload = if (envelope.type == SignalType.GROUP_JOIN) {
             GroupSessionPayload.decode(envelope.payload)
         } else {
@@ -188,5 +213,32 @@ object OfferDeliveryObservation {
                 detail = "src=$srcHost:$srcPort socketId=$socketId"
             )
         }
+    }
+
+    /**
+     * Peer ingress ladder REMOTE_RECEIVE for GROUP_JOIN (observation + ingress fact producer).
+     */
+    fun emitRemoteReceive(
+        envelope: SignalEnvelope,
+        localModuleId: String,
+        detail: String
+    ) {
+        val correlation = correlationFromEnvelope(envelope)
+        emit(
+            stage = Stage.REMOTE_RECEIVE,
+            remoteModuleId = envelope.from.moduleId.value,
+            pathKind = pathKindOf(envelope),
+            signalType = envelope.type.name,
+            offerLineageId = correlation.offerLineageId,
+            sessionId = envelope.sessionId,
+            restartAttemptId = correlation.restartAttemptId,
+            transportGeneration = correlation.transportGeneration,
+            detail = detail
+        )
+        RecoveryIngressObservation.onRemoteIngressReceive(
+            envelope = envelope,
+            localModuleId = localModuleId,
+            sessionId = envelope.sessionId
+        )
     }
 }

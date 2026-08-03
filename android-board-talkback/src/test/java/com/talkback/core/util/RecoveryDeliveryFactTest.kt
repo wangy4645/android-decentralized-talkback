@@ -45,13 +45,20 @@ class RecoveryDeliveryFactTest {
             offerLineageId = "L1",
             recoveryAttemptId = 2L,
             obligationGeneration = 3L,
-            deliveryAttemptId = 1L
+            deliveryAttemptId = 1L,
+            handlerOutcome = com.talkback.core.model.RecoveryHandlerOutcome.ACCEPTED
         )
         assertTrue(RecoveryDeliveryFact.matchesAck(identity, ack))
         assertFalse(
             RecoveryDeliveryFact.matchesAck(
                 identity,
                 ack.copy(deliveryAttemptId = 2L)
+            )
+        )
+        assertTrue(
+            RecoveryDeliveryFact.matchesAck(
+                identity.copy(recoveryAttemptId = 99L),
+                ack.copy(recoveryAttemptId = 1L)
             )
         )
     }

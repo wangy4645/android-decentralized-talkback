@@ -89,6 +89,10 @@ enum class RecoveryWaitingReason {
     WAITING_FOR_AUTHORITY,
     WAITING_FOR_INBOUND,
     WAITING_FOR_ACCEPT,
+    /** PR3-1: admission projection LOW — no current-epoch inbound or exceeded module stale. */
+    ADMISSION_CONFIDENCE_LOW,
+    /** PR3-1: admission projection MEDIUM — inbound older than T_dispatch_fresh. */
+    ADMISSION_CONFIDENCE_STALE,
 }
 
 enum class ReattachDispatchOutcome {
@@ -148,7 +152,9 @@ enum class RecoveryReevaluateTrigger {
     /** ICE CONNECTED / equivalent media restoration (ADR-0022 R28-E / #83). */
     ICE_RESTORED,
     /** ICE CHECKING — early resurrection signal while obligation OPEN (ADR-0022). */
-    ICE_CHECKING
+    ICE_CHECKING,
+    /** ADR-0035 PR4: peer handler processed recovery offer (delivery CONFIRMED). */
+    DELIVERY_CONFIRMED
 }
 
 /**

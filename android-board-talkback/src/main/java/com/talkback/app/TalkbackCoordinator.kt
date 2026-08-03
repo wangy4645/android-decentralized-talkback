@@ -39,6 +39,7 @@ import com.talkback.core.model.MembershipSnapshot
 import com.talkback.core.model.MeshSessionMode
 import com.talkback.core.model.HelloPayload
 import com.talkback.core.model.ModuleId
+import com.talkback.core.model.RecoveryHandlerOutcome
 import com.talkback.core.model.RecoveryReattachAckPayload
 import com.talkback.core.model.RecoveryReattachRequest
 import com.talkback.core.model.RemoteEndpointInfo
@@ -5098,7 +5099,8 @@ class TalkbackCoordinator(
             offerLineageId = lineageId,
             recoveryAttemptId = identity.recoveryAttemptId,
             obligationGeneration = identity.obligationGeneration,
-            deliveryAttemptId = deliveryAttemptId
+            deliveryAttemptId = deliveryAttemptId,
+            handlerOutcome = RecoveryHandlerOutcome.ACCEPTED
         ).encode()
         val envelope = buildSignedEnvelope(
             SignalType.RECOVERY_REATTACH_ACK,
@@ -5108,7 +5110,7 @@ class TalkbackCoordinator(
             ackPayload
         )
         if (sendSignalHandoff(fromPeer, envelope)) {
-            RecoveryDeliveryFact.ackSent(identity, signal.sessionId)
+            RecoveryDeliveryFact.ackSent(identity, signal.sessionId, RecoveryHandlerOutcome.ACCEPTED)
         }
     }
 

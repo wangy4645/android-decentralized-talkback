@@ -138,16 +138,9 @@ class UdpSignalingChannel(
                     socketId = socketId
                 )
                 if (envelope.type == SignalType.GROUP_JOIN) {
-                    val (lineage, attempt, gen) = OfferDeliveryObservation.correlationFromEnvelope(envelope)
-                    OfferDeliveryObservation.emit(
-                        stage = OfferDeliveryObservation.Stage.REMOTE_RECEIVE,
-                        remoteModuleId = envelope.from.moduleId.value,
-                        pathKind = OfferDeliveryObservation.pathKindOf(envelope),
-                        signalType = envelope.type.name,
-                        offerLineageId = lineage,
-                        sessionId = envelope.sessionId,
-                        restartAttemptId = attempt,
-                        transportGeneration = gen,
+                    OfferDeliveryObservation.emitRemoteReceive(
+                        envelope = envelope,
+                        localModuleId = localModuleId,
                         detail = "src=${source.host}:${source.port} socketId=$socketId"
                     )
                 }
@@ -230,16 +223,16 @@ class UdpSignalingChannel(
                 nonce = envelope.nonce.takeIf { it.isNotBlank() }
             )
             if (envelope.type == SignalType.GROUP_JOIN) {
-                val (lineage, attempt, gen) = OfferDeliveryObservation.correlationFromEnvelope(envelope)
+                val correlation = OfferDeliveryObservation.correlationFromEnvelope(envelope)
                 OfferDeliveryObservation.emit(
                     stage = OfferDeliveryObservation.Stage.LOCAL_ACCEPT,
                     remoteModuleId = envelope.to?.moduleId?.value ?: "UNKNOWN",
                     pathKind = OfferDeliveryObservation.pathKindOf(envelope),
                     signalType = envelope.type.name,
-                    offerLineageId = lineage,
+                    offerLineageId = correlation.offerLineageId,
                     sessionId = envelope.sessionId,
-                    restartAttemptId = attempt,
-                    transportGeneration = gen,
+                    restartAttemptId = correlation.restartAttemptId,
+                    transportGeneration = correlation.transportGeneration,
                     detail = "dst=$dstIp:${packet.port} socketId=$socketId"
                 )
             }
