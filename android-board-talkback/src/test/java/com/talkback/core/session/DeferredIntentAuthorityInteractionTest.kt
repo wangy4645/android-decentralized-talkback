@@ -12,18 +12,22 @@ import org.junit.Test
 import java.util.concurrent.Executors
 
 /**
- * ADR-0022 §E.16.1 Slice-1 Phase-2 deterministic Joint — authority only (not C dispatch / J-B).
+ * ADR-0022 §E.16.1 Slice-1: authority composition / interaction regression.
  *
- * R16: CREATED → HELD(DISPATCH) → SUPERSEDED via EDGE_STARTED; late events ignored for execution.
- * R17: fresh ownership / capability / evidence (no inheritance from R16).
+ * Proves DeferredIntentAuthority ownership across supersede + successor create
+ * (CREATED→HELD→SUPERSEDED; fresh ownership; no inherited dispatch readiness).
+ * Not a Joint field-exercise / topology harness.
+ *
+ * R16: CREATED→HELD(DISPATCH)→SUPERSEDED via EDGE_STARTED; late events ignored for execution.
+ * R17: fresh ownership + capability / evidence (no inheritance from R16).
  */
-class DeferredIntentAuthoritySlice1JointTest {
+class DeferredIntentAuthorityInteractionTest {
     private val scheduler = Executors.newSingleThreadScheduledExecutor()
     private var iceRestartCalls = 0
     private val decisionLogs = mutableListOf<String>()
     private lateinit var controller: ConferenceEdgeRecoveryController
 
-    private val sessionId = "sess-jx-s1-joint"
+    private val sessionId = "sess-di-interaction"
     private val channelId = "CH-01"
     private val remoteModuleId = "M03"
     private val admissionSeq = 3L
