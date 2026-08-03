@@ -2,7 +2,7 @@
 
 **Status:** `ARCHAEOLOGY_CLOSED` (2026-08-03)  
 **Does not:** modify ADR · modify code · validate adoption · validate R4 · label Case-B PASS/FAIL  
-**Companion:** [e18-targeted-field-validation-plan.md](./e18-targeted-field-validation-plan.md) · [e18-case-c-closure.md](./e18-case-c-closure.md) · [e18-closure-review.md](./e18-closure-review.md)
+**Companion:** [e18-targeted-field-validation-plan.md](./e18-targeted-field-validation-plan.md) · [e18-case-c-closure.md](./e18-case-c-closure.md) · [e18-closure-review.md](./e18-closure-review.md) · [e18-attempt4c-a-minimal-field-contract.md](./e18-attempt4c-a-minimal-field-contract.md)
 
 **Archaeology closure (naming):**
 
