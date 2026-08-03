@@ -20,8 +20,15 @@ object RecoveryIngressObservation {
 
     internal var windowDeadlineMs: Long = 3_000L
 
+    /**
+     * INV-DELIVERY-OBS-001: key must carry full delivery identity.
+     * Deadline ABSENT must not re-project synthetic recoveryAttemptId=0 /
+     * obligationGeneration=0 for a known outbound window.
+     */
     private data class WindowKey(
         val offerLineageId: String,
+        val recoveryAttemptId: Long,
+        val obligationGeneration: Long,
         val deliveryAttemptId: Long,
         val sessionId: String,
         val from: String,
@@ -138,7 +145,7 @@ object RecoveryIngressObservation {
             return
         }
 
-        val key = WindowKey(lineageId, deliveryAttemptId, sid, from, to)
+        val key = windowKey(identity, sid)
         val outbound = outboundWindows[key]
 
         when (outbound?.state) {
@@ -209,8 +216,8 @@ object RecoveryIngressObservation {
         window.state = OutboundState.CLOSED_ABSENT
         val identity = RecoveryDeliveryFact.Identity(
             offerLineageId = key.offerLineageId,
-            recoveryAttemptId = 0L,
-            obligationGeneration = 0L,
+            recoveryAttemptId = key.recoveryAttemptId,
+            obligationGeneration = key.obligationGeneration,
             deliveryAttemptId = key.deliveryAttemptId,
             from = key.from,
             to = key.to
@@ -243,6 +250,8 @@ object RecoveryIngressObservation {
     private fun windowKey(identity: RecoveryDeliveryFact.Identity, sessionId: String): WindowKey =
         WindowKey(
             offerLineageId = identity.offerLineageId,
+            recoveryAttemptId = identity.recoveryAttemptId,
+            obligationGeneration = identity.obligationGeneration,
             deliveryAttemptId = identity.deliveryAttemptId,
             sessionId = sessionId,
             from = identity.from,

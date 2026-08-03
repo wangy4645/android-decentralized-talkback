@@ -11683,13 +11683,41 @@ Field runs MUST be classified with the stepwise checklist — **not** a single P
 
 Steps (domain-separated):
 
-1. **Delivery** — `RECOVERY_DELIVERY_LINEAGE_SUPERSEDED`; reject phantom `ABSENT(0,0)`
+1. **Delivery** — classify ABSENT as `ACTIVE_WINDOW_DEADLINE_MISS` / `IDENTITY_MISSING` / `TERMINAL_AFTER_SUPERSEDE` (§E.21.6); do not treat D1 `WINDOW_DEADLINE` with valid identity as R3 phantom
 2. **Successor admission** — proxy facts only (`RECOVERY_OBLIGATION_OPENED`, `ADMIT_SUCCESSOR_OBLIGATION_EPISODE`); do not infer adoption
 3. **Deferred Intent** — `DEFERRED_INTENT_RELEASED` / `NEGOTIATION_CAN_EXECUTE` / `HELD` (R2 domain)
 4. **Control reconciliation** — Case A/B/C on `membershipProbeDisposition`; E.18 / completion violation rules
 5. **R4 forbidden-term scan** — `TRANSFERRED`, `SUCCESSOR_OBLIGATION_ADOPTED`, `inheritObligation`
 
 Required report header: `Attempt-4c Baseline Classification` with per-domain labels and `Adoption: NOT_EVALUATED`.
+
+##### E.21.6 Delivery Observation Hygiene (INV-DELIVERY-OBS-001) — not an R3 reopen
+
+**Status:** `IMPLEMENTED_PENDING_VALIDATION` (field replay required; code + UT ≠ field verified)
+
+**Finding (Attempt-4c baseline `logs/phase3c-b-attempt4c-20260803-144151`):** Under D1-armed `WINDOW_DEADLINE`, live lineage `L1` emitted `RECOVERY_REMOTE_INGRESS_ABSENT` with `recoveryAttemptId=0` / `obligationGeneration=0` while matching `deliveryAttemptId` remained intact. There was **no** `RECOVERY_DELIVERY_LINEAGE_SUPERSEDED` / `CLOSED_SUPERSEDED` in the window. This is **not** Grill R3 obligation-conservation regression and **not** successor/adoption failure.
+
+**Root cause:** `RecoveryIngressObservation.WindowKey` omitted attempt/generation; `onWindowDeadline` re-projected synthetic `(0,0)` identity. Facts existed; observation projection lost fields at the deadline boundary.
+
+**Invariant:**
+
+```
+INV-DELIVERY-OBS-001
+A delivery observation fact MUST NOT encode recoveryAttemptId=0 and
+obligationGeneration=0 when originating from a known outbound delivery window.
+```
+
+**Classifier classes (evidence projection only):**
+
+| Class | Meaning |
+|-------|---------|
+| `ACTIVE_WINDOW_DEADLINE_MISS` | Valid identity + `WINDOW_DEADLINE` on active lineage (D1-expected) |
+| `IDENTITY_MISSING` | Synthetic `(0,0)` on deadline — hygiene defect |
+| `TERMINAL_AFTER_SUPERSEDE` | ABSENT / late observation after supersede close — R3-relevant |
+
+**Explicit non-goals of the hygiene fix:** does not change supersede semantics, delivery retry policy, D1 injection, `SUPPRESS_SUCCESSOR_ATTEMPT`, or R4 adoption. Does **not** reopen Grill R3 (`VERIFIED` unchanged).
+
+**Field acceptance (4c rerun):** event must still appear as `WINDOW_DEADLINE` ABSENT; classification migrates `IDENTITY_MISSING` → `ACTIVE_WINDOW_DEADLINE_MISS`. Do not require Delivery `PASS` while D1 arm is active.
 
 ---
 
