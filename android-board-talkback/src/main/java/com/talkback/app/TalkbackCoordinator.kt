@@ -414,14 +414,20 @@ class TalkbackCoordinator(
                 qosMonitor.isGroupConnected(remoteModuleId)
             },
             canDispatchRecoveryMediaAction = { sessionId, remoteModuleId ->
-                var ready = false
-                runOnCoordinatorSync {
-                    val session = sessions[sessionId] ?: return@runOnCoordinatorSync
-                    val channelId = session.channelId ?: return@runOnCoordinatorSync
-                    ready = buildRecoveryEdgeReachabilitySnapshot(channelId, session, remoteModuleId)
-                        .canDispatchRecoverySignal()
+                // Joint / PR52C harness: debug BLOCK must force dispatchReady=false.
+                // Inert when injection is not armed — production reachability unchanged.
+                if (Pr52cDebugInjection.isDispatchBlocked(sessionId, remoteModuleId)) {
+                    false
+                } else {
+                    var ready = false
+                    runOnCoordinatorSync {
+                        val session = sessions[sessionId] ?: return@runOnCoordinatorSync
+                        val channelId = session.channelId ?: return@runOnCoordinatorSync
+                        ready = buildRecoveryEdgeReachabilitySnapshot(channelId, session, remoteModuleId)
+                            .canDispatchRecoverySignal()
+                    }
+                    ready
                 }
-                ready
             },
             probeIceRestartGate = { sessionId, remoteModuleId ->
                 var probe = IceRestartGateProbe(executable = true)
