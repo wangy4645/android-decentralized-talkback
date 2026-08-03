@@ -103,10 +103,10 @@ class ConferenceEdgeRecoveryController(
         remoteModuleId: String,
         offerLineageId: String
     ) -> Unit = { _, _, _ -> },
-    /** PR5-2b / Q7: channel GROUP membership epoch aligned with authority digest (ADR-0022 Q6-2). */
-    private val queryMembershipEpochConverged: (channelId: String, conferenceSessionId: String) -> Boolean =
-        { _, _ -> true }
 ) {
+    /** PR5-2b / Q7 / ADR-0022 E.18: membership epoch probe for control reconciliation. */
+    private val membershipEpochProbe: MembershipEpochConvergenceProbe =
+        DefaultOpenMembershipAuthoritySentinel
     private val edges = ConcurrentHashMap<ConferenceEdgeKey, EdgeRecoveryRecord>()
     private val debounceTimers = ConcurrentHashMap<ConferenceEdgeKey, ScheduledFuture<*>>()
     private val watchdogTimers = ConcurrentHashMap<ConferenceEdgeKey, ScheduledFuture<*>>()
@@ -1592,7 +1592,10 @@ class ConferenceEdgeRecoveryController(
 
     /** PR5-2b: compute + emit Q6-2 control reconciliation fact; store on record for CompletionPolicy. */
     private fun refreshControlReconciliationFact(record: EdgeRecoveryRecord) {
-        val membershipConverged = queryMembershipEpochConverged(record.channelId, record.key.sessionId)
+        val channelId = record.channelId
+        val conferenceSessionId = record.key.sessionId
+        membershipEpochProbe.emitUnwiredObservationIfNeeded(record, channelId, conferenceSessionId, onLog)
+        val membershipConverged = membershipEpochProbe.isConverged(channelId, conferenceSessionId)
         val fact = ControlReconciliationEvaluator.evaluate(
             record = record,
             membershipEpochConverged = membershipConverged,
