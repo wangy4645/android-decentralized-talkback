@@ -10143,7 +10143,7 @@ Phase-3B Field Authorization            AUTHORIZED (2026-08-02)
              rounds cannot produce incremental evidence until R3 + successor
              suppression primitive land
       offlineResult=D1_DIAG_A (answered from 4b log; field round adds nothing)
-    PR5-3 Root Cause Grill R3        IMPLEMENTED_PENDING_VALIDATION (2026-08-03) — see §E.17
+    PR5-3 Root Cause Grill R3        VERIFIED (2026-08-03) — see §E.17
       title=Recovery Delivery Obligation Conservation (NOT "supersede fix")
       scope=termination integrity only
       semantic=X′ (supersede may legally terminate; adoption NOT implied)
@@ -10176,7 +10176,7 @@ PR5-3 / UVCP                            BLOCKED 🔒
 Production                              FROZEN (R2 only; no J-B relax / no CompletionPolicy)
 ```
 
-**Purpose:** D1 **CLOSED**; Slice-1 **CLOSED**; Grill R1/R2 **VERIFIED**; Attempt-4 / 4b **CLOSED**; Attempt-4c **SUSPENDED**; **Grill R3 IMPLEMENTED_PENDING_VALIDATION** (§E.17 obligation conservation), **R4 REGISTERED**; PR5-3 **BLOCKED**.
+**Purpose:** D1 **CLOSED**; Slice-1 **CLOSED**; Grill R1/R2 **VERIFIED**; Attempt-4 / 4b **CLOSED**; Attempt-4c **SUSPENDED**; **Grill R3 VERIFIED** (§E.17 obligation conservation, P1 replay PASS), **R4 REGISTERED**; PR5-3 **BLOCKED**.
 
 **Evidence-model shift (2026-08-03):** Joint is demoted from *sole diagnostic instrument* to *integration confidence gate*. It is **not** cancelled. See §E.17.7.
 
@@ -11054,7 +11054,7 @@ Do not treat as single root cause. PR5-2c-C must not merge D1 transport with neg
 
 ---
 
-### E.17 Recovery Delivery Obligation Conservation — Grill R3 (**IMPLEMENTED_PENDING_VALIDATION** 2026-08-03)
+### E.17 Recovery Delivery Obligation Conservation — Grill R3 (**VERIFIED** 2026-08-03)
 
 **Naming is normative.** This is *not* a "supersede fix". `supersedeAttempt()` is not the defect; the defect is that a recovery delivery obligation can cease to exist without being settled, abandoned, or adopted. The subject is the **obligation lifecycle**, not the function that happens to end it.
 
@@ -11243,6 +11243,30 @@ R3 closure MUST be worded as:
 > R3 establishes supersede **lifecycle integrity** requirements. Whether supersede constitutes a **valid obligation transfer** remains unresolved and is tracked by R4.
 
 It MUST NOT be worded as "supersede semantics clarified" — that phrasing would prematurely close R4 and remove its basis for investigation.
+
+#### E.17.10 P1 validation — Attempt-4b obligation-layer replay (2026-08-03)
+
+**Scope (frozen):** verify only that R3 prevents delivery lineage obligation from silently disappearing under the Attempt-4b supersede topology. Does **not** assert recovery success, negotiation restore, successor adoption, or Joint feasibility.
+
+**Input (fixed):** `logs/phase3c-b-attempt4b-20260802-220150` — session `e79b1f7a-3a2e-41c9-a2dd-b910a7c971f2`, edge M02→M03, lineage L1, attempt 1→2 `REATTACH_INBOUND`.
+
+| Checkpoint | Baseline (frozen pre-R3 field) | Post-R3 replay |
+|---|---|---|
+| T1 `RECOVERY_DELIVERY_LINEAGE_SUPERSEDED` | **ABSENT** (0) | **PRESENT** (UT asserted) |
+| T2 `CLOSED_SUPERSEDED` / `RECOVERY_INGRESS_WINDOW_CLOSED` | **ABSENT** (0) | **PRESENT** (UT asserted) |
+| T3 phantom `ABSENT(recoveryAttemptId=0, obligationGeneration=0)` | **PRESENT** (1 @ 22:03:15.042) | **ABSENT** (0 after deadline) |
+
+**Baseline verdict:** FAIL — `F2_NO_LINEAGE_SUPERSEDED_FACT` + `F3_PHANTOM_ABSENT`. Report: `logs/phase3c-b-attempt4b-20260802-220150/R3_ATTEMPT4B_REPLAY_REPORT.txt`.
+
+**Post-R3 replay method:** obligation-layer deterministic replay — `Attempt4bR3ReplayTest` (4b topology parameters) + `RecoveryDeliveryPolicySupersedeTest` + `RecoveryIngressObservationTest` (all PASS on main + `RecoveryIngressObservation.onLineageSuperseded` CLOSED_SUPERSEDED log).
+
+**Field re-run:** NOT EXECUTED — `run-phase3c-b-protected-window.ps1 -Attempt 4b` requires D1 injection hooks present only in local WIP, not on committed main. Field re-run is deferred; does not block R3 VERIFIED at obligation layer.
+
+**Diagnostic (non-blocking):** baseline contains legacy `RECOVERY_ATTEMPT_STATE … deliveryPhase=` lines (count=4). Recorded for cleanup; not an R3 correctness failure (P0 confirmed non-authoritative).
+
+**R3 status:** `IMPLEMENTED_PENDING_VALIDATION` → **`VERIFIED`** (obligation conservation demonstrated; R4 adoption question remains open per §E.17.9).
+
+Validation confirms delivery obligation conservation under supersede lineage termination. It does not establish successor obligation adoption semantics, which remains tracked by R4.
 
 ---
 

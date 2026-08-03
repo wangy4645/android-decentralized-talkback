@@ -5,14 +5,18 @@ import com.talkback.core.util.RecoveryIngressObservation
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import java.util.concurrent.Executors
 
-/** ADR-0022 §E.17 Grill R3: recovery delivery obligation conservation on supersede. */
-class RecoveryDeliveryPolicySupersedeTest {
+/**
+ * P1 Attempt-4b obligation-layer replay (ADR-0022 E.17).
+ *
+ * Replays the supersede topology from logs/phase3c-b-attempt4b-20260802-220150:
+ * session e79b1f7a, edge M02->M03, lineage L1, attempt 1 superseded by REATTACH_INBOUND.
+ */
+class Attempt4bR3ReplayTest {
 
     private val scheduler = Executors.newSingleThreadScheduledExecutor()
     private val policyLogs = mutableListOf<String>()
@@ -21,7 +25,7 @@ class RecoveryDeliveryPolicySupersedeTest {
     private lateinit var policy: RecoveryOfferDeliveryPolicy
     private lateinit var record: EdgeRecoveryRecord
 
-    private val sessionId = "sess-1"
+    private val sessionId = "e79b1f7a-3a2e-41c9-a2dd-b910a7c971f2"
     private val remoteModuleId = "M03"
     private val lineageId = "L1"
 
@@ -32,7 +36,7 @@ class RecoveryDeliveryPolicySupersedeTest {
         observationLines.clear()
         RecoveryDeliveryFact.resetForTest { factLines.add(it) }
         RecoveryIngressObservation.resetForTest(
-            deadlineMs = 5_000L,
+            deadlineMs = 3_000L,
             observationLog = { observationLines.add(it) }
         )
         policy = RecoveryOfferDeliveryPolicy(
@@ -46,7 +50,7 @@ class RecoveryDeliveryPolicySupersedeTest {
             onDispatchRecoveryOffer = { _, _, _, _ -> true },
             canDispatchRecoverySignal = { _, _ -> true }
         )
-        record = pendingRecord()
+        record = episodeRecord()
         RecoveryDeliveryFact.bindIngressAbsentHandler { identity, sid ->
             policy.onRemoteIngressAbsent(record, identity, sid)
         }
@@ -59,47 +63,51 @@ class RecoveryDeliveryPolicySupersedeTest {
         scheduler.shutdownNow()
     }
 
-    private fun pendingRecord(
-        deliveryAttemptId: Long = 1L,
-        lineage: String = lineageId
-    ): EdgeRecoveryRecord {
+    private fun episodeRecord(): EdgeRecoveryRecord {
         return EdgeRecoveryRecord(
             key = ConferenceEdgeKey(sessionId, remoteModuleId),
             phase = EdgeRecoveryPhase.REATTACH_ACCEPTED,
             channelId = "CH-1",
             recoveryAttemptId = 1L,
             recoveryStartedAtMs = 0L,
+            obligationGeneration = 1L,
             recoveryOfferDeliveryPhase = RecoveryOfferDeliveryPhase.PENDING,
-            recoveryOfferLineageId = lineage,
-            recoveryOfferDeliveryAttemptId = deliveryAttemptId,
+            recoveryOfferLineageId = lineageId,
+            recoveryOfferDeliveryAttemptId = 1L,
             recoveryOfferLastDispatchAtMs = 0L
         )
     }
 
-    private fun identity(deliveryAttemptId: Long = 1L, lineage: String = lineageId) =
-        RecoveryDeliveryFact.Identity(
-            offerLineageId = lineage,
-            recoveryAttemptId = 1L,
-            obligationGeneration = 1L,
-            deliveryAttemptId = deliveryAttemptId,
-            from = "M02",
-            to = remoteModuleId
-        )
+    private fun episodeIdentity() = RecoveryDeliveryFact.Identity(
+        offerLineageId = lineageId,
+        recoveryAttemptId = 1L,
+        obligationGeneration = 1L,
+        deliveryAttemptId = 1L,
+        from = "M02",
+        to = remoteModuleId
+    )
 
-    private fun absentCount(): Int =
-        factLines.count { it.startsWith("RECOVERY_REMOTE_INGRESS_ABSENT") }
+    private fun phantomAbsentCount(): Int =
+        factLines.count {
+            it.startsWith("RECOVERY_REMOTE_INGRESS_ABSENT") &&
+                it.contains("recoveryAttemptId=0") &&
+                it.contains("obligationGeneration=0")
+        }
 
     @Test
-    fun supersedeLineage_closesObservationWindow() {
-        val id = identity()
+    fun attempt4bR3Replay_supersedeClosesObligationWithoutPhantomAbsent() {
+        val id = episodeIdentity()
+
         RecoveryDeliveryFact.emit(RecoveryDeliveryFact.Phase.LOCAL_ACCEPTED, id, sessionId)
+        RecoveryDeliveryFact.emit(RecoveryDeliveryFact.Phase.DELIVERY_PENDING, id, sessionId)
 
         policy.supersedeLineage(record, "REATTACH_INBOUND")
 
-        assertEquals(RecoveryOfferDeliveryPhase.SUPERSEDED, record.recoveryOfferDeliveryPhase)
         assertTrue(
             factLines.any {
                 it.startsWith("RECOVERY_DELIVERY_LINEAGE_SUPERSEDED") &&
+                    it.contains("offerLineageId=L1") &&
+                    it.contains("recoveryAttemptId=1") &&
                     it.contains("reason=REATTACH_INBOUND")
             }
         )
@@ -110,44 +118,11 @@ class RecoveryDeliveryPolicySupersedeTest {
                     it.contains("state=CLOSED_SUPERSEDED")
             }
         )
+        assertEquals(RecoveryOfferDeliveryPhase.SUPERSEDED, record.recoveryOfferDeliveryPhase)
 
         RecoveryIngressObservation.fireWindowDeadlineForTest(id, sessionId)
-        assertEquals(0, absentCount())
-
-        RecoveryDeliveryFact.emitRemoteIngressAbsent(id, sessionId)
+        assertEquals(0, phantomAbsentCount())
+        assertFalse(factLines.any { it.startsWith("RECOVERY_REMOTE_INGRESS_ABSENT") })
         assertTrue(policyLogs.none { it.contains("RECOVERY_DELIVERY_RETRY_EVALUATE") })
-        assertFalse(
-            factLines.any {
-                it.startsWith("RECOVERY_REMOTE_INGRESS_ABSENT") &&
-                    it.contains("recoveryAttemptId=0") &&
-                    it.contains("obligationGeneration=0")
-            }
-        )
-    }
-
-    @Test
-    fun supersededLineage_isDistinguishableFromNeverCreated() {
-        val neverCreated = EdgeRecoveryRecord(
-            key = ConferenceEdgeKey(sessionId, remoteModuleId),
-            phase = EdgeRecoveryPhase.RECOVERY_PENDING,
-            channelId = "CH-1",
-            recoveryAttemptId = 2L,
-            recoveryStartedAtMs = 0L
-        )
-        assertEquals(RecoveryOfferDeliveryPhase.NONE, neverCreated.recoveryOfferDeliveryPhase)
-        assertEquals(null, neverCreated.recoveryOfferLineageId)
-
-        RecoveryDeliveryFact.emit(
-            RecoveryDeliveryFact.Phase.LOCAL_ACCEPTED,
-            identity(),
-            sessionId
-        )
-        policy.supersedeLineage(record, "REATTACH_INBOUND")
-
-        assertEquals(RecoveryOfferDeliveryPhase.SUPERSEDED, record.recoveryOfferDeliveryPhase)
-        assertEquals(lineageId, record.recoveryOfferLineageId)
-        assertNotEquals(neverCreated.recoveryOfferDeliveryPhase, record.recoveryOfferDeliveryPhase)
-        assertTrue(record.recoveryOfferDeliveryPhase.isTerminal())
-        assertFalse(neverCreated.recoveryOfferDeliveryPhase.isTerminal())
     }
 }

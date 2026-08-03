@@ -103,6 +103,13 @@ class RecoveryIngressObservationTest {
         val id = identity()
         RecoveryDeliveryFact.emit(RecoveryDeliveryFact.Phase.LOCAL_ACCEPTED, id, "sess-1")
         RecoveryIngressObservation.onLineageSuperseded("L1")
+        assertTrue(
+            observationLines.any {
+                it.contains("RECOVERY_INGRESS_WINDOW_CLOSED") &&
+                    it.contains("offerLineageId=L1") &&
+                    it.contains("state=CLOSED_SUPERSEDED")
+            }
+        )
         RecoveryIngressObservation.onIngressEvidenceForTest(id, "sess-1")
         assertEquals(0, observedCount())
         assertEquals(0, absentCount())
@@ -112,6 +119,8 @@ class RecoveryIngressObservationTest {
                     it.contains("LINEAGE_SUPERSEDED")
             }
         )
+        RecoveryIngressObservation.fireWindowDeadlineForTest(id, "sess-1")
+        assertEquals(0, absentCount())
     }
 
     @Test

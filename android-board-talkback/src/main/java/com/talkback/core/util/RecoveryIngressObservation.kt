@@ -187,6 +187,11 @@ object RecoveryIngressObservation {
         outboundWindows.keys.filter { it.offerLineageId == offerLineageId }.forEach { key ->
             val window = outboundWindows[key]
             if (window != null && window.state == OutboundState.OPEN) {
+                logObservationOnly(
+                    "RECOVERY_INGRESS_WINDOW_CLOSED offerLineageId=${key.offerLineageId} " +
+                        "deliveryAttemptId=${key.deliveryAttemptId} state=CLOSED_SUPERSEDED " +
+                        "from=${key.from} to=${key.to}"
+                )
                 closeOutboundWindow(key, OutboundState.CLOSED_SUPERSEDED)
             }
         }
