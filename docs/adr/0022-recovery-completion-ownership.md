@@ -10150,10 +10150,12 @@ Phase-3B Field Authorization            AUTHORIZED (2026-08-02)
       invariant=INV-REC-032 obligation conservation
       authority=RecoveryOfferDeliveryPolicy (controller = requester, not mutator)
       evidence=logs/phase3c-b-attempt4b-20260802-220150 (103s obligation loss)
-    PR5-3 Root Cause Grill R4        REGISTERED (2026-08-03) — not started
+    PR5-3 Root Cause Grill R4        REGISTERED (2026-08-03)
       title=Successor Adoption Integrity
       question=when does a successor actually adopt the recovery obligation?
-      owns=adoption point / TRANSFERRED semantics / delivery-vs-deferredIntent kinship
+      owns=adoption point / adoption facts / delivery-vs-deferredIntent kinship
+      R4-def=DONE (§E.20 — semantic contract only)
+      R4-impl=WAITING (runtime transition; no TRANSFERRED / no generation change)
       note=R3 closure MUST NOT be worded as "supersede semantics clarified"
     Classification buckets (KEEP — do not merge):
       FAIL_C                 = product chain real failure
@@ -10176,7 +10178,7 @@ PR5-3 / UVCP                            BLOCKED 🔒
 Production                              FROZEN (R2 only; no J-B relax / no CompletionPolicy)
 ```
 
-**Purpose:** D1 **CLOSED**; Slice-1 **CLOSED**; Grill R1/R2 **VERIFIED**; Attempt-4 / 4b **CLOSED**; Attempt-4c **SUSPENDED**; **Grill R3 VERIFIED** (§E.17 obligation conservation, P1 replay PASS), **R4 REGISTERED**; PR5-3 **BLOCKED**.
+**Purpose:** D1 **CLOSED**; Slice-1 **CLOSED**; Grill R1/R2 **VERIFIED**; Attempt-4 / 4b **CLOSED**; Attempt-4c **SUSPENDED**; **Grill R3 VERIFIED** (§E.17 obligation conservation, P1 replay PASS); **R4 REGISTERED** with **R4-def DONE** (§E.20 adoption contract); PR5-3 **BLOCKED**.
 
 **Evidence-model shift (2026-08-03):** Joint is demoted from *sole diagnostic instrument* to *integration confidence gate*. It is **not** cancelled. See §E.17.7.
 
@@ -11270,7 +11272,7 @@ Validation confirms delivery obligation conservation under supersede lineage ter
 
 #### E.18 Control Reconciliation Authority Closure
 
-**Status:** `OPEN` (E.18.1 `LANDED`; E.18.2 `WAITING` PR-D)
+**Status:** `OPEN` (E.18.1 `LANDED` — behavior intentionally unchanged; E.18.2 `WAITING` PR-D)
 
 Completion readiness, control reconciliation, and successor adoption are separate authority domains. A passing completion predicate without wired control authority or adoption semantics shall not be interpreted as full recovery correctness.
 
@@ -11293,6 +11295,177 @@ Regression fence for production `RecoveryCompletionPolicy` close gate. Tests lan
 - **CURRENT_BEHAVIOR** — pins injected/unwired seams; change only via numbered resolution (§E.18).
 
 Files: `RecoveryCompletionPolicyTest`, `CompletionObservationProjectionTest`, `ControlReconciliationEvaluatorTest`, `RecoveryControlReconciliationFactTest`.
+
+#### E.20 R4-def — Successor Obligation Adoption Contract (2026-08-03)
+
+**Status:** `DEFINED` (R4-def PR; **no runtime behavior change**)
+
+**Scope:** define the semantic contract for successor obligation transition. R4-def answers *what must be true and observable* before a successor may claim obligation ownership. It does **not** implement transition, change generation semantics, or introduce completion enums.
+
+> R4-def = semantic contract  
+> NOT: runtime behavior change
+
+##### E.20.1 Authority domains (Completion / Control / Adoption)
+
+Completion readiness, control reconciliation, and successor adoption are **separate authority domains**. A passing completion predicate without wired control authority (§E.18) or explicit adoption evidence (this section) shall **not** be interpreted as full recovery correctness.
+
+| Domain | Question | Guarantee (when verified) |
+|---|---|---|
+| **R3 — Delivery Obligation Conservation** | Can an existing delivery obligation disappear silently? | **No.** A lineage can only terminate through an explicit lifecycle outcome (`SUPERSEDED`, `CLOSED`, deadline close, etc.). |
+| **R4 — Successor Obligation Adoption Integrity** | When a lineage is superseded, who owns the obligation next? | A successor **cannot** claim ownership without explicit adoption evidence. |
+
+**R3 proves:** old lineage **termination integrity** (obligation does not vanish).  
+**R4 proves:** successor **ownership transition** (obligation is explicitly adopted, not assumed).
+
+These domains MUST NOT be merged in evidence interpretation. R3 `VERIFIED` does **not** establish successor adoption.
+
+##### E.20.2 Candidate Adoption Point — Successor Admission Acceptance Boundary
+
+**Normative name:** **Successor Admission Acceptance Boundary** (not bound to a test case name).
+
+**Current implementation anchor (informative only):** `SuccessorObligationAdmission` — regression case **G-Resurrect-1** (`closedFreshEvidence_admitsSuccessorGenPlusOne`). If admission flow is refactored, this anchor may move; the boundary definition below remains normative.
+
+**ADOPTION_POINT** is reached **only when all** of the following hold:
+
+1. **Successor admission accepted** — a new recovery attempt is admitted as a legal successor (not merely created by supersede side-effects).
+2. **Fresh recovery identity** — successor owns a fresh `(recoveryAttemptId, obligationGeneration)` pair distinct from the terminated predecessor episode.
+3. **Evidence binding** — resurrection / admission evidence is bound to that successor identity (dual-key: attempt + generation); stale or mismatched evidence is rejected.
+4. **Predecessor termination known** — prior lineage obligation reached a **known** terminal state (e.g. `OBLIGATION_DEADLINE`, `CLOSED_SUPERSEDED`, explicit close reason) before adoption is evaluated.
+5. **Ownership transition fact emitted** — an auditable fact records the adoption decision. **Without fact, adoption is not provable.**
+
+**Explicit non-equivalences (frozen):**
+
+```text
+supersede attempt created     ≠  ADOPTION_POINT
+successor attempt exists      ≠  obligation adopted
+delivery lineage SUPERSEDED   ≠  TRANSFERRED
+RECOVERY_OBLIGATION_OPENED    ≠  SUCCESSOR_OBLIGATION_ADOPTED   (until R4-impl emits adoption facts)
+```
+
+**Non-equivalence ladder (frozen — R4-impl MUST NOT collapse):**
+
+```text
+Admission  ≠  Adoption  ≠  Transfer
+```
+
+The three relations below are normative. Violating any one reintroduces the R3-class failure mode where obligation appears to move without an auditable owner.
+
+**1. Admission ≠ Adoption**
+
+`SUCCESSOR_ADMISSION_ACCEPTED` proves only:
+
+> A successor attempt is **legal** and may participate in the recovery flow (fresh identity allocated; admission checks passed).
+
+It does **not** prove:
+
+- the old lineage has ended (termination is a separate R3 / close-reason fact),
+- obligation has **migrated** to the successor,
+- the successor **bears** the predecessor's obligation.
+
+**G-Resurrect-1 MUST NOT be read as ADOPTION_POINT.** It exercises admission (`RECOVERY_OBLIGATION_OPENED`, `ADMIT_SUCCESSOR_OBLIGATION_EPISODE`) — not `SUCCESSOR_OBLIGATION_ADOPTED`.
+
+**2. Candidate ≠ Confirmed**
+
+`SUCCESSOR_OBLIGATION_ADOPTION_CANDIDATE` is an **eligibility observation** — all ADOPTION_POINT prerequisites (§1–4) are simultaneously satisfied at evaluation time.
+
+It is **not** an ownership fact. A candidate may still fail before confirmation:
+
+```text
+CANDIDATE
+    → negotiation blocked / delivery pending / control unwired
+    → timeout or terminal close
+    → no SUCCESSOR_OBLIGATION_ADOPTED
+```
+
+Emitting `ADOPTED` from `CANDIDATE` alone is forbidden. Only `SUCCESSOR_OBLIGATION_ADOPTED` records confirmed ownership.
+
+**3. Adoption ≠ Transfer**
+
+> Adoption describes **verified ownership establishment** of a recovery obligation by a successor. It does **not** imply that the previous lineage was retroactively transferred, nor does supersede itself imply adoption.
+
+Forbidden implementation shape (reintroduces R3 X′):
+
+```kotlin
+supersedeAttempt() {
+    old.close()
+    new.transfer()   // ← collapses Adoption into Transfer; obligation silently moves
+}
+```
+
+Supersede may **terminate** the old lineage (R3). Adoption must **establish** successor ownership via explicit fact (R4). Transfer semantics (`TRANSFERRED`, `OLD_LINEAGE_TRANSFERRED`) remain **unauthorized** until a future ADR-amended R4-impl explicitly defines them — if ever.
+
+##### E.20.3 Fact schema (events only — no `TRANSFERRED`)
+
+R4-def registers **event names** for future R4-impl. No enum, state machine field, or runtime emission is introduced in R4-def.
+
+| Fact | Owner (authority) | Meaning | Does **not** mean |
+|---|---|---|---|
+| `SUCCESSOR_ADMISSION_ACCEPTED` | Successor Admission | New recovery attempt passed admission legality checks; fresh identity allocated. | Old lineage ended; obligation migrated; successor bears predecessor obligation. |
+| `SUCCESSOR_OBLIGATION_ADOPTION_CANDIDATE` | R4 adoption evaluation | Eligibility observation: ADOPTION_POINT prerequisites (E.20.2 §1–4) satisfied at evaluation time. | Ownership established; adoption confirmed. |
+| `SUCCESSOR_OBLIGATION_ADOPTED` | R4 ownership authority | Ownership transition recorded under R4 authority. **R4-impl target fact.** | Recovery complete / `RECOVERED`; retroactive transfer of old lineage. |
+
+**Forbidden in R4-def and until R4-impl explicitly authorizes:**
+
+```text
+TRANSFERRED                    (enum or phase — implies completion semantics)
+OLD_LINEAGE_TRANSFERRED        (assumes old→new handoff already completed)
+```
+
+**Informative mapping (current code, not normative):** G-Resurrect-1 today emits `RECOVERY_OBLIGATION_OPENED` + `ADMIT_SUCCESSOR_OBLIGATION_EPISODE` / `NEW_OBLIGATION_EPISODE`. These are **admission** facts, not `SUCCESSOR_OBLIGATION_ADOPTED`. R4-impl must close the gap between admission and adoption facts without renaming admission into adoption.
+
+**Suggested minimum fields** (for R4-impl log contract; schema draft only):
+
+```text
+SUCCESSOR_ADMISSION_ACCEPTED
+  session, remote, channelId
+  predecessorAttemptId, predecessorObligationGeneration, predecessorCloseReason
+  successorAttemptId, successorObligationGeneration
+  evidenceKind, evidenceObservedAtMs
+
+SUCCESSOR_OBLIGATION_ADOPTION_CANDIDATE
+  (same correlation keys)
+  adoptionPrerequisites=[admission,freshIdentity,evidenceBound,predecessorTerminated]
+
+SUCCESSOR_OBLIGATION_ADOPTED
+  (same correlation keys)
+  adoptedAtMs, adoptionAuthority=SuccessorObligationAdmission
+```
+
+##### E.20.4 Frozen until R4-impl
+
+| Item | R4-def | R4-impl |
+|---|---|---|
+| `TRANSFERRED` enum / phase | **NOT introduced** | Only if ADR-amended after adoption contract exercised |
+| `obligationGeneration` / `recoveryAttemptId` semantics | **NOT changed** | Consumes existing dual-key fences (`sessionEpochMatched`, G-Resurrect) |
+| Obligation inheritance / silent carry-over | **NOT implemented** | Explicit adoption path only |
+| Kotlin / Coordinator / harness changes | **None** | R4-impl PR(s) after PR-D wiring baseline |
+
+##### E.20.5 Attempt-4c / Joint evidence discipline
+
+```text
+Attempt-4c / Joint evidence BEFORE R4-def
+    → diagnostic only (topology / harness / no-crash)
+    → MUST NOT be read as "successor adopted obligation"
+
+Attempt-4c / Joint evidence AFTER R4-def
+    → may evaluate adoption hypotheses against §E.20.2 facts
+    → still requires R4-impl emission of SUCCESSOR_OBLIGATION_ADOPTED for PASS
+```
+
+Joint `PASS` without `SUCCESSOR_OBLIGATION_ADOPTED` proves integration confidence only, not adoption integrity.
+
+##### E.20.6 R4 status board
+
+```text
+R4-def Successor Adoption Contract
+    REGISTERED
+        |
+        +-- R4-def DEFINED (§E.20)     ← semantic contract only
+        |
+        +-- R4-impl WAITING            ← runtime facts + authority wiring
+```
+
+**Next engineering slice after R4-def:** PR-D Runtime Wiring (§E.18.2 membership authority closure). R4-impl remains blocked until PR-D restores wired control authority and adoption facts have a single emission owner.
 
 ---
 
