@@ -11671,6 +11671,26 @@ Successor adoption        contract: R4-def DEFINED; runtime: R4-impl WAITING ⏳
 
 **Engineering focus shifts from** "why did recovery vanish?" **to** "before recovery completes, does the successor actually bear the obligation it should?" — R4's question. Attempt-4c provides the first field vocabulary for that question without claiming adoption.
 
+##### E.21.9 Log analysis checklist (frozen)
+
+**Status:** contract frozen (2026-08-03).
+
+Field runs MUST be classified with the stepwise checklist — **not** a single PASS/FAIL verdict:
+
+**Canonical doc:** [attempt4c-baseline-checklist.md](../analysis/attempt4c-baseline-checklist.md)
+
+**Semi-automatic classifier:** `scripts/analyze-attempt4c-baseline.ps1 -LogDir <attempt4c-log-dir>`
+
+Steps (domain-separated):
+
+1. **Delivery** — `RECOVERY_DELIVERY_LINEAGE_SUPERSEDED`; reject phantom `ABSENT(0,0)`
+2. **Successor admission** — proxy facts only (`RECOVERY_OBLIGATION_OPENED`, `ADMIT_SUCCESSOR_OBLIGATION_EPISODE`); do not infer adoption
+3. **Deferred Intent** — `DEFERRED_INTENT_RELEASED` / `NEGOTIATION_CAN_EXECUTE` / `HELD` (R2 domain)
+4. **Control reconciliation** — Case A/B/C on `membershipProbeDisposition`; E.18 / completion violation rules
+5. **R4 forbidden-term scan** — `TRANSFERRED`, `SUCCESSOR_OBLIGATION_ADOPTED`, `inheritObligation`
+
+Required report header: `Attempt-4c Baseline Classification` with per-domain labels and `Adoption: NOT_EVALUATED`.
+
 ---
 
 ## References
