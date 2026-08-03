@@ -161,6 +161,7 @@ import com.talkback.core.util.RecoveryDeliveryFact
 import com.talkback.core.util.FloorTrace
 import com.talkback.core.util.GroupTransitionReadinessLog
 import com.talkback.core.util.MeetingRecoveryLog
+import com.talkback.core.util.SuppressSuccessorAttemptDebugInjection
 import com.talkback.core.util.PttTimingLog
 import com.talkback.core.util.TalkbackLog
 import com.talkback.app.governance.TalkbackChannelGovernanceHost
@@ -11666,6 +11667,102 @@ class TalkbackCoordinator(
             return block()
         }
         return coordinatorExecutor.submit(block).get()
+    }
+    /** DEBUG harness only: bounded wait; never ANR the caller. */
+    private fun <T> runOnCoordinatorSyncTimed(
+        action: String,
+        timeoutMs: Long = 3_000L,
+        default: T,
+        block: () -> T
+    ): T {
+        if (stopped || coordinatorExecutor.isShutdown) {
+            log("DEBUG_DISPATCH_SKIPPED action=$action reason=coordinator_unavailable")
+            return default
+        }
+        if (onCoordinatorThread.get()) {
+            return block()
+        }
+        return try {
+            coordinatorExecutor.submit(block).get(timeoutMs, TimeUnit.MILLISECONDS)
+        } catch (_: java.util.concurrent.TimeoutException) {
+            log("DEBUG_DISPATCH_TIMEOUT action=$action timeoutMs=$timeoutMs")
+            default
+        } catch (_: java.util.concurrent.RejectedExecutionException) {
+            log("DEBUG_DISPATCH_SKIPPED action=$action reason=rejected")
+            default
+        } catch (e: java.util.concurrent.ExecutionException) {
+            val cause = e.cause
+            if (cause is IllegalStateException) {
+                log("DEBUG_DISPATCH_SKIPPED action=$action reason=coordinator_unavailable")
+                return default
+            }
+            throw e
+        }
+    }
+
+    private fun activeHostConferenceSessionForRemote(remoteModuleId: String): TalkbackSession? =
+        sessions.values.firstOrNull { session ->
+            session.type == SessionType.CONFERENCE &&
+                session.accepted &&
+                isConferenceHostSession(session) &&
+                remoteModuleId in conferenceMemberRemoteIds(session)
+        }
+
+    /**
+     * Harness: arm SUPPRESS_SUCCESSOR_ATTEMPT on the active host conference edge.
+     * Experiment control only — not a recovery policy change.
+     */
+    fun debugSuppressSuccessorAttemptArm(
+        remoteModuleId: String,
+        ttlMs: Long = SuppressSuccessorAttemptDebugInjection.DEFAULT_TTL_MS,
+        reason: String = "HARNESS_SUPPRESS_SUCCESSOR_ATTEMPT"
+    ): Boolean {
+        val ok = runOnCoordinatorSyncTimed("SUPPRESS_SUCCESSOR_ATTEMPT_ARM", default = false) {
+            val session = activeHostConferenceSessionForRemote(remoteModuleId)
+                ?: return@runOnCoordinatorSyncTimed false
+            SuppressSuccessorAttemptDebugInjection.arm(
+                sessionId = session.id,
+                targetModule = remoteModuleId,
+                ttlMs = ttlMs,
+                reason = reason,
+                log = ::log
+            )
+            true
+        }
+        if (ok) {
+            log(
+                "DEBUG_DISPATCH_COMPLETED action=SUPPRESS_SUCCESSOR_ATTEMPT_ARM " +
+                    "remote=$remoteModuleId ttlMs=$ttlMs"
+            )
+        } else {
+            log(
+                "DEBUG_DISPATCH_SKIPPED action=SUPPRESS_SUCCESSOR_ATTEMPT_ARM " +
+                    "remote=$remoteModuleId reason=no_host_session_or_timeout"
+            )
+        }
+        return ok
+    }
+
+    fun debugSuppressSuccessorAttemptClear(remoteModuleId: String): Boolean {
+        val ok = runOnCoordinatorSyncTimed("SUPPRESS_SUCCESSOR_ATTEMPT_CLEAR", default = false) {
+            val session = activeHostConferenceSessionForRemote(remoteModuleId)
+                ?: return@runOnCoordinatorSyncTimed false
+            SuppressSuccessorAttemptDebugInjection.clear(session.id, remoteModuleId)
+            log(
+                "SUPPRESS_SUCCESSOR_ATTEMPT_CLEARED sessionId=${session.id} " +
+                    "targetModule=$remoteModuleId"
+            )
+            true
+        }
+        if (ok) {
+            log("DEBUG_DISPATCH_COMPLETED action=SUPPRESS_SUCCESSOR_ATTEMPT_CLEAR remote=$remoteModuleId")
+        } else {
+            log(
+                "DEBUG_DISPATCH_SKIPPED action=SUPPRESS_SUCCESSOR_ATTEMPT_CLEAR " +
+                    "remote=$remoteModuleId reason=no_host_session_or_timeout"
+            )
+        }
+        return ok
     }
 
 }

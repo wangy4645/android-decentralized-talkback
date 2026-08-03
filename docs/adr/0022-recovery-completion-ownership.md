@@ -11721,6 +11721,25 @@ obligationGeneration=0 when originating from a known outbound delivery window.
 
 ---
 
+---
+
+### E.21.7 `SUPPRESS_SUCCESSOR_ATTEMPT` harness primitive (LANDED)
+
+Experiment-control only. Does **not** enter RecoveryDeliveryPolicy / DeferredIntentAuthority /
+RecoveryCompletionPolicy / adoption.
+
+Facts:
+
+- `SUPPRESS_SUCCESSOR_ATTEMPT_ARMED` — arm only (must appear even if never hit)
+- `SUPPRESS_SUCCESSOR_ATTEMPT_APPLIED` — only when successor admission is actually blocked
+- `HARNESS_SUCCESSOR_SUPPRESSION_APPLIED` — co-emitted with APPLIED (harness/experiment marker only; not a recovery-domain fact)
+- `SUPPRESS_SUCCESSOR_ATTEMPT_EXPIRED` — TTL owned by the primitive
+
+Hook: before `admitSuccessorObligationEpisode` in `onRecoveryReachabilityChanged`.
+
+Attempt-4c-S (`-Attempt 4cs`): no D1; arm suppress on host; classify Case S A/B/C.
+Do **not** implement `SUCCESSOR_OBLIGATION_ADOPTED` / `TRANSFERRED` here (R4-impl WAITING).
+
 ## References
 
 - ADR-0020 — Conference Runtime Projection Contract

@@ -1,5 +1,6 @@
 package com.talkback.core.session
 
+import com.talkback.core.util.SuppressSuccessorAttemptDebugInjection
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -9,7 +10,7 @@ import org.junit.Test
 import java.util.concurrent.Executors
 
 /**
- * G-RESURRECT-0..5 鈥?successor obligation admission (ADR-0022 搂13.2.4 Gap-2).
+ * G-RESURRECT-0..5 — successor obligation admission (ADR-0022 §13.2.4 Gap-2).
  */
 class SuccessorObligationAdmissionTest {
 
@@ -28,12 +29,14 @@ class SuccessorObligationAdmissionTest {
         iceRestartCalls = 0
         canDispatch = true
         iceConnected = false
+        SuppressSuccessorAttemptDebugInjection.resetForTest()
         controller = buildController()
     }
 
     @After
     fun tearDown() {
         controller.clearAll()
+        SuppressSuccessorAttemptDebugInjection.resetForTest()
         scheduler.shutdownNow()
     }
 
@@ -424,5 +427,49 @@ class SuccessorObligationAdmissionTest {
         )
         assertTrue(controller.edgeObligationOpen("sess-1", "M02"))
         assertEquals(gen1 + 1L, controller.obligationGeneration("sess-1", "M02"))
+    }
+
+    @Test
+    fun suppressSuccessorAttempt_blocksAdmission_emitsApplied_keepsClosed() {
+        val gen1 = driveHostObligationDeadlineClosed()
+        val attemptBefore = controller.attemptLineageObservation("sess-1", "M02")!!.attemptId
+        SuppressSuccessorAttemptDebugInjection.arm(
+            sessionId = "sess-1",
+            targetModule = "M02",
+            ttlMs = 60_000L,
+            reason = "UT_ATTEMPT_4C_S",
+            nowMs = nowMs,
+            log = { decisionLogs.add(it) }
+        )
+        nowMs += 5L
+        decisionLogs.clear()
+
+        notifyReachability(
+            trigger = RecoveryReevaluateTrigger.REMOTE_MODULE_RECOVERED,
+            evidence = RecoveryResurrectionEvidence(
+                kind = RecoveryReevaluateTrigger.REMOTE_MODULE_RECOVERED,
+                observedAtMs = nowMs
+            )
+        )
+
+        assertFalse(controller.edgeObligationOpen("sess-1", "M02"))
+        assertEquals(gen1, controller.obligationGeneration("sess-1", "M02"))
+        assertEquals(
+            attemptBefore,
+            controller.attemptLineageObservation("sess-1", "M02")!!.attemptId
+        )
+        assertTrue(decisionLogs.any { it.contains("SUPPRESS_SUCCESSOR_ATTEMPT_APPLIED") })
+        assertTrue(decisionLogs.any { it.contains("HARNESS_SUCCESSOR_SUPPRESSION_APPLIED") })
+        assertTrue(
+            decisionLogs.any {
+                it.contains("RECOVERY_REACHABILITY_IGNORED") &&
+                    it.contains("reason=suppress_successor_attempt")
+            }
+        )
+        assertFalse(decisionLogs.any { it.contains("ADMIT_SUCCESSOR_OBLIGATION_EPISODE") })
+        assertFalse(decisionLogs.any { it.contains("RECOVERY_OBLIGATION_OPENED") })
+        assertEquals(1, SuppressSuccessorAttemptDebugInjection.applyCount())
+        assertFalse(decisionLogs.any { it.contains("SUCCESSOR_OBLIGATION_ADOPTED") })
+        assertFalse(decisionLogs.any { it.contains("TRANSFERRED") })
     }
 }
