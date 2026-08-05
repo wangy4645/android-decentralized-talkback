@@ -6,7 +6,9 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.Executors
 
 /**
- * R28-L.1.4: idempotent qualification repair with cap/backoff.
+ * R28-L.1.4 + L.1.5: idempotent qualification repair with cap/backoff.
+ * L.1.5: [QUALIFICATION_WAIT] + [QualificationFailureReason.QUALIFICATION_TIMEOUT] admits the next
+ * attempt within cap (genuine requal failure); REQUESTED/IN_PROGRESS same-gen remains reject (jitter).
  * Owned by [com.talkback.core.signaling.SignalingTransportManager]; does not mutate recovery lineage.
  */
 class QualificationRepairCoordinator(
@@ -35,6 +37,12 @@ class QualificationRepairCoordinator(
     var tracker: LinkQualificationTracker? = null
 
     var currentNetworkId: () -> String = { "none" }
+
+    /**
+     * L.1.5 rollback: when false, QUALIFICATION_WAIT + timeout rejects as L.1.4 duplicate.
+     * Default true after AUTHORIZE L.1.5 RETRY POLICY.
+     */
+    var admitNextAttemptWhileQualificationWait: Boolean = Companion.admitNextAttemptWhileQualificationWait
 
     override fun requestQualificationRepair(reason: QualificationFailureReason) {
         val snapshot = tracker?.snapshot() ?: return
@@ -105,7 +113,7 @@ class QualificationRepairCoordinator(
             )
             return
         }
-        if (isDuplicateInFlight(rebindGeneration)) {
+        if (isDuplicateInFlight(rebindGeneration, reason)) {
             LinkQualificationTrace.linkQualificationRepairDuplicateRejected(
                 reason = reason,
                 socketId = socketId,
@@ -134,11 +142,24 @@ class QualificationRepairCoordinator(
         scheduleRepair(backoffMs, socketId, rebindGeneration, reason, nextAttempt)
     }
 
-    private fun isDuplicateInFlight(generation: Long): Boolean {
+    /**
+     * L.1.4: same-gen while REQUESTED/IN_PROGRESS → duplicate reject (jitter).
+     * L.1.5: QUALIFICATION_WAIT + QUALIFICATION_TIMEOUT → not duplicate (admit next attempt).
+     */
+    private fun isDuplicateInFlight(generation: Long, reason: QualificationFailureReason): Boolean {
+        if (generation != activeGeneration) return false
         return when (repairState) {
             TransportRepairState.REPAIR_REQUESTED,
-            TransportRepairState.REPAIR_IN_PROGRESS,
-            TransportRepairState.QUALIFICATION_WAIT -> generation == activeGeneration
+            TransportRepairState.REPAIR_IN_PROGRESS -> true
+            TransportRepairState.QUALIFICATION_WAIT -> {
+                if (admitNextAttemptWhileQualificationWait &&
+                    reason == QualificationFailureReason.QUALIFICATION_TIMEOUT
+                ) {
+                    false
+                } else {
+                    true
+                }
+            }
             else -> false
         }
     }
@@ -239,6 +260,14 @@ class QualificationRepairCoordinator(
     companion object {
         const val DEFAULT_REPAIR_CAP = 3
         val DEFAULT_REPAIR_BACKOFF_MS = longArrayOf(1_000L, 5_000L, 15_000L)
+
+        /**
+         * Process-wide L.1.5 default; instance may override via [admitNextAttemptWhileQualificationWait].
+         * Set false to roll back to L.1.4 WAIT duplicate-reject.
+         */
+        @Volatile
+        var admitNextAttemptWhileQualificationWait: Boolean = true
+
         private val SHARED_SCHEDULER: ScheduledExecutorService? = Executors.newSingleThreadScheduledExecutor { runnable ->
             Thread(runnable, "link-qualification-repair").apply { isDaemon = true }
         }

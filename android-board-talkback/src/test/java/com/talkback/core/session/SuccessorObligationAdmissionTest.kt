@@ -472,4 +472,94 @@ class SuccessorObligationAdmissionTest {
         assertFalse(decisionLogs.any { it.contains("SUCCESSOR_OBLIGATION_ADOPTED") })
         assertFalse(decisionLogs.any { it.contains("TRANSFERRED") })
     }
+
+    // ---- E16 Phase-3 ActivationEvidence (SUCCESSOR_START) ----
+
+    @Test
+    fun e16_t1_admitThenSuccessorStartedBeforeDelivery() {
+        driveHostObligationDeadlineClosed()
+        nowMs += 5L
+        decisionLogs.clear()
+        canDispatch = false
+
+        notifyReachability(
+            trigger = RecoveryReevaluateTrigger.REMOTE_MODULE_RECOVERED,
+            evidence = RecoveryResurrectionEvidence(
+                kind = RecoveryReevaluateTrigger.REMOTE_MODULE_RECOVERED,
+                observedAtMs = nowMs
+            )
+        )
+
+        val admitIdx = decisionLogs.indexOfFirst { it.contains("ADMIT_SUCCESSOR_OBLIGATION_EPISODE") }
+        val startedIdx = decisionLogs.indexOfFirst { it.contains("RECOVERY_SUCCESSOR_STARTED") }
+        val deliveryIdx = decisionLogs.indexOfFirst {
+            it.contains("RECOVERY_MEDIA_OWNER_ASSIGNED") ||
+                it.contains("RECOVERY_MEDIA_ACTION_DEFERRED") ||
+                it.contains("RECOVERY_MEDIA_ACTION_ASSIGNMENT")
+        }
+        assertTrue("ADMIT_SUCCESSOR missing", admitIdx >= 0)
+        assertTrue("RECOVERY_SUCCESSOR_STARTED missing", startedIdx >= 0)
+        assertTrue("delivery prelude missing", deliveryIdx >= 0)
+        assertTrue("Activation must follow Admission", startedIdx > admitIdx)
+        assertTrue("Activation must precede Delivery", startedIdx < deliveryIdx)
+        assertTrue(
+            decisionLogs[startedIdx].contains("activationKind=SUCCESSOR_START") &&
+                decisionLogs[startedIdx].contains("pathway=NEW_OBLIGATION_EPISODE")
+        )
+        assertEquals(
+            1,
+            decisionLogs.count { it.contains("RECOVERY_SUCCESSOR_STARTED") }
+        )
+    }
+
+    @Test
+    fun e16_t0_deniedAdmission_doesNotEmitSuccessorStarted() {
+        driveHostObligationDeadlineClosed()
+        nowMs += 10L
+        decisionLogs.clear()
+
+        notifyReachability(
+            trigger = RecoveryReevaluateTrigger.PEER_DISCOVERED,
+            evidence = RecoveryResurrectionEvidence(
+                kind = RecoveryReevaluateTrigger.REMOTE_MODULE_RECOVERED,
+                observedAtMs = nowMs
+            )
+        )
+
+        assertTrue(decisionLogs.any { it.contains("RECOVERY_INVALID_EVIDENCE_BINDING") })
+        assertFalse(decisionLogs.any { it.contains("ADMIT_SUCCESSOR_OBLIGATION_EPISODE") })
+        assertFalse(decisionLogs.any { it.contains("RECOVERY_SUCCESSOR_STARTED") })
+    }
+
+    @Test
+    fun e16_idempotent_oneSuccessorStartedPerEpisode() {
+        driveHostObligationDeadlineClosed()
+        nowMs += 5L
+        decisionLogs.clear()
+
+        notifyReachability(
+            trigger = RecoveryReevaluateTrigger.REMOTE_MODULE_RECOVERED,
+            evidence = RecoveryResurrectionEvidence(
+                kind = RecoveryReevaluateTrigger.REMOTE_MODULE_RECOVERED,
+                observedAtMs = nowMs
+            )
+        )
+
+        assertEquals(1, decisionLogs.count { it.contains("RECOVERY_SUCCESSOR_STARTED") })
+
+        // Delivery re-evaluate on open obligation must not re-emit Activation.
+        nowMs += 5L
+        val before = decisionLogs.count { it.contains("RECOVERY_SUCCESSOR_STARTED") }
+        notifyReachability(
+            trigger = RecoveryReevaluateTrigger.REMOTE_MODULE_RECOVERED,
+            evidence = RecoveryResurrectionEvidence(
+                kind = RecoveryReevaluateTrigger.REMOTE_MODULE_RECOVERED,
+                observedAtMs = nowMs
+            )
+        )
+        assertEquals(
+            before,
+            decisionLogs.count { it.contains("RECOVERY_SUCCESSOR_STARTED") }
+        )
+    }
 }

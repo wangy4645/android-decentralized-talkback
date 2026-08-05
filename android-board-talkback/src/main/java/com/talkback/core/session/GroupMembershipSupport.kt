@@ -162,11 +162,16 @@ object GroupMembershipSupport {
         anchorEpoch: Long,
         members: List<EndpointAddress>,
         senderModuleId: String,
-        authorityModuleId: String
+        authorityModuleId: String,
+        /** ADR-0036: conference recovery rejects out-of-order epoch regression. */
+        monotonicEpoch: Boolean = false
     ): MembershipSnapshotApplyResult {
         val channelId = session.channelId ?: return MembershipSnapshotApplyResult.IGNORED_STALE
         if (senderModuleId != authorityModuleId) {
             return MembershipSnapshotApplyResult.IGNORED_NOT_AUTHORITY
+        }
+        if (monotonicEpoch && rosterEpoch < session.rosterEpoch) {
+            return MembershipSnapshotApplyResult.IGNORED_STALE
         }
         val memberIds = members.map { it.moduleId.value }
         val remoteHash = memberHash(channelId, rosterEpoch, memberIds)

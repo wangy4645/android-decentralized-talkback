@@ -66,6 +66,16 @@ internal enum class MembershipEpochProbeDisposition {
     UNWIRED
 }
 
+/** ADR-0036 RCA-4: precise recovery failure taxonomy (logs / terminal paths). */
+enum class RecoveryFailureClass {
+    MEDIA_PATH_FAILED,
+    TRANSPORT_RECONNECT_FAILED,
+    MEMBERSHIP_CONVERGENCE_TIMEOUT,
+    CONTROL_RECONCILIATION_TIMEOUT,
+    UNKNOWN_RECOVERY_TIMEOUT,
+    EXPLICIT_ABORT
+}
+
 /** PR5-2b: Q6-2 control reconciliation snapshot on edge record. */
 internal data class ControlReconciliationFact(
     val controlHandshakeCompleted: Boolean,
@@ -403,7 +413,14 @@ internal data class EdgeRecoveryRecord(
     /** PR5-1: attempt-scoped state owned by RecoveryAttemptOwner (orthogonal to episode phase). */
     var attemptContext: RecoveryAttemptContext? = null,
     /** PR5-2b: last emitted control reconciliation fact (ADR-0022 Q6-2). */
-    var controlReconciliationFact: ControlReconciliationFact? = null
+    var controlReconciliationFact: ControlReconciliationFact? = null,
+    /** ADR-0037 Phase 3.2: canonical negotiation owner for this episode+edge. */
+    var canonicalNegotiationOwnerModuleId: String? = null,
+    /**
+     * E16 ActivationEvidence: successor pathway emit guard (once per episode).
+     * Set when [RECOVERY_SUCCESSOR_STARTED] is logged; not transport-ready.
+     */
+    var successorActivationEmitted: Boolean = false
 ) {
     /** True while this record owns an active recovery attempt (ADR-0022 P0.5). */
     fun hasActiveAttempt(): Boolean = phase.isActivelyRecovering()

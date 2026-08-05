@@ -5,6 +5,8 @@ import com.talkback.core.model.RecoveryHandlerOutcome
 import com.talkback.core.util.RecoveryDeliveryFact
 import com.talkback.core.util.RecoveryControlReconciliationFact
 import com.talkback.core.util.RecoveryControlReconciliationMembershipObservation
+import com.talkback.core.util.RecoveryNegotiationAuthority
+import com.talkback.core.util.RecoveryNegotiationObservation
 import com.talkback.core.util.SuppressSuccessorAttemptDebugInjection
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ScheduledExecutorService
@@ -108,6 +110,9 @@ class ConferenceEdgeRecoveryController internal constructor(
     /** ADR-0022 E.18.2: membership epoch probe; Coordinator wires [WiredMembershipEpochProbe]. */
     private val membershipEpochProbe: MembershipEpochConvergenceProbe =
         DefaultOpenMembershipAuthoritySentinel,
+    /** ADR-0036 RCA-6: membership resync in-flight per (channelId, recoveryEpisodeId). */
+    private val isMembershipConvergenceInFlight: (channelId: String, obligationGeneration: Long) -> Boolean =
+        { _, _ -> false },
 ) {
     private val edges = ConcurrentHashMap<ConferenceEdgeKey, EdgeRecoveryRecord>()
     private val debounceTimers = ConcurrentHashMap<ConferenceEdgeKey, ScheduledFuture<*>>()
@@ -365,6 +370,135 @@ class ConferenceEdgeRecoveryController internal constructor(
             pendingCompletion = record.hasPendingCompletionDecision,
             obligationGeneration = record.obligationGeneration
         )
+    }
+
+    /** ADR-0037 Phase 3.1/3.2: read-only snapshot for negotiation observation. */
+    fun negotiationObservationContext(
+        sessionId: String,
+        remoteModuleId: String
+    ): RecoveryNegotiationObservation.EdgeObservationContext? {
+        val record = edges[ConferenceEdgeKey(sessionId, remoteModuleId)] ?: return null
+        val coordinatorOwner = RecoveryNegotiationAuthority.bootstrapCoordinatorOwner(
+            localModuleId = localModuleId,
+            remoteModuleId = remoteModuleId,
+            initiatesReattach = record.initiatesReattach,
+            recoveryViaInboundReattach = record.recoveryViaInboundReattach
+        )
+        return RecoveryNegotiationObservation.EdgeObservationContext(
+            sessionId = sessionId,
+            edgeModuleId = remoteModuleId,
+            episodeId = record.recoveryAttemptId,
+            obligationGen = record.obligationGeneration,
+            intentId = record.iceRestartIntentId,
+            mediaActionOwnerLabel = record.mediaActionOwner.logLabel(),
+            deferredReason = record.deferredReason?.name,
+            existingTransactionOwnerModuleId = record.canonicalNegotiationOwnerModuleId,
+            recoveryCoordinatorOwnerModuleId = coordinatorOwner
+        )
+    }
+
+    /** ADR-0037 Phase 3.2: canonical owner for outbound recovery envelope stamp (A). */
+    fun negotiationOwnerModuleId(sessionId: String, remoteModuleId: String): String? {
+        val record = edges[ConferenceEdgeKey(sessionId, remoteModuleId)] ?: return null
+        return ensureCanonicalNegotiationOwner(record, "OUTBOUND_OFFER_STAMP")
+    }
+
+    fun validateInboundNegotiationOwner(
+        sessionId: String,
+        remoteModuleId: String,
+        wireOwnerModuleId: String?,
+        recoveryEpisodeId: Long
+    ): RecoveryNegotiationAuthority.WireOwnerResult? {
+        val record = edges[ConferenceEdgeKey(sessionId, remoteModuleId)] ?: return null
+        if (recoveryEpisodeId > 0L && record.recoveryAttemptId != recoveryEpisodeId) {
+            return RecoveryNegotiationAuthority.WireOwnerResult(
+                validation = RecoveryNegotiationAuthority.WireOwnerValidation.CONFLICT,
+                canonicalOwner = record.canonicalNegotiationOwnerModuleId
+                    ?: RecoveryNegotiationAuthority.resolveOwner(ownerElectionInput(record)).negotiationOwnerModuleId,
+                wireOwner = wireOwnerModuleId,
+                conflictOwner = wireOwnerModuleId
+            )
+        }
+        return RecoveryNegotiationAuthority.validateWireOwner(
+            ownerElectionInput(record),
+            wireOwnerModuleId
+        )
+    }
+
+    fun adoptInboundNegotiationOwner(
+        sessionId: String,
+        remoteModuleId: String,
+        ownerModuleId: String,
+        trigger: String
+    ) {
+        val record = edges[ConferenceEdgeKey(sessionId, remoteModuleId)] ?: return
+        if (record.canonicalNegotiationOwnerModuleId == null) {
+            record.canonicalNegotiationOwnerModuleId = ownerModuleId
+            onLog(
+                "RECOVERY_NEGOTIATION_OWNER_ADOPTED session=$sessionId edge=$remoteModuleId " +
+                    "owner=$ownerModuleId trigger=$trigger"
+            )
+        }
+        observeNegotiationOwner(record, trigger)
+    }
+
+    fun onNegotiationGlareAcceptRemote(sessionId: String, remoteModuleId: String, reason: String) {
+        val record = edges[ConferenceEdgeKey(sessionId, remoteModuleId)] ?: return
+        if (!hasDeferredMediaAction(record) && record.iceRestartIntentId == null) return
+        negotiationObservationContext(sessionId, remoteModuleId)?.let { ctx ->
+            RecoveryNegotiationObservation.emitIntentFromContext(
+                ctx,
+                localModuleId,
+                RecoveryNegotiationObservation.IntentState.BLOCKED_BY_GLARE,
+                reason
+            )
+            RecoveryNegotiationObservation.emitIntentTerminalFromContext(
+                ctx,
+                "BLOCKED_BY_GLARE",
+                reason
+            )
+        }
+        expireDeferredIceRestartIntent(record, "GLARE:$reason")
+    }
+
+    private fun ownerElectionInput(record: EdgeRecoveryRecord): RecoveryNegotiationAuthority.OwnerElectionInput {
+        val coordinatorOwner = RecoveryNegotiationAuthority.bootstrapCoordinatorOwner(
+            localModuleId = localModuleId,
+            remoteModuleId = record.key.remoteModuleId,
+            initiatesReattach = record.initiatesReattach,
+            recoveryViaInboundReattach = record.recoveryViaInboundReattach
+        )
+        return RecoveryNegotiationAuthority.OwnerElectionInput(
+            key = RecoveryNegotiationAuthority.RecoveryNegotiationKey(
+                sessionId = record.key.sessionId,
+                edgeModuleId = record.key.remoteModuleId,
+                recoveryEpisodeId = record.recoveryAttemptId
+            ),
+            localModuleId = localModuleId,
+            remoteModuleId = record.key.remoteModuleId,
+            existingTransactionOwnerModuleId = record.canonicalNegotiationOwnerModuleId,
+            recoveryCoordinatorOwnerModuleId = coordinatorOwner
+        )
+    }
+
+    private fun ensureCanonicalNegotiationOwner(record: EdgeRecoveryRecord, trigger: String): String {
+        if (record.canonicalNegotiationOwnerModuleId == null) {
+            val resolution = RecoveryNegotiationAuthority.resolveOwner(ownerElectionInput(record))
+            record.canonicalNegotiationOwnerModuleId = resolution.negotiationOwnerModuleId
+            onLog(
+                "RECOVERY_NEGOTIATION_OWNER_BOOTSTRAP session=${record.key.sessionId} " +
+                    "edge=${record.key.remoteModuleId} episodeId=${record.recoveryAttemptId} " +
+                    "owner=${resolution.negotiationOwnerModuleId} rule=${resolution.rule.name} trigger=$trigger"
+            )
+        }
+        observeNegotiationOwner(record, trigger)
+        return record.canonicalNegotiationOwnerModuleId!!
+    }
+
+    private fun observeNegotiationOwner(record: EdgeRecoveryRecord, trigger: String) {
+        negotiationObservationContext(record.key.sessionId, record.key.remoteModuleId)?.let { ctx ->
+            RecoveryNegotiationObservation.emitOwnerResolvedFromContext(ctx, localModuleId, trigger)
+        }
     }
 
     fun obligationGeneration(sessionId: String, remoteModuleId: String): Long? =
@@ -638,6 +772,7 @@ class ConferenceEdgeRecoveryController internal constructor(
             hasPendingCompletionDecision = false
         )
         edges[key] = record
+        ensureCanonicalNegotiationOwner(record, "OBLIGATION_OPENED:$trigger")
         onLog(
             "RECOVERY_OBLIGATION_OPENED session=${key.sessionId} remote=${key.remoteModuleId} " +
                 "obligationGen=$newGeneration attempt=${record.recoveryAttemptId} trigger=$trigger"
@@ -780,6 +915,15 @@ class ConferenceEdgeRecoveryController internal constructor(
                 "attempt=${record.recoveryAttemptId} trigger=${wakeupBinding.sourceType} " +
                 "wakeupBinding=${wakeupBinding.logLabel()} deferredReason=$reason"
         )
+        observeNegotiationOwner(record, trigger)
+        negotiationObservationContext(record.key.sessionId, record.key.remoteModuleId)?.let { ctx ->
+            RecoveryNegotiationObservation.emitIntentFromContext(
+                ctx,
+                localModuleId,
+                RecoveryNegotiationObservation.IntentState.DEFERRED,
+                reason.name
+            )
+        }
     }
 
     private fun clearDeferralFields(record: EdgeRecoveryRecord) {
@@ -878,6 +1022,25 @@ class ConferenceEdgeRecoveryController internal constructor(
             )
         }
         if (!isDeferredIceRestartIntent(record) && record.iceRestartIntentId == null) return
+        val glareBlocked = cause.startsWith("GLARE:")
+        negotiationObservationContext(record.key.sessionId, record.key.remoteModuleId)?.let { ctx ->
+            RecoveryNegotiationObservation.emitIntentFromContext(
+                ctx,
+                localModuleId,
+                if (glareBlocked) {
+                    RecoveryNegotiationObservation.IntentState.BLOCKED_BY_GLARE
+                } else {
+                    RecoveryNegotiationObservation.IntentState.EXPIRED
+                },
+                cause
+            )
+            val terminalState = when {
+                glareBlocked -> "BLOCKED_BY_GLARE"
+                cause.startsWith("SUPERSEDE") || cause.startsWith("ADMIT_SUCCESSOR") -> "SUPERSEDED"
+                else -> "EXPIRED"
+            }
+            RecoveryNegotiationObservation.emitIntentTerminalFromContext(ctx, terminalState, cause)
+        }
         val kind = when {
             cause.startsWith("SUPERSEDE") || cause.startsWith("ADMIT_SUCCESSOR") ->
                 DeferredIntentAuthority.ReleaseKind.SUPERSEDE
@@ -935,6 +1098,15 @@ class ConferenceEdgeRecoveryController internal constructor(
                 "gateBlock=${probe.blockReason ?: "UNKNOWN"} " +
                 "signalingState=${probe.signalingState ?: "UNKNOWN"}"
         )
+        observeNegotiationOwner(record, "GATE_NOT_EXECUTABLE")
+        negotiationObservationContext(sessionId, remoteModuleId)?.let { ctx ->
+            RecoveryNegotiationObservation.emitIntentFromContext(
+                ctx,
+                localModuleId,
+                RecoveryNegotiationObservation.IntentState.BLOCKED,
+                probe.blockReason?.name ?: "GATE_NOT_EXECUTABLE"
+            )
+        }
     }
 
     private fun enterHeldDispatch(
@@ -1178,6 +1350,19 @@ class ConferenceEdgeRecoveryController internal constructor(
                 "intentId=$intentId attemptId=$attemptId obligationGen=$obligationGen " +
                 "restartAttemptId=$attemptId dispatchAt=${dispatchAt ?: "NONE"}"
         )
+        negotiationObservationContext(sessionId, remoteModuleId)?.let { ctx ->
+            RecoveryNegotiationObservation.emitIntentFromContext(
+                ctx,
+                localModuleId,
+                RecoveryNegotiationObservation.IntentState.EXECUTED,
+                drainTerminalReason
+            )
+            RecoveryNegotiationObservation.emitIntentTerminalFromContext(
+                ctx,
+                "EXECUTED",
+                drainTerminalReason
+            )
+        }
         if (capturedIntentId != null) {
             deferredIntentAuthority.markExecuted(capturedIntentId)
             releaseDeferredIntentSlot(
@@ -1291,6 +1476,7 @@ class ConferenceEdgeRecoveryController internal constructor(
             "RECOVERY_MEDIA_ACTION_ASSIGNMENT session=${key.sessionId} remote=${key.remoteModuleId} " +
                 "attempt=${record.recoveryAttemptId} owner=HOST_RESTART trigger=$trigger"
         )
+        observeNegotiationOwner(record, trigger)
         issueBoundedIceRestart(record, recoveryReason)
     }
 
@@ -1363,8 +1549,23 @@ class ConferenceEdgeRecoveryController internal constructor(
     private fun enterFailedMediaResidency(
         record: EdgeRecoveryRecord,
         reason: String,
-        explicitAbort: Boolean = false
+        explicitAbort: Boolean = false,
+        failureClass: RecoveryFailureClass? = null
     ) {
+        if (record.iceRestartIntentId != null || hasDeferredMediaAction(record)) {
+            negotiationObservationContext(record.key.sessionId, record.key.remoteModuleId)?.let { ctx ->
+                RecoveryNegotiationObservation.emitIntentTerminalFromContext(
+                    ctx,
+                    "MISSING",
+                    reason
+                )
+            }
+        }
+        val resolvedClass = failureClass ?: when {
+            explicitAbort -> RecoveryFailureClass.EXPLICIT_ABORT
+            reason == "attempt_timeout" -> RecoveryFailureClass.UNKNOWN_RECOVERY_TIMEOUT
+            else -> RecoveryFailureClass.MEDIA_PATH_FAILED
+        }
         val oldPhase = record.phase
         record.phase = EdgeRecoveryPhase.FAILED_MEDIA_RECOVERY
         logPhaseTransition(record, oldPhase, record.phase, if (explicitAbort) "EXPLICIT_ABORT:$reason" else "FAILED_MEDIA:$reason")
@@ -1374,17 +1575,71 @@ class ConferenceEdgeRecoveryController internal constructor(
             onLog(
                 "EXPLICIT_RECOVERY_ABORT session=${record.key.sessionId} " +
                     "remote=${record.key.remoteModuleId} attempt=${record.recoveryAttemptId} " +
-                    "reason=$reason deadlineAt=${record.obligationDeadlineAtMs}"
+                    "reason=$reason failureClass=$resolvedClass deadlineAt=${record.obligationDeadlineAtMs}"
             )
             notifyAttemptLineageObservation(record, "explicit_recovery_abort")
         } else {
             onLog(
                 "FAILED_MEDIA_RECOVERY session=${record.key.sessionId} remote=${record.key.remoteModuleId} " +
-                    "attempt=${record.recoveryAttemptId} reason=$reason deadlineAt=${record.obligationDeadlineAtMs}"
+                    "attempt=${record.recoveryAttemptId} reason=$reason failureClass=$resolvedClass " +
+                    "deadlineAt=${record.obligationDeadlineAtMs}"
             )
             notifyAttemptLineageObservation(record, "failed_media_recovery")
         }
         scheduleObligationDeadline(record)
+    }
+
+    /** ADR-0036 RCA-4 / RCA-6: classify watchdog timeout before entering failed residency. */
+    private fun classifyRecoveryFailureAtTimeout(record: EdgeRecoveryRecord): RecoveryFailureClass {
+        val fact = record.controlReconciliationFact?.takeIf { it.isCurrentFor(record) }
+        val mediaSatisfied = record.mediaRestored || isIceConnected(record.key.sessionId, record.key.remoteModuleId)
+        if (!mediaSatisfied) return RecoveryFailureClass.MEDIA_PATH_FAILED
+        if (fact == null) return RecoveryFailureClass.UNKNOWN_RECOVERY_TIMEOUT
+        if (!fact.membershipEpochConverged &&
+            fact.membershipProbeDisposition == MembershipEpochProbeDisposition.CHECKED
+        ) {
+            return RecoveryFailureClass.MEMBERSHIP_CONVERGENCE_TIMEOUT
+        }
+        if (!fact.result && fact.membershipEpochConverged) {
+            return RecoveryFailureClass.CONTROL_RECONCILIATION_TIMEOUT
+        }
+        return RecoveryFailureClass.UNKNOWN_RECOVERY_TIMEOUT
+    }
+
+    private fun emitRecoveryCompletionBlocked(
+        record: EdgeRecoveryRecord,
+        blockedReason: String
+    ) {
+        onLog(
+            "RECOVERY_COMPLETION_BLOCKED_BY_CONTROL session=${record.key.sessionId} " +
+                "remote=${record.key.remoteModuleId} attempt=${record.recoveryAttemptId} " +
+                "obligationGen=${record.obligationGeneration} reason=$blockedReason"
+        )
+    }
+
+    private fun shouldDeferWatchdogForMembershipConvergence(record: EdgeRecoveryRecord): Boolean {
+        val channelId = record.channelId ?: return false
+        val fact = record.controlReconciliationFact?.takeIf { it.isCurrentFor(record) } ?: return false
+        if (fact.membershipEpochConverged) return false
+        if (fact.membershipProbeDisposition != MembershipEpochProbeDisposition.CHECKED) return false
+        return isMembershipConvergenceInFlight(channelId, record.obligationGeneration)
+    }
+
+    private fun shouldDeferWatchdogForControlReconciliation(record: EdgeRecoveryRecord): Boolean {
+        if (shouldDeferWatchdogForMembershipConvergence(record)) return false
+        val fact = record.controlReconciliationFact?.takeIf { it.isCurrentFor(record) } ?: return false
+        if (fact.result) return false
+        val mediaSatisfied = record.mediaRestored ||
+            isIceConnected(record.key.sessionId, record.key.remoteModuleId)
+        if (!mediaSatisfied || !record.controlPlaneStarted()) return false
+        if (!fact.membershipEpochConverged &&
+            fact.membershipProbeDisposition == MembershipEpochProbeDisposition.CHECKED
+        ) {
+            return false
+        }
+        if (!fact.controlHandshakeCompleted || !fact.sessionEpochMatched) return true
+        if (fact.membershipEpochConverged) return true
+        return false
     }
 
     private fun enterFailedRequiresUserAction(record: EdgeRecoveryRecord) {
@@ -1534,6 +1789,74 @@ class ConferenceEdgeRecoveryController internal constructor(
         refreshControlReconciliationFact(record)
     }
 
+    /**
+     * ADR-0036 Phase 2.4 Fix-D: authority digest observation changed.
+     *
+     * Bypasses Coordinator capability materiality gate so completion authority re-consumes
+     * the new membership fact. Does **not** assume converged — only re-runs the existing
+     * membership / control reconciliation predicates and completion evaluation.
+     */
+    fun forceRefreshControlReconciliationAfterDigestRefresh(
+        sessionId: String,
+        channelId: String,
+        reason: String = "DIGEST_REFRESH",
+        oldDigestEpoch: Long? = null,
+        oldDigestHash: Int? = null,
+        newDigestEpoch: Long? = null,
+        newDigestHash: Int? = null
+    ) {
+        val digestAudit = RecoveryControlReconciliationFact.DigestRefreshAudit(
+            oldDigestEpoch = oldDigestEpoch,
+            oldDigestHash = oldDigestHash,
+            newDigestEpoch = newDigestEpoch,
+            newDigestHash = newDigestHash
+        )
+        val targets = edges.values.filter {
+            it.key.sessionId == sessionId &&
+                it.channelId == channelId &&
+                it.edgeObligationOpen()
+        }
+        if (targets.isEmpty()) {
+            onLog(
+                "CONTROL_RECONCILIATION_REFRESH_TRIGGERED reason=$reason " +
+                    "session=$sessionId channel=$channelId edges=0 " +
+                    "oldDigestEpoch=${oldDigestEpoch ?: "null"} " +
+                    "oldDigestHash=${oldDigestHash ?: "null"} " +
+                    "newDigestEpoch=${newDigestEpoch ?: "null"} " +
+                    "newDigestHash=${newDigestHash ?: "null"} " +
+                    "skipped=NO_OPEN_OBLIGATION"
+            )
+            return
+        }
+        targets.forEach { record ->
+            onLog(
+                "CONTROL_RECONCILIATION_REFRESH_TRIGGERED reason=$reason " +
+                    "session=$sessionId channel=$channelId remote=${record.key.remoteModuleId} " +
+                    "attempt=${record.recoveryAttemptId} obligationGen=${record.obligationGeneration} " +
+                    "oldDigestEpoch=${oldDigestEpoch ?: "null"} " +
+                    "oldDigestHash=${oldDigestHash ?: "null"} " +
+                    "newDigestEpoch=${newDigestEpoch ?: "null"} " +
+                    "newDigestHash=${newDigestHash ?: "null"}"
+            )
+            refreshControlReconciliationFact(record, digestAudit)
+            val snapshot = buildCompletionEvaluationSnapshot(record)
+            val signature = projectRecoveryCapabilitySignature(
+                snapshot = snapshot,
+                initiatesReattach = record.initiatesReattach,
+                controlPlaneStarted = record.controlPlaneStarted()
+            )
+            runCompletionEvaluationStub(
+                record = record,
+                snapshot = snapshot,
+                signature = signature,
+                trigger = RecoveryReevaluateTrigger.DIGEST_REFRESH,
+                skipMembershipRefresh = true
+            )
+            emitCompletionObservations(record, snapshot, RecoveryReevaluateTrigger.DIGEST_REFRESH)
+        }
+        notifyChanged(sessionId)
+    }
+
     private fun reevaluateOpenObligation(
         record: EdgeRecoveryRecord,
         snapshot: EdgeReachabilitySnapshot,
@@ -1617,7 +1940,10 @@ class ConferenceEdgeRecoveryController internal constructor(
     }
 
     /** PR5-2b: compute + emit Q6-2 control reconciliation fact; store on record for CompletionPolicy. */
-    private fun refreshControlReconciliationFact(record: EdgeRecoveryRecord) {
+    private fun refreshControlReconciliationFact(
+        record: EdgeRecoveryRecord,
+        digestAudit: RecoveryControlReconciliationFact.DigestRefreshAudit? = null
+    ) {
         val channelId = record.channelId
         val conferenceSessionId = record.key.sessionId
         val probeResult = when {
@@ -1633,7 +1959,7 @@ class ConferenceEdgeRecoveryController internal constructor(
             clock = clock
         )
         record.controlReconciliationFact = fact
-        RecoveryControlReconciliationFact.emit(record, fact, onLog)
+        RecoveryControlReconciliationFact.emit(record, fact, onLog, digestAudit)
     }
 
     private fun emitMembershipProbeObservation(
@@ -1728,6 +2054,13 @@ class ConferenceEdgeRecoveryController internal constructor(
                 "obligationGen=${admitted.obligationGeneration} attempt=${admitted.recoveryAttemptId} " +
                 "evidenceKind=${evidence.kind} observedAtMs=${evidence.observedAtMs}"
         )
+        // E16 ActivationEvidence (SUCCESSOR_START): after Admission, before Delivery prelude.
+        emitRecoverySuccessorStarted(
+            record = admitted,
+            evidence = evidence,
+            priorGen = previousGen,
+            priorAttempt = previousAttempt
+        )
         // M1: same resolve path as R1 / SUPERSEDE; immediate=false; watchdog only after dispatch.
         admitted.mediaActionOwner = MediaActionOwner.PENDING
         clearDeferralFields(admitted)
@@ -1770,6 +2103,29 @@ class ConferenceEdgeRecoveryController internal constructor(
         return SuccessorObligationAdmission(
             obligationGeneration = admitted.obligationGeneration,
             recoveryAttemptId = admitted.recoveryAttemptId
+        )
+    }
+
+    /**
+     * E16 Phase-3: ActivationEvidence.kind=SUCCESSOR_START.
+     * Once per obligation episode; does not imply transport/ready/delivery success.
+     */
+    private fun emitRecoverySuccessorStarted(
+        record: EdgeRecoveryRecord,
+        evidence: RecoveryResurrectionEvidence,
+        priorGen: Long,
+        priorAttempt: Long
+    ) {
+        if (record.successorActivationEmitted) return
+        record.successorActivationEmitted = true
+        val key = record.key
+        onLog(
+            "RECOVERY_SUCCESSOR_STARTED session=${key.sessionId} remote=${key.remoteModuleId} " +
+                "local=$localModuleId obligationGen=${record.obligationGeneration} " +
+                "attempt=${record.recoveryAttemptId} pathway=NEW_OBLIGATION_EPISODE " +
+                "trigger=ADMIT_SUCCESSOR_OBLIGATION_EPISODE " +
+                "priorGen=$priorGen priorAttempt=$priorAttempt " +
+                "evidenceKind=${evidence.kind} activationKind=SUCCESSOR_START"
         )
     }
 
@@ -1952,7 +2308,8 @@ class ConferenceEdgeRecoveryController internal constructor(
                 channelId = "",
                 phase = EdgeRecoveryPhase.REATTACH_ACCEPTED,
                 initiatesReattach = false,
-                attemptOpenTrigger = RecoveryDecisionTrigger.REATTACH_ACCEPTED.name
+                attemptOpenTrigger = RecoveryDecisionTrigger.REATTACH_ACCEPTED.name,
+                recoveryViaInboundReattach = true
             )
             edges[key]!!
         }
@@ -2591,6 +2948,16 @@ class ConferenceEdgeRecoveryController internal constructor(
                     remoteModuleId = record.key.remoteModuleId,
                     fenceArmed = true
                 )
+                observeNegotiationOwner(record, "DEFER_ADMISSION")
+                RecoveryNegotiationObservation.emitIntent(
+                    sessionId = record.key.sessionId,
+                    edgeModuleId = record.key.remoteModuleId,
+                    intentId = intentId,
+                    episodeId = record.recoveryAttemptId,
+                    ownerModuleId = localModuleId,
+                    reason = block.name,
+                    state = RecoveryNegotiationObservation.IntentState.CREATED
+                )
             }
             return
         }
@@ -2616,6 +2983,15 @@ class ConferenceEdgeRecoveryController internal constructor(
                     sourceKey = edgeWakeupKey(record.key.sessionId, record.key.remoteModuleId)
                 ),
                 trigger = "ADMISSION_CONFIDENCE:${admissionProjection.decision}"
+            )
+            return
+        }
+        val negotiationOwner = ensureCanonicalNegotiationOwner(record, "ICE_RESTART_DISPATCH")
+        if (negotiationOwner != localModuleId) {
+            onLog(
+                "NEGOTIATION_NON_OWNER_BLOCKED session=${record.key.sessionId} " +
+                    "remote=${record.key.remoteModuleId} attempt=${record.recoveryAttemptId} " +
+                    "owner=$negotiationOwner local=$localModuleId"
             )
             return
         }
@@ -2696,6 +3072,47 @@ class ConferenceEdgeRecoveryController internal constructor(
                 )
                 return@schedule
             }
+            if (shouldDeferWatchdogForMembershipConvergence(still)) {
+                emitRecoveryCompletionBlocked(still, "MEMBERSHIP_CONVERGENCE_PENDING")
+                onLog(
+                    "RECOVERY_WATCHDOG_DEFERRED session=${key.sessionId} edge=${key.remoteModuleId} " +
+                        "obligationGen=${still.obligationGeneration} attempt=${still.recoveryAttemptId} " +
+                        "reason=MEMBERSHIP_CONVERGENCE_PENDING"
+                )
+                scheduleWatchdog(still)
+                return@schedule
+            }
+            if (shouldDeferWatchdogForControlReconciliation(still)) {
+                emitRecoveryCompletionBlocked(still, "CONTROL_RECONCILIATION_PENDING")
+                onLog(
+                    "RECOVERY_WATCHDOG_DEFERRED session=${key.sessionId} edge=${key.remoteModuleId} " +
+                        "obligationGen=${still.obligationGeneration} attempt=${still.recoveryAttemptId} " +
+                        "reason=CONTROL_RECONCILIATION_PENDING"
+                )
+                scheduleWatchdog(still)
+                return@schedule
+            }
+            val mediaSatisfied = still.mediaRestored ||
+                isIceConnected(key.sessionId, key.remoteModuleId)
+            val controlFact = still.controlReconciliationFact?.takeIf { it.isCurrentFor(still) }
+            if (mediaSatisfied && controlFact?.result == true) {
+                val snapshot = EdgeReachabilitySnapshot(
+                    linkReady = true,
+                    peerDiscovered = true,
+                    peerSignalingReachable = true,
+                    mediaRouteConnected = still.mediaRestored,
+                    authorityReachable = true
+                )
+                if (tryCompletionFromFrozenPredicate(still, snapshot, RecoveryReevaluateTrigger.ICE_RESTORED)) {
+                    onLog(
+                        "RECOVERY_DECISION session=${key.sessionId} edge=${key.remoteModuleId} " +
+                            "attempt=${still.recoveryAttemptId} trigger=ATTEMPT_TIMEOUT " +
+                            "decision=RECOVERED approved=true"
+                    )
+                    notifyChanged(key.sessionId)
+                    return@schedule
+                }
+            }
             val abortReason = when {
                 hasDeferredMediaAction(still) -> {
                     assignMediaActionOwner(still, MediaActionOwner.ABORTED)
@@ -2707,10 +3124,16 @@ class ConferenceEdgeRecoveryController internal constructor(
                 }
                 else -> "attempt_timeout"
             }
+            val failureClass = when {
+                abortReason == "NO_MEDIA_ACTION_OWNER" || abortReason == "OWNER_BLOCKED" ->
+                    RecoveryFailureClass.EXPLICIT_ABORT
+                else -> classifyRecoveryFailureAtTimeout(still)
+            }
             enterFailedMediaResidency(
                 still,
                 reason = abortReason,
-                explicitAbort = abortReason == "NO_MEDIA_ACTION_OWNER" || abortReason == "OWNER_BLOCKED"
+                explicitAbort = abortReason == "NO_MEDIA_ACTION_OWNER" || abortReason == "OWNER_BLOCKED",
+                failureClass = failureClass
             )
             notifyChanged(key.sessionId)
         }, budgetMs, TimeUnit.MILLISECONDS)
@@ -2763,7 +3186,8 @@ class ConferenceEdgeRecoveryController internal constructor(
         phase: EdgeRecoveryPhase,
         initiatesReattach: Boolean,
         newAttempt: Boolean = false,
-        attemptOpenTrigger: String? = null
+        attemptOpenTrigger: String? = null,
+        recoveryViaInboundReattach: Boolean = false
     ): EdgeRecoveryRecord {
         val now = clock()
         val existing = edges[key]
@@ -2787,6 +3211,7 @@ class ConferenceEdgeRecoveryController internal constructor(
                 recoveryAttemptId = ++attemptSeq,
                 recoveryStartedAtMs = now,
                 initiatesReattach = initiatesReattach,
+                recoveryViaInboundReattach = recoveryViaInboundReattach,
                 obligationGeneration = obligationGen,
                 obligationOpenedAtMs = if (preserveOpen) {
                     existing!!.obligationOpenedAtMs ?: now
@@ -2805,6 +3230,7 @@ class ConferenceEdgeRecoveryController internal constructor(
                 edges[key] = created
                 val trigger = attemptOpenTrigger
                     ?: if (newAttempt) "NEW_ATTEMPT" else "UPSERT"
+                ensureCanonicalNegotiationOwner(created, trigger)
                 val pathway = when {
                     newAttempt -> "BEGIN_RECOVERY"
                     existing == null -> "UPSERT_EDGE"
@@ -2938,9 +3364,12 @@ class ConferenceEdgeRecoveryController internal constructor(
         record: EdgeRecoveryRecord,
         snapshot: EdgeReachabilitySnapshot,
         trigger: RecoveryReevaluateTrigger,
-        evidence: String? = null
+        evidence: String? = null,
+        skipMembershipRefresh: Boolean = false
     ): Boolean {
-        refreshControlReconciliationFact(record)
+        if (!skipMembershipRefresh) {
+            refreshControlReconciliationFact(record)
+        }
         val key = record.key
         val iceConnectedProbe = isIceConnected(key.sessionId, key.remoteModuleId)
         val iceConnectedForPredicate =
@@ -2970,9 +3399,16 @@ class ConferenceEdgeRecoveryController internal constructor(
         record: EdgeRecoveryRecord,
         snapshot: EdgeReachabilitySnapshot,
         signature: RecoveryCapabilitySignature,
-        trigger: RecoveryReevaluateTrigger
+        trigger: RecoveryReevaluateTrigger,
+        skipMembershipRefresh: Boolean = false
     ) {
-        if (tryCompletionFromFrozenPredicate(record, snapshot, trigger)) {
+        if (tryCompletionFromFrozenPredicate(
+                record,
+                snapshot,
+                trigger,
+                skipMembershipRefresh = skipMembershipRefresh
+            )
+        ) {
             onLog(
                 "RECOVERY_DECISION session=${record.key.sessionId} edge=${record.key.remoteModuleId} " +
                     "attempt=${record.recoveryAttemptId} trigger=$trigger decision=RECOVERED approved=true"
@@ -3311,6 +3747,7 @@ class ConferenceEdgeRecoveryController internal constructor(
         clearMediaRestoredFact(record)
         record.epochRefreshUsed = false
         record.recoveryViaInboundReattach = false
+        record.canonicalNegotiationOwnerModuleId = null
         record.reattachDeliveryState = ReattachDeliveryState.QUEUED
         record.reattachNonce = null
         record.outboundDispatchAttemptId = null

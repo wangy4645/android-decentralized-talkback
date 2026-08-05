@@ -261,6 +261,13 @@ class TalkbackRuntime(
     fun conferenceMediaUnavailable(sessionId: String, remoteModuleId: String): Boolean =
         runCatching { coordinator.conferenceMediaUnavailable(sessionId, remoteModuleId) }.getOrElse { false }
 
+    /** PR5-3 M1 — completion-axis projection (optional); null until observation has run. */
+    fun conferenceEpisodeCompletion(
+        sessionId: String,
+        remoteModuleId: String
+    ): com.talkback.core.session.EpisodeCompletionProjection? =
+        runCatching { coordinator.conferenceEpisodeCompletion(sessionId, remoteModuleId) }.getOrNull()
+
     fun networkQualityLabel(): String = conferenceNetworkIndicator().toQualityLabel()
     fun onlineModuleCount(): Int = runCatching { coordinator.onlineModuleCount() }.getOrElse { 0 }
     fun qosSummary(): String = runCatching { coordinator.qosSummary() }.getOrElse { "" }

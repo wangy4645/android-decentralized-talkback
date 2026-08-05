@@ -27,4 +27,23 @@ object PeerControlSignalingAdmission {
         if (!isHardGatedControl(type)) return true
         return peerEdgeReady
     }
+
+    /**
+     * ADR-0036 Phase 2.1: membership recovery resync may bootstrap before full PEER_EDGE_READY
+     * when the authority peer is observable on the current transport epoch (not NEVER_OBSERVED).
+     */
+    fun maySendMembershipRecoveryResync(
+        peerSnapshot: PeerEdgeSignalingSnapshot,
+        localBidirectionalReady: Boolean
+    ): Boolean {
+        if (!localBidirectionalReady) return false
+        return when (peerSnapshot.reason) {
+            null,
+            PeerEdgeSignalingNotReadyReason.FRESHNESS_EXPIRED -> true
+            PeerEdgeSignalingNotReadyReason.NEVER_OBSERVED,
+            PeerEdgeSignalingNotReadyReason.GENERATION_MISMATCH,
+            PeerEdgeSignalingNotReadyReason.GENERATION_INVALIDATED,
+            PeerEdgeSignalingNotReadyReason.LOCAL_NOT_BIDIRECTIONAL -> false
+        }
+    }
 }

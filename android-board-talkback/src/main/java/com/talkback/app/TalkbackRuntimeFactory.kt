@@ -228,6 +228,11 @@ object TalkbackRuntimeFactory {
                 coordinator.onLinkQualificationStateChanged()
             }
         }
+        if (peerEdgeSignalingReadiness != null) {
+            peerEdgeSignalingReadiness.onPeerEdgeSignalingReady = { moduleId ->
+                coordinator.onPeerEdgeSignalingReady(moduleId)
+            }
+        }
         coordinator.updateStaticPeers(staticPeers)
         val runtime = TalkbackRuntime(
             config,

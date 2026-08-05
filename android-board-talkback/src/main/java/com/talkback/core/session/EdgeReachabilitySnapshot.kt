@@ -149,6 +149,12 @@ enum class RecoveryReevaluateTrigger {
     REMOTE_MODULE_RECOVERED,
     AUTHORITY_REACHABLE,
     AUTHORITY_LOST,
+    /**
+     * ADR-0036 Phase 2.4 Fix-D: authority digest observation changed.
+     * Forces control reconciliation recompute without capability materiality gate.
+     * Does NOT imply membership converged — only re-triggers the existing predicate.
+     */
+    DIGEST_REFRESH,
     /** ICE CONNECTED / equivalent media restoration (ADR-0022 R28-E / #83). */
     ICE_RESTORED,
     /** ICE CHECKING — early resurrection signal while obligation OPEN (ADR-0022). */

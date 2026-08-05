@@ -77,4 +77,37 @@ class RecoveryControlReconciliationFactTest {
         assertEquals(1, overrideLines.size)
         RecoveryControlReconciliationFact.resetForTest()
     }
+
+    /** INVARIANT: DIGEST_REFRESH audit fields appear when provided (ADR-0036 Fix-D). */
+    @Test
+    fun invariant_emit_includesDigestRefreshAuditFields() {
+        val lines = mutableListOf<String>()
+        RecoveryControlReconciliationFact.resetForTest { lines.add(it) }
+        val r = record(EdgeRecoveryPhase.ICE_RESTARTING)
+        val fact = ControlReconciliationFact(
+            controlHandshakeCompleted = true,
+            sessionEpochMatched = true,
+            membershipEpochConverged = true,
+            computedAtMs = 100L,
+            attemptId = 7L,
+            obligationGeneration = 5L
+        )
+        RecoveryControlReconciliationFact.emit(
+            r,
+            fact,
+            digestAudit = RecoveryControlReconciliationFact.DigestRefreshAudit(
+                oldDigestEpoch = 3L,
+                oldDigestHash = -925203082,
+                newDigestEpoch = 1L,
+                newDigestHash = -528664596
+            )
+        )
+        val line = lines.single()
+        assertTrue(line.contains("oldDigestEpoch=3"))
+        assertTrue(line.contains("oldDigestHash=-925203082"))
+        assertTrue(line.contains("newDigestEpoch=1"))
+        assertTrue(line.contains("newDigestHash=-528664596"))
+        assertTrue(line.contains("membershipEpochConverged=true"))
+        RecoveryControlReconciliationFact.resetForTest()
+    }
 }

@@ -111,6 +111,22 @@ class GroupMembershipSupportTest {
     }
 
     @Test
+    fun applyMembershipSnapshot_monotonicEpoch_rejectsRegression() {
+        val s = session("M01", "M02", "M03")
+        s.rosterEpoch = 5L
+        val authorityMembers = listOf(
+            EndpointAddress(ModuleId("M01"), EndpointId("E01")),
+            EndpointAddress(ModuleId("M02"), EndpointId("E01")),
+            EndpointAddress(ModuleId("M03"), EndpointId("E01"))
+        )
+        val result = GroupMembershipSupport.applyMembershipSnapshot(
+            s, 4L, 0L, authorityMembers, "M01", "M01", monotonicEpoch = true
+        )
+        assertEquals(GroupMembershipSupport.MembershipSnapshotApplyResult.IGNORED_STALE, result)
+        assertEquals(5L, s.rosterEpoch)
+    }
+
+    @Test
     fun applyMembershipSnapshot_rejectsHigherEpochFromNonAuthority() {
         val s = session("M01", "M03")
         assertEquals(1L, s.rosterEpoch)

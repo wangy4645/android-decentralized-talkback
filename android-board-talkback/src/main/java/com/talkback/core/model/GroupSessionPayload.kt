@@ -40,7 +40,9 @@ data class GroupSessionPayload(
     /** ADR-0035: obligation generation stamped on recovery offer (ACK correlation). */
     val obligationGeneration: Long? = null,
     /** ADR-0035 PR1: delivery attempt within a lineage (default 1; no retry owner yet). */
-    val deliveryAttemptId: Long = 1L
+    val deliveryAttemptId: Long = 1L,
+    /** ADR-0037 Phase 3.2: wire-carried negotiation owner (A), not a second election. */
+    val negotiationOwnerModuleId: String? = null
 ) {
     fun encode(): String {
         val arr = JSONArray()
@@ -95,6 +97,9 @@ data class GroupSessionPayload(
         if (deliveryAttemptId > 0L) {
             json.put("deliveryAttemptId", deliveryAttemptId)
         }
+        if (!negotiationOwnerModuleId.isNullOrBlank()) {
+            json.put("negotiationOwnerModuleId", negotiationOwnerModuleId)
+        }
         return json.toString()
     }
 
@@ -135,7 +140,8 @@ data class GroupSessionPayload(
                     restartAttemptId = json.optLong("restartAttemptId", 0L).takeIf { it > 0L },
                     transportGeneration = json.optLong("transportGeneration", 0L).takeIf { it > 0L },
                     obligationGeneration = json.optLong("obligationGeneration", 0L).takeIf { it > 0L },
-                    deliveryAttemptId = json.optLong("deliveryAttemptId", 1L).coerceAtLeast(1L)
+                    deliveryAttemptId = json.optLong("deliveryAttemptId", 1L).coerceAtLeast(1L),
+                    negotiationOwnerModuleId = json.optString("negotiationOwnerModuleId").takeIf { it.isNotBlank() }
                 )
             }.getOrNull()
         }

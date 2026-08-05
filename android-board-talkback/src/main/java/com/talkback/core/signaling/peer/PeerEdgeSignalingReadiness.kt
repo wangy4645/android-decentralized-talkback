@@ -28,6 +28,9 @@ class PeerEdgeSignalingReadiness(
     @Volatile
     var onPeerEdgeSignalingLost: ((PeerEdgeSignalingLost) -> Unit)? = null
 
+    @Volatile
+    var onPeerEdgeSignalingReady: ((String) -> Unit)? = null
+
     fun onPeerInboundObserved(fact: PeerInboundObserved) {
         val snapshot = localSnapshot()
         if (fact.receiveGeneration != snapshot.rebindGeneration) return
@@ -200,6 +203,7 @@ class PeerEdgeSignalingReadiness(
             observedSignal = observedSignal,
             lastInboundAtMs = lastInboundAtMs
         )
+        onPeerEdgeSignalingReady?.invoke(remoteModuleId)
     }
 }
 

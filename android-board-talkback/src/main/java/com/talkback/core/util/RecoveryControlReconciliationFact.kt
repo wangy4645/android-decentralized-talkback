@@ -12,7 +12,19 @@ object RecoveryControlReconciliationFact {
         testLogSink = sink
     }
 
-    internal fun format(record: EdgeRecoveryRecord, fact: ControlReconciliationFact): String {
+    /** Optional digest provenance attached on DIGEST_REFRESH re-evaluations (ADR-0036 Fix-D). */
+    data class DigestRefreshAudit(
+        val oldDigestEpoch: Long?,
+        val oldDigestHash: Int?,
+        val newDigestEpoch: Long?,
+        val newDigestHash: Int?
+    )
+
+    internal fun format(
+        record: EdgeRecoveryRecord,
+        fact: ControlReconciliationFact,
+        digestAudit: DigestRefreshAudit? = null
+    ): String {
         val key = record.key
         val sb = StringBuilder("RECOVERY_CONTROL_RECONCILIATION_FACT")
         sb.append(" session=").append(key.sessionId)
@@ -25,6 +37,12 @@ object RecoveryControlReconciliationFact {
         sb.append(" membershipEpochConverged=").append(fact.membershipEpochConverged)
         sb.append(" membershipProbeDisposition=").append(fact.membershipProbeDisposition)
         sb.append(" result=").append(fact.result)
+        if (digestAudit != null) {
+            sb.append(" oldDigestEpoch=").append(digestAudit.oldDigestEpoch ?: "null")
+            sb.append(" oldDigestHash=").append(digestAudit.oldDigestHash ?: "null")
+            sb.append(" newDigestEpoch=").append(digestAudit.newDigestEpoch ?: "null")
+            sb.append(" newDigestHash=").append(digestAudit.newDigestHash ?: "null")
+        }
         val mismatch = fact.mismatchReason()
         if (mismatch != null) {
             sb.append(" reason=").append(mismatch)
@@ -35,9 +53,10 @@ object RecoveryControlReconciliationFact {
     internal fun emit(
         record: EdgeRecoveryRecord,
         fact: ControlReconciliationFact,
-        overrideSink: ((String) -> Unit)? = null
+        overrideSink: ((String) -> Unit)? = null,
+        digestAudit: DigestRefreshAudit? = null
     ) {
-        val message = format(record, fact)
+        val message = format(record, fact, digestAudit)
         if (overrideSink != null) {
             overrideSink(message)
             return

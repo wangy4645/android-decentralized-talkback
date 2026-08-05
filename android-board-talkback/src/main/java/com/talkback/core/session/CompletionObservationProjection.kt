@@ -121,6 +121,8 @@ object CompletionObservationProjection {
                 "deliveryConfirmedOutcome=$outcomePart candidate=${result.candidate} " +
                 "reason=${result.waitingReason}$triggerPart"
         )
+        // PR5-3 M0: shadow EpisodeCompletionProjection only (no UVCP bind).
+        EpisodeCompletionProjectionFacade.onObservation(result = result, logSink = emit)
     }
 
     internal fun deliveryPredicateRequired(record: EdgeRecoveryRecord): Boolean =
