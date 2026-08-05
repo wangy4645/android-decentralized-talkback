@@ -913,13 +913,16 @@ class ConferenceEdgeRecoveryController internal constructor(
                 "wakeupBinding=${wakeupBinding.logLabel()} deferredReason=$reason"
         )
         observeNegotiationOwner(record, trigger)
-        negotiationObservationContext(record.key.sessionId, record.key.remoteModuleId)?.let { ctx ->
-            RecoveryNegotiationObservation.emitIntentFromContext(
-                ctx,
-                localModuleId,
-                RecoveryNegotiationObservation.IntentState.DEFERRED,
-                reason.name
-            )
+        // RNA-5.1 / Gate 3C-C: negotiation intent only for committed NEGOTIATION_SETTLING slots.
+        if (reason == DeferredReason.NEGOTIATION_SETTLING && record.iceRestartIntentId != null) {
+            negotiationObservationContext(record.key.sessionId, record.key.remoteModuleId)?.let { ctx ->
+                RecoveryNegotiationObservation.emitIntentFromContext(
+                    ctx,
+                    localModuleId,
+                    RecoveryNegotiationObservation.IntentState.DEFERRED,
+                    reason.name
+                )
+            }
         }
     }
 

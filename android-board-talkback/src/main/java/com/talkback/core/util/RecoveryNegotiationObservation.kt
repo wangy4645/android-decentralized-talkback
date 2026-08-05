@@ -164,10 +164,11 @@ object RecoveryNegotiationObservation {
         state: IntentState,
         reason: String
     ) {
+        val intentId = ctx.intentId ?: return
         emitIntent(
             sessionId = ctx.sessionId,
             edgeModuleId = ctx.edgeModuleId,
-            intentId = ctx.intentId ?: "NONE",
+            intentId = intentId,
             episodeId = ctx.episodeId,
             ownerModuleId = localModuleId,
             reason = reason,
