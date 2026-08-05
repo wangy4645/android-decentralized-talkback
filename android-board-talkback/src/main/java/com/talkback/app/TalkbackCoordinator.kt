@@ -70,6 +70,10 @@ import com.talkback.core.session.ConferenceEdgeRecoveryController
 import com.talkback.core.session.ConferenceBootstrapDeferral
 import com.talkback.core.session.DefaultMembershipAuthorityResolver
 import com.talkback.core.session.MembershipAuthorityResolveTrace
+import com.talkback.core.session.MembershipResyncKey
+import com.talkback.core.session.MembershipResyncLifecycle
+import com.talkback.core.session.MembershipResyncRecord
+import com.talkback.core.session.MembershipResyncState
 import com.talkback.core.session.RecoveryMembershipContext
 import com.talkback.core.session.WiredMembershipEpochProbe
 import com.talkback.core.session.ConferenceEdgeKey
@@ -118,6 +122,9 @@ import com.talkback.core.session.GroupIdentityStability
 import com.talkback.core.session.IdentityResolver
 import com.talkback.core.session.GroupMemberReachability
 import com.talkback.core.session.GroupMembershipSupport
+import com.talkback.core.model.AuthorityDigestFreshness
+import com.talkback.core.model.AuthorityDigestObservation
+import com.talkback.core.model.AuthorityDigestSource
 import com.talkback.core.model.GroupResyncRequestPayload
 import com.talkback.core.model.TopologyDigest
 import com.talkback.core.session.GroupMeshReconciler
@@ -157,6 +164,8 @@ import com.talkback.core.util.ConferenceAuditTimelineLog
 import com.talkback.core.util.ConferenceRecoveryOwnershipLog
 import com.talkback.core.util.MediaRecoveryCausalTrace
 import com.talkback.core.util.OfferDeliveryObservation
+import com.talkback.core.util.RecoveryNegotiationAuthority
+import com.talkback.core.util.RecoveryNegotiationObservation
 import com.talkback.core.util.RecoveryDeliveryFact
 import com.talkback.core.util.FloorTrace
 import com.talkback.core.util.GroupTransitionReadinessLog
@@ -523,7 +532,7 @@ class TalkbackCoordinator(
             },
             membershipEpochProbe = WiredMembershipEpochProbe(
                 resolver = DefaultMembershipAuthorityResolver { channelId ->
-                    lastSeenAuthorityDigestByChannel[channelId]
+                    authorityDigestForChannel(channelId)
                 },
                 resolveContext = { channelId, conferenceSessionId ->
                     val session = sessions[conferenceSessionId] ?: return@WiredMembershipEpochProbe null
@@ -542,7 +551,10 @@ class TalkbackCoordinator(
                 onResolveTrace = { outcome ->
                     MembershipAuthorityResolveTrace.emit(::log, outcome)
                 }
-            )
+            ),
+            isMembershipConvergenceInFlight = { channelId, obligationGeneration ->
+                isMembershipResyncInFlight(channelId, obligationGeneration)
+            }
         )
     }
     private val groupMeshReconciler = GroupMeshReconciler()
@@ -823,7 +835,23 @@ class TalkbackCoordinator(
     private val conferenceReconnectStartedAtBySession = ConcurrentHashMap<String, Long>()
     private val lastConferenceBarrierCanPublishBySession = ConcurrentHashMap<String, Boolean>()
     private val lastGroupMeshReconnectMsByPeer = ConcurrentHashMap<String, Long>()
-    private val lastSeenAuthorityDigestByChannel = ConcurrentHashMap<String, TopologyDigest>()
+    /**
+     * ADR-0036 Phase 2.4: provenance-bound authority digest observations.
+     * Resolver still compares [TopologyDigest] only; provenance drives stale invalidation.
+     */
+    private val lastSeenAuthorityDigestByChannel = ConcurrentHashMap<String, AuthorityDigestObservation>()
+    /** ADR-0036 RCA-6 + RESYNC-LIFECYCLE-001: one ownership record per (channelId, recoveryEpisodeId). */
+    private val membershipResyncRecordByKey = ConcurrentHashMap<MembershipResyncKey, MembershipResyncRecord>()
+    private val transportRecoveryMembershipTriggers = setOf(
+        RecoveryReevaluateTrigger.LINK_READY,
+        RecoveryReevaluateTrigger.PEER_DISCOVERED,
+        RecoveryReevaluateTrigger.ROUTE_CONVERGED,
+        RecoveryReevaluateTrigger.AUTHORITY_REACHABLE,
+        RecoveryReevaluateTrigger.PEER_REACHABILITY_RESTORED
+    )
+    private val membershipAuthorityResolver = DefaultMembershipAuthorityResolver { channelId ->
+        authorityDigestForChannel(channelId)
+    }
     /** Last HELLO floor snapshot from the session floor authority (diagnostics only). */
     private val lastSeenAuthorityFloorSnapshotByChannel = ConcurrentHashMap<String, FloorSnapshotDigest>()
     private val lastGroupTopologyReadinessBySession = ConcurrentHashMap<String, GroupTopologyReadiness>()
@@ -2714,6 +2742,12 @@ class TalkbackCoordinator(
             return
         }
         lastRecoveryCapabilityByEdge[edgeKey] = signature
+        if (
+            conferenceEdgeRecoveryController.isAnyEdgeRecovering(session.id) &&
+            trigger in transportRecoveryMembershipTriggers
+        ) {
+            maybeRequestMembershipConvergenceForConferenceRecovery(session, trigger.name)
+        }
         conferenceEdgeRecoveryController.onRecoveryReachabilityChanged(
             sessionId = session.id,
             channelId = channelId,
@@ -2727,7 +2761,376 @@ class TalkbackCoordinator(
     }
 
     internal fun onLinkQualificationStateChanged() {
-        // R28-L wiring seam; recovery media-action gate lives in a follow-up line.
+        notifyConferenceRecoveryReachabilityOnLinkOrDiscovery(RecoveryReevaluateTrigger.LINK_READY)
+        sessions.values
+            .filter { isConferenceSession(it) && it.accepted }
+            .forEach { session ->
+                if (conferenceEdgeRecoveryController.isAnyEdgeRecovering(session.id)) {
+                    maybeRequestMembershipConvergenceForConferenceRecovery(session, "BIDIRECTIONAL_READY")
+                }
+            }
+    }
+
+    private fun isTransportRecovered(): Boolean =
+        linkQualificationSnapshot().linkQualification == LinkQualificationState.BIDIRECTIONAL_READY
+
+    /**
+     * ADR-0036 RCA-3: membership authority is bootstrap primary / GROUP anchor — never conference host.
+     */
+    private fun resolveMembershipAuthorityIdForChannel(channelId: String): String? {
+        val groupSession = sessions.values.firstOrNull {
+            it.type == SessionType.GROUP && it.accepted && it.channelId == channelId
+        }
+        if (groupSession != null) {
+            return resolveMembershipAuthorityId(groupSession)
+        }
+        return resolveBootstrapPrimary(dialableRemoteModuleIds().plus(localModuleId))?.value
+    }
+
+    private fun recoveryEpisodeIdForConference(session: TalkbackSession): Long? {
+        val sessionId = session.id
+        for (remoteModuleId in conferenceRecoveryRemoteModuleIds(session)) {
+            val lineage = conferenceEdgeRecoveryController.attemptLineageObservation(sessionId, remoteModuleId)
+            if (lineage != null && lineage.obligationOpen) {
+                return lineage.obligationGeneration
+            }
+        }
+        return null
+    }
+
+    /**
+     * ADR-0036 RCA-2 P0-A: narrow membership convergence trigger on conference transport recovery.
+     */
+    private fun maybeRequestMembershipConvergenceForConferenceRecovery(
+        conferenceSession: TalkbackSession,
+        transportTrigger: String
+    ) {
+        if (!isTransportRecovered()) return
+        val channelId = conferenceSession.channelId ?: return
+        val episodeId = recoveryEpisodeIdForConference(conferenceSession) ?: return
+        val context = RecoveryMembershipContext(
+            channelId = channelId,
+            conferenceSessionId = conferenceSession.id,
+            localMembershipView = TopologyDigest.fromSession(conferenceSession),
+            isLocalMembershipAuthority = isMembershipAuthorityForChannel(channelId)
+        )
+        val outcome = membershipAuthorityResolver.evaluateMembershipConvergence(
+            context,
+            conferenceSession.id
+        )
+        MembershipAuthorityResolveTrace.emit(::log, outcome)
+        if (outcome.converged) return
+        if (outcome.authorityDigest == null) return // UNWIRED — wait until CHECKED
+        val resyncKey = MembershipResyncKey(channelId, episodeId)
+        if (isMembershipResyncInFlight(channelId, episodeId)) return
+        if (membershipResyncRecordByKey[resyncKey]?.isOwnershipActive() == true) return
+        requestMembershipConvergenceFromAuthority(conferenceSession, channelId, episodeId, transportTrigger)
+    }
+
+    /**
+     * ADR-0036 Phase 2.1 + RESYNC-LIFECYCLE-001: retry when authority peer becomes PEER_EDGE_READY.
+     */
+    internal fun onPeerEdgeSignalingReady(remoteModuleId: String) {
+        runOnCoordinator {
+            membershipResyncRecordByKey
+                .filter { (_, record) ->
+                    record.authorityId == remoteModuleId &&
+                        record.canRedispatch(MembershipResyncLifecycle.MAX_DISPATCH_ATTEMPTS)
+                }
+                .forEach { (key, pending) ->
+                    val session = sessions[pending.conferenceSessionId]
+                    if (session == null || !session.accepted || !isConferenceSession(session)) {
+                        membershipResyncRecordByKey.remove(key)
+                        return@forEach
+                    }
+                    if (!conferenceEdgeRecoveryController.isAnyEdgeRecovering(session.id)) {
+                        membershipResyncRecordByKey.remove(key)
+                        return@forEach
+                    }
+                    log(
+                        "MEMBERSHIP_RESYNC_RETRY reason=PEER_EDGE_READY authority=$remoteModuleId " +
+                            "channel=${key.channelId} episodeId=${key.recoveryEpisodeId} " +
+                            "state=${pending.state.name} dispatchCount=${pending.dispatchCount}"
+                    )
+                    requestMembershipConvergenceFromAuthority(
+                        session,
+                        key.channelId,
+                        key.recoveryEpisodeId,
+                        "PEER_EDGE_READY",
+                        isRetry = true
+                    )
+                }
+        }
+    }
+
+    private fun isMembershipAuthorityForChannel(channelId: String): Boolean {
+        val authorityId = resolveMembershipAuthorityIdForChannel(channelId) ?: return false
+        return authorityId == localModuleId.value
+    }
+
+    private fun requestMembershipConvergenceFromAuthority(
+        conferenceSession: TalkbackSession,
+        channelId: String,
+        episodeId: Long,
+        transportTrigger: String,
+        isRetry: Boolean = false
+    ) {
+        val authorityId = resolveMembershipAuthorityIdForChannel(channelId) ?: return
+        if (authorityId == localModuleId.value) return
+        val peer = resolvePeerForModule(authorityId) ?: return
+        val requestSession = findGroupSessionForMembership(channelId, conferenceSession.id)
+            ?: conferenceSession
+        val remote = endpointForModule(requestSession, ModuleId(authorityId))
+        val body = GroupResyncRequestPayload(
+            channelId = channelId,
+            requesterRosterEpoch = requestSession.rosterEpoch
+        ).encode()
+        val envelope = buildSignedEnvelope(
+            SignalType.GROUP_RESYNC_REQUEST,
+            requestSession.local,
+            remote,
+            requestSession.id,
+            body
+        )
+        val resyncKey = MembershipResyncKey(channelId, episodeId)
+        val authorityEpoch = authorityDigestEpoch(channelId)
+        val existingRecord = membershipResyncRecordByKey[resyncKey]
+        if (!isRetry) {
+            log(
+                "MEMBERSHIP_CONVERGENCE_REQUESTED reason=conference_recovery trigger=$transportTrigger " +
+                    "channel=$channelId episodeId=$episodeId authority=$authorityId " +
+                    "requester=${localModuleId.value} localEpoch=${requestSession.rosterEpoch} " +
+                    "authorityEpoch=${authorityEpoch ?: "UNKNOWN"}"
+            )
+        }
+        val nowMs = System.currentTimeMillis()
+        val sent = sendMembershipResyncHandoff(peer, envelope, authorityId)
+        if (sent) {
+            val dispatched = MembershipResyncLifecycle.recordDispatched(
+                channelId = channelId,
+                episodeId = episodeId,
+                authorityId = authorityId,
+                conferenceSessionId = conferenceSession.id,
+                transportTrigger = transportTrigger,
+                existing = existingRecord,
+                nowMs = nowMs
+            )
+            membershipResyncRecordByKey[resyncKey] = dispatched
+            log(
+                "GROUP_RESYNC_REQUEST_SENT reason=conference_recovery channel=$channelId " +
+                    "episodeId=$episodeId sessionId=${requestSession.id} to=$authorityId " +
+                    "trigger=$transportTrigger requesterRosterEpoch=${requestSession.rosterEpoch} " +
+                    "state=${MembershipResyncState.DISPATCHED.name} awaitingAuthority=true " +
+                    "dispatchCount=${dispatched.dispatchCount}"
+            )
+        } else {
+            val blocked = MembershipResyncLifecycle.recordBlocked(
+                channelId = channelId,
+                episodeId = episodeId,
+                authorityId = authorityId,
+                conferenceSessionId = conferenceSession.id,
+                transportTrigger = transportTrigger,
+                existing = existingRecord,
+                nowMs = nowMs
+            )
+            membershipResyncRecordByKey[resyncKey] = blocked
+            val blockReason = peerEdgeSignalingReadiness?.snapshot(authorityId)?.reason
+            log(
+                "GROUP_RESYNC_REQUEST_BLOCKED reason=conference_recovery channel=$channelId " +
+                    "episodeId=$episodeId sessionId=${requestSession.id} to=$authorityId " +
+                    "trigger=$transportTrigger peerEdgeReason=${blockReason ?: "UNKNOWN"}"
+            )
+            log(
+                "MEMBERSHIP_RESYNC_PENDING channel=$channelId episodeId=$episodeId " +
+                    "authority=$authorityId trigger=$transportTrigger " +
+                    "state=${MembershipResyncState.PENDING_BLOCKED.name}"
+            )
+        }
+    }
+
+    /**
+     * ADR-0036 Phase 2.1: membership resync uses recovery bootstrap admission when peer edge not fully ready.
+     */
+    private fun sendMembershipResyncHandoff(
+        target: PeerTarget,
+        envelope: SignalEnvelope,
+        authorityModuleId: String
+    ): Boolean {
+        val readiness = peerEdgeSignalingReadiness
+        if (readiness != null) {
+            if (readiness.isReady(authorityModuleId)) {
+                // Standard hard gate — peer edge ready.
+            } else {
+                val snap = readiness.snapshot(authorityModuleId)
+                if (PeerControlSignalingAdmission.maySendMembershipRecoveryResync(
+                        snap,
+                        isTransportRecovered()
+                    )
+                ) {
+                    log(
+                        "PEER_RECOVERY_BOOTSTRAP_ALLOWED type=GROUP_RESYNC_REQUEST " +
+                            "peer=$authorityModuleId reason=${snap.reason}"
+                    )
+                } else {
+                    log(
+                        "PEER_EDGE_CONTROL_BLOCKED type=GROUP_RESYNC_REQUEST peer=$authorityModuleId " +
+                            "reason=${snap.reason}"
+                    )
+                    return false
+                }
+            }
+        }
+        return runCatching {
+            signalingChannel.send(target, envelope)
+        }.onFailure {
+            log("Signal send failed type=${envelope.type} err=${it.message}")
+        }.isSuccess
+    }
+
+    private fun logMembershipEpochTransition(
+        session: TalkbackSession,
+        channelId: String,
+        fromEpoch: Long,
+        toEpoch: Long,
+        authorityEpoch: Long,
+        authorityId: String,
+        applyResult: String,
+        path: String
+    ) {
+        log(
+            "MEMBERSHIP_EPOCH_TRANSITION channel=$channelId session=${session.id} path=$path " +
+                "from=$fromEpoch to=$toEpoch authority=$authorityEpoch authorityId=$authorityId " +
+                "applyResult=$applyResult"
+        )
+    }
+
+    private fun authorityDigestForChannel(channelId: String): TopologyDigest? =
+        lastSeenAuthorityDigestByChannel[channelId]?.digest
+
+    private fun authorityDigestEpoch(channelId: String): Long? =
+        authorityDigestForChannel(channelId)?.rosterEpoch
+
+    /**
+     * ADR-0036 Phase 2.4: write provenance-bound authority digest observation.
+     * Replaces sticky cache entries when live HELLO/snapshot proves a different generation.
+     * Fix-D: when digest content changes, force control reconciliation recompute (predicate unchanged).
+     */
+    private fun observeAuthorityDigest(
+        channelId: String,
+        authorityId: String,
+        digest: TopologyDigest,
+        source: AuthorityDigestSource,
+        membershipContext: String
+    ) {
+        val previous = lastSeenAuthorityDigestByChannel[channelId]
+        val next = AuthorityDigestObservation(
+            channelId = channelId,
+            authorityId = authorityId,
+            digest = digest,
+            observedAtMs = System.currentTimeMillis(),
+            source = source,
+            membershipContext = membershipContext
+        )
+        val digestChanged = previous == null ||
+            previous.digest.rosterEpoch != digest.rosterEpoch ||
+            previous.digest.memberHash != digest.memberHash
+        lastSeenAuthorityDigestByChannel[channelId] = next
+        if (previous != null &&
+            AuthorityDigestFreshness.isStaleReplacement(previous.digest, digest)
+        ) {
+            log(AuthorityDigestFreshness.formatInvalidated(channelId, previous, next))
+        } else {
+            log(
+                "AUTHORITY_DIGEST_OBSERVED channel=$channelId authority=$authorityId " +
+                    "epoch=${digest.rosterEpoch} hash=${digest.memberHash} " +
+                    "source=${source.name} context=$membershipContext"
+            )
+        }
+        if (digestChanged && source != AuthorityDigestSource.TEST_SEED) {
+            forceControlReconciliationAfterDigestRefresh(
+                channelId = channelId,
+                previous = previous,
+                next = next
+            )
+        }
+    }
+
+    /**
+     * ADR-0036 Phase 2.4 Fix-D: digest changed → re-evaluate open recovery edges.
+     * Bypasses capability materiality gate; does not widen membershipEpochConverged predicate.
+     */
+    private fun forceControlReconciliationAfterDigestRefresh(
+        channelId: String,
+        previous: AuthorityDigestObservation?,
+        next: AuthorityDigestObservation
+    ) {
+        sessions.values
+            .filter { isConferenceSession(it) && it.accepted && it.channelId == channelId }
+            .forEach { session ->
+                conferenceEdgeRecoveryController.forceRefreshControlReconciliationAfterDigestRefresh(
+                    sessionId = session.id,
+                    channelId = channelId,
+                    reason = "DIGEST_REFRESH",
+                    oldDigestEpoch = previous?.digest?.rosterEpoch,
+                    oldDigestHash = previous?.digest?.memberHash,
+                    newDigestEpoch = next.digest.rosterEpoch,
+                    newDigestHash = next.digest.memberHash
+                )
+            }
+    }
+
+    private fun membershipResyncBudgetMs(): Long =
+        config.edgeRecoveryAttemptBudgetMs.coerceAtLeast(MEMBERSHIP_RESYNC_MIN_BUDGET_MS)
+
+    /**
+     * ADR-0036 RCA-6: resync in-flight defers watchdog; budget expiry yields terminal timeout path.
+     */
+    private fun isMembershipResyncInFlight(channelId: String, episodeId: Long): Boolean {
+        val key = MembershipResyncKey(channelId, episodeId)
+        val record = membershipResyncRecordByKey[key] ?: return false
+        val nowMs = System.currentTimeMillis()
+        val budgetMs = membershipResyncBudgetMs()
+        if (record.isInFlight(budgetMs, nowMs)) {
+            return true
+        }
+        if (record.isOwnershipActive()) {
+            membershipResyncRecordByKey.remove(key)
+            log(
+                "MEMBERSHIP_RESYNC_BUDGET_EXCEEDED channel=$channelId episodeId=$episodeId " +
+                    "elapsedMs=${nowMs - record.startedAtMs} budgetMs=$budgetMs " +
+                    "dispatchCount=${record.dispatchCount} " +
+                    "reason=authority_unreachable_or_snapshot_missing"
+            )
+        }
+        return false
+    }
+
+    private fun clearMembershipResyncInFlight(channelId: String, episodeId: Long? = null) {
+        if (episodeId != null) {
+            membershipResyncRecordByKey.remove(MembershipResyncKey(channelId, episodeId))
+            return
+        }
+        membershipResyncRecordByKey.keys.filter { it.channelId == channelId }.forEach {
+            membershipResyncRecordByKey.remove(it)
+        }
+    }
+
+    private fun refreshConferenceControlReconciliationForChannel(channelId: String) {
+        val observation = lastSeenAuthorityDigestByChannel[channelId]
+        sessions.values
+            .filter { isConferenceSession(it) && it.accepted && it.channelId == channelId }
+            .forEach { session ->
+                // ADR-0036 Phase 2.4 Fix-D: do not route through capability materiality gate.
+                conferenceEdgeRecoveryController.forceRefreshControlReconciliationAfterDigestRefresh(
+                    sessionId = session.id,
+                    channelId = channelId,
+                    reason = "DIGEST_REFRESH",
+                    oldDigestEpoch = null,
+                    oldDigestHash = null,
+                    newDigestEpoch = observation?.digest?.rosterEpoch,
+                    newDigestHash = observation?.digest?.memberHash
+                )
+            }
     }
 
     private fun isConferenceAuthorityMediaRecovering(session: TalkbackSession): Boolean {
@@ -2886,6 +3289,16 @@ class TalkbackCoordinator(
                     conferenceEdgeRecoveryController.isMediaUnavailable(sessionId, remoteModuleId)
             )
         }
+
+    /**
+     * PR5-3 M1 — read-only EpisodeCompletionProjection for UVCP completion axis.
+     * Cached by [EpisodeCompletionProjectionFacade] from observation; does not alter connectivity mapping.
+     */
+    fun conferenceEpisodeCompletion(
+        sessionId: String,
+        remoteModuleId: String
+    ): com.talkback.core.session.EpisodeCompletionProjection? =
+        com.talkback.core.session.EpisodeCompletionProjectionFacade.latest(sessionId, remoteModuleId)
 
     fun networkQualityLabel(): String = conferenceNetworkIndicator().toQualityLabel()
 
@@ -3059,7 +3472,16 @@ class TalkbackCoordinator(
         sessions.values
             .firstOrNull { it.type == SessionType.GROUP && it.channelId == channelId && it.accepted }
             ?.let { session ->
-                lastSeenAuthorityDigestByChannel[channelId] = TopologyDigest.fromSession(session)
+                val authorityId = resolveMembershipAuthorityIdForChannel(channelId)
+                    ?: session.anchorModuleId?.value
+                    ?: localModuleId.value
+                observeAuthorityDigest(
+                    channelId = channelId,
+                    authorityId = authorityId,
+                    digest = TopologyDigest.fromSession(session),
+                    source = AuthorityDigestSource.TEST_SEED,
+                    membershipContext = session.type.name
+                )
             }
     }
 
@@ -4641,10 +5063,30 @@ class TalkbackCoordinator(
             return
         }
 
-        if (sessionType == SessionType.GROUP &&
-            tryApplyMembershipSnapshotInvite(signal, fromPeer, payload)
-        ) {
-            return
+        // ADR-0036 Phase 2.2 Fix-B: membership snapshot carrier is payload-semantic,
+        // not SessionType.GROUP-only (conference recovery sends CONFERENCE-mode invites).
+        val membershipSnapshot = payload.membershipSnapshot
+        if (membershipSnapshot != null) {
+            val membershipContext = findGroupSessionForMembership(channelId, signal.sessionId)
+                ?: findConferenceSessionForMembership(channelId, signal.sessionId)
+            if (membershipContext != null) {
+                log(
+                    "MEMBERSHIP_SNAPSHOT_APPLY_DISPATCH channel=$channelId " +
+                        "membershipContext=${membershipContext.type.name} " +
+                        "payloadSessionType=${sessionType.name} " +
+                        "from=${caller.moduleId.value} sessionId=${signal.sessionId} " +
+                        "rosterEpoch=${membershipSnapshot.rosterEpoch}"
+                )
+                if (tryApplyMembershipSnapshotInvite(signal, fromPeer, payload)) {
+                    return
+                }
+            } else {
+                log(
+                    "MEMBERSHIP_SNAPSHOT_APPLY_DISPATCH_REJECTED reason=NO_MEMBERSHIP_CONTEXT " +
+                        "channel=$channelId payloadSessionType=${sessionType.name} " +
+                        "from=${caller.moduleId.value} sessionId=${signal.sessionId}"
+                )
+            }
         }
 
         sessions[signal.sessionId]?.let { existing ->
@@ -5273,6 +5715,222 @@ class TalkbackCoordinator(
         )
     }
 
+    /**
+     * ADR-0037 Phase 3.2: recovery negotiation ingress with owner validation + GlareResolver.
+     * Returns true when the offer must not proceed (drop/reject); false to continue accept path.
+     */
+    private fun handleRecoveryNegotiationIngress(
+        session: TalkbackSession,
+        peerId: String,
+        payload: GroupSessionPayload,
+        snap: com.talkback.core.webrtc.NegotiationPcSnapshot?,
+        ice: String?,
+        callerEndpointId: String
+    ): Boolean {
+        val episodeId = payload.restartAttemptId ?: 0L
+        val wireOwner = payload.negotiationOwnerModuleId
+        val wireResult = conferenceEdgeRecoveryController.validateInboundNegotiationOwner(
+            sessionId = session.id,
+            remoteModuleId = peerId,
+            wireOwnerModuleId = wireOwner,
+            recoveryEpisodeId = episodeId
+        )
+        if (wireResult == null) {
+            observeRecoveryOfferIngress(
+                sessionId = session.id,
+                remoteModuleId = peerId,
+                remoteEndpointId = callerEndpointId,
+                joinIntent = payload.joinIntent.name,
+                decision = MediaRecoveryCausalTrace.OfferIngressDecision.DROP_DECODE_FAILED,
+                localIceState = ice,
+                detail = "no_edge_record episodeId=$episodeId",
+                session = session,
+                payload = payload
+            )
+            return true
+        }
+        when (wireResult.validation) {
+            RecoveryNegotiationAuthority.WireOwnerValidation.CONFLICT -> {
+                RecoveryNegotiationObservation.emitOwnerConflict(
+                    sessionId = session.id,
+                    edgeModuleId = peerId,
+                    episodeId = episodeId,
+                    canonicalOwner = wireResult.canonicalOwner,
+                    wireOwner = wireResult.wireOwner ?: "NONE",
+                    trigger = "INBOUND_RECOVERY_OFFER"
+                )
+                observeGlareDecision(
+                    session = session,
+                    peerId = peerId,
+                    snap = snap,
+                    decision = RecoveryNegotiationObservation.GlareDecision.REJECT_STALE,
+                    reason = "ownership_conflict canonical=${wireResult.canonicalOwner} wire=${wireResult.wireOwner}",
+                    localOwner = wireResult.canonicalOwner,
+                    remoteOwner = wireResult.wireOwner ?: peerId
+                )
+                observeRecoveryOfferIngress(
+                    sessionId = session.id,
+                    remoteModuleId = peerId,
+                    remoteEndpointId = callerEndpointId,
+                    joinIntent = payload.joinIntent.name,
+                    decision = MediaRecoveryCausalTrace.OfferIngressDecision.DROP_OWNERSHIP_CONFLICT,
+                    localIceState = ice,
+                    detail = "ownership_conflict",
+                    session = session,
+                    payload = payload
+                )
+                return true
+            }
+            RecoveryNegotiationAuthority.WireOwnerValidation.BOOTSTRAP_ADOPT,
+            RecoveryNegotiationAuthority.WireOwnerValidation.OK -> {
+                val adoptOwner = wireOwner ?: wireResult.canonicalOwner
+                conferenceEdgeRecoveryController.adoptInboundNegotiationOwner(
+                    sessionId = session.id,
+                    remoteModuleId = peerId,
+                    ownerModuleId = adoptOwner,
+                    trigger = "INBOUND_RECOVERY_OFFER"
+                )
+            }
+        }
+        val localOwner = conferenceEdgeRecoveryController.negotiationOwnerModuleId(session.id, peerId)
+            ?: wireResult.canonicalOwner
+        val remoteOwner = wireOwner ?: peerId
+        val glareResolution = RecoveryNegotiationAuthority.resolveGlare(
+            localModuleId = localModuleId.value,
+            localOwner = localOwner,
+            remoteOwner = remoteOwner,
+            localSignalingState = snap?.signalingState,
+            localDescType = snap?.localDescriptionType,
+            remoteDescType = snap?.remoteDescriptionType ?: "OFFER",
+            isPoliteNegotiator = politeForMeshPair(peerId)
+        )
+        val glareDecision = when (glareResolution) {
+            RecoveryNegotiationAuthority.GlareResolution.KEEP_LOCAL ->
+                RecoveryNegotiationObservation.GlareDecision.KEEP_LOCAL
+            RecoveryNegotiationAuthority.GlareResolution.ACCEPT_REMOTE ->
+                RecoveryNegotiationObservation.GlareDecision.ACCEPT_REMOTE
+            RecoveryNegotiationAuthority.GlareResolution.REJECT_STALE ->
+                RecoveryNegotiationObservation.GlareDecision.REJECT_STALE
+            RecoveryNegotiationAuthority.GlareResolution.NO_GLARE ->
+                RecoveryNegotiationObservation.GlareDecision.OTHER_LEGACY
+        }
+        if (glareResolution != RecoveryNegotiationAuthority.GlareResolution.NO_GLARE) {
+            observeGlareDecision(
+                session = session,
+                peerId = peerId,
+                snap = snap,
+                decision = glareDecision,
+                reason = "recovery_glare_resolution=$glareResolution",
+                localOwner = localOwner,
+                remoteOwner = remoteOwner
+            )
+        }
+        return when (glareResolution) {
+            RecoveryNegotiationAuthority.GlareResolution.KEEP_LOCAL -> {
+                observeRecoveryOfferIngress(
+                    sessionId = session.id,
+                    remoteModuleId = peerId,
+                    remoteEndpointId = callerEndpointId,
+                    joinIntent = payload.joinIntent.name,
+                    decision = MediaRecoveryCausalTrace.OfferIngressDecision.DROP_GLARE_KEEP_LOCAL,
+                    localIceState = ice,
+                    detail = "glare_keep_local",
+                    session = session,
+                    payload = payload
+                )
+                true
+            }
+            RecoveryNegotiationAuthority.GlareResolution.REJECT_STALE -> {
+                observeRecoveryOfferIngress(
+                    sessionId = session.id,
+                    remoteModuleId = peerId,
+                    remoteEndpointId = callerEndpointId,
+                    joinIntent = payload.joinIntent.name,
+                    decision = MediaRecoveryCausalTrace.OfferIngressDecision.DROP_GLARE_REJECT_STALE,
+                    localIceState = ice,
+                    detail = "glare_reject_stale",
+                    session = session,
+                    payload = payload
+                )
+                true
+            }
+            RecoveryNegotiationAuthority.GlareResolution.ACCEPT_REMOTE -> {
+                conferenceEdgeRecoveryController.onNegotiationGlareAcceptRemote(
+                    sessionId = session.id,
+                    remoteModuleId = peerId,
+                    reason = "GLARE_ACCEPT_REMOTE"
+                )
+                false
+            }
+            RecoveryNegotiationAuthority.GlareResolution.NO_GLARE -> false
+        }
+    }
+
+  private fun observeGlareDecision(
+        session: TalkbackSession,
+        peerId: String,
+        snap: com.talkback.core.webrtc.NegotiationPcSnapshot?,
+        decision: RecoveryNegotiationObservation.GlareDecision,
+        reason: String,
+        localOwner: String,
+        remoteOwner: String
+    ) {
+        if (session.type != SessionType.CONFERENCE) return
+        val obsCtx = conferenceEdgeRecoveryController.negotiationObservationContext(session.id, peerId)
+        val glareDetected = snap?.signalingState.equals("HAVE_LOCAL_OFFER", ignoreCase = true) &&
+            snap?.localDescriptionType.equals("OFFER", ignoreCase = true)
+        RecoveryNegotiationObservation.emitGlareDecision(
+            sessionId = session.id,
+            edgeModuleId = peerId,
+            episodeId = obsCtx?.episodeId,
+            localModuleId = localModuleId.value,
+            localSignalingState = snap?.signalingState,
+            localDescType = snap?.localDescriptionType,
+            remoteDescType = snap?.remoteDescriptionType ?: "OFFER",
+            localOwner = localOwner,
+            remoteOwner = remoteOwner,
+            decision = decision,
+            reason = reason,
+            glareDetected = glareDetected
+        )
+    }
+
+  private fun observeLegacyGlareDecision(
+        session: TalkbackSession,
+        peerId: String,
+        snap: com.talkback.core.webrtc.NegotiationPcSnapshot?,
+        ice: String?,
+        decision: RecoveryNegotiationObservation.GlareDecision,
+        reason: String
+    ) {
+        if (session.type != SessionType.CONFERENCE) return
+        val obsCtx = conferenceEdgeRecoveryController.negotiationObservationContext(session.id, peerId)
+        val localOwner = obsCtx?.let {
+            RecoveryNegotiationObservation.shadowResolveOwner(
+                localModuleId.value,
+                peerId,
+                it.existingTransactionOwnerModuleId,
+                it.recoveryCoordinatorOwnerModuleId
+            ).selectedOwner
+        } ?: localModuleId.value
+        val glareDetected = snap?.signalingState.equals("HAVE_LOCAL_OFFER", ignoreCase = true) &&
+            snap?.localDescriptionType.equals("OFFER", ignoreCase = true)
+        RecoveryNegotiationObservation.emitGlareDecision(
+            sessionId = session.id,
+            edgeModuleId = peerId,
+            episodeId = obsCtx?.episodeId,
+            localModuleId = localModuleId.value,
+            localSignalingState = snap?.signalingState,
+            localDescType = snap?.localDescriptionType,
+            remoteDescType = snap?.remoteDescriptionType ?: "OFFER",
+            localOwner = localOwner,
+            remoteOwner = peerId,
+            decision = decision,
+            reason = reason,
+            glareDetected = glareDetected
+        )
+    }
+
     private fun acceptGroupJoin(
         session: TalkbackSession,
         signal: SignalEnvelope,
@@ -5312,36 +5970,59 @@ class TalkbackCoordinator(
             val peerId = caller.moduleId.value
             val ice = qosMonitor.snapshot(peerId)?.iceState
             if (IceConnectivity.isConnected(ice)) {
-                log("${sessionTag(session)} GROUP_JOIN duplicate from $peerId ice=$ice")
-                val dupCtx = mediaRecoveryTraceContext(
-                    session,
-                    peerId,
-                    caller.endpointId.value,
-                    iceRestart = payload.joinIntent == ConferenceJoinIntent.RECOVERY_REATTACH
-                )
                 val snap = meshEngineForSession(session, peerId)?.negotiationSnapshot()
-                observeRecoveryOfferIngress(
-                    sessionId = session.id,
-                    remoteModuleId = peerId,
-                    remoteEndpointId = caller.endpointId.value,
-                    joinIntent = payload.joinIntent.name,
-                    decision = MediaRecoveryCausalTrace.OfferIngressDecision.DROP_DUPLICATE_ICE_CONNECTED,
-                    localIceState = ice,
-                    detail = "reason=mesh_already_connected meshCompleted=true iceState=$ice " +
-                        "pcGeneration=${dupCtx.pcGeneration ?: "NONE"} " +
-                        "signalingState=${snap?.signalingState ?: "UNKNOWN"} " +
-                        "localDesc=${snap?.localDescriptionType ?: "NONE"} " +
-                        "remoteDesc=${snap?.remoteDescriptionType ?: "NONE"}",
-                    session = session,
-                    payload = payload
-                )
-                return
+                if (payload.joinIntent == ConferenceJoinIntent.RECOVERY_REATTACH) {
+                    if (handleRecoveryNegotiationIngress(
+                        session = session,
+                        peerId = peerId,
+                        payload = payload,
+                        snap = snap,
+                        ice = ice,
+                        callerEndpointId = caller.endpointId.value
+                    )) {
+                        return
+                    }
+                } else {
+                    log("${sessionTag(session)} GROUP_JOIN duplicate from $peerId ice=$ice")
+                    observeLegacyGlareDecision(
+                        session = session,
+                        peerId = peerId,
+                        snap = snap,
+                        ice = ice,
+                        decision = RecoveryNegotiationObservation.GlareDecision.DROP_DUPLICATE_LEGACY,
+                        reason = "mesh_already_connected ice=$ice meshCompleted=true"
+                    )
+                    observeRecoveryOfferIngress(
+                        sessionId = session.id,
+                        remoteModuleId = peerId,
+                        remoteEndpointId = caller.endpointId.value,
+                        joinIntent = payload.joinIntent.name,
+                        decision = MediaRecoveryCausalTrace.OfferIngressDecision.DROP_DUPLICATE_ICE_CONNECTED,
+                        localIceState = ice,
+                        detail = "reason=mesh_already_connected meshCompleted=true iceState=$ice " +
+                            "signalingState=${snap?.signalingState ?: "UNKNOWN"} " +
+                            "localDesc=${snap?.localDescriptionType ?: "NONE"} " +
+                            "remoteDesc=${snap?.remoteDescriptionType ?: "NONE"}",
+                        session = session,
+                        payload = payload
+                    )
+                    return
+                }
             }
             val channelId = session.channelId
             if (channelId != null &&
                 !groupMeshReconciler.canAcceptIceRestart(channelId, peerId, ice)
             ) {
                 log("${sessionTag(session)} GROUP_JOIN ICE restart throttled from $peerId ice=$ice")
+                val throttleSnap = meshEngineForSession(session, peerId)?.negotiationSnapshot()
+                observeLegacyGlareDecision(
+                    session = session,
+                    peerId = peerId,
+                    snap = throttleSnap,
+                    ice = ice,
+                    decision = RecoveryNegotiationObservation.GlareDecision.DROP_ICE_RESTART_THROTTLED_LEGACY,
+                    reason = "ice_restart_throttled channel=$channelId"
+                )
                 observeRecoveryOfferIngress(
                     sessionId = session.id,
                     remoteModuleId = peerId,
@@ -7733,20 +8414,76 @@ class TalkbackCoordinator(
         log("${sessionTag(session)} GROUP_RESYNC_REQUEST (invite mismatch) -> $authorityId")
     }
 
+    /**
+     * ADR-0036 Phase 2.2: resolve membership context for GROUP_RESYNC_REQUEST.
+     * Prefer GROUP; fall back to accepted CONFERENCE on the same channel (conference recovery path).
+     */
+    private fun resolveMembershipContextForResync(channelId: String): TalkbackSession? =
+        sessions.values.firstOrNull {
+            it.type == SessionType.GROUP && it.accepted && it.channelId == channelId
+        } ?: sessions.values.firstOrNull {
+            it.type == SessionType.CONFERENCE && it.accepted && it.channelId == channelId
+        }
+
     private fun handleGroupResyncRequest(signal: SignalEnvelope, fromPeer: PeerTarget) {
-        val payload = GroupResyncRequestPayload.decode(signal.payload) ?: return
-        val session = sessions.values.firstOrNull {
-            it.type == SessionType.GROUP &&
-                it.accepted &&
-                it.channelId == payload.channelId
-        } ?: return
-        if (!isMembershipAuthority(session)) return
+        val payload = GroupResyncRequestPayload.decode(signal.payload)
+        if (payload == null) {
+            log(
+                "GROUP_RESYNC_HANDLER_REJECTED reason=PAYLOAD_DECODE_FAILED " +
+                    "requestSessionId=${signal.sessionId}"
+            )
+            return
+        }
+        val requestSessionType = sessions[signal.sessionId]?.type?.name ?: "UNKNOWN"
+        val session = resolveMembershipContextForResync(payload.channelId)
+        if (session == null) {
+            log(
+                "GROUP_RESYNC_HANDLER_REJECTED reason=NO_MEMBERSHIP_CONTEXT " +
+                    "channel=${payload.channelId} requestSession=$requestSessionType " +
+                    "requestSessionId=${signal.sessionId}"
+            )
+            return
+        }
+        if (!isMembershipAuthority(session)) {
+            log(
+                "GROUP_RESYNC_HANDLER_REJECTED reason=NOT_MEMBERSHIP_AUTHORITY " +
+                    "channel=${payload.channelId} membershipContext=${session.type.name} " +
+                    "local=${localModuleId.value}"
+            )
+            return
+        }
         val requesterId = signal.from.moduleId.value
         val endpoint = session.groupMembers.find { it.moduleId.value == requesterId }
             ?: endpointForDialableModule(ModuleId(requesterId))
-            ?: return
-        sendMembershipSnapshotInvite(session, endpoint)
-        log("${sessionTag(session)} GROUP_RESYNC -> SNAPSHOT $requesterId")
+        if (endpoint == null) {
+            log(
+                "GROUP_RESYNC_HANDLER_REJECTED reason=NO_REQUESTER_ENDPOINT " +
+                    "channel=${payload.channelId} membershipContext=${session.type.name} " +
+                    "requester=$requesterId"
+            )
+            return
+        }
+        log(
+            "GROUP_RESYNC_HANDLER_ACCEPTED membershipContext=${session.type.name} " +
+                "channel=${payload.channelId} authority=${localModuleId.value} " +
+                "requester=$requesterId sessionId=${session.id} " +
+                "rosterEpoch=${session.rosterEpoch}"
+        )
+        val sent = sendMembershipSnapshotInvite(session, endpoint)
+        if (sent) {
+            log(
+                "MEMBERSHIP_SNAPSHOT_SENT channel=${payload.channelId} " +
+                    "membershipContext=${session.type.name} to=$requesterId " +
+                    "sessionId=${session.id} rosterEpoch=${session.rosterEpoch}"
+            )
+            log("${sessionTag(session)} GROUP_RESYNC -> SNAPSHOT $requesterId")
+        } else {
+            log(
+                "GROUP_RESYNC_HANDLER_REJECTED reason=SNAPSHOT_SEND_FAILED " +
+                    "channel=${payload.channelId} membershipContext=${session.type.name} " +
+                    "requester=$requesterId"
+            )
+        }
     }
 
     private fun membershipSnapshotForSession(session: TalkbackSession): MembershipSnapshot {
@@ -7786,6 +8523,13 @@ class TalkbackCoordinator(
             it.type == SessionType.GROUP && it.accepted && it.channelId == channelId
         }
 
+    private fun findConferenceSessionForMembership(channelId: String, sessionId: String): TalkbackSession? =
+        sessions[sessionId]?.takeIf {
+            it.type == SessionType.CONFERENCE && it.accepted && it.channelId == channelId
+        } ?: sessions.values.firstOrNull {
+            it.type == SessionType.CONFERENCE && it.accepted && it.channelId == channelId
+        }
+
     private fun tryApplyMembershipSnapshotInvite(
         signal: SignalEnvelope,
         fromPeer: PeerTarget,
@@ -7796,14 +8540,15 @@ class TalkbackCoordinator(
         val channelId = payload.channelId
         val members = GroupSessionPayload.parseMembers(payload.members)
         if (members.isEmpty()) return false
-        val session = findGroupSessionForMembership(channelId, signal.sessionId) ?: return false
+        val groupSession = findGroupSessionForMembership(channelId, signal.sessionId)
+        val conferenceSession = findConferenceSessionForMembership(channelId, signal.sessionId)
+        val session = groupSession ?: conferenceSession ?: return false
         val caller = signal.from
-        val authorityId = session.anchorModuleId?.value
-            ?: resolveBootstrapPrimary(dialableRemoteModuleIds().plus(localModuleId))?.value
-            ?: caller.moduleId.value
+        val authorityId = resolveMembershipAuthorityIdForChannel(channelId) ?: caller.moduleId.value
         rememberSignalPeer(caller.moduleId.value, fromPeer)
         session.remotePeersByModule[caller.moduleId.value] = fromPeer
         val localEpochBefore = session.rosterEpoch
+        val monotonicEpoch = session.type == SessionType.CONFERENCE
         when (
             GroupMembershipSupport.applyMembershipSnapshot(
                 session,
@@ -7811,7 +8556,8 @@ class TalkbackCoordinator(
                 snapshot.anchorEpoch,
                 members,
                 caller.moduleId.value,
-                authorityId
+                authorityId,
+                monotonicEpoch = monotonicEpoch
             )
         ) {
             GroupMembershipSupport.MembershipSnapshotApplyResult.APPLIED -> {
@@ -7822,18 +8568,64 @@ class TalkbackCoordinator(
                         "from=${caller.moduleId.value}" +
                         if (forceAlign) " forceAlign localWas=$localEpochBefore" else ""
                 )
-                touchConvergenceAnchor(session)
-                completeGroupMesh(session)
-                updateSessionReceivePlayback(session)
-                tryFlushPendingTransmit(session)
-                emitGroupTopologySnapshot(TopologySnapshotReason.MEMBERSHIP_CHANGED, session)
-                onGroupConvergenceBoundary(session)
+                if (session.type == SessionType.CONFERENCE) {
+                    logMembershipEpochTransition(
+                        session = session,
+                        channelId = channelId,
+                        fromEpoch = localEpochBefore,
+                        toEpoch = session.rosterEpoch,
+                        authorityEpoch = snapshot.rosterEpoch,
+                        authorityId = authorityId,
+                        applyResult = "APPLIED",
+                        path = "conference_snapshot_invite"
+                    )
+                }
+                // ADR-0036 Phase 2.4 Fix-C: refresh observation from live authority snapshot
+                // before control reconciliation so stale HELLO cache cannot false-mismatch.
+                observeAuthorityDigest(
+                    channelId = channelId,
+                    authorityId = authorityId,
+                    digest = TopologyDigest(
+                        rosterEpoch = snapshot.rosterEpoch,
+                        anchorEpoch = snapshot.anchorEpoch,
+                        memberHash = GroupMembershipSupport.memberHash(
+                            channelId,
+                            snapshot.rosterEpoch,
+                            members.map { it.moduleId.value }
+                        )
+                    ),
+                    source = AuthorityDigestSource.MEMBERSHIP_SNAPSHOT_APPLY,
+                    membershipContext = session.type.name
+                )
+                if (groupSession != null) {
+                    touchConvergenceAnchor(groupSession)
+                    completeGroupMesh(groupSession)
+                    updateSessionReceivePlayback(groupSession)
+                    tryFlushPendingTransmit(groupSession)
+                    emitGroupTopologySnapshot(TopologySnapshotReason.MEMBERSHIP_CHANGED, groupSession)
+                    onGroupConvergenceBoundary(groupSession)
+                }
+                alignConferenceSessionsFromMembershipSnapshot(channelId, snapshot, members, authorityId)
+                clearMembershipResyncInFlight(channelId)
+                refreshConferenceControlReconciliationForChannel(channelId)
             }
-            GroupMembershipSupport.MembershipSnapshotApplyResult.IGNORED_STALE -> {
+                    GroupMembershipSupport.MembershipSnapshotApplyResult.IGNORED_STALE -> {
                 log(
                     "${sessionTag(session)} snapshotIgnored remoteEpoch=${snapshot.rosterEpoch} " +
                         "localEpoch=${session.rosterEpoch} from=${caller.moduleId.value}"
                 )
+                if (session.type == SessionType.CONFERENCE) {
+                    logMembershipEpochTransition(
+                        session = session,
+                        channelId = channelId,
+                        fromEpoch = session.rosterEpoch,
+                        toEpoch = session.rosterEpoch,
+                        authorityEpoch = snapshot.rosterEpoch,
+                        authorityId = authorityId,
+                        applyResult = "IGNORED_STALE",
+                        path = "conference_snapshot_invite"
+                    )
+                }
             }
             GroupMembershipSupport.MembershipSnapshotApplyResult.IGNORED_NOT_AUTHORITY -> {
                 log(
@@ -7845,6 +8637,78 @@ class TalkbackCoordinator(
         }
         session.touch()
         return true
+    }
+
+    /**
+     * ADR-0036 RCA-3: align conference roster epoch from membership authority snapshot only.
+     */
+    private fun alignConferenceSessionsFromMembershipSnapshot(
+        channelId: String,
+        snapshot: MembershipSnapshot,
+        members: List<EndpointAddress>,
+        authorityId: String
+    ) {
+        sessions.values
+            .filter { it.type == SessionType.CONFERENCE && it.accepted && it.channelId == channelId }
+            .forEach { conference ->
+                if (conference.rosterEpoch == snapshot.rosterEpoch &&
+                    GroupMembershipSupport.memberHashForSession(conference) ==
+                    GroupMembershipSupport.memberHash(
+                        channelId,
+                        snapshot.rosterEpoch,
+                        members.map { it.moduleId.value }
+                    )
+                ) {
+                    return@forEach
+                }
+                val localEpochBefore = conference.rosterEpoch
+                when (
+                    GroupMembershipSupport.applyMembershipSnapshot(
+                        conference,
+                        snapshot.rosterEpoch,
+                        snapshot.anchorEpoch,
+                        members,
+                        authorityId,
+                        authorityId,
+                        monotonicEpoch = true
+                    )
+                ) {
+                    GroupMembershipSupport.MembershipSnapshotApplyResult.APPLIED -> {
+                        log(
+                            "${sessionTag(conference)} conferenceMembershipAligned rosterEpoch=" +
+                                "${snapshot.rosterEpoch} authority=$authorityId"
+                        )
+                        logMembershipEpochTransition(
+                            session = conference,
+                            channelId = channelId,
+                            fromEpoch = localEpochBefore,
+                            toEpoch = conference.rosterEpoch,
+                            authorityEpoch = snapshot.rosterEpoch,
+                            authorityId = authorityId,
+                            applyResult = "APPLIED",
+                            path = "conference_align_from_group_snapshot"
+                        )
+                    }
+                    GroupMembershipSupport.MembershipSnapshotApplyResult.IGNORED_NOT_AUTHORITY -> {
+                        log(
+                            "WARN ${sessionTag(conference)} conferenceMembershipAlignRejected " +
+                                "authority=$authorityId rosterEpoch=${snapshot.rosterEpoch}"
+                        )
+                    }
+                    GroupMembershipSupport.MembershipSnapshotApplyResult.IGNORED_STALE -> {
+                        logMembershipEpochTransition(
+                            session = conference,
+                            channelId = channelId,
+                            fromEpoch = localEpochBefore,
+                            toEpoch = conference.rosterEpoch,
+                            authorityEpoch = snapshot.rosterEpoch,
+                            authorityId = authorityId,
+                            applyResult = "IGNORED_STALE",
+                            path = "conference_align_from_group_snapshot"
+                        )
+                    }
+                }
+            }
     }
 
     private fun isMembershipAuthority(session: TalkbackSession): Boolean {
@@ -9166,7 +10030,12 @@ class TalkbackCoordinator(
             restartAttemptId = traceCtx.recoveryAttemptId,
             transportGeneration = traceCtx.transportGeneration,
             obligationGeneration = traceCtx.obligationGeneration,
-            deliveryAttemptId = deliveryAttemptId
+            deliveryAttemptId = deliveryAttemptId,
+            negotiationOwnerModuleId = if (joinIntent == ConferenceJoinIntent.RECOVERY_REATTACH) {
+                conferenceEdgeRecoveryController.negotiationOwnerModuleId(session.id, remoteModuleId)
+            } else {
+                null
+            }
         )
         OfferDeliveryObservation.emit(
             stage = OfferDeliveryObservation.Stage.SEND_REQUEST,
@@ -10679,6 +11548,7 @@ class TalkbackCoordinator(
         private val HOST_REJOIN_BACKOFF_MS = longArrayOf(2_000L, 5_000L, 10_000L)
         private val CONFERENCE_HOST_LINK_KICK_DELAYS_MS = longArrayOf(500L, 2_000L, 5_000L, 10_000L)
         private const val GROUP_PTT_RECOVERY_DELAY_MS = 300L
+        private const val MEMBERSHIP_RESYNC_MIN_BUDGET_MS = 15_000L
         private const val CONFERENCE_INVITE_MIN_INTERVAL_MS = 5_000L
         private const val ENSURE_CANONICAL_INVITE_COOLDOWN_MS = 5_000L
     }
@@ -11000,18 +11870,23 @@ class TalkbackCoordinator(
     private fun recordAuthorityDigestFromHello(payload: HelloPayload) {
         val channelId = payload.channelId ?: return
         if (payload.rosterEpoch <= 0L) return
-        val session = sessions.values.firstOrNull {
-            it.type == SessionType.GROUP && it.accepted && it.channelId == channelId
-        } ?: return
-        val authorityId = session.anchorModuleId?.value
-            ?: resolveBootstrapPrimary(dialableRemoteModuleIds().plus(localModuleId))?.value
+        // ADR-0036 Phase 2.4 Fix-B: conference recovery needs digest refresh without GROUP session.
+        val session = resolveMembershipContextForResync(channelId) ?: return
+        val authorityId = resolveMembershipAuthorityIdForChannel(channelId)
+            ?: session.anchorModuleId?.value
             ?: return
         if (payload.moduleId != authorityId) return
-        lastSeenAuthorityDigestByChannel[channelId] = TopologyDigest(
-            rosterEpoch = payload.rosterEpoch,
-            anchorEpoch = payload.anchorEpoch,
-            meshGeneration = payload.meshGeneration,
-            memberHash = payload.memberHash
+        observeAuthorityDigest(
+            channelId = channelId,
+            authorityId = authorityId,
+            digest = TopologyDigest(
+                rosterEpoch = payload.rosterEpoch,
+                anchorEpoch = payload.anchorEpoch,
+                meshGeneration = payload.meshGeneration,
+                memberHash = payload.memberHash
+            ),
+            source = AuthorityDigestSource.HELLO,
+            membershipContext = session.type.name
         )
     }
 
@@ -11086,7 +11961,7 @@ class TalkbackCoordinator(
     private fun membershipDigestAlignedWithAuthority(session: TalkbackSession): Boolean {
         if (isMembershipAuthority(session)) return true
         val channelId = session.channelId ?: return false
-        val authorityDigest = lastSeenAuthorityDigestByChannel[channelId] ?: return false
+        val authorityDigest = authorityDigestForChannel(channelId) ?: return false
         val localDigest = TopologyDigest.fromSession(session)
         return localDigest.rosterEpoch == authorityDigest.rosterEpoch &&
             localDigest.memberHash == authorityDigest.memberHash
