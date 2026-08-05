@@ -8,6 +8,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import com.talkback.core.util.RecoveryNegotiationObservation
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicLong
 
@@ -22,6 +23,7 @@ class Pr52cDeferredIntentHoldTest {
     private var dispatchReady = true
     private var iceConnected = false
     private val decisionLogs = mutableListOf<String>()
+    private val observationLines = mutableListOf<String>()
     private val admissionSeqCounter = AtomicLong(0L)
     private val capabilityObservation = NegotiationCapabilityObservation()
     private lateinit var controller: ConferenceEdgeRecoveryController
@@ -37,14 +39,17 @@ class Pr52cDeferredIntentHoldTest {
         dispatchReady = true
         iceConnected = false
         decisionLogs.clear()
+        observationLines.clear()
         admissionSeqCounter.set(0L)
         capabilityObservation.clearAll()
+        RecoveryNegotiationObservation.resetForTest { observationLines.add(it) }
         controller = buildController()
     }
 
     @After
     fun tearDown() {
         controller.clearAll()
+        RecoveryNegotiationObservation.resetForTest(null)
         scheduler.shutdownNow()
     }
 
@@ -232,6 +237,21 @@ class Pr52cDeferredIntentHoldTest {
             source = RecoverySource.ICE_MONITOR
         )
         assertTrue(decisionLogs.any { it.contains("DEFERRED_INTENT_SUPERSEDED") && it.contains("oldIntent=$r1") })
+        assertTrue(
+            decisionLogs.any {
+                it.contains("NEGOTIATION_INTENT_CLOSE_REQUEST") &&
+                    it.contains("intentId=$r1") &&
+                    it.contains("source=MEDIA_ACTION_SUPERSEDE")
+            }
+        )
+        assertTrue(
+            observationLines.any {
+                it.contains("RECOVERY_NEGOTIATION_INTENT_TERMINAL") &&
+                    it.contains("intentId=$r1") &&
+                    it.contains("terminalState=SUPERSEDED") &&
+                    it.contains("reason=SUPERSEDED")
+            }
+        )
 
         val r2 = controller.pendingIceRestartIntentId(sessionId, remoteModuleId)
         assertNotNull(r2)

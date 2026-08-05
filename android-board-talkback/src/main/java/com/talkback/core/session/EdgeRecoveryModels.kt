@@ -417,6 +417,12 @@ internal data class EdgeRecoveryRecord(
     /** ADR-0037 Phase 3.2: canonical negotiation owner for this episode+edge. */
     var canonicalNegotiationOwnerModuleId: String? = null,
     /**
+     * RNA-5 v2 / Gate 3C: single terminal writer guard — set when
+     * [RECOVERY_NEGOTIATION_INTENT_TERMINAL] is emitted for the current intent episode.
+     */
+    var negotiationIntentTerminalEmitted: Boolean = false,
+    var negotiationIntentTerminalState: String? = null,
+    /**
      * E16 ActivationEvidence: successor pathway emit guard (once per episode).
      * Set when [RECOVERY_SUCCESSOR_STARTED] is logged; not transport-ready.
      */

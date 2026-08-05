@@ -159,6 +159,16 @@ class ConferenceEdgeRecoveryController internal constructor(
                         "remote=$remoteModuleId intentId=$intentId reason=$reason"
                 )
             }
+        },
+        onNegotiationCloseRequest = { sessionId, remoteModuleId, intentId, terminalHint, source, cause ->
+            onDeferredIntentNegotiationCloseRequest(
+                sessionId = sessionId,
+                remoteModuleId = remoteModuleId,
+                intentId = intentId,
+                terminalHint = terminalHint,
+                source = source,
+                cause = cause
+            )
         }
     )
 
@@ -445,19 +455,6 @@ class ConferenceEdgeRecoveryController internal constructor(
     fun onNegotiationGlareAcceptRemote(sessionId: String, remoteModuleId: String, reason: String) {
         val record = edges[ConferenceEdgeKey(sessionId, remoteModuleId)] ?: return
         if (!hasDeferredMediaAction(record) && record.iceRestartIntentId == null) return
-        negotiationObservationContext(sessionId, remoteModuleId)?.let { ctx ->
-            RecoveryNegotiationObservation.emitIntentFromContext(
-                ctx,
-                localModuleId,
-                RecoveryNegotiationObservation.IntentState.BLOCKED_BY_GLARE,
-                reason
-            )
-            RecoveryNegotiationObservation.emitIntentTerminalFromContext(
-                ctx,
-                "BLOCKED_BY_GLARE",
-                reason
-            )
-        }
         expireDeferredIceRestartIntent(record, "GLARE:$reason")
     }
 
@@ -1004,11 +1001,156 @@ class ConferenceEdgeRecoveryController internal constructor(
         if (existing != null) return existing
         val id = "R${iceRestartIntentSeq.incrementAndGet()}"
         record.iceRestartIntentId = id
+        record.negotiationIntentTerminalEmitted = false
+        record.negotiationIntentTerminalState = null
         return id
     }
 
+    private fun clearNegotiationIntentTerminalGuard(record: EdgeRecoveryRecord) {
+        record.negotiationIntentTerminalEmitted = false
+        record.negotiationIntentTerminalState = null
+    }
+
+    private fun resolveNegotiationIntentTerminal(cause: String): String = when {
+        cause.startsWith("GLARE:") -> "BLOCKED_BY_GLARE"
+        cause.startsWith("SUPERSEDE") || cause.startsWith("ADMIT_SUCCESSOR") -> "SUPERSEDED"
+        else -> "EXPIRED"
+    }
+
+    private fun resolveNegotiationIntentCloseSource(cause: String): String = when {
+        cause.startsWith("GLARE:") -> "GLARE_RESOLVER"
+        cause.startsWith("SUPERSEDE") || cause.startsWith("ADMIT_SUCCESSOR") -> "MEDIA_ACTION_SUPERSEDE"
+        cause.startsWith("OBLIGATION_CLOSE") -> "OBLIGATION_CLOSE"
+        cause.startsWith("DRAIN_") -> "NEGOTIATION_DRAIN"
+        else -> "DEFERRED_EXPIRE"
+    }
+
     /**
-     * INV-DI-001: terminal transition via [releaseDeferredIntentSlot] 鈥?not log-only.
+     * Gate 3C-B / RNA-5.4: bridge DeferredIntentAuthority supersede to negotiation terminal closure.
+     * DeferredIntentAuthority emits CLOSE_REQUEST via callback; this is the sole RNA terminal writer.
+     */
+    private fun onDeferredIntentNegotiationCloseRequest(
+        sessionId: String,
+        remoteModuleId: String,
+        intentId: String,
+        terminalHint: String,
+        source: String,
+        cause: String
+    ) {
+        val record = edges[ConferenceEdgeKey(sessionId, remoteModuleId)] ?: return
+        val terminalReason = when (terminalHint) {
+            "SUPERSEDED" -> "SUPERSEDED"
+            "BLOCKED_BY_GLARE" -> cause
+            else -> cause
+        }
+        closeNegotiationIntent(
+            record = record,
+            intentId = intentId,
+            terminal = terminalHint,
+            reason = terminalReason,
+            source = source,
+            clearDeferralAfterClose = false
+        )
+    }
+
+    /**
+     * RNA-5 v2 / Gate 3C-A: sole writer for [RECOVERY_NEGOTIATION_INTENT_TERMINAL].
+     * Returns true when a new terminal fact was emitted; false when already closed (no-op).
+     */
+    private fun closeNegotiationIntent(
+        record: EdgeRecoveryRecord,
+        intentId: String?,
+        terminal: String,
+        reason: String,
+        source: String,
+        preTerminalIntentState: RecoveryNegotiationObservation.IntentState? = null,
+        markAuthorityExecuted: Boolean = false,
+        clearDeferralAfterClose: Boolean = true
+    ): Boolean {
+        val sessionId = record.key.sessionId
+        val remoteModuleId = record.key.remoteModuleId
+        val resolvedIntentId = intentId ?: record.iceRestartIntentId
+
+        if (record.negotiationIntentTerminalEmitted) {
+            onLog(
+                "NEGOTIATION_INTENT_CLOSE_SKIPPED session=$sessionId edge=$remoteModuleId " +
+                    "intentId=${resolvedIntentId ?: "NONE"} terminalHint=$terminal source=$source " +
+                    "reason=already_closed priorTerminal=${record.negotiationIntentTerminalState ?: "NONE"}"
+            )
+            return false
+        }
+
+        val hasNegotiationLifecycle =
+            resolvedIntentId != null ||
+                isDeferredIceRestartIntent(record) ||
+                record.iceRestartIntentId != null
+        if (!hasNegotiationLifecycle) {
+            return false
+        }
+
+        onLog(
+            "NEGOTIATION_INTENT_CLOSE_REQUEST session=$sessionId edge=$remoteModuleId " +
+                "intentId=${resolvedIntentId ?: "NONE"} terminal=$terminal source=$source reason=$reason"
+        )
+
+        val intentState = preTerminalIntentState ?: when (terminal) {
+            "BLOCKED_BY_GLARE" -> RecoveryNegotiationObservation.IntentState.BLOCKED_BY_GLARE
+            "EXECUTED" -> RecoveryNegotiationObservation.IntentState.EXECUTED
+            else -> RecoveryNegotiationObservation.IntentState.EXPIRED
+        }
+        negotiationObservationContext(sessionId, remoteModuleId)?.let { ctx ->
+            RecoveryNegotiationObservation.emitIntentFromContext(
+                ctx,
+                localModuleId,
+                intentState,
+                reason
+            )
+            RecoveryNegotiationObservation.emitIntentTerminalFromContext(ctx, terminal, reason)
+        } ?: run {
+            RecoveryNegotiationObservation.emitIntentTerminal(
+                sessionId = sessionId,
+                edgeModuleId = remoteModuleId,
+                intentId = resolvedIntentId ?: "NONE",
+                terminalState = terminal,
+                reason = reason
+            )
+        }
+
+        record.negotiationIntentTerminalEmitted = true
+        record.negotiationIntentTerminalState = terminal
+
+        val releaseKind = when (terminal) {
+            "SUPERSEDED" -> DeferredIntentAuthority.ReleaseKind.SUPERSEDE
+            "EXECUTED" -> DeferredIntentAuthority.ReleaseKind.SLOT_AFTER_EXECUTED
+            else -> DeferredIntentAuthority.ReleaseKind.TERMINAL_DISCARD
+        }
+        val releaseDomain = when {
+            reason.startsWith("OBLIGATION_CLOSE") || source == "OBLIGATION_CLOSE" ->
+                DeferredIntentAuthority.RequestingDomain.CONTROL
+            terminal == "EXECUTED" || source == "NEGOTIATION_DRAIN" ->
+                DeferredIntentAuthority.RequestingDomain.NEGOTIATION
+            else -> DeferredIntentAuthority.RequestingDomain.MEDIA
+        }
+        if (markAuthorityExecuted && resolvedIntentId != null) {
+            deferredIntentAuthority.markExecuted(resolvedIntentId)
+        }
+        if (resolvedIntentId != null && record.iceRestartIntentId == resolvedIntentId) {
+            releaseDeferredIntentSlot(
+                record = record,
+                reason = reason,
+                domain = releaseDomain,
+                kind = releaseKind,
+                expireCause = reason
+            )
+        }
+        if (clearDeferralAfterClose && terminal != "EXECUTED") {
+            clearDeferralFields(record)
+        }
+        return true
+    }
+
+    /**
+     * INV-DI-001: terminal transition via [closeNegotiationIntent] + [releaseDeferredIntentSlot].
      */
     private fun expireDeferredIceRestartIntent(record: EdgeRecoveryRecord, cause: String) {
         if (!hasDeferredMediaAction(record) && record.iceRestartIntentId == null) return
@@ -1022,45 +1164,14 @@ class ConferenceEdgeRecoveryController internal constructor(
             )
         }
         if (!isDeferredIceRestartIntent(record) && record.iceRestartIntentId == null) return
-        val glareBlocked = cause.startsWith("GLARE:")
-        negotiationObservationContext(record.key.sessionId, record.key.remoteModuleId)?.let { ctx ->
-            RecoveryNegotiationObservation.emitIntentFromContext(
-                ctx,
-                localModuleId,
-                if (glareBlocked) {
-                    RecoveryNegotiationObservation.IntentState.BLOCKED_BY_GLARE
-                } else {
-                    RecoveryNegotiationObservation.IntentState.EXPIRED
-                },
-                cause
-            )
-            val terminalState = when {
-                glareBlocked -> "BLOCKED_BY_GLARE"
-                cause.startsWith("SUPERSEDE") || cause.startsWith("ADMIT_SUCCESSOR") -> "SUPERSEDED"
-                else -> "EXPIRED"
-            }
-            RecoveryNegotiationObservation.emitIntentTerminalFromContext(ctx, terminalState, cause)
-        }
-        val kind = when {
-            cause.startsWith("SUPERSEDE") || cause.startsWith("ADMIT_SUCCESSOR") ->
-                DeferredIntentAuthority.ReleaseKind.SUPERSEDE
-            else -> DeferredIntentAuthority.ReleaseKind.TERMINAL_DISCARD
-        }
-        val domain = when {
-            cause.startsWith("OBLIGATION_CLOSE") ->
-                DeferredIntentAuthority.RequestingDomain.CONTROL
-            cause.startsWith("DRAIN_") ->
-                DeferredIntentAuthority.RequestingDomain.NEGOTIATION
-            else -> DeferredIntentAuthority.RequestingDomain.MEDIA
-        }
-        releaseDeferredIntentSlot(
+        val terminal = resolveNegotiationIntentTerminal(cause)
+        closeNegotiationIntent(
             record = record,
-            reason = cause,
-            domain = domain,
-            kind = kind,
-            expireCause = cause
+            intentId = record.iceRestartIntentId,
+            terminal = terminal,
+            reason = if (terminal == "SUPERSEDED") "SUPERSEDED" else cause,
+            source = resolveNegotiationIntentCloseSource(cause)
         )
-        clearDeferralFields(record)
     }
 
     private fun isRecoveryDispatchReady(sessionId: String, remoteModuleId: String): Boolean {
@@ -1350,28 +1461,16 @@ class ConferenceEdgeRecoveryController internal constructor(
                 "intentId=$intentId attemptId=$attemptId obligationGen=$obligationGen " +
                 "restartAttemptId=$attemptId dispatchAt=${dispatchAt ?: "NONE"}"
         )
-        negotiationObservationContext(sessionId, remoteModuleId)?.let { ctx ->
-            RecoveryNegotiationObservation.emitIntentFromContext(
-                ctx,
-                localModuleId,
-                RecoveryNegotiationObservation.IntentState.EXECUTED,
-                drainTerminalReason
-            )
-            RecoveryNegotiationObservation.emitIntentTerminalFromContext(
-                ctx,
-                "EXECUTED",
-                drainTerminalReason
-            )
-        }
-        if (capturedIntentId != null) {
-            deferredIntentAuthority.markExecuted(capturedIntentId)
-            releaseDeferredIntentSlot(
-                record = still,
-                reason = drainTerminalReason,
-                domain = DeferredIntentAuthority.RequestingDomain.NEGOTIATION,
-                kind = DeferredIntentAuthority.ReleaseKind.SLOT_AFTER_EXECUTED
-            )
-        }
+        closeNegotiationIntent(
+            record = still,
+            intentId = capturedIntentId,
+            terminal = "EXECUTED",
+            reason = drainTerminalReason,
+            source = "NEGOTIATION_DRAIN",
+            preTerminalIntentState = RecoveryNegotiationObservation.IntentState.EXECUTED,
+            markAuthorityExecuted = true,
+            clearDeferralAfterClose = false
+        )
     }
 
     private fun clearValidationFenceIfArmed(
@@ -1553,13 +1652,13 @@ class ConferenceEdgeRecoveryController internal constructor(
         failureClass: RecoveryFailureClass? = null
     ) {
         if (record.iceRestartIntentId != null || hasDeferredMediaAction(record)) {
-            negotiationObservationContext(record.key.sessionId, record.key.remoteModuleId)?.let { ctx ->
-                RecoveryNegotiationObservation.emitIntentTerminalFromContext(
-                    ctx,
-                    "MISSING",
-                    reason
-                )
-            }
+            closeNegotiationIntent(
+                record = record,
+                intentId = record.iceRestartIntentId,
+                terminal = "EXPIRED",
+                reason = reason,
+                source = "ATTEMPT_FAILURE"
+            )
         }
         val resolvedClass = failureClass ?: when {
             explicitAbort -> RecoveryFailureClass.EXPLICIT_ABORT

@@ -20,7 +20,19 @@ class DeferredIntentAuthority(
         remoteModuleId: String,
         intentId: String,
         reason: String
-    ) -> Unit = { _, _, _, _ -> }
+    ) -> Unit = { _, _, _, _ -> },
+    /**
+     * Gate 3C-B / RNA-5.4: bridge supersede facts to negotiation terminal closure.
+     * Authority MUST NOT emit [RECOVERY_NEGOTIATION_INTENT_TERMINAL] directly.
+     */
+    private val onNegotiationCloseRequest: (
+        sessionId: String,
+        remoteModuleId: String,
+        intentId: String,
+        terminalHint: String,
+        source: String,
+        cause: String
+    ) -> Unit = { _, _, _, _, _, _ -> }
 ) {
     enum class ExecutionState {
         CREATED,
@@ -278,6 +290,15 @@ class DeferredIntentAuthority(
                     )
                 }
 
+                onNegotiationCloseRequest(
+                    record.sessionId,
+                    record.remoteModuleId,
+                    intentId,
+                    "SUPERSEDED",
+                    resolveNegotiationCloseSource(requestingDomain, reason),
+                    reason
+                )
+
                 return SupersedeResult.Accepted(intentId, oldState, at)
             }
         }
@@ -398,6 +419,17 @@ class DeferredIntentAuthority(
                 }
             }
         }
+    }
+
+    private fun resolveNegotiationCloseSource(
+        requestingDomain: RequestingDomain,
+        reason: String
+    ): String = when {
+        reason.startsWith("GLARE:") -> "GLARE_RESOLVER"
+        requestingDomain == RequestingDomain.MEDIA -> "MEDIA_ACTION_SUPERSEDE"
+        requestingDomain == RequestingDomain.NEGOTIATION -> "NEGOTIATION_DRAIN"
+        requestingDomain == RequestingDomain.CONTROL -> "OBLIGATION_CLOSE"
+        else -> "MEDIA_ACTION_SUPERSEDE"
     }
 
     private fun emitExpireAudit(record: IntentRecord, cause: String) {

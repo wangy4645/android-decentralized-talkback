@@ -12,6 +12,7 @@ import org.junit.Test
 class DeferredIntentAuthoritySlice1Test {
     private val logs = mutableListOf<String>()
     private val fenceReleases = mutableListOf<String>()
+    private val closeRequests = mutableListOf<String>()
     private lateinit var authority: DeferredIntentAuthority
 
     private val sessionId = "sess-jx-s1"
@@ -21,11 +22,15 @@ class DeferredIntentAuthoritySlice1Test {
     fun setUp() {
         logs.clear()
         fenceReleases.clear()
+        closeRequests.clear()
         authority = DeferredIntentAuthority(
             onLog = { logs.add(it) },
             clock = { 1_000L },
             onReleaseFence = { sid, rid, intentId, reason ->
                 fenceReleases.add("$sid|$rid|$intentId|$reason")
+            },
+            onNegotiationCloseRequest = { sid, rid, intentId, terminal, source, cause ->
+                closeRequests.add("$sid|$rid|$intentId|$terminal|$source|$cause")
             }
         )
     }
@@ -49,6 +54,10 @@ class DeferredIntentAuthoritySlice1Test {
             authority.executionState("R16")
         )
         assertTrue(logs.any { it.contains("DEFERRED_INTENT_SUPERSEDED") && it.contains("oldState=CREATED") })
+        assertEquals(
+            listOf("$sessionId|$remote|R16|SUPERSEDED|MEDIA_ACTION_SUPERSEDE|EDGE_STARTED:ICE_DISCONNECTED"),
+            closeRequests
+        )
         assertTrue(logs.any { it.contains("FENCE_RELEASED") && it.contains("reason=SUPERSEDE") })
         assertTrue(logs.any { it.contains("ARMED_TO_RELEASED_BY_SUPERSEDE") })
         assertEquals(listOf("$sessionId|$remote|R16|RELEASED_BY_SUPERSEDE"), fenceReleases)
