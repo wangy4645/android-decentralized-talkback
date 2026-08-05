@@ -206,6 +206,12 @@ class RecoveryNegotiationControllerGateTest {
                     it.contains("terminalState=BLOCKED_BY_GLARE")
             }
         )
+        assertEquals(
+            1,
+            observationLines.count {
+                it.contains("RECOVERY_NEGOTIATION_INTENT_TERMINAL") && it.contains("intentId=$intentId")
+            }
+        )
         assertFalse(decisionLogs.any { it.contains("FAILED_MEDIA_RECOVERY") })
         assertFalse(decisionLogs.any { it.contains("OWNER_BLOCKED") })
 
@@ -226,6 +232,12 @@ class RecoveryNegotiationControllerGateTest {
                 it.contains("RECOVERY_NEGOTIATION_INTENT_TERMINAL") &&
                     it.contains("intentId=$firstIntent") &&
                     it.contains("EXPIRED")
+            }
+        )
+        assertEquals(
+            1,
+            observationLines.count {
+                it.contains("RECOVERY_NEGOTIATION_INTENT_TERMINAL") && it.contains("intentId=$firstIntent")
             }
         )
         assertNull(controller.pendingIceRestartIntentId(sessionId, remoteModuleId))
@@ -265,35 +277,57 @@ class RecoveryNegotiationControllerGateTest {
     }
 
     @Test
-    fun gate3c_negotiationSettlingDefer_classifiesTensionOutcome() {
-        deferNegotiationIntent()
+    fun gate3a_duplicateClose_afterGlare_emitsSingleTerminal() {
+        val intentId = deferNegotiationIntent()
+        controller.onNegotiationGlareAcceptRemote(sessionId, remoteModuleId, "GLARE_ACCEPT_REMOTE")
+        assertEquals(
+            1,
+            observationLines.count {
+                it.contains("RECOVERY_NEGOTIATION_INTENT_TERMINAL") && it.contains("intentId=$intentId")
+            }
+        )
+
+        closeObligationKeepingEdge()
+        decisionLogs.clear()
+        controller.drainPendingIceRestart(sessionId, remoteModuleId)
+
+        assertEquals(
+            1,
+            observationLines.count {
+                it.contains("RECOVERY_NEGOTIATION_INTENT_TERMINAL") && it.contains("intentId=$intentId")
+            }
+        )
+        assertTrue(decisionLogs.any { it.contains("NEGOTIATION_INTENT_CLOSE_SKIPPED") })
+    }
+
+    @Test
+    fun gate3c_negotiationSettlingDefer_expiresWhenAnswerMissing() {
+        val intentId = deferNegotiationIntent()
         decisionLogs.clear()
         observationLines.clear()
-        advanceScheduled(800L)
-
-        val expiredTerminal = observationLines.any {
-            it.contains("RECOVERY_NEGOTIATION_INTENT_TERMINAL") && it.contains("EXPIRED")
-        }
-        val failedMedia = decisionLogs.any { it.contains("FAILED_MEDIA_RECOVERY") }
-        val ownerBlocked = decisionLogs.any { it.contains("OWNER_BLOCKED") }
-        val stillDeferred = controller.pendingIceRestartIntentId(sessionId, remoteModuleId) != null
-
-        val outcome = when {
-            expiredTerminal -> "EXPIRED_TERMINAL"
-            failedMedia || ownerBlocked -> "FAILED_MEDIA_RECOVERY_OR_OWNER_BLOCKED"
-            stillDeferred -> "DEFERRED_DANGLING"
-            else -> "UNKNOWN"
-        }
+        // iceRestartTimeoutMs=200; negotiation intent budget reuses that value (not attempt budget).
+        advanceScheduled(350L)
 
         assertTrue(
-            outcome in setOf(
-                "EXPIRED_TERMINAL",
-                "FAILED_MEDIA_RECOVERY_OR_OWNER_BLOCKED",
-                "DEFERRED_DANGLING"
-            )
+            decisionLogs.any {
+                it.contains("NEGOTIATION_BUDGET_EXHAUSTED") && it.contains("intentId=$intentId")
+            }
         )
-        if (outcome == "FAILED_MEDIA_RECOVERY_OR_OWNER_BLOCKED") {
-            assertFalse(expiredTerminal)
-        }
+        assertTrue(
+            decisionLogs.any {
+                it.contains("NEGOTIATION_INTENT_CLOSE_REQUEST") &&
+                    it.contains("intentId=$intentId") &&
+                    it.contains("source=NEGOTIATION_BUDGET")
+            }
+        )
+        assertTrue(
+            observationLines.any {
+                it.contains("RECOVERY_NEGOTIATION_INTENT_TERMINAL") &&
+                    it.contains("intentId=$intentId") &&
+                    it.contains("terminalState=EXPIRED")
+            }
+        )
+        assertNull(controller.pendingIceRestartIntentId(sessionId, remoteModuleId))
+        assertFalse(decisionLogs.any { it.contains("FAILED_MEDIA_RECOVERY") })
     }
 }

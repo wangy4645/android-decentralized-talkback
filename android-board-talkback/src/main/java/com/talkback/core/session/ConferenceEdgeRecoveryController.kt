@@ -118,6 +118,8 @@ class ConferenceEdgeRecoveryController internal constructor(
     private val debounceTimers = ConcurrentHashMap<ConferenceEdgeKey, ScheduledFuture<*>>()
     private val watchdogTimers = ConcurrentHashMap<ConferenceEdgeKey, ScheduledFuture<*>>()
     private val deadlineTimers = ConcurrentHashMap<ConferenceEdgeKey, ScheduledFuture<*>>()
+    /** Gate 3C-D: episode-scoped negotiation intent budget (independent of attempt watchdog). */
+    private val negotiationIntentTimers = ConcurrentHashMap<ConferenceEdgeKey, ScheduledFuture<*>>()
     private val cancelledSessions = ConcurrentHashMap<String, Long>()
     private val cancelledChannels = ConcurrentHashMap<String, Long>()
     private val pendingTransportNonce = ConcurrentHashMap<ConferenceEdgeKey, String>()
@@ -1002,6 +1004,7 @@ class ConferenceEdgeRecoveryController internal constructor(
     private fun allocateIceRestartIntentId(record: EdgeRecoveryRecord): String {
         val existing = record.iceRestartIntentId
         if (existing != null) return existing
+        cancelNegotiationIntentBudget(record.key)
         val id = "R${iceRestartIntentSeq.incrementAndGet()}"
         record.iceRestartIntentId = id
         record.negotiationIntentTerminalEmitted = false
@@ -1025,7 +1028,53 @@ class ConferenceEdgeRecoveryController internal constructor(
         cause.startsWith("SUPERSEDE") || cause.startsWith("ADMIT_SUCCESSOR") -> "MEDIA_ACTION_SUPERSEDE"
         cause.startsWith("OBLIGATION_CLOSE") -> "OBLIGATION_CLOSE"
         cause.startsWith("DRAIN_") -> "NEGOTIATION_DRAIN"
+        cause.startsWith("NEGOTIATION_BUDGET") -> "NEGOTIATION_BUDGET"
         else -> "DEFERRED_EXPIRE"
+    }
+
+    /**
+     * Gate 3C-D / RNA-5 dual-clock: schedule independent negotiation-intent budget.
+     * Reuses [iceRestartTimeoutMs] value; does not enlarge attempt watchdog budget.
+     */
+    private fun scheduleNegotiationIntentBudget(record: EdgeRecoveryRecord, intentId: String) {
+        val key = record.key
+        cancelNegotiationIntentBudget(key)
+        val budgetMs = iceRestartTimeoutMs
+        val deadlineAt = clock() + budgetMs
+        record.negotiationIntentDeadlineAtMs = deadlineAt
+        val attemptId = record.recoveryAttemptId
+        val obligationGen = record.obligationGeneration
+        onLog(
+            "NEGOTIATION_INTENT_BUDGET_ARMED session=${key.sessionId} edge=${key.remoteModuleId} " +
+                "intentId=$intentId attempt=$attemptId obligationGen=$obligationGen " +
+                "budgetMs=$budgetMs deadlineAtMs=$deadlineAt"
+        )
+        val future = scheduler.schedule({
+            val current = edges[key] ?: return@schedule
+            if (current.recoveryAttemptId != attemptId) return@schedule
+            if (current.obligationGeneration != obligationGen) return@schedule
+            if (current.iceRestartIntentId != intentId) return@schedule
+            if (current.negotiationIntentTerminalEmitted) return@schedule
+            if (!isDeferredIceRestartIntent(current) && current.iceRestartIntentId == null) return@schedule
+            onLog(
+                "NEGOTIATION_BUDGET_EXHAUSTED session=${key.sessionId} edge=${key.remoteModuleId} " +
+                    "intentId=$intentId attempt=$attemptId obligationGen=$obligationGen " +
+                    "budgetMs=$budgetMs"
+            )
+            closeNegotiationIntent(
+                record = current,
+                intentId = intentId,
+                terminal = "EXPIRED",
+                reason = "NEGOTIATION_BUDGET_EXHAUSTED",
+                source = "NEGOTIATION_BUDGET"
+            )
+        }, budgetMs, TimeUnit.MILLISECONDS)
+        negotiationIntentTimers[key] = future
+    }
+
+    private fun cancelNegotiationIntentBudget(key: ConferenceEdgeKey) {
+        negotiationIntentTimers.remove(key)?.cancel(false)
+        edges[key]?.negotiationIntentDeadlineAtMs = null
     }
 
     /**
@@ -1091,6 +1140,8 @@ class ConferenceEdgeRecoveryController internal constructor(
             return false
         }
 
+        cancelNegotiationIntentBudget(record.key)
+
         onLog(
             "NEGOTIATION_INTENT_CLOSE_REQUEST session=$sessionId edge=$remoteModuleId " +
                 "intentId=${resolvedIntentId ?: "NONE"} terminal=$terminal source=$source reason=$reason"
@@ -1154,8 +1205,20 @@ class ConferenceEdgeRecoveryController internal constructor(
 
     /**
      * INV-DI-001: terminal transition via [closeNegotiationIntent] + [releaseDeferredIntentSlot].
+     * Already-closed intents still route to [closeNegotiationIntent] for CLOSE_SKIPPED audit.
      */
     private fun expireDeferredIceRestartIntent(record: EdgeRecoveryRecord, cause: String) {
+        if (record.negotiationIntentTerminalEmitted) {
+            val terminal = resolveNegotiationIntentTerminal(cause)
+            closeNegotiationIntent(
+                record = record,
+                intentId = record.iceRestartIntentId,
+                terminal = terminal,
+                reason = if (terminal == "SUPERSEDED") "SUPERSEDED" else cause,
+                source = resolveNegotiationIntentCloseSource(cause)
+            )
+            return
+        }
         if (!hasDeferredMediaAction(record) && record.iceRestartIntentId == null) return
         val binding = record.wakeupBinding
         val intentId = record.iceRestartIntentId ?: "NONE"
@@ -1303,7 +1366,10 @@ class ConferenceEdgeRecoveryController internal constructor(
         val key = ConferenceEdgeKey(sessionId, remoteModuleId)
         val record = edges[key] ?: return
         if (!isDeferredIceRestartIntent(record)) {
-            if (seamLabel == Pr52cDebugInjection.DEBUG_RELEASE_SEAM) {
+            if (record.negotiationIntentTerminalEmitted) {
+                // Gate 3C: late drain after terminal still audits CLOSE_SKIPPED (no second terminal).
+                expireDeferredIceRestartIntent(record, "DRAIN_ALREADY_TERMINAL")
+            } else if (seamLabel == Pr52cDebugInjection.DEBUG_RELEASE_SEAM) {
                 onLog(
                     "DEFERRED_INTENT_DRAIN_RETRY_SKIPPED session=$sessionId remote=$remoteModuleId " +
                         "intentId=${record.iceRestartIntentId ?: "NONE"} " +
@@ -2829,6 +2895,8 @@ class ConferenceEdgeRecoveryController internal constructor(
         watchdogTimers.clear()
         deadlineTimers.values.forEach { it.cancel(false) }
         deadlineTimers.clear()
+        negotiationIntentTimers.values.forEach { it.cancel(false) }
+        negotiationIntentTimers.clear()
         edges.clear()
         terminalReevaluateDedup.clear()
         cancelledSessions.clear()
@@ -3060,6 +3128,7 @@ class ConferenceEdgeRecoveryController internal constructor(
                     reason = block.name,
                     state = RecoveryNegotiationObservation.IntentState.CREATED
                 )
+                scheduleNegotiationIntentBudget(record, intentId)
             }
             return
         }
@@ -3246,6 +3315,7 @@ class ConferenceEdgeRecoveryController internal constructor(
         cancelDebounce(key)
         cancelWatchdog(key)
         cancelDeadline(key)
+        cancelNegotiationIntentBudget(key)
         val record = edges[key] ?: return
         recoveryOfferDeliveryPolicy.cancel(record)
         record.phase = EdgeRecoveryPhase.CANCELLED
@@ -3945,6 +4015,7 @@ class ConferenceEdgeRecoveryController internal constructor(
             remoteModuleId = remoteModuleId,
             fenceArmed = true
         )
+        scheduleNegotiationIntentBudget(record, intentId)
         return intentId
     }
 

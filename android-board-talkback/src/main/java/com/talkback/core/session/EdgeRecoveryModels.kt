@@ -423,6 +423,11 @@ internal data class EdgeRecoveryRecord(
     var negotiationIntentTerminalEmitted: Boolean = false,
     var negotiationIntentTerminalState: String? = null,
     /**
+     * Gate 3C-D: independent negotiation-intent budget deadline (dual-clock option C).
+     * Orthogonal to attempt watchdog; does not enlarge [attemptBudgetMs].
+     */
+    var negotiationIntentDeadlineAtMs: Long? = null,
+    /**
      * E16 ActivationEvidence: successor pathway emit guard (once per episode).
      * Set when [RECOVERY_SUCCESSOR_STARTED] is logged; not transport-ready.
      */
