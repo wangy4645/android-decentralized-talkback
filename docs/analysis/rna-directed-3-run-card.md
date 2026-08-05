@@ -1,6 +1,7 @@
 # RNA Directed #3 Run Card — RNA-5 v2 Intent Terminal Closure
 
-**Status:** READY (Gate 3C implementation complete / ready for field)
+**Status:** PASS (RNA-5 lifecycle closure) — FIELD VERIFIED
+**Evidence:** `talkback/logs/wifi-recovery-m03-rna0037-directed3-20260805-193602`
 **Authorized:** 2026-08-05 (architecture sign-off after PR-3C-A..D)
 **Parent:** [Gate 3C plan](./gate3c-negotiation-intent-terminal-closure-plan.md)
 **Contract:** [RNA-5 v2 amendment](../adr/0037-rna-5-intent-terminal-contract-amendment.md)
@@ -186,10 +187,22 @@ Focus question:
 
 ---
 
-## Status
+## Field result (2026-08-05)
 
 ```text
-Gate 3C                             VERIFIED / READY FOR FIELD
-RNA Directed #3                     READY (not started)
+RNA-0037 Directed #3                PASS (RNA-5 lifecycle closure)
+Gate 3C                             FIELD VERIFIED
+DEFERRED_DANGLING                   CLOSED BY RNA-5 v2 + Directed #3 PASS
+Owner bilateral convergence         OPEN
+M03↔M02 OWNER_CONFLICT              OUT_OF_SCOPE_FOR_RNA0037_DIRECTED3
 Recovery Completion                 OPEN
 ```
+
+Evidence dir: `talkback/logs/wifi-recovery-m03-rna0037-directed3-20260805-193602`
+
+Primary chain (M01 → edge=M03):
+- R1 / R2: CREATED → BUDGET_ARMED → BUDGET_EXHAUSTED → CLOSE_REQUEST → TERMINAL(EXPIRED)
+- ghost intent = 0; MEDIA_NOT_READY isolated to media defer only
+
+Next (offline, no code): RNA-0037 evidence completion audit —
+why intent closes without NEGOTIATION_RECOVERY_FACT / RECOVERY_EDGE_RECOVERED.

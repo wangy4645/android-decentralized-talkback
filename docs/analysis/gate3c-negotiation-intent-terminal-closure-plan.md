@@ -245,24 +245,31 @@ RECOVERY_EDGE_RECOVERED
 ADR-0036 Membership                 VERIFIED / RE-SIGNED
 
 ADR-0037 Design                     FINAL
-RNA-5 v2 Terminal Contract          FROZEN
+RNA-5 v2 Terminal Contract          FROZEN + FIELD VERIFIED
 
 Phase 3.2
   Authority gates                   VERIFIED
   Controller gates                  VERIFIED
 
-Gate 3C Implementation
-  PR-3C-A Single terminal writer    DONE  (closeNegotiationIntent sole writer)
-  PR-3C-B Supersede bridge          DONE  (dee9718)
-  PR-3C-C Ghost intent ban          DONE  (8cf7bfe)
-  PR-3C-D Intent budget timer       DONE  (1eb693d)
-Gate 3C                             VERIFIED / READY FOR FIELD
+Gate 3C Negotiation Intent Terminal Closure
+  PR-3C-A terminal single writer    VERIFIED
+  PR-3C-B supersede bridge          VERIFIED  (dee9718)
+  PR-3C-C ghost intent ban          VERIFIED  (8cf7bfe)
+  PR-3C-D dual clock budget         VERIFIED  (1eb693d)
+  Field:
+    Directed #2                     FAIL (historical dangling) — ARCHIVED
+    Directed #3                     PASS
+      evidence: ../../logs/wifi-recovery-m03-rna0037-directed3-20260805-193602
+  Result:
+    Gate 3C                         FIELD VERIFIED
+    DEFERRED_DANGLING               CLOSED BY RNA-5 v2 + Directed #3 PASS
 
-RNA Directed #2                     ARCHIVED (pre-RNA-5; dangling intent FAIL)
-RNA Directed #3                     READY
-  run card: ./rna-directed-3-run-card.md
-
+Owner bilateral convergence         OPEN
 Recovery Completion                 OPEN
+
+Next (offline audit, no code):
+  RNA-0037 evidence completion audit
+  — intent closed vs missing NEGOTIATION_RECOVERY_FACT / EDGE_RECOVERED
 ```
 
 ## References

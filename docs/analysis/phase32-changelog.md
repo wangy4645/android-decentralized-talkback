@@ -1,6 +1,6 @@
 # Phase 3.2 Behavior Change -- Changelog
 
-**Status:** Gate 3C VERIFIED / READY FOR FIELD; RNA Directed #3 READY
+**Status:** Gate 3C FIELD VERIFIED; RNA Directed #3 PASS; Recovery Completion OPEN
 
 ---
 
@@ -33,22 +33,24 @@ Previously `upsertEdge` bootstrapped owner before `recoveryViaInboundReattach` w
 | Authority unit | `RecoveryNegotiationAuthorityTest` | VERIFIED |
 | Negotiation stabilization | `NegotiationStabilizationGateTest` | VERIFIED |
 | Controller lifecycle | `RecoveryNegotiationControllerGateTest` | VERIFIED |
-| Gate 3C | NEGOTIATION_INTENT_TERMINAL_CLOSURE | VERIFIED (PR-3C-A..D) / READY FOR FIELD |
+| Gate 3C | NEGOTIATION_INTENT_TERMINAL_CLOSURE | FIELD VERIFIED (Directed #3 PASS) |
 | Field W1/W2 | Device | NOT AUTHORIZED until prep sequence |
 
 ---
 
-## Gate 3C (VERIFIED / READY FOR FIELD)
+## Gate 3C (FIELD VERIFIED)
 
-RNA-5 v2 frozen. Implementation complete on `main`:
+RNA-5 v2 frozen + implemented + Directed #3 PASS.
 
-- PR-3C-A single terminal writer
-- PR-3C-B supersede bridge (`dee9718`)
-- PR-3C-C ghost intent ban (`8cf7bfe`)
-- PR-3C-D intent budget timer (`1eb693d`)
+- PR-3C-A..D VERIFIED on `main`
+- Directed #2 FAIL (historical dangling) ARCHIVED
+- Directed #3 PASS — `logs/wifi-recovery-m03-rna0037-directed3-20260805-193602`
+- `DEFERRED_DANGLING` CLOSED BY RNA-5 v2 + Directed #3 PASS
 
 Plan: `docs/analysis/gate3c-negotiation-intent-terminal-closure-plan.md`.
-Directed #3 run card: `docs/analysis/rna-directed-3-run-card.md`.
+Run card: `docs/analysis/rna-directed-3-run-card.md`.
+
+Recovery Completion remains OPEN. Next: offline RNA-0037 evidence completion audit.
 
 ---
 

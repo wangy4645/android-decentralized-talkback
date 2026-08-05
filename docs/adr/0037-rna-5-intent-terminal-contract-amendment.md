@@ -2,7 +2,7 @@
 
 ## Status
 
-**ACCEPTED / FROZEN** (2026-08-05). Architecture accepted 2026-08-05. Gate 3C implementation **COMPLETE** (PR-3C-A..D on main) — READY FOR FIELD / RNA Directed #3.
+**ACCEPTED / FROZEN** (2026-08-05). Gate 3C **FIELD VERIFIED** via RNA Directed #3 PASS (2026-08-05). Evidence: `talkback/logs/wifi-recovery-m03-rna0037-directed3-20260805-193602`.
 
 **Parent:** [ADR-0037](./0037-recovery-negotiation-authority-v1.md) (RNA-5, RNA-016, INV-RNA-010, INV-RNA-011)
 
@@ -200,12 +200,13 @@ RNA Directed #2
   root cause                        RNA-5 lifecycle gap (addressed by this freeze)
 
 Gate 3C
-  status                            VERIFIED / READY FOR FIELD
-  PR-3C-A..D                        DONE on main
+  status                            FIELD VERIFIED
+  Directed #3                       PASS (RNA-5 lifecycle closure)
+  DEFERRED_DANGLING                 CLOSED BY RNA-5 v2 + Directed #3 PASS
 
 Next
-  RNA Directed #3                   READY
-  run card: ../analysis/rna-directed-3-run-card.md
+  RNA-0037 evidence completion audit (offline)
+  Recovery Completion               OPEN
 
 ## References
 
