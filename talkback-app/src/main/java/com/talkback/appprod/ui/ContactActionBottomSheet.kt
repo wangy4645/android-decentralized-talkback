@@ -80,6 +80,22 @@ class ContactActionBottomSheet : BottomSheetDialogFragment() {
         }
 
         bindAction(
+            view.findViewById(R.id.actionRecentMessages),
+            R.drawable.ic_toolbar_menu,
+            getString(R.string.call_action_recent_messages),
+            getString(R.string.call_action_recent_messages_sub)
+        ) {
+            setFragmentResult(
+                REQUEST_RECENT_MESSAGES,
+                bundleOf(
+                    ARG_KEY to key,
+                    ARG_LABEL to label
+                )
+            )
+            dismiss()
+        }
+
+        bindAction(
             view.findViewById(R.id.actionFavorite),
             R.drawable.ic_nav_contacts,
             getString(R.string.call_action_favorite),
@@ -117,6 +133,7 @@ class ContactActionBottomSheet : BottomSheetDialogFragment() {
     companion object {
         const val REQUEST_PRIVATE_CALL = "contact_private_call"
         const val REQUEST_SEND_MESSAGE = "contact_send_message"
+        const val REQUEST_RECENT_MESSAGES = "contact_recent_messages"
         private const val ARG_KEY = "key"
         private const val ARG_LABEL = "label"
         private const val ARG_TEAM = "team"

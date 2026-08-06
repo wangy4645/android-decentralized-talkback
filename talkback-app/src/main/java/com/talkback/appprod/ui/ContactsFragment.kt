@@ -51,6 +51,16 @@ class ContactsFragment : Fragment() {
                 .show(parentFragmentManager, "endpoint_text_compose")
         }
         parentFragmentManager.setFragmentResultListener(
+            ContactActionBottomSheet.REQUEST_RECENT_MESSAGES,
+            this
+        ) { _, bundle ->
+            val remoteKey = bundle.getString("key").orEmpty()
+            val remoteLabel = bundle.getString("label").orEmpty()
+            EndpointTextRecentDialog
+                .newInstance(remoteKey, remoteLabel)
+                .show(parentFragmentManager, "endpoint_text_recent")
+        }
+        parentFragmentManager.setFragmentResultListener(
             EndpointTextComposeDialog.REQUEST_SEND,
             this
         ) { _, bundle ->

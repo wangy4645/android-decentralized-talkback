@@ -10,6 +10,9 @@ import com.talkback.appprod.data.AppConfig
 import com.talkback.appprod.data.AppConfigStore
 import com.talkback.appprod.data.ChannelMode
 import com.talkback.appprod.runtime.ChannelWarmupPolicy
+import com.talkback.appprod.endpointtext.EndpointTextDirection
+import com.talkback.appprod.endpointtext.EndpointTextRecord
+import com.talkback.appprod.endpointtext.EndpointTextRecentStore
 import com.talkback.core.endpointtext.EndpointTextEvent
 import com.talkback.core.session.ChannelReadiness
 import com.talkback.core.session.ConferenceRuntimePhase
@@ -45,6 +48,7 @@ class TalkViewModel(
 ) : ViewModel() {
     private val app = TalkbackApp.get(appContext)
     private val manager get() = app.runtimeManager
+    private val endpointTextRecentStore: EndpointTextRecentStore = app.endpointTextRecentStore
     private val taskProfileManager = TaskProfileManager(appContext)
 
     private val _uiState = MutableStateFlow(buildIdleState(configStore.load()))
@@ -81,6 +85,14 @@ class TalkViewModel(
         _endpointTextReceived.asSharedFlow()
 
     private val endpointTextSink: (EndpointTextEvent) -> Unit = { event ->
+        endpointTextRecentStore.append(
+            EndpointTextRecord(
+                endpointKey = event.from.key,
+                text = event.text,
+                timestampMs = System.currentTimeMillis(),
+                direction = EndpointTextDirection.INBOUND
+            )
+        )
         _endpointTextReceived.tryEmit(
             EndpointTextUiEvent(
                 fromKey = event.from.key,
@@ -652,8 +664,23 @@ class TalkViewModel(
             return "SERVICE_STOPPED"
         }
         val remote = endpointAddressFromKey(config, remoteKey) ?: return "INVALID_PEER"
-        return EndpointTextSendErrorMapper.map(manager.sendEndpointText(config, remote, text))
+        val error = EndpointTextSendErrorMapper.map(manager.sendEndpointText(config, remote, text))
+        if (error == null) {
+            endpointTextRecentStore.append(
+                EndpointTextRecord(
+                    endpointKey = remoteKey,
+                    text = text,
+                    timestampMs = System.currentTimeMillis(),
+                    direction = EndpointTextDirection.OUTBOUND
+                )
+            )
+        }
+        return error
     }
+
+    /** Process-local recent EndpointText for [endpointKey] (newest first). Presentation cache only. */
+    fun recentEndpointText(endpointKey: String): List<EndpointTextRecord> =
+        endpointTextRecentStore.recent(endpointKey)
 
     override fun onCleared() {
         if (manager.onEndpointTextReceived === endpointTextSink) {
