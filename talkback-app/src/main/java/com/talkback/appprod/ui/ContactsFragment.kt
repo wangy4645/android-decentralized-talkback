@@ -35,6 +35,29 @@ class ContactsFragment : Fragment() {
             }
             startPrivateCall(remoteKey, remoteLabel, teamName)
         }
+        parentFragmentManager.setFragmentResultListener(
+            ContactActionBottomSheet.REQUEST_SEND_MESSAGE,
+            this
+        ) { _, bundle ->
+            val remoteKey = bundle.getString("key").orEmpty()
+            val remoteLabel = bundle.getString("label").orEmpty()
+            val online = bundle.getBoolean("online", false)
+            if (!online) {
+                Toast.makeText(requireContext(), R.string.call_peer_offline, Toast.LENGTH_SHORT).show()
+                return@setFragmentResultListener
+            }
+            EndpointTextComposeDialog
+                .newInstance(remoteKey, remoteLabel)
+                .show(parentFragmentManager, "endpoint_text_compose")
+        }
+        parentFragmentManager.setFragmentResultListener(
+            EndpointTextComposeDialog.REQUEST_SEND,
+            this
+        ) { _, bundle ->
+            val remoteKey = bundle.getString(EndpointTextComposeDialog.ARG_KEY).orEmpty()
+            val text = bundle.getString(EndpointTextComposeDialog.ARG_TEXT).orEmpty()
+            sendEndpointText(remoteKey, text)
+        }
     }
 
     override fun onCreateView(
@@ -140,6 +163,42 @@ class ContactsFragment : Fragment() {
             else -> Toast.makeText(
                 requireContext(),
                 R.string.call_failed,
+                Toast.LENGTH_SHORT
+            ).show()
+        }
+    }
+
+    private fun sendEndpointText(remoteKey: String, text: String) {
+        viewModel.syncServiceState()
+        when (val err = viewModel.sendEndpointText(remoteKey, text)) {
+            null -> Toast.makeText(
+                requireContext(),
+                R.string.endpoint_text_sent,
+                Toast.LENGTH_SHORT
+            ).show()
+            "SERVICE_STOPPED" -> Toast.makeText(
+                requireContext(),
+                R.string.service_not_running,
+                Toast.LENGTH_SHORT
+            ).show()
+            "UNREACHABLE" -> Toast.makeText(
+                requireContext(),
+                R.string.endpoint_text_unreachable,
+                Toast.LENGTH_SHORT
+            ).show()
+            "TEXT_TOO_LONG" -> Toast.makeText(
+                requireContext(),
+                R.string.endpoint_text_too_long,
+                Toast.LENGTH_SHORT
+            ).show()
+            "SEND_FAILED" -> Toast.makeText(
+                requireContext(),
+                R.string.endpoint_text_send_failed,
+                Toast.LENGTH_SHORT
+            ).show()
+            else -> Toast.makeText(
+                requireContext(),
+                R.string.endpoint_text_failed,
                 Toast.LENGTH_SHORT
             ).show()
         }

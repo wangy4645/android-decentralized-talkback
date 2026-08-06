@@ -11,6 +11,7 @@ import com.talkback.app.TalkbackRuntimeFactory
 import com.talkback.app.TalkbackSessionSnapshot
 import com.talkback.appprod.data.AppConfig
 import com.talkback.appprod.data.AppConfigStore
+import com.talkback.core.endpointtext.EndpointTextEvent
 import com.talkback.core.media.MediaTopologyPolicy
 import com.talkback.core.model.EndpointAddress
 import com.talkback.core.model.EndpointId
@@ -44,6 +45,13 @@ class TalkbackRuntimeManager(private val appContext: Context) {
     private var consecutiveWarmupFailures = 0
     @Volatile
     private var lastWarmupAttemptMs = 0L
+
+    /**
+     * App-layer inbound Endpoint Text sink. Re-bound onto each new runtime in [start].
+     * Transient control event — must not persist (ADR-0039).
+     */
+    @Volatile
+    var onEndpointTextReceived: ((EndpointTextEvent) -> Unit)? = null
 
     private companion object {
         const val MESH_CALL_BACKOFF_MS = 3_000L
@@ -117,6 +125,9 @@ class TalkbackRuntimeManager(private val appContext: Context) {
                 staticPeers = config.staticPeers(),
                 onLog = { TalkbackLog.i(it) }
             )
+            created.onEndpointTextReceived = { event ->
+                onEndpointTextReceived?.invoke(event)
+            }
             created.start()
             runtime = created
             skipNextMeshBackoff = true
@@ -131,6 +142,7 @@ class TalkbackRuntimeManager(private val appContext: Context) {
     }
 
     fun stop() {
+        runtime?.onEndpointTextReceived = null
         runtime?.stop()
         runtime = null
         skipNextMeshBackoff = true
@@ -524,6 +536,11 @@ class TalkbackRuntimeManager(private val appContext: Context) {
                 onSuccess = { Result.success(it) },
                 onFailure = { Result.failure(it) }
             )
+    }
+
+    fun sendEndpointText(config: AppConfig, remote: EndpointAddress, text: String): Result<Unit> {
+        val rt = runtime ?: return Result.failure(IllegalStateException("SERVICE_STOPPED"))
+        return rt.sendEndpointText(localAddress(config), remote, text)
     }
 
     fun activeUnicastSession(): TalkbackSessionSnapshot? =

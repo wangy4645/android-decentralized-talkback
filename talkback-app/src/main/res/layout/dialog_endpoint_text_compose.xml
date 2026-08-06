@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:paddingHorizontal="20dp"
+    android:paddingTop="4dp"
+    android:paddingBottom="4dp">
+
+    <TextView
+        android:id="@+id/txtEndpointTextTitle"
+        style="@style/EndpointTextDialogTitle"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:paddingBottom="4dp" />
+
+    <TextView
+        android:id="@+id/txtEndpointTextHint"
+        style="@style/EndpointTextDialogHint"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:paddingBottom="8dp"
+        android:text="@string/endpoint_text_hint" />
+
+    <EditText
+        android:id="@+id/editEndpointText"
+        style="@style/EndpointTextDialogInput"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="top|start"
+        android:inputType="textMultiLine|textCapSentences"
+        android:maxLength="256"
+        android:minLines="3"
+        android:maxLines="6" />
+
+    <TextView
+        android:id="@+id/txtEndpointTextCount"
+        style="@style/EndpointTextDialogHint"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="end"
+        android:paddingTop="6dp"
+        android:text="@string/endpoint_text_char_count_zero" />
+</LinearLayout>

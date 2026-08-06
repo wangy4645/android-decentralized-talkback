@@ -67,7 +67,16 @@ class ContactActionBottomSheet : BottomSheetDialogFragment() {
             getString(R.string.call_action_message),
             subtitle = null
         ) {
-            showSoon()
+            setFragmentResult(
+                REQUEST_SEND_MESSAGE,
+                bundleOf(
+                    ARG_KEY to key,
+                    ARG_LABEL to label,
+                    ARG_TEAM to team,
+                    ARG_ONLINE to online
+                )
+            )
+            dismiss()
         }
 
         bindAction(
@@ -107,6 +116,7 @@ class ContactActionBottomSheet : BottomSheetDialogFragment() {
 
     companion object {
         const val REQUEST_PRIVATE_CALL = "contact_private_call"
+        const val REQUEST_SEND_MESSAGE = "contact_send_message"
         private const val ARG_KEY = "key"
         private const val ARG_LABEL = "label"
         private const val ARG_TEAM = "team"

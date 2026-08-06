@@ -17,6 +17,9 @@ import com.talkback.core.presence.SessionPresenceSnapshot
 import com.talkback.core.contacts.CallableModuleGate
 import com.talkback.core.contacts.ContactEndpointRow
 import com.talkback.core.contacts.ContactsProjection
+import com.talkback.core.endpointtext.EndpointTextController
+import com.talkback.core.endpointtext.EndpointTextEvent
+import com.talkback.core.endpointtext.EndpointTextPrepareResult
 import com.talkback.core.discovery.CompositeModuleDiscoveryService
 import com.talkback.core.discovery.DiscoverySignalHandler
 import com.talkback.core.discovery.GossipDiscoveryControl
@@ -340,6 +343,13 @@ class TalkbackCoordinator(
     private val peerEdgeSignalingReadiness: PeerEdgeSignalingReadiness? = null,
     private val onLog: ((String) -> Unit)? = null
 ) {
+    @Volatile
+    var onEndpointTextReceived: ((EndpointTextEvent) -> Unit)? = null
+
+    private val endpointTextController = EndpointTextController(
+        onLog = { message -> log(message) }
+    )
+
     private val receivePathLivenessObserver = ReceivePathLivenessObserver()
     private val programAudioBus = ProgramAudioBus(mediaRegistry::getGroup)
     private val conferenceAudioBus = ConferenceAudioBus(
@@ -1299,6 +1309,71 @@ class TalkbackCoordinator(
             }
             placeCallInternal(local, remote, channelId, SessionType.UNICAST)
         }
+
+    /**
+     * Control-plane Endpoint Text (ADR-0039). Bypasses Session / Floor / Admission.
+     * Rate-limited sends succeed as [Result.success] without putting a packet on the wire.
+     */
+    fun sendEndpointText(
+        from: EndpointAddress,
+        to: EndpointAddress,
+        text: String
+    ): Result<Unit> = runCatching {
+        runOnCoordinatorSync {
+            if (text.length > EndpointTextController.MAX_TEXT_CHARS) {
+                error(EndpointTextController.REASON_TEXT_TOO_LONG)
+            }
+            val peer = resolvePeerForModule(to.moduleId.value)
+                ?: error(EndpointTextController.REASON_UNREACHABLE)
+            if (!isModuleDialable(to.moduleId.value)) {
+                error(EndpointTextController.REASON_UNREACHABLE)
+            }
+            when (val prepared = endpointTextController.prepareSend(from, to, text)) {
+                is EndpointTextPrepareResult.Rejected ->
+                    error(prepared.reason)
+                EndpointTextPrepareResult.RateLimited -> Unit
+                is EndpointTextPrepareResult.Ready -> {
+                    val envelope = buildSignedEnvelope(
+                        SignalType.ENDPOINT_TEXT,
+                        from,
+                        to,
+                        sessionId = "",
+                        payload = prepared.payload.encode()
+                    )
+                    if (!sendSignalHandoff(peer, envelope)) {
+                        error(EndpointTextController.REASON_SEND_FAILED)
+                    }
+                    endpointTextController.markSent(from, to)
+                    log(
+                        "ENDPOINT_TEXT sent messageId=${prepared.payload.messageId} " +
+                            "from=${from.key} to=${to.key}"
+                    )
+                }
+            }
+        }
+    }
+
+    /** Test seam: deliver ENDPOINT_TEXT with a fixed Message Id (dedup coverage). */
+    internal fun testInjectEndpointText(
+        from: EndpointAddress,
+        to: EndpointAddress,
+        messageId: String,
+        text: String,
+        fromPeer: PeerTarget
+    ) = runOnCoordinatorSync {
+        val payload = com.talkback.core.endpointtext.EndpointTextPayload(
+            messageId = messageId,
+            text = text
+        ).encode()
+        val envelope = buildSignedEnvelope(
+            SignalType.ENDPOINT_TEXT,
+            from,
+            to,
+            sessionId = "",
+            payload = payload
+        )
+        handleSignal(envelope, fromPeer)
+    }
 
     fun groupCall(
         local: EndpointAddress,
@@ -3977,6 +4052,15 @@ class TalkbackCoordinator(
 
     private fun handleSignal(signal: SignalEnvelope, fromPeer: PeerTarget) {
         if (!verifyIncomingSignal(signal)) return
+        // Explicit ENDPOINT_TEXT bypass (P0): do not touchSession / Session / Floor / Admission.
+        if (signal.type == SignalType.ENDPOINT_TEXT) {
+            observePeerInboundAfterAuth(signal)
+            callableModuleGate.markVerified(signal.from.moduleId.value)
+            rememberSignalPeer(signal.from.moduleId.value, fromPeer)
+            val event = endpointTextController.onReceive(signal) ?: return
+            onEndpointTextReceived?.invoke(event)
+            return
+        }
         observePeerInboundAfterAuth(signal)
         callableModuleGate.markVerified(signal.from.moduleId.value)
         rememberSignalPeer(signal.from.moduleId.value, fromPeer)
@@ -4011,6 +4095,7 @@ class TalkbackCoordinator(
             SignalType.FLOOR_PREEMPTED -> handleFloorPreempted(signal)
             SignalType.FLOOR_RELEASE -> handleFloorRelease(signal)
             SignalType.HANGUP -> handleHangup(signal)
+            SignalType.ENDPOINT_TEXT -> Unit // handled above; keep exhaustive
             else -> Unit
         }
     }

@@ -29,6 +29,15 @@ object RecoveryNegotiationObservation {
         OTHER_LEGACY
     }
 
+    enum class NegotiationRecoveryBlockedReason {
+        NONE,
+        GLARE,
+        STALE,
+        OWNER_UNRESOLVED,
+        BUDGET_EXHAUSTED,
+        SUPERSEDED
+    }
+
     data class ShadowOwnerResolution(
         val candidateOwners: List<String>,
         val selectedOwner: String,
@@ -47,10 +56,18 @@ object RecoveryNegotiationObservation {
         val recoveryCoordinatorOwnerModuleId: String?
     )
 
+    private data class NegotiationRecoveryFactKey(
+        val intentId: String,
+        val terminalState: String
+    )
+
+    private val emittedRecoveryFacts = mutableSetOf<NegotiationRecoveryFactKey>()
+
     private var logSink: ((String) -> Unit)? = null
 
     internal fun resetForTest(sink: ((String) -> Unit)? = null) {
         logSink = sink
+        emittedRecoveryFacts.clear()
     }
 
     private fun log(message: String) {
@@ -205,7 +222,6 @@ object RecoveryNegotiationObservation {
         log(sb.toString())
     }
 
-
     fun emitOwnerConflict(
         sessionId: String,
         edgeModuleId: String,
@@ -223,6 +239,7 @@ object RecoveryNegotiationObservation {
         sb.append(" trigger=").append(trigger)
         log(sb.toString())
     }
+
     fun emitIntentTerminal(
         sessionId: String,
         edgeModuleId: String,
@@ -252,4 +269,98 @@ object RecoveryNegotiationObservation {
             reason = reason
         )
     }
+
+    /**
+     * RNA-6 / PR-RNA6-A: emit negotiation recovery fact after intent terminal.
+     * Returns false when intentId missing or duplicate (intentId, terminalState).
+     */
+    fun emitNegotiationRecoveryFact(
+        sessionId: String,
+        edgeModuleId: String,
+        recoveryEpisodeId: Long,
+        recoveryAttemptId: Long,
+        obligationGeneration: Long,
+        intentId: String,
+        terminalState: String,
+        terminalReason: String,
+        closeSource: String,
+        ownerModuleId: String,
+        ownerResolved: Boolean,
+        transactionClosed: Boolean,
+        mediaReady: Boolean,
+        blockedReason: NegotiationRecoveryBlockedReason,
+        emittedAtMs: Long,
+        negotiationEpoch: Long = 0L
+    ): Boolean {
+        if (intentId.isBlank() || intentId == "NONE") return false
+        val key = NegotiationRecoveryFactKey(intentId, terminalState)
+        if (!emittedRecoveryFacts.add(key)) return false
+        val sb = StringBuilder("NEGOTIATION_RECOVERY_FACT")
+        sb.append(" sessionId=").append(sessionId)
+        sb.append(" edge=").append(edgeModuleId)
+        sb.append(" recoveryEpisodeId=").append(recoveryEpisodeId)
+        sb.append(" recoveryAttemptId=").append(recoveryAttemptId)
+        sb.append(" obligationGeneration=").append(obligationGeneration)
+        sb.append(" negotiationEpoch=").append(negotiationEpoch)
+        sb.append(" intentId=").append(intentId)
+        sb.append(" terminalState=").append(terminalState)
+        sb.append(" terminalReason=").append(terminalReason)
+        sb.append(" closeSource=").append(closeSource)
+        sb.append(" owner=").append(ownerModuleId)
+        sb.append(" ownerResolved=").append(ownerResolved)
+        sb.append(" transactionClosed=").append(transactionClosed)
+        sb.append(" mediaReady=").append(mediaReady)
+        sb.append(" blockedReason=").append(blockedReason.name)
+        sb.append(" emittedAtMs=").append(emittedAtMs)
+        log(sb.toString())
+        return true
+    }
+
+    fun emitNegotiationRecoveryFactFromContext(
+        ctx: EdgeObservationContext,
+        intentId: String,
+        terminalState: String,
+        terminalReason: String,
+        closeSource: String,
+        ownerModuleId: String,
+        ownerResolved: Boolean,
+        mediaReady: Boolean,
+        emittedAtMs: Long
+    ): Boolean = emitNegotiationRecoveryFact(
+        sessionId = ctx.sessionId,
+        edgeModuleId = ctx.edgeModuleId,
+        recoveryEpisodeId = ctx.episodeId,
+        recoveryAttemptId = ctx.episodeId,
+        obligationGeneration = ctx.obligationGen,
+        intentId = intentId,
+        terminalState = terminalState,
+        terminalReason = terminalReason,
+        closeSource = closeSource,
+        ownerModuleId = ownerModuleId,
+        ownerResolved = ownerResolved,
+        transactionClosed = true,
+        mediaReady = mediaReady,
+        blockedReason = resolveBlockedReason(terminalState, terminalReason),
+        emittedAtMs = emittedAtMs
+    )
+
+    internal fun resolveBlockedReason(
+        terminalState: String,
+        terminalReason: String
+    ): NegotiationRecoveryBlockedReason = when (terminalState) {
+        "EXECUTED" -> NegotiationRecoveryBlockedReason.NONE
+        "BLOCKED_BY_GLARE" -> NegotiationRecoveryBlockedReason.GLARE
+        "SUPERSEDED" -> NegotiationRecoveryBlockedReason.SUPERSEDED
+        "EXPIRED" -> when {
+            terminalReason.contains("BUDGET", ignoreCase = true) ->
+                NegotiationRecoveryBlockedReason.BUDGET_EXHAUSTED
+            terminalReason.contains("STALE", ignoreCase = true) ->
+                NegotiationRecoveryBlockedReason.STALE
+            else -> NegotiationRecoveryBlockedReason.BUDGET_EXHAUSTED
+        }
+        else -> NegotiationRecoveryBlockedReason.NONE
+    }
+
+    internal fun recoveryFactCountForTest(intentId: String, terminalState: String): Int =
+        if (emittedRecoveryFacts.contains(NegotiationRecoveryFactKey(intentId, terminalState))) 1 else 0
 }

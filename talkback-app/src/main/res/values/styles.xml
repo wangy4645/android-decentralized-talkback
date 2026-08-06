@@ -330,4 +330,24 @@
         <item name="android:textColor">@color/tb_success</item>
         <item name="android:textSize">9sp</item>
     </style>
+
+    <style name="EndpointTextDialogTitle">
+        <item name="android:fontFamily">sans-serif-medium</item>
+        <item name="android:includeFontPadding">false</item>
+        <item name="android:textColor">@color/tb_text_primary</item>
+        <item name="android:textSize">14sp</item>
+    </style>
+
+    <style name="EndpointTextDialogHint">
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:includeFontPadding">false</item>
+        <item name="android:textColor">@color/tb_text_muted</item>
+        <item name="android:textSize">10sp</item>
+    </style>
+
+    <style name="EndpointTextDialogInput" parent="SettingsEditText">
+        <item name="android:background">@drawable/bg_industrial_card</item>
+        <item name="android:paddingHorizontal">10dp</item>
+        <item name="android:paddingVertical">8dp</item>
+    </style>
 </resources>
