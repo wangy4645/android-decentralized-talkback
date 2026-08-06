@@ -36,10 +36,12 @@ class EndpointTextControllerTest {
         val from = EndpointAddress(ModuleId("M01"), EndpointId("E01"))
         val to = EndpointAddress(ModuleId("M02"), EndpointId("E01"))
         assertTrue(controller.prepareSend(from, to, "a") is EndpointTextPrepareResult.Ready)
+        controller.markSent(from, to)
         now += 200L
         assertTrue(controller.prepareSend(from, to, "b") is EndpointTextPrepareResult.RateLimited)
         now += 1_000L
         assertTrue(controller.prepareSend(from, to, "c") is EndpointTextPrepareResult.Ready)
+        controller.markSent(from, to)
     }
 
     @Test

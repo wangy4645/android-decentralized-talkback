@@ -1333,16 +1333,17 @@ class TalkbackCoordinator(
                     error(prepared.reason)
                 EndpointTextPrepareResult.RateLimited -> Unit
                 is EndpointTextPrepareResult.Ready -> {
-                    sendSignal(
-                        peer,
-                        buildSignedEnvelope(
-                            SignalType.ENDPOINT_TEXT,
-                            from,
-                            to,
-                            sessionId = "",
-                            payload = prepared.payload.encode()
-                        )
+                    val envelope = buildSignedEnvelope(
+                        SignalType.ENDPOINT_TEXT,
+                        from,
+                        to,
+                        sessionId = "",
+                        payload = prepared.payload.encode()
                     )
+                    if (!sendSignalHandoff(peer, envelope)) {
+                        error(EndpointTextController.REASON_SEND_FAILED)
+                    }
+                    endpointTextController.markSent(from, to)
                     log(
                         "ENDPOINT_TEXT sent messageId=${prepared.payload.messageId} " +
                             "from=${from.key} to=${to.key}"

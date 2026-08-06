@@ -41,8 +41,6 @@ class EndpointTextController(
             onLog("ENDPOINT_TEXT rate_limited from=${from.key} to=${to.key}")
             return EndpointTextPrepareResult.RateLimited
         }
-        lastSendAtMsByKey[rateKey] = now
-        trimRateLimitMap()
         val id = messageId?.takeIf { it.isNotBlank() } ?: newMessageId()
         val payload = EndpointTextPayload(
             messageId = id,
@@ -52,6 +50,12 @@ class EndpointTextController(
         )
         onLog("ENDPOINT_TEXT send prepared messageId=$id from=${from.key} to=${to.key}")
         return EndpointTextPrepareResult.Ready(payload)
+    }
+
+    /** Record rate-limit credit only after local signaling handoff succeeds. */
+    fun markSent(from: EndpointAddress, to: EndpointAddress) {
+        lastSendAtMsByKey[rateLimitKey(from.key, to.key)] = clockMs()
+        trimRateLimitMap()
     }
 
     fun onReceive(signal: SignalEnvelope): EndpointTextEvent? {
@@ -111,6 +115,7 @@ class EndpointTextController(
         private const val RATE_LIMIT_MAP_CAP = 512
         const val REASON_TEXT_TOO_LONG = "TEXT_TOO_LONG"
         const val REASON_UNREACHABLE = "UNREACHABLE"
+        const val REASON_SEND_FAILED = "SEND_FAILED"
     }
 }
 
