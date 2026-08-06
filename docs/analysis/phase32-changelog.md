@@ -1,4 +1,4 @@
-﻿# Phase 3.2 Behavior Change -- Changelog
+# Phase 3.2 Behavior Change -- Changelog
 
 **Status:** Gate 3C CLOSED; RNA-6 DEFERRED; RNA Directed #3 PASS; Recovery Completion OPEN
 
@@ -73,3 +73,14 @@ Recovery Completion remains OPEN. Next: offline RNA-0037 evidence completion aud
 **Not changed:** Completion admission · Media lifecycle · UI projection · Timeout budget
 
 **PR-LIFE-2:** AUTHORIZED — attempt lineage telemetry + `RECOVERY_ATTEMPT_OWNERSHIP_LOST` diagnostic (observability only)
+---
+
+## ADR-0040 Phase-2 observability (2026-08-06)
+
+**PR-LIFE-2:** attempt lineage + ownership-lost diagnostics (behavior-neutral contract freeze)
+
+**Telemetry:** RECOVERY_ATTEMPT_LINEAGE · RECOVERY_ATTEMPT_OWNERSHIP_LOST (diagnostic only)
+
+**Aggregation key:** (edgeId, attemptId, transitionSeq)
+
+**Not changed:** recovery FSM · completion · timeout budget · admission · UI

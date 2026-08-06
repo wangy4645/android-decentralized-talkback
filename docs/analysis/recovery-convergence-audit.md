@@ -23,7 +23,7 @@ Media Lifecycle:                NOT IMPACTED
 Presentation:                   NOT IMPACTED
 Completion Predicate:           FROZEN
 ADR-0040 PR-LIFE-1:             PASS (field)
-ADR-0040 PR-LIFE-2:             AUTHORIZED (telemetry / regression only)
+ADR-0040 PR-LIFE-2:             MERGED (telemetry / regression contract)
 ```
 
 ---
@@ -67,3 +67,28 @@ Duplicate log sink:        detected (2x lines per event in field capture)
 Impact:                    no behavior impact
 PR-LIFE-2 aggregation:     (edgeId, attemptId, transitionSeq)
 ```
+---
+
+## PR-LIFE-2 Observability Contract
+
+Does **not** alter:
+- recovery state transition
+- completion predicate
+- timeout budget
+- admission rules
+- UI projection
+
+Exposes lifecycle ownership invariants only.
+
+### Retry vs Resume
+
+| Kind | attemptId | parentAttemptId | resumeFromDeferred |
+|------|-----------|-----------------|--------------------|
+| Retry | increments | previous attempt | false |
+| Resume | same | null / unchanged | true |
+
+### Ownership lost (diagnostic only)
+
+`obligationOpen AND L2 recovered AND watchdog inactive AND no terminal` → `RECOVERY_ATTEMPT_OWNERSHIP_LOST`
+
+No automatic recovery action.
