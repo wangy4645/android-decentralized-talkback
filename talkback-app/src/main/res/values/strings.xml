@@ -306,9 +306,14 @@
     <string name="call_action_monitor">Monitor</string>
     <string name="call_action_monitor_sub">One-way listen</string>
     <string name="call_action_message">Send Message</string>
+    <string name="call_action_recent_messages">Recent Messages</string>
+    <string name="call_action_recent_messages_sub">This session only</string>
     <string name="call_action_favorite">Add to Favorites</string>
     <string name="call_action_cancel">Cancel</string>
     <string name="endpoint_text_compose_title">Message %1$s</string>
+    <string name="endpoint_text_recent_title">%1$s</string>
+    <string name="endpoint_text_recent_empty">No recent messages in this session</string>
+    <string name="endpoint_text_recent_outbound_prefix">→ %1$s</string>
     <string name="endpoint_text_hint">Max 256 characters</string>
     <string name="endpoint_text_char_count">%1$d/%2$d</string>
     <string name="endpoint_text_char_count_zero">0/256</string>

@@ -87,6 +87,10 @@
         layout="@layout/item_contact_action_row" />
 
     <include
+        android:id="@+id/actionRecentMessages"
+        layout="@layout/item_contact_action_row" />
+
+    <include
         android:id="@+id/actionFavorite"
         layout="@layout/item_contact_action_row" />
 
