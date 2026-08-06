@@ -1,6 +1,6 @@
-# Phase 3.2 Behavior Change -- Changelog
+﻿# Phase 3.2 Behavior Change -- Changelog
 
-**Status:** Gate 3C FIELD VERIFIED; RNA Directed #3 PASS; Recovery Completion OPEN
+**Status:** Gate 3C CLOSED; RNA-6 DEFERRED; RNA Directed #3 PASS; Recovery Completion OPEN
 
 ---
 
@@ -62,3 +62,14 @@ Recovery Completion remains OPEN. Next: offline RNA-0037 evidence completion aud
 4. `wifi-recovery-adjudicate.ps1` (RNA-0037 field verdict)
 5. W2
 6. Recovery Completion Authority review
+---
+
+## ADR-0040 Phase-1 (2026-08-06)
+
+**PR-LIFE-1:** PASS (field `m03-flap-recovery-convergence-20260806-161533`)
+
+**Fixed:** Capability deferral lifecycle ownership loss (restore attempt ownership after capability deferral)
+
+**Not changed:** Completion admission · Media lifecycle · UI projection · Timeout budget
+
+**PR-LIFE-2:** AUTHORIZED — attempt lineage telemetry + `RECOVERY_ATTEMPT_OWNERSHIP_LOST` diagnostic (observability only)

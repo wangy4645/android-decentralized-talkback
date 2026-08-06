@@ -57,7 +57,16 @@ data class EdgeAttemptLineageRaw(
     val mediaRestored: Boolean,
     val obligationOpen: Boolean,
     val pendingCompletion: Boolean,
-    val obligationGeneration: Long = 0L
+    val obligationGeneration: Long = 0L,
+    /** ADR-0040 PR-LIFE-2: prior attempt when attemptId incremented (retry/supersede). */
+    val parentAttemptId: Long? = null,
+    /** ADR-0040 PR-LIFE-2: same attemptId resumed after capability defer (not a retry). */
+    val resumeFromDeferred: Boolean = false,
+    /** Last capability-class defer trigger (e.g. CAPABILITY_UNAVAILABLE_AT_FIRE). */
+    val deferTrigger: String? = null,
+    val deferredReason: String? = null,
+    /** Monotonic per-edge transition counter for duplicate-sink aggregation. */
+    val transitionSeq: Long = 0L
 )
 
 /** E.18.2: whether membership epoch probe produced checked evidence vs unwired gap. */
@@ -431,7 +440,27 @@ internal data class EdgeRecoveryRecord(
      * E16 ActivationEvidence: successor pathway emit guard (once per episode).
      * Set when [RECOVERY_SUCCESSOR_STARTED] is logged; not transport-ready.
      */
-    var successorActivationEmitted: Boolean = false
+    var successorActivationEmitted: Boolean = false,
+    /**
+     * ADR-0040 PR-LIFE-1: attempt watchdog deferred for capability (no live timer).
+     * Cleared when [RECOVERY_WATCHDOG_STARTED] successfully arms; resumed on L2/wakeup
+     * after capability restore — hangup must not be the sole CLEAR path.
+     */
+    var attemptClockOwnershipDeferred: Boolean = false,
+    /** ADR-0040 PR-LIFE-2: lineage — set on retry/supersede (attemptId++). */
+    var parentAttemptId: Long? = null,
+    /** ADR-0040 PR-LIFE-2: true when same attemptId resumes after capability defer. */
+    var resumeFromDeferred: Boolean = false,
+    /** ADR-0040 PR-LIFE-2: last capability defer trigger for audit (e.g. CAPABILITY_UNAVAILABLE_AT_FIRE). */
+    var deferTrigger: String? = null,
+    /** ADR-0040 PR-LIFE-2: last wakeup trigger observed on this attempt. */
+    var lastWakeupTrigger: String? = null,
+    /** ADR-0040 PR-LIFE-2: monotonic transition seq for duplicate-sink aggregation. */
+    var lineageTransitionSeq: Long = 0L,
+    /** Wall-clock when [attemptClockOwnershipDeferred] was set (diagnostic only). */
+    var attemptClockOwnershipDeferredSinceMs: Long? = null,
+    /** PR-LIFE-2-B: emit [RECOVERY_ATTEMPT_OWNERSHIP_LOST] at most once per attempt episode. */
+    var ownershipLostDiagnosticEmitted: Boolean = false
 ) {
     /** True while this record owns an active recovery attempt (ADR-0022 P0.5). */
     fun hasActiveAttempt(): Boolean = phase.isActivelyRecovering()

@@ -6,6 +6,7 @@ import com.talkback.core.util.RecoveryDeliveryFact
 import com.talkback.core.util.RecoveryControlReconciliationFact
 import com.talkback.core.util.RecoveryControlReconciliationMembershipObservation
 import com.talkback.core.util.RecoveryNegotiationAuthority
+import com.talkback.core.util.RecoveryEdgeStateObservation
 import com.talkback.core.util.RecoveryNegotiationObservation
 import com.talkback.core.util.SuppressSuccessorAttemptDebugInjection
 import java.util.concurrent.ConcurrentHashMap
@@ -117,6 +118,8 @@ class ConferenceEdgeRecoveryController internal constructor(
     private val edges = ConcurrentHashMap<ConferenceEdgeKey, EdgeRecoveryRecord>()
     private val debounceTimers = ConcurrentHashMap<ConferenceEdgeKey, ScheduledFuture<*>>()
     private val watchdogTimers = ConcurrentHashMap<ConferenceEdgeKey, ScheduledFuture<*>>()
+    /** PR-LIFE-2-B: diagnostic-only timer; never auto-heals attempt ownership. */
+    private val ownershipLostDiagnosticTimers = ConcurrentHashMap<ConferenceEdgeKey, ScheduledFuture<*>>()
     private val deadlineTimers = ConcurrentHashMap<ConferenceEdgeKey, ScheduledFuture<*>>()
     /** Gate 3C-D: episode-scoped negotiation intent budget (independent of attempt watchdog). */
     private val negotiationIntentTimers = ConcurrentHashMap<ConferenceEdgeKey, ScheduledFuture<*>>()
@@ -380,7 +383,12 @@ class ConferenceEdgeRecoveryController internal constructor(
             mediaRestored = record.mediaRestored,
             obligationOpen = record.edgeObligationOpen(),
             pendingCompletion = record.hasPendingCompletionDecision,
-            obligationGeneration = record.obligationGeneration
+            obligationGeneration = record.obligationGeneration,
+            parentAttemptId = record.parentAttemptId,
+            resumeFromDeferred = record.resumeFromDeferred,
+            deferTrigger = record.deferTrigger,
+            deferredReason = record.deferredReason?.name,
+            transitionSeq = record.lineageTransitionSeq
         )
     }
 
@@ -677,11 +685,117 @@ class ConferenceEdgeRecoveryController internal constructor(
         trigger: String,
         supersededFromAttempt: Long? = null
     ) {
+        emitAttemptLineageTelemetry(record, trigger)
         onAttemptLineageObservation(
             record.key.sessionId,
             record.key.remoteModuleId,
             trigger,
             supersededFromAttempt
+        )
+    }
+
+    /**
+     * ADR-0040 PR-LIFE-2-A: structured attempt lineage for audit / duplicate-sink aggregation.
+     * Does not alter recovery transitions.
+     */
+    private fun emitAttemptLineageTelemetry(
+        record: EdgeRecoveryRecord,
+        trigger: String
+    ) {
+        record.lineageTransitionSeq += 1L
+        val key = record.key
+        onLog(
+            "RECOVERY_ATTEMPT_LINEAGE session=${key.sessionId} edge=${key.remoteModuleId} " +
+                "attemptId=${record.recoveryAttemptId} " +
+                "parentAttemptId=${record.parentAttemptId ?: "NONE"} " +
+                "resumeFromDeferred=${record.resumeFromDeferred} " +
+                "deferTrigger=${record.deferTrigger ?: "NONE"} " +
+                "deferredReason=${record.deferredReason?.name ?: "NONE"} " +
+                "transitionSeq=${record.lineageTransitionSeq} " +
+                "obligationGen=${record.obligationGeneration} " +
+                "ownershipDeferred=${record.attemptClockOwnershipDeferred} " +
+                "lastWakeup=${record.lastWakeupTrigger ?: "NONE"} " +
+                "trigger=$trigger"
+        )
+    }
+
+    private fun markCapabilityDeferral(
+        record: EdgeRecoveryRecord,
+        deferTrigger: String
+    ) {
+        record.attemptClockOwnershipDeferred = true
+        record.deferTrigger = deferTrigger
+        if (record.attemptClockOwnershipDeferredSinceMs == null) {
+            record.attemptClockOwnershipDeferredSinceMs = clock()
+        }
+        scheduleOwnershipLostDiagnostic(record)
+        emitAttemptLineageTelemetry(record, "CAPABILITY_DEFER:$deferTrigger")
+    }
+
+    private fun clearCapabilityDeferralOwnershipMarkers(record: EdgeRecoveryRecord) {
+        record.attemptClockOwnershipDeferred = false
+        record.attemptClockOwnershipDeferredSinceMs = null
+        record.ownershipLostDiagnosticEmitted = false
+        cancelOwnershipLostDiagnostic(record.key)
+    }
+
+    private fun scheduleOwnershipLostDiagnostic(record: EdgeRecoveryRecord) {
+        val key = record.key
+        val attemptId = record.recoveryAttemptId
+        val obligationGen = record.obligationGeneration
+        cancelOwnershipLostDiagnostic(key)
+        val future = scheduler.schedule({
+            val current = edges[key] ?: return@schedule
+            if (current.recoveryAttemptId != attemptId) return@schedule
+            if (current.obligationGeneration != obligationGen) return@schedule
+            maybeEmitAttemptOwnershipLost(current)
+        }, observationWindowMs, TimeUnit.MILLISECONDS)
+        ownershipLostDiagnosticTimers[key] = future
+    }
+
+    private fun cancelOwnershipLostDiagnostic(key: ConferenceEdgeKey) {
+        ownershipLostDiagnosticTimers.remove(key)?.cancel(false)
+    }
+
+    /**
+     * PR-LIFE-2-B: diagnostic only — never auto-restart watchdog or clear obligation.
+     */
+    private fun maybeEmitAttemptOwnershipLost(record: EdgeRecoveryRecord) {
+        if (record.ownershipLostDiagnosticEmitted) return
+        if (!record.edgeObligationOpen()) return
+        if (record.phase == EdgeRecoveryPhase.RECOVERED) return
+        if (record.obligationClosedAtMs != null) return
+        val key = record.key
+        val l2Satisfied =
+            record.mediaRestored || isIceConnected(key.sessionId, key.remoteModuleId)
+        if (!l2Satisfied) {
+            scheduleOwnershipLostDiagnostic(record)
+            return
+        }
+        if (watchdogTimers.containsKey(key)) {
+            scheduleOwnershipLostDiagnostic(record)
+            return
+        }
+        if (!record.attemptClockOwnershipDeferred && !hasDeferredMediaAction(record)) return
+        if (record.attemptClockOwnershipDeferredSinceMs == null) {
+            scheduleOwnershipLostDiagnostic(record)
+            return
+        }
+        val obligationAgeMs = clock() - (record.obligationOpenedAtMs ?: record.recoveryStartedAtMs)
+        val deferredSinceMs = record.attemptClockOwnershipDeferredSinceMs?.let { clock() - it } ?: 0L
+        record.ownershipLostDiagnosticEmitted = true
+        emitAttemptLineageTelemetry(record, "OWNERSHIP_LOST_DIAGNOSTIC")
+        onLog(
+            "RECOVERY_ATTEMPT_OWNERSHIP_LOST session=${key.sessionId} edge=${key.remoteModuleId} " +
+                "attemptId=${record.recoveryAttemptId} obligationGen=${record.obligationGeneration} " +
+                "obligationAgeMs=$obligationAgeMs " +
+                "deferredSinceMs=$deferredSinceMs " +
+                "lastTransition=${record.phase.name} " +
+                "lastDeferredReason=${record.deferredReason?.name ?: "NONE"} " +
+                "deferTrigger=${record.deferTrigger ?: "NONE"} " +
+                "lastWakeup=${record.lastWakeupTrigger ?: "NONE"} " +
+                "transitionSeq=${record.lineageTransitionSeq} " +
+                "action=DIAGNOSTIC_ONLY"
         )
     }
 
@@ -720,6 +834,13 @@ class ConferenceEdgeRecoveryController internal constructor(
                 "obligationGen=${record.obligationGeneration} " +
                 "obligationOpen=${record.edgeObligationOpen()} " +
                 "pendingCompletion=${record.hasPendingCompletionDecision}"
+        )
+        RecoveryEdgeStateObservation.emitPhaseTransition(
+            record = record,
+            oldPhase = oldPhase,
+            newPhase = newPhase,
+            trigger = trigger,
+            overrideSink = onLog
         )
         RecoveryAttemptOwner.reconcileFromFacts(record, "PHASE:$trigger")
     }
@@ -936,6 +1057,67 @@ class ConferenceEdgeRecoveryController internal constructor(
         record.deferAdmissionObservationSeq = null
         record.deferredIntentHoldReason = null
         record.deferredIntentDrainRetryCount = 0
+    }
+
+    /**
+     * ADR-0040 PR-LIFE-1: restore recovery attempt ownership after capability deferral.
+     *
+     * Field gap (Audit-B): CAPABILITY_UNAVAILABLE_AT_FIRE + MEDIA_NOT_READY left the attempt
+     * without a clear owner for the next transition (WAKEUP fired, no CLEAR, no WATCHDOG_STARTED).
+     *
+     * Clears only capability-class deferred reasons when L2 evidence is present, then re-arms
+     * the attempt watchdog when capability no longer blocks. Does **not** change completion
+     * predicate, timeout budget, or UI.
+     *
+     * @return true when attempt clock was resumed via [scheduleWatchdog]
+     */
+    private fun resumeAttemptOwnershipAfterCapabilityRestore(
+        record: EdgeRecoveryRecord,
+        trigger: String
+    ): Boolean {
+        if (!record.edgeObligationOpen()) return false
+        if (!record.phase.isActivelyRecovering()) return false
+        val key = record.key
+        val l2Satisfied =
+            record.mediaRestored || isIceConnected(key.sessionId, key.remoteModuleId)
+        val capabilityDeferral =
+            hasDeferredMediaAction(record) &&
+                when (record.deferredReason) {
+                    DeferredReason.MEDIA_NOT_READY,
+                    DeferredReason.ROUTE_NOT_READY,
+                    DeferredReason.AUTHORITY_NOT_READY -> true
+                    else -> false
+                }
+        var cleared = false
+        // Clear only when L2 recovery evidence is present — hangup must not be the sole CLEAR path.
+        // Do not clear on dispatchReady alone (dispatch may still be NON_OWNER_BLOCKED).
+        if (capabilityDeferral && l2Satisfied) {
+            val prior = record.deferredReason
+            clearDeferralFields(record)
+            cleared = true
+            onLog(
+                "RECOVERY_DEFERRED_REASON_CLEARED session=${key.sessionId} " +
+                    "edge=${key.remoteModuleId} attempt=${record.recoveryAttemptId} " +
+                    "priorReason=$prior trigger=$trigger " +
+                    "l2Satisfied=true ownership=ATTEMPT_CLOCK_RESUME"
+            )
+        }
+        if (isCapabilityBlockingAttemptClock(record)) return false
+        if (!record.phase.isActivelyRecovering()) return false
+        // Re-arm only when ownership was deferred or we just cleared a capability deferral.
+        // Avoid duplicate timers on routine ICE reconnect while a live watchdog is already armed.
+        if (!cleared && !record.attemptClockOwnershipDeferred) return false
+        scheduleWatchdog(record)
+        // scheduleWatchdog may re-defer if capability still blocks — do not claim resume.
+        if (record.attemptClockOwnershipDeferred) return false
+        record.resumeFromDeferred = true
+        emitAttemptLineageTelemetry(record, "OWNERSHIP_RESUMED:$trigger")
+        onLog(
+            "RECOVERY_ATTEMPT_OWNERSHIP_RESUMED session=${key.sessionId} " +
+                "edge=${key.remoteModuleId} attempt=${record.recoveryAttemptId} " +
+                "trigger=$trigger clearedDeferral=$cleared resumeFromDeferred=true"
+        )
+        return true
     }
 
     /**
@@ -1170,6 +1352,16 @@ class ConferenceEdgeRecoveryController internal constructor(
             )
         }
 
+        emitNegotiationRecoveryFactForTerminalClose(
+            record = record,
+            sessionId = sessionId,
+            remoteModuleId = remoteModuleId,
+            intentId = resolvedIntentId,
+            terminal = terminal,
+            reason = reason,
+            source = source
+        )
+
         record.negotiationIntentTerminalEmitted = true
         record.negotiationIntentTerminalState = terminal
 
@@ -1201,6 +1393,57 @@ class ConferenceEdgeRecoveryController internal constructor(
             clearDeferralFields(record)
         }
         return true
+    }
+
+    /**
+     * RNA-6 / PR-RNA6-A: bridge terminal close to NEGOTIATION_RECOVERY_FACT (observation only).
+     * Must not call markRecovered or mutate completion predicate.
+     */
+    private fun emitNegotiationRecoveryFactForTerminalClose(
+        record: EdgeRecoveryRecord,
+        sessionId: String,
+        remoteModuleId: String,
+        intentId: String?,
+        terminal: String,
+        reason: String,
+        source: String
+    ) {
+        val factIntentId = intentId ?: return
+        val ownerModuleId = ensureCanonicalNegotiationOwner(record, "NEGOTIATION_RECOVERY_FACT")
+        val ownerResolved = record.canonicalNegotiationOwnerModuleId != null
+        val mediaReady = record.mediaRestored || isIceConnected(sessionId, remoteModuleId)
+        val emittedAtMs = clock()
+        negotiationObservationContext(sessionId, remoteModuleId)?.let { ctx ->
+            RecoveryNegotiationObservation.emitNegotiationRecoveryFactFromContext(
+                ctx = ctx,
+                intentId = factIntentId,
+                terminalState = terminal,
+                terminalReason = reason,
+                closeSource = source,
+                ownerModuleId = ownerModuleId,
+                ownerResolved = ownerResolved,
+                mediaReady = mediaReady,
+                emittedAtMs = emittedAtMs
+            )
+        } ?: run {
+            RecoveryNegotiationObservation.emitNegotiationRecoveryFact(
+                sessionId = sessionId,
+                edgeModuleId = remoteModuleId,
+                recoveryEpisodeId = record.recoveryAttemptId,
+                recoveryAttemptId = record.recoveryAttemptId,
+                obligationGeneration = record.obligationGeneration,
+                intentId = factIntentId,
+                terminalState = terminal,
+                terminalReason = reason,
+                closeSource = source,
+                ownerModuleId = ownerModuleId,
+                ownerResolved = ownerResolved,
+                transactionClosed = true,
+                mediaReady = mediaReady,
+                blockedReason = RecoveryNegotiationObservation.resolveBlockedReason(terminal, reason),
+                emittedAtMs = emittedAtMs
+            )
+        }
     }
 
     /**
@@ -2040,6 +2283,8 @@ class ConferenceEdgeRecoveryController internal constructor(
                     "attempt=${record.recoveryAttemptId} trigger=$trigger " +
                     "wakeupBinding=${record.wakeupBinding?.logLabel()}"
             )
+            record.lastWakeupTrigger = trigger.name
+            emitAttemptLineageTelemetry(record, "WAKEUP_FIRED:${trigger.name}")
             val fencedIntentId = record.iceRestartIntentId
             val productionDrainSuppressed = fencedIntentId != null &&
                 Pr52cDebugInjection.shouldSuppressProductionDeferredDrain(
@@ -2069,6 +2314,12 @@ class ConferenceEdgeRecoveryController internal constructor(
                     trigger = trigger.name
                 )
             }
+            // ADR-0040 PR-LIFE-1: WAKEUP after capability restore must reclaim attempt ownership
+            // (field path: WATCHDOG_DEFERRED → WAKEUP_FIRED with no second ICE_CONNECTED).
+            resumeAttemptOwnershipAfterCapabilityRestore(
+                record = record,
+                trigger = "WAKEUP_FIRED:${trigger.name}"
+            )
         }
         if (
             trigger == RecoveryReevaluateTrigger.LINK_READY ||
@@ -2175,6 +2426,12 @@ class ConferenceEdgeRecoveryController internal constructor(
             result = result,
             trigger = trigger,
             logSink = sink ?: onLog
+        )
+        RecoveryEdgeStateObservation.maybeEmit(
+            record = record,
+            result = result,
+            trigger = trigger,
+            overrideSink = onLog
         )
     }
 
@@ -2691,6 +2948,12 @@ class ConferenceEdgeRecoveryController internal constructor(
         // ADR-0022 R28-E: record media fact, then completion evaluation 鈥?never direct RECOVERED.
         noteMediaRestored(record)
         notifyAttemptLineageObservation(record, "transport_recovered_on_ice_connected")
+        // ADR-0040 PR-LIFE-1: L2 evidence must clear stale capability deferral and resume
+        // attempt ownership (must not wait for hangup / scope teardown).
+        resumeAttemptOwnershipAfterCapabilityRestore(
+            record = record,
+            trigger = "ICE_CONNECTED_L2"
+        )
         runIceRestorationCompletionEvaluation(record)
     }
 
@@ -2893,6 +3156,8 @@ class ConferenceEdgeRecoveryController internal constructor(
         debounceTimers.clear()
         watchdogTimers.values.forEach { it.cancel(false) }
         watchdogTimers.clear()
+        ownershipLostDiagnosticTimers.values.forEach { it.cancel(false) }
+        ownershipLostDiagnosticTimers.clear()
         deadlineTimers.values.forEach { it.cancel(false) }
         deadlineTimers.clear()
         negotiationIntentTimers.values.forEach { it.cancel(false) }
@@ -3197,6 +3462,7 @@ class ConferenceEdgeRecoveryController internal constructor(
         val obligationGen = record.obligationGeneration
         cancelWatchdog(key)
         if (isCapabilityBlockingAttemptClock(record)) {
+            markCapabilityDeferral(record, "CAPABILITY_UNAVAILABLE")
             onLog(
                 "RECOVERY_WATCHDOG_DEFERRED session=${key.sessionId} edge=${key.remoteModuleId} " +
                     "obligationGen=$obligationGen attempt=$attemptId " +
@@ -3205,6 +3471,7 @@ class ConferenceEdgeRecoveryController internal constructor(
             )
             return
         }
+        clearCapabilityDeferralOwnershipMarkers(record)
         val budgetMs = minOf(attemptBudgetMs, iceRestartTimeoutMs + debounceMs)
         onLog(
             "RECOVERY_WATCHDOG_STARTED session=${key.sessionId} edge=${key.remoteModuleId} " +
@@ -3235,6 +3502,7 @@ class ConferenceEdgeRecoveryController internal constructor(
             if (still.obligationGeneration != obligationGen) return@schedule
             if (!still.phase.isActivelyRecovering()) return@schedule
             if (isCapabilityBlockingAttemptClock(still)) {
+                markCapabilityDeferral(still, "CAPABILITY_UNAVAILABLE_AT_FIRE")
                 onLog(
                     "RECOVERY_WATCHDOG_DEFERRED session=${key.sessionId} edge=${key.remoteModuleId} " +
                         "obligationGen=${still.obligationGeneration} attempt=${still.recoveryAttemptId} " +
@@ -3385,6 +3653,8 @@ class ConferenceEdgeRecoveryController internal constructor(
                 initiatesReattach = initiatesReattach,
                 recoveryViaInboundReattach = recoveryViaInboundReattach,
                 obligationGeneration = obligationGen,
+                parentAttemptId = previousAttempt,
+                resumeFromDeferred = false,
                 obligationOpenedAtMs = if (preserveOpen) {
                     existing!!.obligationOpenedAtMs ?: now
                 } else {
@@ -3426,6 +3696,7 @@ class ConferenceEdgeRecoveryController internal constructor(
                     )
                 )
                 logPhaseTransition(created, existing?.phase, created.phase, if (newAttempt) "NEW_ATTEMPT" else "UPSERT")
+                emitAttemptLineageTelemetry(created, "ATTEMPT_OPENED:$pathway")
             }
         } else {
             existing.apply {
@@ -3914,6 +4185,15 @@ class ConferenceEdgeRecoveryController internal constructor(
         record.obligationDeadlineAtMs = null
         record.phase = EdgeRecoveryPhase.RECOVERY_PENDING
         record.recoveryAttemptId = ++attemptSeq
+        record.parentAttemptId = previousAttempt
+        record.resumeFromDeferred = false
+        record.deferTrigger = null
+        record.lastWakeupTrigger = null
+        record.lineageTransitionSeq = 0L
+        record.attemptClockOwnershipDeferred = false
+        record.attemptClockOwnershipDeferredSinceMs = null
+        record.ownershipLostDiagnosticEmitted = false
+        cancelOwnershipLostDiagnostic(record.key)
         record.iceRestartIssued = false
         record.restartDispatchAtMs = null
         clearMediaRestoredFact(record)

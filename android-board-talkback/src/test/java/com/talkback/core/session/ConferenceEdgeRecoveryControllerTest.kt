@@ -702,6 +702,131 @@ class ConferenceEdgeRecoveryControllerTest {
     }
 
     @Test
+    fun adr0040_capabilityDeferThenLateRecovery_clearsDeferralAndResumesWatchdog() {
+        // Audit-B: CAPABILITY defer -> L2 restore -> CLEAR + WATCHDOG resume.
+        // Hangup must not be the sole CLEAR path.
+        var actionReady = false
+        var iceConnected = false
+        controller = buildController(
+            canDispatchRecoveryMediaAction = { _, _ -> actionReady },
+            isIceConnected = { _, _ -> iceConnected }
+        )
+        controller.onIceStateChanged(
+            sessionId = "sess-life1",
+            channelId = "CH-1",
+            remoteModuleId = "M02",
+            iceState = "DISCONNECTED",
+            eligibility = eligible(),
+            initiatesReattach = false
+        )
+        Thread.sleep(350)
+        assertTrue(
+            decisionLogs.any {
+                it.contains("RECOVERY_WATCHDOG_DEFERRED") && it.contains("edge=M02")
+            }
+        )
+        val startedBefore =
+            decisionLogs.count { it.contains("RECOVERY_WATCHDOG_STARTED") && it.contains("edge=M02") }
+
+        actionReady = true
+        iceConnected = true
+        controller.onIceConnected("sess-life1", "M02")
+
+        assertTrue(
+            "expected deferredReason clear after L2",
+            decisionLogs.any {
+                it.contains("RECOVERY_DEFERRED_REASON_CLEARED") && it.contains("edge=M02")
+            }
+        )
+        assertTrue(
+            "expected attempt ownership resume",
+            decisionLogs.any {
+                it.contains("RECOVERY_ATTEMPT_OWNERSHIP_RESUMED") && it.contains("edge=M02")
+            }
+        )
+        val startedAfter =
+            decisionLogs.count { it.contains("RECOVERY_WATCHDOG_STARTED") && it.contains("edge=M02") }
+        assertTrue(
+            "expected WATCHDOG_STARTED after L2 restore",
+            startedAfter > startedBefore
+        )
+        val lineage = controller.attemptLineageObservation("sess-life1", "M02")!!
+        assertTrue(lineage.resumeFromDeferred)
+        assertTrue(
+            decisionLogs.any {
+                it.contains("RECOVERY_ATTEMPT_LINEAGE") &&
+                    it.contains("edge=M02") &&
+                    it.contains("resumeFromDeferred=true")
+            }
+        )
+    }
+
+    @Test
+    fun adr0040_ownershipLostDiagnostic_emitsWithoutAutoResume() {
+        var actionReady = false
+        var iceConnected = false
+        controller = buildController(
+            observationWindowMs = 150L,
+            attemptBudgetMs = 500L,
+            canDispatchRecoveryMediaAction = { _, _ -> actionReady },
+            isIceConnected = { _, _ -> iceConnected }
+        )
+        controller.onIceStateChanged(
+            sessionId = "sess-life2",
+            channelId = "CH-1",
+            remoteModuleId = "M02",
+            iceState = "DISCONNECTED",
+            eligibility = eligible(),
+            initiatesReattach = false
+        )
+        Thread.sleep(350)
+        assertTrue(
+            decisionLogs.any {
+                it.contains("RECOVERY_WATCHDOG_DEFERRED") && it.contains("edge=M02")
+            }
+        )
+        actionReady = true
+        iceConnected = true
+        // L2 probe true but deliberately skip onIceConnected / resume path.
+        Thread.sleep(200)
+        assertTrue(
+            decisionLogs.any {
+                it.contains("RECOVERY_ATTEMPT_OWNERSHIP_LOST") && it.contains("edge=M02")
+            }
+        )
+        assertFalse(
+            decisionLogs.any {
+                it.contains("RECOVERY_ATTEMPT_OWNERSHIP_RESUMED") && it.contains("edge=M02")
+            }
+        )
+    }
+
+    @Test
+    fun adr0040_lineage_retry_setsParentAttemptId_notResumeFlag() {
+        controller = buildController()
+        controller.onIceStateChanged(
+            sessionId = "sess-life3",
+            channelId = "CH-1",
+            remoteModuleId = "M02",
+            iceState = "DISCONNECTED",
+            eligibility = eligible(),
+            initiatesReattach = true
+        )
+        Thread.sleep(80)
+        val attempt1 = controller.attemptLineageObservation("sess-life3", "M02")!!.attemptId
+        controller.onRecoveryReattachAccepted(
+            "sess-life3",
+            "M02",
+            RecoveryReason.NETWORK_RECOVERY,
+            RecoverySource.ICE_MONITOR
+        )
+        val lineage = controller.attemptLineageObservation("sess-life3", "M02")!!
+        assertTrue(lineage.attemptId > attempt1)
+        assertEquals(attempt1, lineage.parentAttemptId)
+        assertFalse(lineage.resumeFromDeferred)
+    }
+
+    @Test
     fun attemptTimeout_exposesFailedMediaRecoveryFacts_notRecovering() {
         controller.onIceStateChanged(
             sessionId = "sess-1",
