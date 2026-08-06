@@ -24,6 +24,8 @@ class EndpointTextComposeDialog : DialogFragment() {
         val remoteLabel = requireArguments().getString(ARG_LABEL).orEmpty()
         val view = LayoutInflater.from(requireContext())
             .inflate(R.layout.dialog_endpoint_text_compose, null, false)
+        view.findViewById<TextView>(R.id.txtEndpointTextTitle).text =
+            getString(R.string.endpoint_text_compose_title, remoteLabel)
         val edit = view.findViewById<EditText>(R.id.editEndpointText)
         val count = view.findViewById<TextView>(R.id.txtEndpointTextCount)
         val max = EndpointTextController.MAX_TEXT_CHARS
@@ -39,7 +41,6 @@ class EndpointTextComposeDialog : DialogFragment() {
         })
 
         return AlertDialog.Builder(requireContext())
-            .setTitle(getString(R.string.endpoint_text_compose_title, remoteLabel))
             .setView(view)
             .setNegativeButton(R.string.call_action_cancel, null)
             .setPositiveButton(R.string.endpoint_text_send, null)

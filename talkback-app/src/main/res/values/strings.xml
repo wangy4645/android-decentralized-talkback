@@ -309,7 +309,7 @@
     <string name="call_action_favorite">Add to Favorites</string>
     <string name="call_action_cancel">Cancel</string>
     <string name="endpoint_text_compose_title">Message %1$s</string>
-    <string name="endpoint_text_hint">Short instruction (max 256 characters)</string>
+    <string name="endpoint_text_hint">Max 256 characters</string>
     <string name="endpoint_text_char_count">%1$d/%2$d</string>
     <string name="endpoint_text_char_count_zero">0/256</string>
     <string name="endpoint_text_send">Send</string>
