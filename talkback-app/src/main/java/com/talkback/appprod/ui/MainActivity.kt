@@ -87,6 +87,19 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                talkViewModel.endpointTextReceived.collect { event ->
+                    // INLINE only — do not interrupt PTT / Floor / call UI (ADR-0039).
+                    Toast.makeText(
+                        this@MainActivity,
+                        getString(R.string.endpoint_text_inbound, event.fromLabel, event.text),
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
+        }
+
         onBackPressedDispatcher.addCallback(
             this,
             object : OnBackPressedCallback(true) {

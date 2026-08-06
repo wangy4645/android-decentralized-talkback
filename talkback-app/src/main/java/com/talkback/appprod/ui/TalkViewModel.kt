@@ -10,6 +10,7 @@ import com.talkback.appprod.data.AppConfig
 import com.talkback.appprod.data.AppConfigStore
 import com.talkback.appprod.data.ChannelMode
 import com.talkback.appprod.runtime.ChannelWarmupPolicy
+import com.talkback.core.endpointtext.EndpointTextEvent
 import com.talkback.core.session.ChannelReadiness
 import com.talkback.core.session.ConferenceRuntimePhase
 import com.talkback.appprod.data.TaskProfile
@@ -74,9 +75,25 @@ class TalkViewModel(
     private val _toastMessageRes = MutableSharedFlow<Int>(extraBufferCapacity = 1)
     val toastMessageRes: SharedFlow<Int> = _toastMessageRes.asSharedFlow()
 
+    private val _endpointTextReceived =
+        MutableSharedFlow<EndpointTextUiEvent>(extraBufferCapacity = 16)
+    val endpointTextReceived: SharedFlow<EndpointTextUiEvent> =
+        _endpointTextReceived.asSharedFlow()
+
+    private val endpointTextSink: (EndpointTextEvent) -> Unit = { event ->
+        _endpointTextReceived.tryEmit(
+            EndpointTextUiEvent(
+                fromKey = event.from.key,
+                fromLabel = formatEndpointLabel(event.from.key),
+                text = event.text
+            )
+        )
+    }
+
     init {
         MeetingPresenceDisplay.receivePathLivenessProvider =
             RuntimeReceivePathLivenessProvider { manager.getRuntime() }
+        manager.onEndpointTextReceived = endpointTextSink
         taskProfileManager.ensureInitialized()
         val config = configStore.load()
         if (config.isConferenceMode()) {
@@ -623,6 +640,26 @@ class TalkViewModel(
             message.contains("not discovered", ignoreCase = true) -> "UNREACHABLE"
             else -> "FAILED"
         }
+    }
+
+    /**
+     * Send Endpoint Text to [remoteKey]. Returns null on success (including silent rate-limit drop);
+     * otherwise a UI error code: SERVICE_STOPPED, UNREACHABLE, TEXT_TOO_LONG, SEND_FAILED, FAILED.
+     */
+    fun sendEndpointText(remoteKey: String, text: String): String? {
+        val config = configStore.load()
+        if (!isServiceReady()) {
+            return "SERVICE_STOPPED"
+        }
+        val remote = endpointAddressFromKey(config, remoteKey) ?: return "INVALID_PEER"
+        return EndpointTextSendErrorMapper.map(manager.sendEndpointText(config, remote, text))
+    }
+
+    override fun onCleared() {
+        if (manager.onEndpointTextReceived === endpointTextSink) {
+            manager.onEndpointTextReceived = null
+        }
+        super.onCleared()
     }
 
     fun acceptIncomingCall() {
