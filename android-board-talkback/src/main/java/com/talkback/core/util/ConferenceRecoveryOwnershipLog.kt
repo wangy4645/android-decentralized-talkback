@@ -45,7 +45,12 @@ object ConferenceRecoveryOwnershipLog {
     val mediaRestored: Boolean,
     val obligationOpen: Boolean,
     val pendingCompletion: Boolean,
-    val supersededFromAttempt: Long? = null
+    val supersededFromAttempt: Long? = null,
+    val parentAttemptId: Long? = null,
+    val resumeFromDeferred: Boolean = false,
+    val deferTrigger: String? = null,
+    val deferredReason: String? = null,
+    val transitionSeq: Long = 0L
   )
 
   data class ParticipantMembershipObservation(
@@ -113,7 +118,12 @@ object ConferenceRecoveryOwnershipLog {
       mediaRestored = raw.mediaRestored,
       obligationOpen = raw.obligationOpen,
       pendingCompletion = raw.pendingCompletion,
-      supersededFromAttempt = supersededFromAttempt
+      supersededFromAttempt = supersededFromAttempt,
+      parentAttemptId = raw.parentAttemptId,
+      resumeFromDeferred = raw.resumeFromDeferred,
+      deferTrigger = raw.deferTrigger,
+      deferredReason = raw.deferredReason,
+      transitionSeq = raw.transitionSeq
     )
   }
 
@@ -164,6 +174,11 @@ object ConferenceRecoveryOwnershipLog {
           append(" obligationOpen=").append(attemptLineage.obligationOpen)
           append(" pendingCompletion=").append(attemptLineage.pendingCompletion)
           attemptLineage.supersededFromAttempt?.let { append(" supersededFromAttempt=").append(it) }
+          append(" parentAttemptId=").append(attemptLineage.parentAttemptId ?: "none")
+          append(" resumeFromDeferred=").append(attemptLineage.resumeFromDeferred)
+          attemptLineage.deferTrigger?.let { append(" deferTrigger=").append(it) }
+          attemptLineage.deferredReason?.let { append(" deferredReason=").append(it) }
+          append(" transitionSeq=").append(attemptLineage.transitionSeq)
         } else {
           append(" attemptId=none")
         }
