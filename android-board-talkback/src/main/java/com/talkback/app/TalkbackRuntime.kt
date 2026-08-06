@@ -5,6 +5,7 @@ import com.talkback.core.media.MediaTopologyPolicy
 import com.talkback.core.discovery.MeshSweepGossipDiscovery
 import com.talkback.core.discovery.StaticPeerDiscoveryService
 import com.talkback.core.discovery.StaticPeerEntry
+import com.talkback.core.endpointtext.EndpointTextEvent
 import com.talkback.core.model.EndpointAddress
 import com.talkback.core.model.EndpointId
 import com.talkback.core.model.EndpointPriority
@@ -15,6 +16,7 @@ import com.talkback.core.ptt.PttState
 import com.talkback.core.registry.EndpointRegistry
 import com.talkback.core.webrtc.MediaBearerScope
 import com.talkback.core.session.ChannelReadiness
+import com.talkback.core.signaling.PeerTarget
 import com.talkback.core.sync.RemoteModuleState
 
 data class TalkbackRuntimeConfig(
@@ -88,6 +90,18 @@ class TalkbackRuntime(
 
     fun call(from: EndpointAddress, to: EndpointAddress, channelId: String? = null): String =
         coordinator.call(from, to, channelId)
+
+    /**
+     * Send Endpoint Text (control-plane). Does not create or touch Session / Floor / Admission.
+     */
+    fun sendEndpointText(from: EndpointAddress, to: EndpointAddress, text: String): Result<Unit> =
+        coordinator.sendEndpointText(from, to, text)
+
+    var onEndpointTextReceived: ((EndpointTextEvent) -> Unit)?
+        get() = coordinator.onEndpointTextReceived
+        set(value) {
+            coordinator.onEndpointTextReceived = value
+        }
 
     fun groupCall(
         from: EndpointAddress,
@@ -495,6 +509,16 @@ class TalkbackRuntime(
 
     internal fun testNotifyRemoteModuleRecovered(moduleId: String) {
         coordinator.testNotifyRemoteModuleRecovered(moduleId)
+    }
+
+    internal fun testInjectEndpointText(
+        from: EndpointAddress,
+        to: EndpointAddress,
+        messageId: String,
+        text: String,
+        fromPeer: PeerTarget
+    ) {
+        coordinator.testInjectEndpointText(from, to, messageId, text, fromPeer)
     }
 
     fun debugPr52cCreateDeferredIntent(remoteModuleId: String): String? =

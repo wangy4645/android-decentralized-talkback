@@ -27,7 +27,9 @@ enum class SignalType {
     WEBRTC_OFFER,
     WEBRTC_ANSWER,
     WEBRTC_ICE,
-    HANGUP
+    HANGUP,
+    /** Control-plane transient text between EndpointKeys (ADR-0039). Not a Session. */
+    ENDPOINT_TEXT
 }
 
 data class SignalEnvelope(
