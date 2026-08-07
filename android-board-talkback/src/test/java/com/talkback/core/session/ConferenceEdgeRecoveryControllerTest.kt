@@ -60,7 +60,8 @@ class ConferenceEdgeRecoveryControllerTest {
         isIceConnected: (String, String) -> Boolean = { _, _ -> false },
         canDispatchRecoveryMediaAction: (String, String) -> Boolean = { _, _ ->
             harnessReachability.canDispatchRecoverySignal()
-        }
+        },
+        membershipEpochProbe: MembershipEpochConvergenceProbe = DefaultOpenMembershipAuthoritySentinel
     ) = ConferenceEdgeRecoveryController(
         debounceMs = debounceMs,
         iceRestartTimeoutMs = 200L,
@@ -72,8 +73,23 @@ class ConferenceEdgeRecoveryControllerTest {
         onRequestReattach = onRequestReattach,
         onIceRestart = onIceRestart,
         isIceConnected = isIceConnected,
-        canDispatchRecoveryMediaAction = canDispatchRecoveryMediaAction
+        canDispatchRecoveryMediaAction = canDispatchRecoveryMediaAction,
+        membershipEpochProbe = membershipEpochProbe
     )
+
+    private fun membershipConvergedProbe() = object : MembershipEpochConvergenceProbe {
+        override fun probe(
+            record: EdgeRecoveryRecord,
+            channelId: String,
+            conferenceSessionId: String
+        ): MembershipEpochProbeResult =
+            MembershipEpochProbeResult.Checked(
+                authorityId = "M01",
+                expectedEpoch = 1L,
+                observedEpoch = 1L,
+                converged = true
+            )
+    }
 
     @After
     fun tearDown() {
@@ -2529,5 +2545,46 @@ class ConferenceEdgeRecoveryControllerTest {
             .toLong()
         assertTrue(nextAttempt > failedAttempt)
         assertFalse(controller.factsForSession("sess-1").anyFailedMediaRecovery)
+    }
+
+    /**
+     * OBS-M03 H-RES-1 / field attempt-2: ICE level-stable CONNECTED after obligation closes
+     * does not clear FAILED_MEDIA_RECOVERY residency (no new onIceConnected edge).
+     */
+    @Test
+    fun failedMediaRecovery_obligationClosedWhileIceStable_residencyPersists() {
+        controller = buildController(
+            observationWindowMs = 150L,
+            attemptBudgetMs = 120L,
+            isIceConnected = { _, _ -> true },
+            membershipEpochProbe = membershipConvergedProbe(),
+            onRequestReattach = { _, _, _ ->
+                reattachCalls++
+                ReattachDispatchOutcome.SENT
+            }
+        )
+        controller.onIceStateChanged(
+            sessionId = "sess-res",
+            channelId = "CH-1",
+            remoteModuleId = "M02",
+            iceState = "FAILED",
+            eligibility = eligible(),
+            initiatesReattach = true
+        )
+        Thread.sleep(200)
+        assertTrue(controller.factsForSession("sess-res").anyFailedMediaRecovery)
+        assertTrue(controller.edgeObligationOpen("sess-res", "M02"))
+        assertTrue(decisionLogs.any { it.contains("FAILED_MEDIA_RECOVERY") && it.contains("attempt_timeout") })
+
+        Thread.sleep(200)
+        assertTrue(controller.edgeObligationClosed("sess-res", "M02"))
+        assertFalse(controller.edgeObligationOpen("sess-res", "M02"))
+        assertEquals(
+            ObligationCloseReason.OBLIGATION_DEADLINE,
+            controller.obligationCloseReason("sess-res", "M02")
+        )
+        assertTrue(controller.isMediaUnavailable("sess-res", "M02"))
+        assertTrue(controller.factsForSession("sess-res").anyFailedMediaRecovery)
+        assertFalse(decisionLogs.any { it.contains("RECOVERY_EDGE_RECOVERED") })
     }
 }
