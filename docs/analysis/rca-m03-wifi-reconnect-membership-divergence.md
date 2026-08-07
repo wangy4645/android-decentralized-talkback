@@ -295,8 +295,9 @@ Likely gate sites (implementation **not authorized** until directed run passes):
 
 ## 8. Phase 2 directed run card
 
+**Full card:** [reconnect-convergence-fence-validation-run-card.md](./reconnect-convergence-fence-validation-run-card.md)  
 **Case:** `reconnect-convergence-fence-validation`  
-**Goal:** Validate H1 — when membership not converged, suppressing outbound mesh invite eliminates `CALL_REJECT` storm.
+**Goal:** Validate H1 — during membership not-ready window, outbound mesh invite continues (baseline). Fence suppress is a *future* target, not this run’s implementation.
 
 ### T0 — Baseline
 
@@ -403,8 +404,8 @@ conference returns to OPERATIONAL
 
 | Step | Status | Action |
 |------|--------|--------|
-| P0 | **COMPLETE** | Q3-lite: [four-view audit](./q3-lite-membership-view-semantics-audit.md) |
-| P1 | **NEXT** | Directed run T0–T4 (H1 validation) |
+| P0 | **COMPLETE** (`0a91ab2` pushed) | Q3-lite: [four-view audit](./q3-lite-membership-view-semantics-audit.md) |
+| P1 | **AUTHORIZED** | Directed run T0–T4 — [run card](./reconnect-convergence-fence-validation-run-card.md) |
 | P2 | PENDING | If H1 confirmed → lightweight Post-Reconnect Convergence Contract draft |
 | P3 | NOT AUTHORIZED | Invite admission gate implementation |
 | P4 | NOT AUTHORIZED | BUSY reason refactor |
@@ -426,7 +427,7 @@ conference returns to OPERATIONAL
 | Track | Relationship |
 |-------|--------------|
 | PR-UI-1 | Independent — conversation overlay lifecycle fix (merged separately) |
-| PR-UI-2 | Independent — peer reconnecting hint from UVCP; must not read `canonicalMismatch` |
+| PR-UI-2 | Independent — peer reconnecting hint from UVCP; implemented · waiting review; must not read `canonicalMismatch`; not a runtime fix signal |
 | ADR-0040 | No regression; do not conflate |
 | Phase 3.2 baseline | Architecture CLOSED; this is next-layer engineering maturity |
 
@@ -435,25 +436,30 @@ conference returns to OPERATIONAL
 ## 11. Status board entry
 
 ```text
+0a91ab2 Q3-lite audit              PUSHED
+
 ADR-0040 Recovery Lifecycle        VERIFIED (no regression evidence)
 
 PR-UI-1                            MERGED
-PR-UI-2                            VALID UX · independent · not runtime fix
+PR-UI-2                            implemented · independent · waiting review
+                                   (not runtime fix signal)
 
 RCA-M03-WIFI-RECONNECT             OPEN
-  Phase:                             Phase-2 Audit
-  Q3-lite:                            COMPLETE (q3-lite-membership-view-semantics-audit.md)
-  Next:                              Q1 directed run (fence validation)
+  Phase:                             Phase-2 field validation
+  Q3-lite:                            CLOSED (semantic clarification)
+  Next:                              Directed Run T0–T4
+  Run card:                          reconnect-convergence-fence-validation-run-card.md
 
-Hypothesis H1 (convergence fence)    SUPPORTED (static + Q3-lite) · field verify PENDING
+Hypothesis H1 (convergence fence)    SUPPORTED (static + Q3-lite) · field verify NEXT
 Q2 (BUSY semantic overload)          CONFIRMED (static) · fix NOT AUTHORIZED
 Q3 (self roster)                     CLOSED — Semantic A; not proven violation
 
 Not authorized:
-  recovery changes · completion changes · membership self-heal patch
-  BUSY semantics refactor · time-based sleep fence
+  fence implementation · BUSY refactor · membership patch / append-self
+  recovery / completion / RNA changes · time-based sleep fence
 
 Discipline:
   WiFi flap = trigger only
+  TransportReady ≠ SignalingAdmissionReady
   define signaling readiness before fixing failure appearance
 ```
