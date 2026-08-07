@@ -63,6 +63,7 @@ class MainActivity : AppCompatActivity() {
 
         bottomNav.setOnItemSelectedListener { item ->
             if (suppressNavListener) return@setOnItemSelectedListener true
+            dismissConversation()
             if (!talkViewModel.uiState.value.call.active) {
                 dismissCallOverlay()
             }
