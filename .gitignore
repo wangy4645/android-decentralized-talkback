@@ -15,10 +15,20 @@ captures/
 .DS_Store
 Thumbs.db
 
-# Test logs
+# Test / runtime logs
 test-logs/
 logs-soak*/
+logs/
+*.log
 *.apk
+
+# Local workspace state (not product source)
+.pr-life-*/
+.restore-backup/
+
+# Alternate / scratch build outputs
+**/build/
+build-*/
 
 # Local dev caches
 .gradle-home/
