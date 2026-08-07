@@ -437,29 +437,29 @@ conference returns to OPERATIONAL
 
 ```text
 0a91ab2 Q3-lite audit              PUSHED
+967e042 directed run card          PUSHED
 
-ADR-0040 Recovery Lifecycle        VERIFIED (no regression evidence)
+ADR-0040 Recovery Lifecycle        VERIFIED
+PR-LIFE-1 / PR-LIFE-2              CLOSED
 
 PR-UI-1                            MERGED
-PR-UI-2                            implemented · independent · waiting review
-                                   (not runtime fix signal)
+PR-UI-2                            READY (independent · waiting)
+                                   (not runtime fix signal · not this run)
 
 RCA-M03-WIFI-RECONNECT             OPEN
   Phase:                             Phase-2 field validation
-  Q3-lite:                            CLOSED (semantic clarification)
-  Next:                              Directed Run T0–T4
+  Q3-lite:                            CLOSED
+  H1 static:                          SUPPORTED
+  H1 FIELD VALIDATION:                RUNNING (baseline · current APK · no instrumentation PR)
   Run card:                          reconnect-convergence-fence-validation-run-card.md
 
-Hypothesis H1 (convergence fence)    SUPPORTED (static + Q3-lite) · field verify NEXT
-Q2 (BUSY semantic overload)          CONFIRMED (static) · fix NOT AUTHORIZED
-Q3 (self roster)                     CLOSED — Semantic A; not proven violation
-
-Not authorized:
-  fence implementation · BUSY refactor · membership patch / append-self
-  recovery / completion / RNA changes · time-based sleep fence
+Unauthorized:
+  admission gate · MESH_ADMISSION_DECISION before H1 confirm
+  BUSY refactor · membership mutation
+  recovery / completion / RNA · time-based sleep fence
 
 Discipline:
   WiFi flap = trigger only
   TransportReady ≠ SignalingAdmissionReady
-  define signaling readiness before fixing failure appearance
+  reproduce production path before widening the change surface
 ```

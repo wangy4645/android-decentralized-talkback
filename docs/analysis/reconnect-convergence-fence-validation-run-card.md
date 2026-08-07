@@ -1,17 +1,19 @@
 # Reconnect Convergence Fence Validation Run Card
 
-**Status:** AUTHORIZED (baseline / unfenced observation)  
+**Status:** AUTHORIZED — BASELINE FIELD RUN (no instrumentation PR)  
 **Case:** `reconnect-convergence-fence-validation`  
 **Date:** 2026-08-07  
 **Parent:** [RCA-M03-Reconnect](./rca-m03-wifi-reconnect-membership-divergence.md)  
 **Semantics:** [Q3-lite four-view audit](./q3-lite-membership-view-semantics-audit.md) (CLOSED)  
-**Evidence freeze:** commit `0a91ab2` (Q3-lite + RCA Phase 2)
+**Evidence freeze:** `0a91ab2` + `967e042` on `main` · **current APK only**
 
 **Goal:** Prove that during the post-reconnect membership non-ready window, outbound mesh invite continues (or does not). **Not** WiFi reconnect success. **Not** recovery lifecycle. **Not** fence implementation.
 
 ```text
 TransportReady  ≠  SignalingAdmissionReady
 ```
+
+**Baseline discipline (signed):** do **not** add `MESH_ADMISSION_DECISION` before this run. Existing logs (`MESH_OFFERED`, `CALL_REJECT`, `CANONICAL_MISMATCH`, `GROUP_RESYNC_REQUEST`, `rosterEpoch`, `memberHash`) are sufficient to answer H1. Instrumentation is deferred until after H1 field confirmation (implementation prep), not for proving the problem exists.
 
 ---
 
@@ -72,47 +74,23 @@ NOT_READY :=
 
 ---
 
-## Observation enrichment (behavior-neutral; preferred)
+## Observation enrichment — DEFERRED
 
-If a build is cut for this run, add **logs only** (no gate behavior):
-
-### 1. `MESH_ADMISSION_DECISION`
-
-Emit at the decision site before `offerGroupMeshJoin()` / mesh retry:
+`MESH_ADMISSION_DECISION` and extra inviteAttemptId correlation are **not** part of this baseline.
 
 ```text
-MESH_ADMISSION_DECISION
-  ready=<bool>
-  reason=<MEMBERSHIP_PENDING|DIGEST_MISALIGNED|RESYNC_IN_FLIGHT|TRANSPORT_ONLY|ALLOWED>
-  sessionId=
-  channelId=
-  remote=
-  rosterEpoch=
-  memberHash=
+Baseline run  = current main APK + existing tokens
+Instrumentation = only after H1 field-confirmed, before gate impl
 ```
 
-Purpose: prove *what a fence would decide* without implementing suppress.
-
-Without this log, adjudicate from existing `TOPOLOGY_SNAPSHOT` + `MESH_OFFERED` timing only (weaker but acceptable for baseline).
-
-### 2. Convergence epoch correlation
-
-On each invite attempt and each topology snapshot, record:
+Adjudicate from:
 
 ```text
-rosterEpoch / membershipEpoch
-topologyDigest (or memberHash)
-inviteAttemptId (or mesh offer correlation id if present)
+TOPOLOGY_SNAPSHOT + membershipDigestAligned + MEMBERSHIP_PENDING
+CANONICAL_MISMATCH / GROUP_RESYNC_REQUEST
+MESH_OFFERED / CALL_REJECT / mesh retry schedule
+rosterEpoch / memberHash (already on topology / digest paths)
 ```
-
-Purpose:
-
-```text
-invite happened during epoch N
-epoch N was unstable
-```
-
-**Unauthorized:** wiring `ready=false` into actual suppress. Observation only.
 
 ---
 
@@ -178,11 +156,19 @@ CALL_REJECT (decode reason if possible; expect BUSY)
 MESH_ADMISSION_DECISION (if instrumented)
 ```
 
-Correlate each invite with:
+Correlate on three axes (primary adjudication):
 
 ```text
-rosterEpoch + memberHash at offer time
-membershipDigestAligned / groupTopologyReadiness
+Axis A — Membership readiness
+  CANONICAL_MISMATCH · MEMBERSHIP_PENDING · GROUP_RESYNC_REQUEST
+  MEMBERSHIP_SNAPSHOT_APPLY · digest aligned / rosterEpoch / memberHash
+
+Axis B — Signaling admission
+  MESH_OFFERED · CALL_REJECT · retry schedule
+
+Axis C — Recovery boundary (exclusion only)
+  transport recovered · ICE connected · EDGE_RECOVERED
+  (do not use as H1 pass/fail)
 ```
 
 **Expected (current unfenced main):**
@@ -211,25 +197,25 @@ CALL_REJECT burst stops
 conference returns toward OPERATIONAL
 ```
 
-**Do not** treat UI ONLINE / banner as authority.
+**Do not** treat UI ONLINE / banner / PR-UI-2 as authority.
 
 ---
 
 ## T4 — Adjudication
 
-### Baseline (no fence) — this card’s default run
+### Baseline (no fence) — this card
 
-| Outcome | Verdict |
-|---------|---------|
-| T2: NOT_READY + MESH_OFFERED + CALL_REJECT storm | **H1 SUPPORTED** — fence design authorized next |
-| T2: NOT_READY + no MESH_OFFERED, but storm persists | **H1 REFUTED** — widen RCA (other admission path) |
-| T2: NOT_READY + no MESH_OFFERED + no storm | Unexpected healthy path; document; recheck instrumentation |
-| T3: converges then offers resume cleanly | Convergence eventual; fence still may be needed for window |
+| Case | Pattern | Verdict |
+|------|---------|---------|
+| **1** | NOT_READY + MESH_OFFERED + CALL_REJECT storm | **H1 CONFIRMED** → Post-Reconnect Convergence Contract |
+| **2** | NOT_READY + no MESH_OFFERED, but reject continues | **H1 weakened** → Q1.2 (stale invite / retry queue / ownership) |
+| **3** | authority epoch=N, local digest=N, topology content diverges | **Reopen Q3-lite** only if true four-view contradiction |
+| — | NOT_READY + no MESH_OFFERED + no storm | Unexpected healthy path; document |
 
-### Post-fence target (NOT this run; future card)
+### Post-fence target (NOT this run)
 
 ```text
-NOT_READY → MESH_OFFERED = 0 (or MESH_OFFER_SUPPRESSED)
+NOT_READY → MESH_OFFERED = 0
          → CONVERGED
          → MESH_OFFERED resume
          → CALL_REJECT storm absent/reduced
@@ -273,10 +259,11 @@ membershipDigestAligned
 MEMBERSHIP_PENDING
 CANONICAL_MISMATCH
 GROUP_RESYNC_REQUEST
+MEMBERSHIP_SNAPSHOT_APPLY
 MESH_OFFERED
-MESH_ADMISSION_DECISION
 CALL_REJECT
 TRANSPORT_READY
+EDGE_RECOVERED
 ```
 
 ---
@@ -284,29 +271,23 @@ TRANSPORT_READY
 ## Authorization board
 
 ```text
+ADR-0040 Recovery Lifecycle           VERIFIED
+PR-LIFE-1 / PR-LIFE-2                 CLOSED
+
 0a91ab2 Q3-lite audit                 PUSHED
+967e042 run card                      PUSHED
+
+PR-UI-1                               MERGED
+PR-UI-2                               READY (independent · waiting · not this run)
 
 RCA-M03                               OPEN
-Q3-lite                               CLOSED (semantic clarification)
-H1 convergence fence                  SUPPORTED (static) · field verify THIS RUN
-
-This run authorizes:                  baseline observation only
-Next if H1 field-supported:           Post-Reconnect Convergence Contract draft
-                                      + SignalingAdmissionReady predicate
+Q3-lite                               CLOSED
+H1 convergence fence missing          SUPPORTED STATIC
+H1 FIELD VALIDATION                   RUNNING (baseline · no instrumentation PR)
 
 Unauthorized:
-  fence implementation
-  BUSY refactor
-  membership patch / append-self
-  recovery / completion / RNA changes
-  PR-UI-2 as fix signal
-```
-
----
-
-## Status after this card
-
-```text
-PR-UI-2                               implemented · independent · waiting review
-Directed Run T0–T4                    AUTHORIZED · execute next
+  admission gate implementation
+  MESH_ADMISSION_DECISION before H1 confirm
+  BUSY semantic change
+  membership mutation
 ```
