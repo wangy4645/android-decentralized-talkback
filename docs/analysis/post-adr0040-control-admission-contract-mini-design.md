@@ -274,5 +274,13 @@ Root contract gap     control admission (post-0040)
 Watchdog              premature terminal timeout (symptom)
 Residency exit (X2)   HOLD · downstream only
 
-Next: directed validation card → ADR-X1 draft → implementation
+Design note           DONE (d16029e)
+Directed validation   AUTHORIZED → [run card](./post-adr0040-control-admission-validation-run-card.md)
+ADR-X1                NOT STARTED
+Implementation        NOT STARTED
+
+Hypothesis (pre-field):
+    receipt may not enter admission reevaluation chain
+
+Next: field run → Branch A/B/C adjudication → ADR-X1 draft (if warranted)
 ```
