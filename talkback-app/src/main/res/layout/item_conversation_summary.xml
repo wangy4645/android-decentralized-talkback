@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_marginBottom="8dp"
+    android:background="@drawable/bg_card"
+    android:gravity="center_vertical"
+    android:orientation="horizontal"
+    android:paddingHorizontal="12dp"
+    android:paddingVertical="10dp">
+
+    <FrameLayout
+        android:layout_width="44dp"
+        android:layout_height="44dp">
+
+        <TextView
+            android:id="@+id/txtConversationAvatar"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:layout_gravity="center"
+            android:background="@drawable/bg_message_avatar_online"
+            android:fontFamily="sans-serif-medium"
+            android:gravity="center"
+            android:includeFontPadding="false"
+            android:textColor="@color/tb_text_primary"
+            android:textSize="11sp" />
+
+        <View
+            android:id="@+id/dotOnline"
+            android:layout_width="8dp"
+            android:layout_height="8dp"
+            android:layout_gravity="top|start"
+            android:layout_marginStart="1dp"
+            android:layout_marginTop="2dp"
+            android:background="@drawable/dot_online" />
+    </FrameLayout>
+
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="10dp"
+        android:layout_weight="1"
+        android:orientation="vertical">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/txtConversationLabel"
+                style="@style/MsgEndpointName"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:ellipsize="end"
+                android:maxLines="1" />
+
+            <TextView
+                android:id="@+id/txtConversationTime"
+                style="@style/MsgTime"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/txtConversationTeam"
+            style="@style/MsgTeamName"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:paddingTop="2dp" />
+
+        <TextView
+            android:id="@+id/txtConversationPreview"
+            style="@style/MsgPreview"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:paddingTop="3dp" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/txtConversationUnread"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="8dp"
+        android:background="@drawable/bg_unread_badge"
+        android:gravity="center"
+        android:includeFontPadding="false"
+        android:minWidth="18dp"
+        android:minHeight="18dp"
+        android:paddingHorizontal="5dp"
+        android:textColor="@color/tb_bg"
+        android:textSize="10sp"
+        android:visibility="gone" />
+
+</LinearLayout>

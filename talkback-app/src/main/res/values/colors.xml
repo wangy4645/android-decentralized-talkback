@@ -16,6 +16,8 @@
     <!-- 在线/信号：比主色再偏绿一点 -->
     <color name="tb_success">#58FAB8</color>
     <color name="tb_warning">#FFB020</color>
+    <!-- Conversation header call affordance (mock amber) -->
+    <color name="conversation_call_icon">#FFB020</color>
     <!-- Meeting connecting accent: purer yellow than tb_warning (less orange). -->
     <color name="tb_meeting_connecting">#FFD524</color>
     <color name="tb_danger">#FF4D4F</color>
@@ -27,7 +29,17 @@
     <!-- Meeting speaker: faint outer ring + VU meter inactive segments -->
     <color name="tb_meeting_outer_ring">#33E8EEF4</color>
     <color name="tb_meeting_outer_ring_muted">#225C7084</color>
-    <color name="tb_volume_meter_inactive">#1A2430</color>
+    <color name="tb_volume_meter_inactive">#332A3D4A</color>
+    <color name="tb_volume_meter_light">#7AF6D8</color>
+    <color name="tb_volume_meter_mid">#3AF6D4</color>
+    <color name="tb_volume_meter_deep">#1A9B7E</color>
+    <color name="tb_volume_meter_peak">#B8E84A</color>
+    <color name="tb_volume_meter_yellow">#E8D44A</color>
+    <color name="tb_volume_meter_orange">#FF9A3C</color>
+    <color name="tb_volume_meter_red">#FF4D4F</color>
+    <color name="tb_message_send">#1F9D63</color>
+    <color name="tb_message_fab">#22C55E</color>
+    <color name="tb_message_send_disabled">#2A4A3A</color>
     <!-- PTT 按钮内圆：中心浅灰径向渐变，非纯黑 -->
     <color name="tb_ptt_inner_center">#2C3844</color>
     <color name="tb_ptt_inner_edge">#171F28</color>

@@ -2,15 +2,24 @@ package com.talkback.appprod
 
 import android.app.Application
 import com.talkback.appprod.data.TaskProfileManager
-import com.talkback.appprod.endpointtext.EndpointTextRecentStore
+import com.talkback.appprod.endpointtext.ChannelConversationStore
+import com.talkback.appprod.endpointtext.ConversationStore
+import com.talkback.appprod.endpointtext.EndpointTextInboundNotifier
 import com.talkback.appprod.runtime.TalkbackRuntimeManager
+import kotlinx.coroutines.MainScope
 
 class TalkbackApp : Application() {
     lateinit var runtimeManager: TalkbackRuntimeManager
         private set
 
-    /** Process-local EndpointText presentation cache (ADR-0039 V1.5). Not transport state. */
-    val endpointTextRecentStore = EndpointTextRecentStore()
+    /** Process-local Tactical Message presentation cache. Not transport state. */
+    val conversationStore = ConversationStore()
+
+    /** Process-local Channel Message presentation cache (ADR-0041). */
+    val channelConversationStore = ChannelConversationStore()
+
+    lateinit var endpointTextInboundNotifier: EndpointTextInboundNotifier
+        private set
 
     var serviceRunning: Boolean = false
         internal set
@@ -18,6 +27,7 @@ class TalkbackApp : Application() {
     override fun onCreate() {
         super.onCreate()
         runtimeManager = TalkbackRuntimeManager(this)
+        endpointTextInboundNotifier = EndpointTextInboundNotifier(this, MainScope())
         TaskProfileManager(this).ensureInitialized()
     }
 

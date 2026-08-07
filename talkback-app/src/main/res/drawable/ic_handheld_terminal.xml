@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- Antenna -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M11.25,2h1.5v2.75h-1.5z" />
+    <!-- Body -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M7.5,5.5c0,-0.83 0.67,-1.5 1.5,-1.5h6c0.83,0 1.5,0.67 1.5,1.5V20c0,0.83 -0.67,1.5 -1.5,1.5H9c-0.83,0 -1.5,-0.67 -1.5,-1.5V5.5zM9,7v3.5h6V7H9zM10,12.25h1.25v1.25H10v-1.25zM12.75,12.25H14v1.25h-1.25v-1.25zM10,14.75h1.25V16H10v-1.25zM12.75,14.75H14V16h-1.25v-1.25zM10,17.25h4v1.25h-4v-1.25z" />
+</vector>

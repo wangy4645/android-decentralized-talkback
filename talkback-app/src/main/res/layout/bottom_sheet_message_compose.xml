@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="@color/tb_surface"
+    android:orientation="vertical"
+    android:paddingBottom="8dp">
+
+    <TextView
+        style="@style/MsgSheetTitle"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:paddingHorizontal="16dp"
+        android:paddingTop="14dp"
+        android:paddingBottom="10dp"
+        android:text="@string/message_compose_title" />
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="@color/tb_divider" />
+
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/recyclerComposeTargets"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:maxHeight="360dp"
+        android:paddingVertical="2dp" />
+
+    <TextView
+        android:id="@+id/btnComposeCancel"
+        style="@style/MsgSheetCancel"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="?android:attr/selectableItemBackground"
+        android:clickable="true"
+        android:focusable="true"
+        android:text="@string/call_action_cancel" />
+
+</LinearLayout>

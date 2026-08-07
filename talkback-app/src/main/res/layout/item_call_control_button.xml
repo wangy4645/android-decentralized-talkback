@@ -8,14 +8,14 @@
 
     <FrameLayout
         android:id="@+id/btnControlCircle"
-        android:layout_width="56dp"
-        android:layout_height="56dp"
+        android:layout_width="@dimen/call_control_circle_size"
+        android:layout_height="@dimen/call_control_circle_size"
         android:background="@drawable/bg_call_control_circle">
 
         <ImageView
             android:id="@+id/imgControlIcon"
-            android:layout_width="24dp"
-            android:layout_height="24dp"
+            android:layout_width="@dimen/call_control_icon_size"
+            android:layout_height="@dimen/call_control_icon_size"
             android:layout_gravity="center"
             android:contentDescription="@null"
             android:tint="@color/tb_text_primary" />

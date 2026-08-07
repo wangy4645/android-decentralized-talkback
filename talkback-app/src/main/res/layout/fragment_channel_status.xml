@@ -3,23 +3,14 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="@color/tb_bg"
-    android:fillViewport="true">
+    android:fillViewport="true"
+    android:scrollbars="none">
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical"
-        android:padding="@dimen/settings_subpage_padding">
-
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:fontFamily="sans-serif"
-            android:includeFontPadding="false"
-            android:paddingBottom="12dp"
-            android:text="@string/nav_channels"
-            android:textColor="@color/tb_text_primary"
-            android:textSize="@dimen/settings_page_title_text_size" />
+        android:paddingBottom="@dimen/settings_subpage_padding">
 
         <LinearLayout
             android:layout_width="match_parent"

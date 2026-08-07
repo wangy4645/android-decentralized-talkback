@@ -4,11 +4,11 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-class EndpointTextRecentStoreTest {
+class ConversationStoreTest {
 
     @Test
     fun append_thenRecent_returnsNewestFirst() {
-        val store = EndpointTextRecentStore(capacityPerEndpoint = 8)
+        val store = ConversationStore(capacityPerEndpoint = 8)
         store.append(record("peer-a", "first", 1_000L, EndpointTextDirection.INBOUND))
         store.append(record("peer-a", "second", 2_000L, EndpointTextDirection.OUTBOUND))
 
@@ -20,7 +20,7 @@ class EndpointTextRecentStoreTest {
 
     @Test
     fun recent_isScopedPerEndpointKey() {
-        val store = EndpointTextRecentStore(capacityPerEndpoint = 8)
+        val store = ConversationStore(capacityPerEndpoint = 8)
         store.append(record("peer-a", "a1", 1L, EndpointTextDirection.INBOUND))
         store.append(record("peer-b", "b1", 2L, EndpointTextDirection.INBOUND))
 
@@ -31,7 +31,7 @@ class EndpointTextRecentStoreTest {
 
     @Test
     fun exceedsCapacity_evictsOldest() {
-        val store = EndpointTextRecentStore(capacityPerEndpoint = 8)
+        val store = ConversationStore(capacityPerEndpoint = 8)
         repeat(9) { i ->
             store.append(
                 record("peer-a", "msg-$i", (i + 1) * 1_000L, EndpointTextDirection.INBOUND)
@@ -47,12 +47,38 @@ class EndpointTextRecentStoreTest {
 
     @Test
     fun clear_removesAllEndpoints() {
-        val store = EndpointTextRecentStore(capacityPerEndpoint = 8)
+        val store = ConversationStore(capacityPerEndpoint = 8)
         store.append(record("peer-a", "a", 1L, EndpointTextDirection.INBOUND))
         store.append(record("peer-b", "b", 2L, EndpointTextDirection.OUTBOUND))
         store.clear()
         assertTrue(store.recent("peer-a").isEmpty())
         assertTrue(store.recent("peer-b").isEmpty())
+        assertTrue(store.summaries().isEmpty())
+    }
+
+    @Test
+    fun inbound_incrementsUnread_untilMarkRead() {
+        val store = ConversationStore(capacityPerEndpoint = 8)
+        store.append(record("peer-a", "hello", 1L, EndpointTextDirection.INBOUND))
+        assertEquals(1, store.summaries().single().unreadCount)
+        store.markRead("peer-a")
+        assertEquals(0, store.summaries().single().unreadCount)
+    }
+
+    @Test
+    fun openConversation_suppressesUnreadForInbound() {
+        val store = ConversationStore(capacityPerEndpoint = 8)
+        store.setOpenConversation("peer-a")
+        store.append(record("peer-a", "live", 1L, EndpointTextDirection.INBOUND))
+        assertEquals(0, store.summaries().single().unreadCount)
+    }
+
+    @Test
+    fun summaries_sortedByLastTimestampDescending() {
+        val store = ConversationStore(capacityPerEndpoint = 8)
+        store.append(record("peer-a", "a", 100L, EndpointTextDirection.INBOUND))
+        store.append(record("peer-b", "b", 200L, EndpointTextDirection.INBOUND))
+        assertEquals(listOf("peer-b", "peer-a"), store.summaries().map { it.endpointKey })
     }
 
     private fun record(

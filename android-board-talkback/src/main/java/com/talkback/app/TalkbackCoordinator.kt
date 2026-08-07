@@ -17,6 +17,9 @@ import com.talkback.core.presence.SessionPresenceSnapshot
 import com.talkback.core.contacts.CallableModuleGate
 import com.talkback.core.contacts.ContactEndpointRow
 import com.talkback.core.contacts.ContactsProjection
+import com.talkback.core.channeltext.ChannelTextController
+import com.talkback.core.channeltext.ChannelTextEvent
+import com.talkback.core.channeltext.ChannelTextPrepareResult
 import com.talkback.core.endpointtext.EndpointTextController
 import com.talkback.core.endpointtext.EndpointTextEvent
 import com.talkback.core.endpointtext.EndpointTextPrepareResult
@@ -346,7 +349,14 @@ class TalkbackCoordinator(
     @Volatile
     var onEndpointTextReceived: ((EndpointTextEvent) -> Unit)? = null
 
+    @Volatile
+    var onChannelTextReceived: ((ChannelTextEvent) -> Unit)? = null
+
     private val endpointTextController = EndpointTextController(
+        onLog = { message -> log(message) }
+    )
+
+    private val channelTextController = ChannelTextController(
         onLog = { message -> log(message) }
     )
 
@@ -1347,6 +1357,66 @@ class TalkbackCoordinator(
                     log(
                         "ENDPOINT_TEXT sent messageId=${prepared.payload.messageId} " +
                             "from=${from.key} to=${to.key}"
+                    )
+                }
+            }
+        }
+    }
+
+    /**
+     * ChannelText fan-out (ADR-0041): one logical messageId, unicast to each reachable member.
+     * Address identity is [channelId], not the recipient list.
+     */
+    fun sendChannelText(
+        from: EndpointAddress,
+        channelId: String,
+        remotes: List<EndpointAddress>,
+        text: String
+    ): Result<Unit> = runCatching {
+        runOnCoordinatorSync {
+            if (text.length > ChannelTextController.MAX_TEXT_CHARS) {
+                error(ChannelTextController.REASON_TEXT_TOO_LONG)
+            }
+            if (channelId.isBlank()) {
+                error(ChannelTextController.REASON_INVALID_CHANNEL)
+            }
+            val targets = remotes.filter { it.moduleId.value != from.moduleId.value }
+            if (targets.isEmpty()) {
+                error(ChannelTextController.REASON_NO_MEMBERS)
+            }
+            when (val prepared = channelTextController.prepareSend(from, channelId, text)) {
+                is ChannelTextPrepareResult.Rejected ->
+                    error(prepared.reason)
+                ChannelTextPrepareResult.RateLimited -> Unit
+                is ChannelTextPrepareResult.Ready -> {
+                    var sent = 0
+                    var lastFail: String? = null
+                    for (to in targets) {
+                        val peer = resolvePeerForModule(to.moduleId.value)
+                        if (peer == null || !isModuleDialable(to.moduleId.value)) {
+                            lastFail = ChannelTextController.REASON_UNREACHABLE
+                            continue
+                        }
+                        val envelope = buildSignedEnvelope(
+                            SignalType.CHANNEL_TEXT,
+                            from,
+                            to,
+                            sessionId = "",
+                            payload = prepared.payload.encode()
+                        )
+                        if (sendSignalHandoff(peer, envelope)) {
+                            sent++
+                        } else {
+                            lastFail = ChannelTextController.REASON_SEND_FAILED
+                        }
+                    }
+                    if (sent == 0) {
+                        error(lastFail ?: ChannelTextController.REASON_SEND_FAILED)
+                    }
+                    channelTextController.markSent(from, channelId)
+                    log(
+                        "CHANNEL_TEXT sent messageId=${prepared.payload.messageId} " +
+                            "channelId=$channelId from=${from.key} delivered=$sent/${targets.size}"
                     )
                 }
             }
@@ -2389,6 +2459,25 @@ class TalkbackCoordinator(
             }
             displayAudioLevel(raw)
         }
+
+    /** Linear 0..1 remote/local audio levels for an active unicast call (WebRTC stats). */
+    fun unicastCallAudioLevels(sessionId: String): Pair<Float, Float> = runOnCoordinatorSync {
+        val session = sessions[sessionId] ?: return@runOnCoordinatorSync 0f to 0f
+        if (session.type != SessionType.UNICAST ||
+            session.unicastPhase != UnicastCallPhase.CONNECTED
+        ) {
+            return@runOnCoordinatorSync 0f to 0f
+        }
+        val engine = mediaRegistry.getUnicast(sessionId) ?: return@runOnCoordinatorSync 0f to 0f
+        engine.refreshAudioLevel()
+        val remote = displayAudioLevel(engine.inboundAudioLevel())
+        val local = if (session.muted) {
+            0f
+        } else {
+            displayAudioLevel(engine.outboundAudioLevel())
+        }
+        remote to local
+    }
 
     fun refreshStaleGroupSession(channelId: String) = runOnCoordinator {
         refreshStaleMeshSession(channelId, SessionType.GROUP)
@@ -4052,13 +4141,21 @@ class TalkbackCoordinator(
 
     private fun handleSignal(signal: SignalEnvelope, fromPeer: PeerTarget) {
         if (!verifyIncomingSignal(signal)) return
-        // Explicit ENDPOINT_TEXT bypass (P0): do not touchSession / Session / Floor / Admission.
+        // Explicit ENDPOINT_TEXT / CHANNEL_TEXT bypass: do not touchSession / Session / Floor / Admission.
         if (signal.type == SignalType.ENDPOINT_TEXT) {
             observePeerInboundAfterAuth(signal)
             callableModuleGate.markVerified(signal.from.moduleId.value)
             rememberSignalPeer(signal.from.moduleId.value, fromPeer)
             val event = endpointTextController.onReceive(signal) ?: return
             onEndpointTextReceived?.invoke(event)
+            return
+        }
+        if (signal.type == SignalType.CHANNEL_TEXT) {
+            observePeerInboundAfterAuth(signal)
+            callableModuleGate.markVerified(signal.from.moduleId.value)
+            rememberSignalPeer(signal.from.moduleId.value, fromPeer)
+            val event = channelTextController.onReceive(signal) ?: return
+            onChannelTextReceived?.invoke(event)
             return
         }
         observePeerInboundAfterAuth(signal)
@@ -4096,6 +4193,7 @@ class TalkbackCoordinator(
             SignalType.FLOOR_RELEASE -> handleFloorRelease(signal)
             SignalType.HANGUP -> handleHangup(signal)
             SignalType.ENDPOINT_TEXT -> Unit // handled above; keep exhaustive
+            SignalType.CHANNEL_TEXT -> Unit // handled above; keep exhaustive
             else -> Unit
         }
     }

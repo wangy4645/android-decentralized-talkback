@@ -14,6 +14,10 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.talkback.appprod.R
+import com.talkback.appprod.ui.call.CallLaunchContext
+import com.talkback.appprod.ui.call.CallReturnTarget
+import com.talkback.appprod.ui.call.CallSource
+import com.talkback.appprod.ui.call.PrivateCallNavigator
 import kotlinx.coroutines.launch
 
 class ContactsFragment : Fragment() {
@@ -30,7 +34,11 @@ class ContactsFragment : Fragment() {
             val teamName = bundle.getString("team").orEmpty()
             val online = bundle.getBoolean("online", false)
             if (!online) {
-                Toast.makeText(requireContext(), R.string.call_peer_offline, Toast.LENGTH_SHORT).show()
+                Toast.makeText(
+                    requireContext(),
+                    getString(R.string.call_cannot_call_offline, remoteLabel),
+                    Toast.LENGTH_SHORT
+                ).show()
                 return@setFragmentResultListener
             }
             startPrivateCall(remoteKey, remoteLabel, teamName)
@@ -46,27 +54,7 @@ class ContactsFragment : Fragment() {
                 Toast.makeText(requireContext(), R.string.call_peer_offline, Toast.LENGTH_SHORT).show()
                 return@setFragmentResultListener
             }
-            EndpointTextComposeDialog
-                .newInstance(remoteKey, remoteLabel)
-                .show(parentFragmentManager, "endpoint_text_compose")
-        }
-        parentFragmentManager.setFragmentResultListener(
-            ContactActionBottomSheet.REQUEST_RECENT_MESSAGES,
-            this
-        ) { _, bundle ->
-            val remoteKey = bundle.getString("key").orEmpty()
-            val remoteLabel = bundle.getString("label").orEmpty()
-            EndpointTextRecentDialog
-                .newInstance(remoteKey, remoteLabel)
-                .show(parentFragmentManager, "endpoint_text_recent")
-        }
-        parentFragmentManager.setFragmentResultListener(
-            EndpointTextComposeDialog.REQUEST_SEND,
-            this
-        ) { _, bundle ->
-            val remoteKey = bundle.getString(EndpointTextComposeDialog.ARG_KEY).orEmpty()
-            val text = bundle.getString(EndpointTextComposeDialog.ARG_TEXT).orEmpty()
-            sendEndpointText(remoteKey, text)
+            openConversation(remoteKey, remoteLabel)
         }
     }
 
@@ -150,67 +138,24 @@ class ContactsFragment : Fragment() {
     }
 
     private fun startPrivateCall(remoteKey: String, remoteLabel: String, teamName: String) {
-        viewModel.syncServiceState()
-        when (val err = viewModel.placeCall(remoteKey)) {
-            null -> view?.post {
-                (activity as? MainActivity)?.showCallScreen(remoteKey, remoteLabel, teamName)
-            }
-            "SERVICE_STOPPED" -> Toast.makeText(
-                requireContext(),
-                R.string.service_not_running,
-                Toast.LENGTH_SHORT
-            ).show()
-            "UNREACHABLE" -> Toast.makeText(
-                requireContext(),
-                R.string.call_failed_unreachable,
-                Toast.LENGTH_SHORT
-            ).show()
-            "BUSY" -> Toast.makeText(
-                requireContext(),
-                R.string.call_failed_busy,
-                Toast.LENGTH_SHORT
-            ).show()
-            else -> Toast.makeText(
-                requireContext(),
-                R.string.call_failed,
-                Toast.LENGTH_SHORT
-            ).show()
+        val activity = activity as? MainActivity ?: return
+        view?.post {
+            PrivateCallNavigator.start(
+                activity,
+                CallLaunchContext(
+                    targetKey = remoteKey,
+                    targetLabel = remoteLabel,
+                    teamName = teamName,
+                    source = CallSource.CONTACT,
+                    returnTarget = CallReturnTarget.Contacts
+                )
+            )
         }
     }
 
-    private fun sendEndpointText(remoteKey: String, text: String) {
-        viewModel.syncServiceState()
-        when (val err = viewModel.sendEndpointText(remoteKey, text)) {
-            null -> Toast.makeText(
-                requireContext(),
-                R.string.endpoint_text_sent,
-                Toast.LENGTH_SHORT
-            ).show()
-            "SERVICE_STOPPED" -> Toast.makeText(
-                requireContext(),
-                R.string.service_not_running,
-                Toast.LENGTH_SHORT
-            ).show()
-            "UNREACHABLE" -> Toast.makeText(
-                requireContext(),
-                R.string.endpoint_text_unreachable,
-                Toast.LENGTH_SHORT
-            ).show()
-            "TEXT_TOO_LONG" -> Toast.makeText(
-                requireContext(),
-                R.string.endpoint_text_too_long,
-                Toast.LENGTH_SHORT
-            ).show()
-            "SEND_FAILED" -> Toast.makeText(
-                requireContext(),
-                R.string.endpoint_text_send_failed,
-                Toast.LENGTH_SHORT
-            ).show()
-            else -> Toast.makeText(
-                requireContext(),
-                R.string.endpoint_text_failed,
-                Toast.LENGTH_SHORT
-            ).show()
+    private fun openConversation(remoteKey: String, remoteLabel: String) {
+        view?.post {
+            (activity as? MainActivity)?.showConversation(remoteKey, remoteLabel)
         }
     }
 }

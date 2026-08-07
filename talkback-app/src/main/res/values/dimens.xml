@@ -36,10 +36,33 @@
     <dimen name="mode_pill_tab_width">76dp</dimen>
     <dimen name="mode_pill_tab_height">32dp</dimen>
     <dimen name="mode_pill_gap_above_ptt">10dp</dimen>
-    <!-- 单呼头像：内圆实线 + 外圈虚线，两圈间距约 7dp（参考设计稿） -->
-    <dimen name="call_avatar_inner_size">104dp</dimen>
-    <dimen name="call_avatar_ring_size">118dp</dimen>
-    <dimen name="call_avatar_icon_size">52dp</dimen>
+    <!-- 单呼身份：与 PTT 同款圆框 + 渐弱虚线环 -->
+    <dimen name="call_badge_size">148dp</dimen>
+    <dimen name="call_identity_area_height">220dp</dimen>
+    <dimen name="call_radar_ring_1">160dp</dimen>
+    <dimen name="call_radar_ring_2">172dp</dimen>
+    <dimen name="call_radar_ring_3">184dp</dimen>
+    <dimen name="call_radar_ring_4">196dp</dimen>
+    <dimen name="call_radar_ring_5">208dp</dimen>
+    <dimen name="call_radar_ring_6">220dp</dimen>
+    <dimen name="call_identity_label_text_size">16sp</dimen>
+    <dimen name="call_level_meter_height">14dp</dimen>
+    <dimen name="call_level_meter_icon_size">16dp</dimen>
+    <!-- 音量条左右留白：参考 call_UI，整条约内容区 70% 宽并居中 -->
+    <dimen name="call_meter_margin_horizontal">36dp</dimen>
+    <dimen name="call_meter_timer_margin_top">18dp</dimen>
+    <dimen name="call_timer_margin_bottom">12dp</dimen>
+    <dimen name="call_controls_margin_bottom">16dp</dimen>
+    <!-- 结束通话与底部 Tab 留白：参考 call_UI 约 12% 屏高 -->
+    <dimen name="call_bottom_safe_margin">80dp</dimen>
+    <dimen name="call_banner_margin_top">0dp</dimen>
+    <dimen name="call_banner_min_height">36dp</dimen>
+    <dimen name="call_identity_label_margin_top">4dp</dimen>
+    <!-- 去掉圆外标签后整体下移，收紧与 Remote Speaking 的中间空白 -->
+    <dimen name="call_identity_block_margin_top">20dp</dimen>
+    <dimen name="call_identity_to_banner_gap">16dp</dimen>
+    <dimen name="call_control_circle_size">56dp</dimen>
+    <dimen name="call_control_icon_size">22dp</dimen>
     <!-- Meeting speaker: double-ring avatar + vertical VU meter (reference design) -->
     <dimen name="meeting_speaker_outer_size">168dp</dimen>
     <dimen name="meeting_speaker_inner_size">132dp</dimen>
@@ -49,9 +72,10 @@
     <dimen name="meeting_volume_meter_gap">20dp</dimen>
     <dimen name="call_end_button_height">44dp</dimen>
     <dimen name="call_end_button_radius">22dp</dimen>
-    <dimen name="call_end_button_padding_h">28dp</dimen>
-    <dimen name="call_end_icon_width">33dp</dimen>
-    <dimen name="call_end_icon_height">14dp</dimen>
+    <dimen name="call_end_button_padding_h">24dp</dimen>
+    <!-- 与 Mute / Audio Route 圆钮外缘对齐（相对 panel 内容区，不含 16dp 外边距） -->
+    <dimen name="call_end_button_margin_horizontal">27dp</dimen>
+    <dimen name="call_end_icon_size">20dp</dimen>
     <dimen name="call_ended_title_text_size">18sp</dimen>
     <dimen name="call_ended_duration_text_size">12sp</dimen>
     <dimen name="call_ended_summary_title_text_size">12sp</dimen>
@@ -77,5 +101,18 @@
     <dimen name="settings_row_icon_size">20dp</dimen>
     <dimen name="settings_row_min_height">46dp</dimen>
     <dimen name="settings_subpage_padding">16dp</dimen>
+
+    <!-- Messages / Conversation typography (aligned to message_UI1) -->
+    <dimen name="msg_section_title_text_size">11sp</dimen>
+    <dimen name="msg_sort_text_size">11sp</dimen>
+    <dimen name="msg_endpoint_name_text_size">13sp</dimen>
+    <dimen name="msg_team_text_size">10sp</dimen>
+    <dimen name="msg_preview_text_size">12sp</dimen>
+    <dimen name="msg_time_text_size">10sp</dimen>
+    <dimen name="msg_sheet_title_text_size">13sp</dimen>
+    <dimen name="msg_sheet_cancel_text_size">13sp</dimen>
+    <dimen name="msg_empty_title_text_size">13sp</dimen>
+    <dimen name="msg_empty_hint_text_size">11sp</dimen>
+    <dimen name="msg_tab_text_size">12sp</dimen>
 </resources>
 

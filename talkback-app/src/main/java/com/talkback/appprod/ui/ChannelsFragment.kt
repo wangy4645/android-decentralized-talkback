@@ -4,12 +4,12 @@ import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
-import android.widget.ImageView
 import android.widget.TextView
 import androidx.core.content.ContextCompat
 import androidx.core.view.isVisible
 import androidx.fragment.app.Fragment
 import androidx.fragment.app.activityViewModels
+import androidx.fragment.app.commit
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
@@ -19,115 +19,104 @@ import kotlinx.coroutines.launch
 class ChannelsFragment : Fragment() {
     private val viewModel: TalkViewModel by activityViewModels { TalkViewModelFactory(requireContext()) }
 
+    private enum class Tab { CHANNELS, MESSAGES }
+
+    private var selectedTab = Tab.CHANNELS
+    private var tabChannels: TextView? = null
+    private var tabMessages: TextView? = null
+    private var indicatorChannels: View? = null
+    private var indicatorMessages: View? = null
+    private var unreadBadge: TextView? = null
+
     override fun onCreateView(
         inflater: LayoutInflater,
         container: ViewGroup?,
         savedInstanceState: Bundle?
-    ): View = inflater.inflate(R.layout.fragment_channels, container, false)
+    ): View = inflater.inflate(R.layout.fragment_channels_host, container, false)
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
-        val txtTitle = view.findViewById<TextView>(R.id.txtActiveChannel)
-        val txtDesc = view.findViewById<TextView>(R.id.txtActiveChannelDesc)
-        val txtOnlineCount = view.findViewById<TextView>(R.id.txtChannelOnlineCount)
-        val txtStatus = view.findViewById<TextView>(R.id.txtChannelStatus)
-        val txtFloor = view.findViewById<TextView>(R.id.txtChannelFloor)
-        val imgStatusIcon = view.findViewById<ImageView>(R.id.imgChannelStatusIcon)
+        if (savedInstanceState != null) {
+            selectedTab = runCatching {
+                Tab.valueOf(savedInstanceState.getString(STATE_TAB, Tab.CHANNELS.name))
+            }.getOrDefault(Tab.CHANNELS)
+        }
+
+        tabChannels = view.findViewById(R.id.tabChannels)
+        tabMessages = view.findViewById(R.id.tabMessages)
+        indicatorChannels = view.findViewById(R.id.tabChannelsIndicator)
+        indicatorMessages = view.findViewById(R.id.tabMessagesIndicator)
+        unreadBadge = view.findViewById(R.id.txtMessagesUnreadBadge)
+
+        tabChannels?.setOnClickListener { selectTab(Tab.CHANNELS) }
+        tabMessages?.setOnClickListener { selectTab(Tab.MESSAGES) }
 
         viewLifecycleOwner.lifecycleScope.launch {
             viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
-                viewModel.uiState.collect { state ->
-                    bindChannel(
-                        view,
-                        state,
-                        txtTitle,
-                        txtDesc,
-                        txtOnlineCount,
-                        txtStatus,
-                        txtFloor,
-                        imgStatusIcon
-                    )
+                viewModel.conversationUi.collect { state ->
+                    if (state.totalUnread > 0) {
+                        unreadBadge?.isVisible = true
+                        unreadBadge?.text = state.totalUnread.toString()
+                    } else {
+                        unreadBadge?.isVisible = false
+                    }
                 }
             }
         }
+
+        applyTabUi()
     }
 
-    override fun onResume() {
-        super.onResume()
-        viewModel.startPolling()
-        viewModel.refresh()
+    fun showMessagesTab() {
+        if (!isAdded) return
+        selectedTab = Tab.MESSAGES
+        view?.post { applyTabUi() } ?: applyTabUi()
     }
 
-    override fun onPause() {
-        viewModel.stopPolling()
-        super.onPause()
+    private fun selectTab(tab: Tab) {
+        selectedTab = tab
+        applyTabUi()
     }
 
-    private fun bindChannel(
-        root: View,
-        state: TalkUiState,
-        txtTitle: TextView,
-        txtDesc: TextView,
-        txtOnlineCount: TextView,
-        txtStatus: TextView,
-        txtFloor: TextView,
-        imgStatusIcon: ImageView
-    ) {
-        val ctx = root.context
-        txtTitle.text = state.channelTitle
-        txtDesc.text = state.channelSubtitle
-        txtOnlineCount.text = state.onlineCount.toString()
-
-        val display = state.conferenceDisplay
-        val speaking = state.serviceRunning && state.sessionActive && (
-            (display.live && !state.conferenceMuted) ||
-                state.talking != "--"
-            )
-        val floorLabel = when {
-            speaking -> state.talking
-            state.floorOwner != "--" -> state.floorOwner
-            else -> "--"
-        }
-        txtFloor.text = if (state.conferenceMode) {
-            getString(R.string.mode_meeting) + ": " + floorLabel
-        } else {
-            getString(R.string.channel_floor_location, floorLabel)
-        }
-
-        val statusText = when {
-            !state.serviceRunning -> getString(R.string.channel_status_service_stopped)
-            state.incomingMeetingInvite != null ->
-                getString(R.string.meeting_invite_pending)
-            state.conferenceMode && !state.sessionActive -> getString(R.string.meeting_tap_to_join)
-            !state.sessionActive -> getString(R.string.channel_status_waiting)
-            state.conferenceActive && state.conferenceMuted -> getString(R.string.conference_status_muted)
-            display.live -> getString(R.string.conference_status_live)
-            display.recovering -> getString(R.string.meeting_reconnecting)
-            state.conferenceActive -> getString(R.string.conference_status_connecting)
-            speaking -> getString(R.string.status_speaking)
-            else -> getString(R.string.channel_status_idle)
-        }
-        txtStatus.text = statusText
-        txtStatus.setTextColor(
-            ContextCompat.getColor(
-                ctx,
-                when {
-                    !state.serviceRunning -> R.color.tb_text_muted
-                    speaking -> R.color.tb_primary
-                    else -> R.color.tb_text_secondary
-                }
-            )
+    private fun applyTabUi() {
+        val channelsSelected = selectedTab == Tab.CHANNELS
+        tabChannels?.setTextColor(color(if (channelsSelected) R.color.tb_primary else R.color.tb_text_secondary))
+        tabChannels?.alpha = if (channelsSelected) 1f else 0.45f
+        indicatorChannels?.setBackgroundColor(
+            color(if (channelsSelected) R.color.tb_primary else android.R.color.transparent)
         )
 
-        when {
-            speaking -> {
-                imgStatusIcon.isVisible = true
-                imgStatusIcon.setImageResource(R.drawable.ic_waveform)
-            }
-            state.serviceRunning && state.sessionActive -> {
-                imgStatusIcon.isVisible = true
-                imgStatusIcon.setImageResource(R.drawable.ic_chevrons_right)
-            }
-            else -> imgStatusIcon.isVisible = false
+        val messagesSelected = selectedTab == Tab.MESSAGES
+        tabMessages?.setTextColor(color(if (messagesSelected) R.color.tb_primary else R.color.tb_text_secondary))
+        tabMessages?.alpha = if (messagesSelected) 1f else 0.45f
+        indicatorMessages?.setBackgroundColor(
+            color(if (messagesSelected) R.color.tb_primary else android.R.color.transparent)
+        )
+
+        val tag = if (channelsSelected) TAG_CHANNEL_STATUS else TAG_MESSAGES_LIST
+        if (childFragmentManager.findFragmentByTag(tag)?.isAdded == true) {
+            return
         }
+        val fragment: Fragment = if (channelsSelected) {
+            ChannelStatusFragment()
+        } else {
+            MessagesListFragment()
+        }
+        childFragmentManager.commit {
+            setReorderingAllowed(true)
+            replace(R.id.channelsChildContainer, fragment, tag)
+        }
+    }
+
+    private fun color(resId: Int): Int = ContextCompat.getColor(requireContext(), resId)
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putString(STATE_TAB, selectedTab.name)
+    }
+
+    companion object {
+        private const val STATE_TAB = "channels_tab"
+        private const val TAG_CHANNEL_STATUS = "channel_status"
+        private const val TAG_MESSAGES_LIST = "messages_list"
     }
 }

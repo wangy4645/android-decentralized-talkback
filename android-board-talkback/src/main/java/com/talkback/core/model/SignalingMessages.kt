@@ -29,7 +29,9 @@ enum class SignalType {
     WEBRTC_ICE,
     HANGUP,
     /** Control-plane transient text between EndpointKeys (ADR-0039). Not a Session. */
-    ENDPOINT_TEXT
+    ENDPOINT_TEXT,
+    /** Control-plane Channel broadcast text (ADR-0041). Address is channelId, not multi-to. */
+    CHANNEL_TEXT
 }
 
 data class SignalEnvelope(

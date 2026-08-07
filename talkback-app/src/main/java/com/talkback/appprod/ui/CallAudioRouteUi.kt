@@ -6,18 +6,22 @@ import com.talkback.appprod.R
 
 object CallAudioRouteUi {
     fun highlight(speakerRoot: View, headsetRoot: View, route: CallAudioRoute) {
-        val speaker = speakerRoot.findViewById<FrameLayout>(R.id.btnControlCircle)
-        val headset = headsetRoot.findViewById<FrameLayout>(R.id.btnControlCircle)
-        speaker.setBackgroundResource(
-            if (route == CallAudioRoute.SPEAKER) R.drawable.bg_call_control_circle_active
-            else R.drawable.bg_call_control_circle
+        highlightSpeaker(speakerRoot, route == CallAudioRoute.SPEAKER)
+        highlightControl(
+            headsetRoot,
+            route == CallAudioRoute.EARPIECE || route == CallAudioRoute.HEADSET
         )
-        headset.setBackgroundResource(
-            if (route == CallAudioRoute.EARPIECE || route == CallAudioRoute.HEADSET) {
-                R.drawable.bg_call_control_circle_active
-            } else {
-                R.drawable.bg_call_control_circle
-            }
+    }
+
+    fun highlightSpeaker(speakerRoot: View, active: Boolean) {
+        highlightControl(speakerRoot, active)
+    }
+
+    fun highlightControl(root: View, active: Boolean) {
+        val circle = root.findViewById<FrameLayout>(R.id.btnControlCircle) ?: return
+        circle.setBackgroundResource(
+            if (active) R.drawable.bg_call_control_circle_active
+            else R.drawable.bg_call_control_circle
         )
     }
 }

@@ -6,6 +6,7 @@ import com.talkback.core.discovery.MeshSweepGossipDiscovery
 import com.talkback.core.discovery.StaticPeerDiscoveryService
 import com.talkback.core.discovery.StaticPeerEntry
 import com.talkback.core.endpointtext.EndpointTextEvent
+import com.talkback.core.channeltext.ChannelTextEvent
 import com.talkback.core.model.EndpointAddress
 import com.talkback.core.model.EndpointId
 import com.talkback.core.model.EndpointPriority
@@ -97,10 +98,23 @@ class TalkbackRuntime(
     fun sendEndpointText(from: EndpointAddress, to: EndpointAddress, text: String): Result<Unit> =
         coordinator.sendEndpointText(from, to, text)
 
+    fun sendChannelText(
+        from: EndpointAddress,
+        channelId: String,
+        remotes: List<EndpointAddress>,
+        text: String
+    ): Result<Unit> = coordinator.sendChannelText(from, channelId, remotes, text)
+
     var onEndpointTextReceived: ((EndpointTextEvent) -> Unit)?
         get() = coordinator.onEndpointTextReceived
         set(value) {
             coordinator.onEndpointTextReceived = value
+        }
+
+    var onChannelTextReceived: ((ChannelTextEvent) -> Unit)?
+        get() = coordinator.onChannelTextReceived
+        set(value) {
+            coordinator.onChannelTextReceived = value
         }
 
     fun groupCall(
@@ -331,6 +345,10 @@ class TalkbackRuntime(
 
     fun meetingSpeakerAudioLevel(channelId: String, speakerEndpointKey: String): Float =
         runCatching { coordinator.meetingSpeakerAudioLevel(channelId, speakerEndpointKey) }.getOrElse { 0f }
+
+    fun unicastCallAudioLevels(sessionId: String): Pair<Float, Float> =
+        runCatching { coordinator.unicastCallAudioLevels(sessionId) }
+            .getOrElse { 0f to 0f }
 
     fun isGroupSessionTrulyIdle(channelId: String): Boolean =
         runCatching { coordinator.isGroupSessionTrulyIdle(channelId) }.getOrElse { true }

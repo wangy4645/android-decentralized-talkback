@@ -350,4 +350,88 @@
         <item name="android:paddingHorizontal">10dp</item>
         <item name="android:paddingVertical">8dp</item>
     </style>
+
+    <style name="ConversationInput">
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:includeFontPadding">false</item>
+        <item name="android:background">@drawable/bg_conversation_input</item>
+        <item name="android:paddingHorizontal">12dp</item>
+        <item name="android:paddingVertical">9dp</item>
+        <item name="android:textColor">@color/tb_text_primary</item>
+        <item name="android:textColorHint">@color/tb_text_muted</item>
+        <item name="android:textSize">12sp</item>
+        <item name="android:minHeight">36dp</item>
+    </style>
+
+    <style name="ConversationSendButton">
+        <item name="android:fontFamily">sans-serif-medium</item>
+        <item name="android:includeFontPadding">false</item>
+        <item name="android:background">@drawable/bg_conversation_send_button</item>
+        <item name="android:gravity">center</item>
+        <item name="android:minHeight">36dp</item>
+        <item name="android:minWidth">64dp</item>
+        <item name="android:paddingHorizontal">14dp</item>
+        <item name="android:textAllCaps">false</item>
+        <item name="android:textColor">@color/conversation_send_button_text</item>
+        <item name="android:textSize">12sp</item>
+    </style>
+
+    <style name="MsgSectionTitle">
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:includeFontPadding">false</item>
+        <item name="android:textColor">@color/tb_text_secondary</item>
+        <item name="android:textSize">@dimen/msg_section_title_text_size</item>
+    </style>
+
+    <style name="MsgSortLabel">
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:includeFontPadding">false</item>
+        <item name="android:textColor">@color/tb_primary</item>
+        <item name="android:textSize">@dimen/msg_sort_text_size</item>
+    </style>
+
+    <style name="MsgEndpointName">
+        <item name="android:fontFamily">sans-serif-medium</item>
+        <item name="android:includeFontPadding">false</item>
+        <item name="android:textColor">@color/tb_text_primary</item>
+        <item name="android:textSize">@dimen/msg_endpoint_name_text_size</item>
+    </style>
+
+    <style name="MsgTeamName">
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:includeFontPadding">false</item>
+        <item name="android:textColor">@color/tb_text_muted</item>
+        <item name="android:textSize">@dimen/msg_team_text_size</item>
+    </style>
+
+    <style name="MsgPreview">
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:includeFontPadding">false</item>
+        <item name="android:textColor">@color/tb_text_secondary</item>
+        <item name="android:textSize">@dimen/msg_preview_text_size</item>
+    </style>
+
+    <style name="MsgTime">
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:includeFontPadding">false</item>
+        <item name="android:textColor">@color/tb_text_muted</item>
+        <item name="android:textSize">@dimen/msg_time_text_size</item>
+    </style>
+
+    <style name="MsgSheetTitle">
+        <item name="android:fontFamily">sans-serif-medium</item>
+        <item name="android:includeFontPadding">false</item>
+        <item name="android:textColor">@color/tb_text_primary</item>
+        <item name="android:textSize">@dimen/msg_sheet_title_text_size</item>
+    </style>
+
+    <style name="MsgSheetCancel">
+        <item name="android:fontFamily">sans-serif-medium</item>
+        <item name="android:includeFontPadding">false</item>
+        <item name="android:gravity">center</item>
+        <item name="android:minHeight">44dp</item>
+        <item name="android:paddingVertical">12dp</item>
+        <item name="android:textColor">@color/tb_primary</item>
+        <item name="android:textSize">@dimen/msg_sheet_cancel_text_size</item>
+    </style>
 </resources>

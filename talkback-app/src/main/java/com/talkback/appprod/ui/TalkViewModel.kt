@@ -10,12 +10,18 @@ import com.talkback.appprod.data.AppConfig
 import com.talkback.appprod.data.AppConfigStore
 import com.talkback.appprod.data.ChannelMode
 import com.talkback.appprod.runtime.ChannelWarmupPolicy
+import com.talkback.appprod.endpointtext.ChannelConversationStore
+import com.talkback.appprod.endpointtext.ChannelConversationSummary
+import com.talkback.appprod.endpointtext.ChannelTextRecord
+import com.talkback.appprod.endpointtext.ConversationSummary
+import com.talkback.appprod.endpointtext.EndpointTextInboundNotifier
 import com.talkback.appprod.endpointtext.EndpointTextDirection
 import com.talkback.appprod.endpointtext.EndpointTextRecord
-import com.talkback.appprod.endpointtext.EndpointTextRecentStore
 import com.talkback.core.endpointtext.EndpointTextEvent
+import com.talkback.core.channeltext.ChannelTextEvent
 import com.talkback.core.session.ChannelReadiness
 import com.talkback.core.session.ConferenceRuntimePhase
+import com.talkback.core.session.UnicastCallPhase
 import com.talkback.appprod.data.TaskProfile
 import com.talkback.appprod.data.TaskProfileManager
 import com.talkback.appprod.service.TalkbackForegroundService
@@ -48,7 +54,8 @@ class TalkViewModel(
 ) : ViewModel() {
     private val app = TalkbackApp.get(appContext)
     private val manager get() = app.runtimeManager
-    private val endpointTextRecentStore: EndpointTextRecentStore = app.endpointTextRecentStore
+    private val conversationStore = app.conversationStore
+    private val channelConversationStore = app.channelConversationStore
     private val taskProfileManager = TaskProfileManager(appContext)
 
     private val _uiState = MutableStateFlow(buildIdleState(configStore.load()))
@@ -84,8 +91,13 @@ class TalkViewModel(
     val endpointTextReceived: SharedFlow<EndpointTextUiEvent> =
         _endpointTextReceived.asSharedFlow()
 
+    private val _conversationUi = MutableStateFlow(ConversationListUiState())
+    val conversationUi: StateFlow<ConversationListUiState> = _conversationUi.asStateFlow()
+
+    private val inboundNotifier = app.endpointTextInboundNotifier
+
     private val endpointTextSink: (EndpointTextEvent) -> Unit = { event ->
-        endpointTextRecentStore.append(
+        conversationStore.append(
             EndpointTextRecord(
                 endpointKey = event.from.key,
                 text = event.text,
@@ -93,19 +105,44 @@ class TalkViewModel(
                 direction = EndpointTextDirection.INBOUND
             )
         )
+        refreshConversationUi()
+        val label = endpointLabelForKey(event.from.key)
+        val team = teamDisplayName()
+        inboundNotifier.onInbound(event.from.key, label, team)
         _endpointTextReceived.tryEmit(
             EndpointTextUiEvent(
                 fromKey = event.from.key,
-                fromLabel = formatEndpointLabel(event.from.key),
-                text = event.text
+                fromLabel = label,
+                teamName = team
             )
         )
+    }
+
+    private val channelTextSink: (ChannelTextEvent) -> Unit = { event ->
+        val label = endpointLabelForKey(event.from.key)
+        channelConversationStore.append(
+            ChannelTextRecord(
+                channelId = event.channelId,
+                text = event.text,
+                timestampMs = System.currentTimeMillis(),
+                direction = EndpointTextDirection.INBOUND,
+                senderKey = event.from.key,
+                senderLabel = label
+            )
+        )
+        refreshConversationUi()
+        val team = teamDisplayName()
+        if (!channelConversationStore.isOpen(event.channelId)) {
+            inboundNotifier.onChannelInbound(event.channelId, team)
+        }
     }
 
     init {
         MeetingPresenceDisplay.receivePathLivenessProvider =
             RuntimeReceivePathLivenessProvider { manager.getRuntime() }
         manager.onEndpointTextReceived = endpointTextSink
+        manager.onChannelTextReceived = channelTextSink
+        refreshConversationUi()
         taskProfileManager.ensureInitialized()
         val config = configStore.load()
         if (config.isConferenceMode()) {
@@ -550,6 +587,14 @@ class TalkViewModel(
         return manager.meetingSpeakerAudioLevel(configStore.load(), speaker.key)
     }
 
+    /** WebRTC audio levels for active unicast: remote inbound, local outbound (0..1). */
+    fun unicastCallAudioLevels(): Pair<Float, Float> {
+        val call = _uiState.value.call
+        val sessionId = call.sessionId ?: return 0f to 0f
+        if (call.phase != UnicastCallPhase.CONNECTED) return 0f to 0f
+        return manager.unicastCallAudioLevels(sessionId)
+    }
+
     fun endMeetingForAll() {
         conferenceEndReason = ConferenceEndReason.USER_LEFT
         viewModelScope.launch(Dispatchers.Default) {
@@ -633,6 +678,18 @@ class TalkViewModel(
 
     fun preparePttSession(): String? = initiateGroupCall()
 
+    fun precheckPrivateCall(remoteKey: String): String? {
+        syncServiceState()
+        if (!isServiceReady()) {
+            return "SERVICE_STOPPED"
+        }
+        val item = _uiState.value.endpoints.find { it.key == remoteKey }
+        if (item == null || item.status == EndpointStatus.OFFLINE) {
+            return "OFFLINE"
+        }
+        return null
+    }
+
     fun placeCall(remoteKey: String): String? {
         val config = configStore.load()
         if (!isServiceReady()) {
@@ -666,7 +723,7 @@ class TalkViewModel(
         val remote = endpointAddressFromKey(config, remoteKey) ?: return "INVALID_PEER"
         val error = EndpointTextSendErrorMapper.map(manager.sendEndpointText(config, remote, text))
         if (error == null) {
-            endpointTextRecentStore.append(
+            conversationStore.append(
                 EndpointTextRecord(
                     endpointKey = remoteKey,
                     text = text,
@@ -674,17 +731,110 @@ class TalkViewModel(
                     direction = EndpointTextDirection.OUTBOUND
                 )
             )
+            refreshConversationUi()
         }
         return error
     }
 
-    /** Process-local recent EndpointText for [endpointKey] (newest first). Presentation cache only. */
-    fun recentEndpointText(endpointKey: String): List<EndpointTextRecord> =
-        endpointTextRecentStore.recent(endpointKey)
+    fun sendChannelText(text: String): String? {
+        val config = configStore.load()
+        if (!isServiceReady()) {
+            return "SERVICE_STOPPED"
+        }
+        val channelId = config.defaultChannelId
+        val error = EndpointTextSendErrorMapper.map(
+            manager.sendChannelText(config, channelId, text)
+        )
+        if (error == null) {
+            val localKey = "${config.moduleId.trim().uppercase()}-${config.endpointId.trim().uppercase()}"
+            channelConversationStore.append(
+                ChannelTextRecord(
+                    channelId = channelId,
+                    text = text,
+                    timestampMs = System.currentTimeMillis(),
+                    direction = EndpointTextDirection.OUTBOUND,
+                    senderKey = localKey,
+                    senderLabel = appContext.getString(R.string.conversation_sender_you)
+                )
+            )
+            refreshConversationUi()
+        }
+        return error
+    }
+
+    fun conversationSummaries(): List<ConversationSummary> = conversationStore.summaries()
+
+    fun conversationMessages(endpointKey: String): List<EndpointTextRecord> =
+        conversationStore.recent(endpointKey).reversed()
+
+    fun channelMessages(channelId: String = configStore.load().defaultChannelId): List<ChannelTextRecord> =
+        channelConversationStore.recent(channelId)
+
+    fun setOpenConversation(endpointKey: String?) {
+        conversationStore.setOpenConversation(endpointKey)
+        if (endpointKey != null) {
+            channelConversationStore.setOpenChannel(null)
+        }
+        refreshConversationUi()
+    }
+
+    fun setOpenChannelConversation(channelId: String?) {
+        channelConversationStore.setOpenChannel(channelId)
+        if (channelId != null) {
+            conversationStore.setOpenConversation(null)
+        }
+        refreshConversationUi()
+    }
+
+    fun isConversationOpenFor(endpointKey: String): Boolean =
+        conversationStore.openConversationKey() == endpointKey
+
+    fun isChannelConversationOpen(channelId: String = configStore.load().defaultChannelId): Boolean =
+        channelConversationStore.isOpen(channelId)
+
+    fun channelMemberStats(): Pair<Int, Int> {
+        val online = _uiState.value.endpoints.count { it.status != EndpointStatus.OFFLINE }
+        val total = _uiState.value.endpoints.size.coerceAtLeast(online)
+        return total to online
+    }
+
+    fun bindInboundToastHandler(
+        handler: ((EndpointTextInboundNotifier.ForegroundBatch) -> Unit)?
+    ) {
+        inboundNotifier.foregroundToastHandler = handler
+    }
+
+    fun clearInboundNotification() {
+        inboundNotifier.clearNotification()
+    }
+
+    fun endpointLabelForKey(key: String): String {
+        val youSuffix = appContext.getString(R.string.you_suffix)
+        val fromState = _uiState.value.endpoints.find { it.key == key }?.displayLabel
+        if (!fromState.isNullOrBlank() && !fromState.endsWith(youSuffix)) {
+            return fromState
+        }
+        return formatEndpointLabel(key)
+    }
+
+    private fun refreshConversationUi() {
+        val config = configStore.load()
+        _conversationUi.value = ConversationListUiState(
+            summaries = conversationStore.summaries(),
+            totalUnread = conversationStore.totalUnread() + channelConversationStore.totalUnread(),
+            channelSummary = channelConversationStore.summary(config.defaultChannelId),
+            channelUnread = channelConversationStore.unread(config.defaultChannelId),
+            channelId = config.defaultChannelId,
+            channelDisplayName = config.channelDisplayName
+        )
+    }
 
     override fun onCleared() {
         if (manager.onEndpointTextReceived === endpointTextSink) {
             manager.onEndpointTextReceived = null
+        }
+        if (manager.onChannelTextReceived === channelTextSink) {
+            manager.onChannelTextReceived = null
         }
         super.onCleared()
     }

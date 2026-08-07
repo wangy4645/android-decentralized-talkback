@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="?android:attr/selectableItemBackground"
+    android:gravity="center_vertical"
+    android:orientation="horizontal"
+    android:paddingHorizontal="16dp"
+    android:paddingVertical="10dp">
+
+    <FrameLayout
+        android:id="@+id/frameComposeAvatar"
+        android:layout_width="36dp"
+        android:layout_height="36dp"
+        android:background="@drawable/bg_message_avatar_online">
+
+        <ImageView
+            android:id="@+id/imgComposeAvatar"
+            android:layout_width="18dp"
+            android:layout_height="18dp"
+            android:layout_gravity="center"
+            android:contentDescription="@null"
+            android:src="@drawable/ic_handheld_terminal"
+            app:tint="@color/tb_primary" />
+    </FrameLayout>
+
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="10dp"
+        android:layout_weight="1"
+        android:orientation="vertical">
+
+        <TextView
+            android:id="@+id/txtComposeTargetLabel"
+            style="@style/MsgEndpointName"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content" />
+
+        <TextView
+            android:id="@+id/txtComposeTargetTeam"
+            style="@style/MsgTeamName"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingTop="2dp" />
+    </LinearLayout>
+
+</LinearLayout>

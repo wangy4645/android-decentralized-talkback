@@ -1,0 +1,111 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/tb_bg">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingBottom="10dp">
+
+            <TextView
+                android:id="@+id/txtMessagesSectionChannels"
+                style="@style/MsgSectionTitle"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="@string/messages_section_channels" />
+
+            <TextView
+                android:id="@+id/txtConversationsSort"
+                style="@style/MsgSortLabel"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:drawableEnd="@drawable/ic_dropdown_small"
+                android:drawablePadding="4dp"
+                android:gravity="center_vertical"
+                android:text="@string/conversations_sort_recent" />
+        </LinearLayout>
+
+        <FrameLayout
+            android:id="@+id/rowChannelConversationHost"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="12dp" />
+
+        <TextView
+            style="@style/MsgSectionTitle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingBottom="8dp"
+            android:text="@string/messages_section_direct" />
+
+        <FrameLayout
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1">
+
+            <LinearLayout
+                android:id="@+id/messagesEmptyState"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:gravity="center"
+                android:orientation="vertical"
+                android:paddingHorizontal="24dp"
+                android:visibility="gone">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:fontFamily="sans-serif-medium"
+                    android:includeFontPadding="false"
+                    android:text="@string/messages_list_empty"
+                    android:textColor="@color/tb_text_secondary"
+                    android:textSize="@dimen/msg_empty_title_text_size" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:gravity="center"
+                    android:includeFontPadding="false"
+                    android:paddingTop="6dp"
+                    android:text="@string/messages_list_empty_hint"
+                    android:textColor="@color/tb_text_muted"
+                    android:textSize="@dimen/msg_empty_hint_text_size" />
+            </LinearLayout>
+
+            <androidx.recyclerview.widget.RecyclerView
+                android:id="@+id/recyclerMessages"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:clipToPadding="false"
+                android:paddingBottom="80dp"
+                android:scrollbars="none" />
+        </FrameLayout>
+    </LinearLayout>
+
+    <com.google.android.material.floatingactionbutton.FloatingActionButton
+        android:id="@+id/fabComposeMessage"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|end"
+        android:layout_marginEnd="4dp"
+        android:layout_marginBottom="8dp"
+        android:contentDescription="@string/message_compose_fab"
+        app:backgroundTint="@color/tb_message_fab"
+        app:elevation="4dp"
+        app:fabCustomSize="40dp"
+        app:maxImageSize="22dp"
+        app:srcCompat="@drawable/ic_compose_message"
+        app:tint="@color/tb_bg" />
+
+</FrameLayout>

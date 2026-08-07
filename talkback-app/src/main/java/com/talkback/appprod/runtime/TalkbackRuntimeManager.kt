@@ -12,6 +12,7 @@ import com.talkback.app.TalkbackSessionSnapshot
 import com.talkback.appprod.data.AppConfig
 import com.talkback.appprod.data.AppConfigStore
 import com.talkback.core.endpointtext.EndpointTextEvent
+import com.talkback.core.channeltext.ChannelTextEvent
 import com.talkback.core.media.MediaTopologyPolicy
 import com.talkback.core.model.EndpointAddress
 import com.talkback.core.model.EndpointId
@@ -52,6 +53,9 @@ class TalkbackRuntimeManager(private val appContext: Context) {
      */
     @Volatile
     var onEndpointTextReceived: ((EndpointTextEvent) -> Unit)? = null
+
+    @Volatile
+    var onChannelTextReceived: ((ChannelTextEvent) -> Unit)? = null
 
     private companion object {
         const val MESH_CALL_BACKOFF_MS = 3_000L
@@ -128,6 +132,9 @@ class TalkbackRuntimeManager(private val appContext: Context) {
             created.onEndpointTextReceived = { event ->
                 onEndpointTextReceived?.invoke(event)
             }
+            created.onChannelTextReceived = { event ->
+                onChannelTextReceived?.invoke(event)
+            }
             created.start()
             runtime = created
             skipNextMeshBackoff = true
@@ -143,6 +150,7 @@ class TalkbackRuntimeManager(private val appContext: Context) {
 
     fun stop() {
         runtime?.onEndpointTextReceived = null
+        runtime?.onChannelTextReceived = null
         runtime?.stop()
         runtime = null
         skipNextMeshBackoff = true
@@ -508,6 +516,11 @@ class TalkbackRuntimeManager(private val appContext: Context) {
         return rt.meetingSpeakerAudioLevel(config.defaultChannelId, speakerEndpointKey)
     }
 
+    fun unicastCallAudioLevels(sessionId: String): Pair<Float, Float> {
+        val rt = runtime ?: return 0f to 0f
+        return rt.unicastCallAudioLevels(sessionId)
+    }
+
     fun pressPtt(sessionId: String): PttState {
         val config = configStore.load()
         val local = config.moduleId.trim().uppercase()
@@ -542,6 +555,15 @@ class TalkbackRuntimeManager(private val appContext: Context) {
         val rt = runtime ?: return Result.failure(IllegalStateException("SERVICE_STOPPED"))
         return rt.sendEndpointText(localAddress(config), remote, text)
     }
+
+    fun sendChannelText(config: AppConfig, channelId: String, text: String): Result<Unit> {
+        val rt = runtime ?: return Result.failure(IllegalStateException("SERVICE_STOPPED"))
+        val remotes = collectChannelRemotes(config).orEmpty()
+        return rt.sendChannelText(localAddress(config), channelId, remotes, text)
+    }
+
+    fun channelTextRemotes(config: AppConfig): List<EndpointAddress> =
+        collectChannelRemotes(config).orEmpty()
 
     fun activeUnicastSession(): TalkbackSessionSnapshot? =
         runtime?.activeUnicastSession()

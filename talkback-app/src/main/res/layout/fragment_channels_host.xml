@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/tb_bg"
+    android:orientation="vertical"
+    android:paddingHorizontal="@dimen/settings_subpage_padding"
+    android:paddingTop="@dimen/settings_subpage_padding">
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:fontFamily="sans-serif"
+        android:includeFontPadding="false"
+        android:paddingBottom="12dp"
+        android:text="@string/nav_channels"
+        android:textColor="@color/tb_text_primary"
+        android:textSize="@dimen/settings_page_title_text_size" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:paddingBottom="8dp">
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:gravity="center_horizontal"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/tabChannels"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:fontFamily="sans-serif-medium"
+                android:includeFontPadding="false"
+                android:paddingVertical="8dp"
+                android:text="@string/nav_channels"
+                android:textColor="@color/tb_primary"
+                android:textSize="@dimen/msg_tab_text_size" />
+
+            <View
+                android:id="@+id/tabChannelsIndicator"
+                android:layout_width="match_parent"
+                android:layout_height="2dp"
+                android:background="@color/tb_primary" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:gravity="center_horizontal"
+            android:orientation="vertical">
+
+            <LinearLayout
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:paddingVertical="8dp">
+
+                <TextView
+                    android:id="@+id/tabMessages"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:alpha="0.45"
+                    android:fontFamily="sans-serif-medium"
+                    android:includeFontPadding="false"
+                    android:text="@string/channels_tab_messages"
+                    android:textColor="@color/tb_text_secondary"
+                    android:textSize="@dimen/msg_tab_text_size" />
+
+                <TextView
+                    android:id="@+id/txtMessagesUnreadBadge"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="6dp"
+                    android:background="@drawable/bg_unread_badge"
+                    android:gravity="center"
+                    android:includeFontPadding="false"
+                    android:minWidth="16dp"
+                    android:minHeight="16dp"
+                    android:paddingHorizontal="4dp"
+                    android:textColor="@color/tb_bg"
+                    android:textSize="10sp"
+                    android:visibility="gone" />
+            </LinearLayout>
+
+            <View
+                android:id="@+id/tabMessagesIndicator"
+                android:layout_width="match_parent"
+                android:layout_height="2dp"
+                android:background="@android:color/transparent" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <FrameLayout
+        android:id="@+id/channelsChildContainer"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1" />
+
+</LinearLayout>

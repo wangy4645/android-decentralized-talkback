@@ -1,0 +1,189 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/tb_bg"
+    android:orientation="vertical">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingHorizontal="8dp"
+        android:paddingVertical="10dp">
+
+        <ImageView
+            android:id="@+id/btnConversationBack"
+            android:layout_width="36dp"
+            android:layout_height="36dp"
+            android:background="?android:attr/selectableItemBackgroundBorderless"
+            android:contentDescription="@string/cd_settings_back"
+            android:padding="6dp"
+            android:src="@drawable/ic_settings_back" />
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="2dp"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/txtConversationTitle"
+                style="@style/MsgEndpointName"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:textSize="15sp" />
+
+            <TextView
+                android:id="@+id/txtConversationSubtitle"
+                style="@style/MsgTeamName"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:paddingTop="2dp" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/txtConversationOnline"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="6dp"
+            android:background="@drawable/bg_online_pill"
+            android:fontFamily="sans-serif"
+            android:includeFontPadding="false"
+            android:paddingHorizontal="8dp"
+            android:paddingVertical="3dp"
+            android:text="@string/status_online"
+            android:textColor="@color/tb_primary"
+            android:textSize="10sp"
+            android:visibility="gone" />
+
+        <ImageView
+            android:id="@+id/btnConversationCall"
+            android:layout_width="36dp"
+            android:layout_height="36dp"
+            android:layout_marginStart="4dp"
+            android:background="?android:attr/selectableItemBackgroundBorderless"
+            android:contentDescription="@string/call_action_private"
+            android:padding="7dp"
+            android:src="@drawable/ic_conversation_call"
+            android:tint="@color/conversation_call_icon" />
+
+        <ImageView
+            android:id="@+id/btnConversationMore"
+            android:layout_width="36dp"
+            android:layout_height="36dp"
+            android:background="?android:attr/selectableItemBackgroundBorderless"
+            android:contentDescription="@string/meeting_control_more"
+            android:padding="6dp"
+            android:src="@drawable/ic_conversation_more" />
+    </LinearLayout>
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="@color/tb_divider" />
+
+    <FrameLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1">
+
+        <LinearLayout
+            android:id="@+id/conversationEmptyState"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:gravity="center"
+            android:orientation="vertical"
+            android:paddingHorizontal="24dp"
+            android:visibility="gone">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:fontFamily="sans-serif-medium"
+                android:includeFontPadding="false"
+                android:text="@string/conversation_empty"
+                android:textColor="@color/tb_text_secondary"
+                android:textSize="@dimen/msg_empty_title_text_size" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:includeFontPadding="false"
+                android:paddingTop="6dp"
+                android:text="@string/conversation_empty_hint"
+                android:textColor="@color/tb_text_muted"
+                android:textSize="@dimen/msg_empty_hint_text_size" />
+        </LinearLayout>
+
+        <ScrollView
+            android:id="@+id/scrollConversation"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:clipToPadding="false"
+            android:paddingHorizontal="12dp"
+            android:paddingVertical="10dp"
+            android:scrollbars="none">
+
+            <LinearLayout
+                android:id="@+id/containerConversationMessages"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical" />
+        </ScrollView>
+    </FrameLayout>
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="@color/tb_divider" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingHorizontal="12dp"
+        android:paddingTop="10dp"
+        android:paddingBottom="6dp">
+
+        <EditText
+            android:id="@+id/editConversationInput"
+            style="@style/ConversationInput"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:hint="@string/conversation_input_hint"
+            android:imeOptions="actionSend"
+            android:inputType="textCapSentences|textMultiLine"
+            android:maxLength="256"
+            android:maxLines="4" />
+
+        <TextView
+            android:id="@+id/btnConversationSend"
+            style="@style/ConversationSendButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="10dp"
+            android:clickable="true"
+            android:focusable="true"
+            android:text="@string/endpoint_text_send" />
+    </LinearLayout>
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center"
+        android:includeFontPadding="false"
+        android:paddingBottom="8dp"
+        android:text="@string/conversation_secure_hint"
+        android:textColor="@color/tb_text_muted"
+        android:textSize="10sp" />
+
+</LinearLayout>

@@ -1,5 +1,7 @@
 package com.talkback.appprod.ui
 
+import com.talkback.appprod.endpointtext.ConversationSummary
+import com.talkback.appprod.endpointtext.ChannelConversationSummary
 import com.talkback.core.session.UnicastCallPhase
 import com.talkback.core.session.ChannelReadiness
 import com.talkback.core.session.ConferenceRuntimePhase
@@ -153,4 +155,13 @@ data class TalkUiState(
         mediaConnecting = false,
         recovering = false
     )
+)
+
+data class ConversationListUiState(
+    val summaries: List<ConversationSummary> = emptyList(),
+    val totalUnread: Int = 0,
+    val channelSummary: ChannelConversationSummary? = null,
+    val channelUnread: Int = 0,
+    val channelId: String = "",
+    val channelDisplayName: String = ""
 )
