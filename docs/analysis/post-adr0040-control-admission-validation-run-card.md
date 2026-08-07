@@ -1,11 +1,11 @@
 # Post-ADR-0040 Control Admission Validation Run Card
 
-**Status:** AUTHORIZED (read-only · no behavior change)  
+**Status:** FIELD COMPLETE — Branch A CONFIRMED  
 **Case:** `post-adr0040-control-admission-validation`  
 **Date:** 2026-08-08  
-**Parent:** [X1 mini design note](./post-adr0040-control-admission-contract-mini-design.md) · [OBS-M03](./obs-m03-post-media-recovery-residency.md)  
+**Parent:** [X1 mini design note](./post-adr0040-control-admission-contract-mini-design.md) · [ADR-X1](../adr/x1-control-admission-after-recovery.md) · [OBS-M03](./obs-m03-post-media-recovery-residency.md)  
 **RCA boundary:** Post ADR-0040 Control Admission only — **do not enlarge RCA-M03 fence scope**  
-**Evidence freeze:** `d16029e` on `main` · **current APK only**
+**Field evidence:** `logs/post-adr0040-control-admission-20260808-061947/` · [ADJUDICATION.txt](../../logs/post-adr0040-control-admission-20260808-061947/ADJUDICATION.txt)
 
 **Goal:** Directed validation of bilateral recovery **control admission contract** assumptions under M03 WiFi flap. **Not** bug hunting. **Not** implementation.
 
@@ -363,17 +363,27 @@ NOT AUTHORIZED: recovery FSM change · watchdog relaxation · residency clear
 
 ```text
 X1 Control Admission Contract
+    Status:              CONFIRMED
     Design note           DONE (d16029e)
-    Directed validation   AUTHORIZED (this card)
-    ADR-X1                NOT STARTED
+    Directed validation   FIELD COMPLETE — Branch A
+    ADR-X1                PROPOSED
     Implementation        NOT STARTED
 
-Hypothesis (pre-field):
-    receipt may not enter admission reevaluation chain
-    attempt-7 supports; this run proves or disproves
+Root:
+    Missing receipt-triggered admission reevaluation edge
+
+Evidence:
+    attempt-7  : forensic confirmation
+    attempt-10 : independent reproduction (M03→M02 nonce=beed8928)
+
+Scope:
+    bilateral recovery glare
+
+Not root:
+    SMS · membership · residency · UI projection · watchdog duration
 
 OBS-M03 / X2
-    HOLD — downstream only; do not enlarge this run
+    HOLD — downstream symptom only
 
 RCA-M03 fence
     CLOSED for this track — do not merge scopes

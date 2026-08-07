@@ -1,9 +1,9 @@
 # OBS-M03-POST-MEDIA-RECOVERY-RESIDENCY
 
-**Status:** OPEN (read-only) — **P0/P1 FIELD ADJUDICATED** (attempt-2 desk test PASS)  
+**Status:** OPEN (read-only) — **X2 downstream symptom HOLD** · primary RCA closed at X1  
 **Date:** 2026-08-08  
-**Trigger evidence:** `logs/rca-m03-fence-validation-20260807-215855/` (Attempt 2, env valid)  
-**Parents:** [RCA-M03](./rca-m03-wifi-reconnect-membership-divergence.md) · ADR-0030 failed-media residency · ADR-0040 (exclusion)
+**Trigger evidence:** `logs/rca-m03-fence-validation-20260807-215855/` · `logs/post-adr0040-control-admission-20260808-061947/`  
+**Parents:** [RCA-M03](./rca-m03-wifi-reconnect-membership-divergence.md) · [X1 / ADR-X1](../adr/x1-control-admission-after-recovery.md) · ADR-0030 failed-media residency · ADR-0040 (exclusion)
 
 **Goal:** After media recovers, does `FAILED_MEDIA_RECOVERY` residency exit — and if not, is the exit trigger incomplete?
 
@@ -285,34 +285,31 @@ If H-RES-1 confirmed → draft **failed-media residency exit contract** (ADR-003
 ## 8. Status board
 
 ```text
+RCA-M03 (frozen)
+
+Trigger:              WiFi flap
+Primary defect:       Post-ADR-0040 control admission contract gap
+Confirmed mechanism:  REMOTE_RECEIPT_ACKED not reevaluated (admission graph)
+Secondary symptom:    FAILED_MEDIA_RECOVERY residency / presence sticky (this OBS — X2)
+
+Excluded:
+    SMS regression · ADR-0040 failure · membership divergence · UI bug · watchdog duration as root
+
+X1 Control Admission Contract
+    CONFIRMED
+    attempt-7 forensic · attempt-10 independent reproduction
+    ADR-X1 PROPOSED
+
 ADR-0040 Recovery Lifecycle
-    VERIFIED
-    positive field evidence:
-      resumeFromDeferred
-      ownership resumed (ICE_CONNECTED_L2)
-      EDGE_RECOVERED (M02)
+    VERIFIED (ownership · transport · glare detection PASS)
 
 RCA-M03 Convergence Fence
-    H1 NOT REPRODUCED (attempt-2)
-    keep independent — do not enlarge this OBS into fence RCA
+    H1 NOT REPRODUCED — keep independent
 
-OBS-M03-POST-MEDIA-RECOVERY-RESIDENCY
-    OPEN (read-only)
-    P0 ADJUDICATED: CONTROL_HANDSHAKE_PENDING → attempt_timeout
-    P0+ ADJUDICATED: bilateral recovery glare; reattach sent+delivered; no REATTACH_ACCEPTED on initiator edge
+OBS-M03-POST-MEDIA-RECOVERY-RESIDENCY (X2)
+    OPEN (read-only) — HOLD until X1 implementation reviewed
     P1 CONFIRMED: residency exit edge-trigger gap (desk test PASS)
-
-Findings:
-    mediaUnavailable is DERIVED (MediaUsabilityFact)
-    projection not implicated
-    post-obligation-close soak: media=CONNECTED · obligationOpen=false ·
-      edgeRecoveryPhase=FAILED_MEDIA_RECOVERY · mediaUnavailable=true (≥2 min)
-
-Hypothesis H-RES-1:
-    CONFIRMED — failed-media residency exit requires new ICE edge or open-obligation supersede
-
-Upstream driver (co-primary):
-    control handshake never reaches REATTACH_ACCEPTED before attempt budget
+    Do not patch residency before X1 — may never reach FAILED_MEDIA_RECOVERY if X1 lands
 
 PR-UI-2
     HOLD (UVCP inputs not yet cleared)

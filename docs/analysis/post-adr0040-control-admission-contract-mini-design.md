@@ -1,9 +1,9 @@
 # Post-ADR-0040 Control Admission Contract (X1 Mini Design Note)
 
-**Status:** DRAFT (design only — no behavior change)  
+**Status:** CONFIRMED (design frozen — ADR-X1 PROPOSED)  
 **Date:** 2026-08-08  
-**Parent:** [OBS-M03](./obs-m03-post-media-recovery-residency.md) · ADR-0040 (VERIFIED)  
-**Field evidence:** `logs/rca-m03-fence-validation-20260807-215855/` · M03→M02 attempt-7 · `nonce=c9916187-54d7-4b26-a1f2-82da527229d9`
+**Parent:** [OBS-M03](./obs-m03-post-media-recovery-residency.md) · [ADR-X1](../adr/x1-control-admission-after-recovery.md) · ADR-0040 (VERIFIED)  
+**Field evidence:** attempt-7 `logs/rca-m03-fence-validation-20260807-215855/` · attempt-10 `logs/post-adr0040-control-admission-20260808-061947/`
 
 ---
 
@@ -267,20 +267,32 @@ Observe:
 ## Status board
 
 ```text
-ADR-0040              VERIFIED · ownership PASS
-SMS                   EXCLUDED
-Root scenario         bilateral recovery glare
-Root contract gap     control admission (post-0040)
-Watchdog              premature terminal timeout (symptom)
-Residency exit (X2)   HOLD · downstream only
+X1 Control Admission Contract
 
-Design note           DONE (d16029e)
-Directed validation   AUTHORIZED → [run card](./post-adr0040-control-admission-validation-run-card.md)
-ADR-X1                NOT STARTED
-Implementation        NOT STARTED
+Status:
+    CONFIRMED
 
-Hypothesis (pre-field):
-    receipt may not enter admission reevaluation chain
+Root:
+    Missing receipt-triggered admission reevaluation edge
 
-Next: field run → Branch A/B/C adjudication → ADR-X1 draft (if warranted)
+Architecture statement:
+    Post-ADR-0040 Control Admission Contract gap:
+    REMOTE_RECEIPT_ACKED does not enter admission reevaluation graph;
+    under bilateral glare attempt proceeds unadmitted until
+    CONTROL_RECONCILIATION_TIMEOUT.
+
+Evidence:
+    attempt-7  : forensic confirmation
+    attempt-10 : independent reproduction
+
+Scope:
+    bilateral recovery glare
+
+Not root:
+    SMS · membership · residency · UI projection · watchdog duration
+
+ADR-X1                PROPOSED → [x1-control-admission-after-recovery.md](../adr/x1-control-admission-after-recovery.md)
+Implementation        NOT STARTED (await ADR review)
+
+X2 residency exit     HOLD
 ```
