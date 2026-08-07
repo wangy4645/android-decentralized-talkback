@@ -2,7 +2,7 @@
 
 ## Status
 
-**Status:** PROPOSED (docs only — no behavior change)  
+**Status:** PROPOSED — **REVIEW GATE** (docs only — implementation BLOCKED until approved)  
 **Date:** 2026-08-08  
 **Parents:** [X1 mini design note](../analysis/post-adr0040-control-admission-contract-mini-design.md) · [validation run card](../analysis/post-adr0040-control-admission-validation-run-card.md) · ADR-0040 (VERIFIED) · ADR-0021
 
@@ -15,23 +15,54 @@
 
 ## Summary
 
-Freeze the **post-ADR-0040 control admission contract**: after recovery delivery is acknowledged (`REMOTE_RECEIPT_ACKED`), the system MUST reevaluate control admission using delivery, ownership, glare, and admission-deadline facts — not treat receipt as success, and not timeout merely because `controlPlaneStarted == false`.
+Freeze the **post-ADR-0040 control admission contract**: define when a recovery attempt is **eligible to continue waiting** and when failure is **legitimately terminal** — not how to make recovery succeed.
+
+After delivery is acknowledged (`REMOTE_RECEIPT_ACKED`), the system MUST reevaluate control admission using delivery, ownership, glare, and admission-deadline facts.
 
 **Confirmed defect (architecture wording):**
 
 > Post-ADR-0040 Control Admission Contract gap: `REMOTE_RECEIPT_ACKED` does not enter the admission reevaluation graph; under bilateral recovery glare the attempt continues in an unadmitted state until `CONTROL_RECONCILIATION_TIMEOUT`.
 
-**Do not write:** watchdog bug · reattach failed · Recovery broken
+**Do not write:** watchdog bug · reattach failed · Recovery broken · improve recovery success rate
+
+---
+
+## Motivation
+
+X1 solves:
+
+```text
+ambiguous admission state
+        ↓
+timeout decision legitimacy
+```
+
+X1 does **not** solve:
+
+```text
+recovery algorithm
+        ↓
+make it work
+```
+
+**Goal statement (frozen):**
+
+> Define when a recovery attempt is eligible to continue waiting, and when failure is legitimately terminal.
 
 ## Non-goals
 
+- **Not** improve recovery success rate or optimize recovery algorithm
 - No global watchdog budget enlargement
 - No failed-media residency exit change (X2 — HOLD)
 - No UI / presence / UVCP projection change
+- No `MediaUsabilityFact` change
 - No membership fence / RCA-M03 H1 reopen
 - No ADR-0040 ownership regression relitigation
 - No completion predicate change (ADR-0038)
+- No ADR-0039 changes
+- No SMS-related code
 - No `REMOTE_RECEIPT_ACKED` → `CONTROL_STARTED` direct promotion
+- No modification of `FAILED_MEDIA_RECOVERY` phase semantics in X1 PR
 
 ---
 
@@ -112,6 +143,32 @@ Meaning: peer received recovery intent.
 DELIVERED_BUT_NOT_ADMITTED
 ```
 
+#### DELIVERED_BUT_NOT_ADMITTED lifecycle (required)
+
+Cannot define enter without exit — otherwise X1 replicates old residency problems.
+
+```text
+Enter:
+    REMOTE_RECEIPT_ACKED
+    AND
+    !CONTROL_ADMITTED
+
+Exit (any one):
+    CONTROL_ADMITTED
+    OR
+    explicit terminal admission rejection
+    OR
+    admission deadline exceeded
+```
+
+While in this state, attempt classification is:
+
+```text
+WAITING_FOR_ADMISSION
+```
+
+Not success. Not failure. Not eligible for timeout on `controlPlaneStarted == false` alone.
+
 ### Fact 2 — Admission
 
 ```text
@@ -123,7 +180,7 @@ Sources (existing paths only):
 ```text
 REATTACH_ACCEPTED
 OR
-validated E2 transition (glare-free only)
+validated E2 transition (glare-free only — see §2.4)
 ```
 
 ### Fact 3 — Conflict
@@ -132,7 +189,16 @@ validated E2 transition (glare-free only)
 NEGOTIATION_OWNER_CONFLICT
 ```
 
-Determines whether E2 shortcut is permitted.
+**MUST** be an input to timeout eligibility and E2 permission — not a side observation.
+
+Field proof (attempt-10):
+
+```text
+receipt exists
++ control missing
++ glare unresolved
+= legal WAITING_FOR_ADMISSION state
+```
 
 ### Admission decision inputs
 
@@ -147,9 +213,33 @@ deliveryFact
 Forbidden predicates:
 
 ```text
-if receipt: success                    ❌
-if !controlPlaneStarted: timeout        ❌
+if receipt: success                              ❌
+if !controlPlaneStarted: timeout                 ❌
+if !controlPlaneStarted && receiptMissing: timeout ❌
 ```
+
+---
+
+## 2.4 Decision — E2 shortcut priority (X1 v1 boundary)
+
+**Question:** Under bilateral glare, may `REATTACH_MEDIA_ALREADY_LIVE` cross the control boundary?
+
+**X1 v1 answer:**
+
+```text
+Glare detected (unresolved ownership conflict)
+        ↓
+E2 shortcut SUPPRESSED
+```
+
+```text
+E2 allowed:     no active conflict
+E2 suppressed: conflict unresolved
+```
+
+Rationale (attempt-10): `wireOwner != canonicalOwner` — E2 may bypass ownership resolution.
+
+This is an **X1 v1 boundary**, not a permanent design conclusion. Future ADR may relax after bilateral ownership resolution contract is defined.
 
 ---
 
@@ -165,57 +255,79 @@ onRemoteReceiptAcked()
 reevaluateControlAdmission()
 ```
 
+This is **event wiring**, not a new FSM phase.
+
 Reevaluation MUST consider glare state and MUST NOT promote delivery to admission.
 
-### X1-2 — Glare-aware timeout eligibility
+### X1-2 — Timeout eligibility predicate
 
-Attempt timeout is legitimate only when:
-
-```text
-admissionRejected
-OR admissionDeadlineExpired
-OR terminalConflictResolvedAsFailure
-```
-
-NOT when:
+Glare decision MUST be a predicate input. Pure helpers (suggested names):
 
 ```text
-controlPlaneStarted == false alone
+isAdmissionPending()
+isTimeoutEligible()   // alias: RecoveryAttemptTimeoutEligible
 ```
 
-### X1-3 — E2 shortcut guard (unchanged intent, explicit)
+**RecoveryAttemptTimeoutEligible** is true only when:
 
-Path B (`REATTACH_MEDIA_ALREADY_LIVE` / E2 boundary) remains valid **only when glare-free**.
+```text
+terminalAdmissionFailure
+OR
+admissionDeadlineExpired
+OR
+explicitOwnershipResolutionFailure
+```
 
-Under `NEGOTIATION_OWNER_CONFLICT` / `DROP_OWNERSHIP_CONFLICT`: E2 MUST be suppressed; system waits for admission resolution or explicit reject/deadline.
+**NOT** when:
+
+```text
+REMOTE_RECEIPT_ACKED
++ NEGOTIATION_OWNER_CONFLICT
++ CONTROL_ADMITTED=false
+```
+
+That combination classifies as:
+
+```text
+WAITING_FOR_ADMISSION
+```
+
+### X1-3 — E2 shortcut guard
+
+Per §2.4: under `NEGOTIATION_OWNER_CONFLICT` / `DROP_OWNERSHIP_CONFLICT` with unresolved ownership, E2 MUST be suppressed; system waits for admission resolution, explicit reject, or admission deadline.
 
 ---
 
-## 4. Implementation boundary
+## 4. Implementation boundary (post-approval PR)
 
-### Allowed (minimal)
+**Implementation BLOCKED until this ADR is APPROVED.**
+
+### Allowed (minimal PR)
 
 | Item | Scope |
 |------|--------|
-| Receipt → reevaluation event wiring | `onRemoteReceiptAcked` → `reevaluateControlAdmission` |
-| Glare-aware timeout predicate | `CanAttemptTimeout?` per §3 |
-| Regression test | receipt + glare + no `REATTACH_ACCEPTED` → no premature `FAILED_MEDIA_RECOVERY` |
+| **A. Event wiring** | `REMOTE_RECEIPT_ACKED` → `reevaluateControlAdmission()` — no new phase |
+| **B. Predicate** | `isAdmissionPending()` · `isTimeoutEligible()` — glare-aware |
+| **C. Tests** | Two regression tests (§5) |
 
-### Forbidden
+### Explicitly excluded from X1 PR
 
-| Item | Reason |
-|------|--------|
-| Increase attempt/obligation timeout budgets | Defers incorrect admission, does not fix graph |
-| Clear failed-media residency on timer | Symptom patch (X2) |
-| `REMOTE_RECEIPT_ACKED` → `controlPlaneStarted=true` | Violates delivery/admission layering |
-| Recovery FSM phase addition | Contract wiring only |
-| Membership / completion predicate changes | Out of scope |
+```text
+❌ MediaUsabilityFact change
+❌ Presence projection change
+❌ FAILED_MEDIA_RECOVERY cleanup / residency exit
+❌ Membership changes
+❌ ADR-0039 changes
+❌ SMS related code
+❌ Global timeout budget enlargement
+❌ Recovery FSM phase addition
+```
 
 ---
 
 ## 5. Regression test contract (required before merge)
 
-Scenario (harness or desk):
+### Test 1 — attempt-10 regression (no premature failure)
 
 ```text
 REATTACH_REQUESTED
@@ -224,22 +336,34 @@ REMOTE_RECEIPT_ACKED
     ↓
 GLARE (NEGOTIATION_OWNER_CONFLICT)
     ↓
-no REATTACH_ACCEPTED yet
+no CONTROL_ADMITTED yet
     ↓
-clock advances within admission budget
+advance clock within admission budget
     ↓
-assert: NOT FAILED_MEDIA_RECOVERY (premature)
+assert: NOT FAILED_MEDIA_RECOVERY
 ```
 
-This test defines the contract; implementation exists to satisfy it.
+### Test 2 — legitimate timeout (not timeout disable)
+
+```text
+REATTACH_REQUESTED
+    ↓
+REMOTE_RECEIPT_ACKED
+    ↓
+explicit terminal admission rejection
+    ↓
+advance clock
+    ↓
+assert: FAILED_MEDIA_RECOVERY (or equivalent terminal admission failure)
+```
+
+Both tests define the contract; implementation exists to satisfy them.
 
 ---
 
 ## 6. X2 — Failed-media residency (frozen)
 
 Do **not** implement residency exit in the same PR as X1.
-
-Rationale:
 
 ```text
 If X1 fixes admission → may never enter FAILED_MEDIA_RECOVERY
@@ -251,34 +375,53 @@ If FAILED_MEDIA_RECOVERY persists after X1 → reopen failed residency exit auth
 ## 7. RCA-M03 closure statement
 
 ```text
-RCA-M03
+RCA-M03                  CLOSED for diagnosis
+X1 mechanism             CONFIRMED
 
 Trigger:              WiFi flap
 Primary defect:       Post-ADR-0040 control admission contract gap
 Confirmed mechanism:  REMOTE_RECEIPT_ACKED not reevaluated
-Secondary symptom:    FAILED_MEDIA_RECOVERY residency / presence sticky
+Secondary symptom:    FAILED_MEDIA_RECOVERY residency / presence sticky (X2 HOLD)
 
 Excluded:
-  SMS regression
-  ADR-0040 failure
-  membership divergence
-  UI projection bug
-  watchdog duration as root cause
+  SMS regression · ADR-0040 failure · membership divergence · UI bug · watchdog duration as root
 ```
 
 ---
 
-## 8. Status board
+## 8. Review gate checklist
+
+Required before **APPROVED**:
+
+| # | Constraint | Status |
+|---|------------|--------|
+| 1 | Motivation: timeout eligibility, not recovery success | ✅ in this revision |
+| 2 | `DELIVERED_BUT_NOT_ADMITTED` enter + exit lifecycle | ✅ in this revision |
+| 3 | Glare as timeout predicate input | ✅ in this revision |
+| 4 | E2 suppressed under unresolved glare (X1 v1) | ✅ in this revision |
+
+After approval:
 
 ```text
-X1 Control Admission Contract
-    Status:           CONFIRMED
-    ADR-X1:            PROPOSED (this doc)
-    Implementation:    NOT STARTED
+ADR-X1 APPROVED
+        ↓
+implementation branch
+        ↓
+small PR (wiring + predicate + 2 tests)
+```
+
+---
+
+## 9. Status board
+
+```text
+RCA-M03                  CLOSED for diagnosis
+X1 mechanism             CONFIRMED
+ADR-X1                   PROPOSED — REVIEW GATE
+Implementation           BLOCKED until contract approved
+X2 residency exit        HOLD
 
 Evidence:
     attempt-7  forensic
     attempt-10 independent reproduction
-
-X2 residency exit:   HOLD
 ```
