@@ -291,8 +291,8 @@ Scope:
 Not root:
     SMS · membership · residency · UI projection · watchdog duration
 
-ADR-X1                PROPOSED → [x1-control-admission-after-recovery.md](../adr/x1-control-admission-after-recovery.md)
-Implementation        NOT STARTED (await ADR review)
+ADR-X1                APPROVED FOR IMPLEMENTATION → [x1-control-admission-after-recovery.md](../adr/x1-control-admission-after-recovery.md)
+Implementation        IN PROGRESS (feat/x1-control-admission)
 
 X2 residency exit     HOLD
 ```

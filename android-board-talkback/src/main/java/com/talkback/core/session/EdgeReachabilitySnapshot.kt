@@ -160,7 +160,9 @@ enum class RecoveryReevaluateTrigger {
     /** ICE CHECKING — early resurrection signal while obligation OPEN (ADR-0022). */
     ICE_CHECKING,
     /** ADR-0035 PR4: peer handler processed recovery offer (delivery CONFIRMED). */
-    DELIVERY_CONFIRMED
+    DELIVERY_CONFIRMED,
+    /** ADR-X1: outbound REATTACH receipt acknowledged; admission reevaluation required. */
+    REMOTE_RECEIPT_ACKED
 }
 
 /**
