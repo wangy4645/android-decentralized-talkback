@@ -1,25 +1,39 @@
 # RCA-M03-Reconnect: WiFi Reconnect Induced Membership/Signaling Divergence
 
-**Status:** OPEN — Phase 1 evidence only (no root cause, no code changes)  
+**Status:** OPEN — Phase 2 audit (Q3-lite COMPLETE; directed run PENDING; no code changes authorized)  
 **Date:** 2026-08-07  
-**Trigger:** Call/Messaging smoke test (`logs/call-msg-smoke-20260807-201740`)  
-**DUT:** M03 (`MDX0220416001963`) — WiFi disconnect/reconnect during active conference  
-**Topology:** M01 / M02 / M03 on channel `CH-01`, SSID `happy`
+**Trigger condition:** WiFi flap on M03 during active 3-party conference (not a problem domain)  
+**Field evidence:** Call/Messaging smoke test (`logs/call-msg-smoke-20260807-201740`)  
+**DUT:** M03 (`MDX0220416001963`)  
+**Topology:** M01 (host) / M02 / M03 on channel `CH-01`, SSID `happy`
 
 ## Positioning
+
+**WiFi flap is a trigger condition, not the problem domain.**
+
+```text
+WiFi flap (trigger)
+    |
+    +-- Recovery lifecycle        VERIFIED (ADR-0040; no regression)
+    +-- Transport state           OBSERVED OK (rebind / TRANSPORT_READY)
+    +-- Membership convergence    INVESTIGATION (current)
+    +-- Signaling admission       INVESTIGATION (current)
+```
 
 This is **not** a recovery lifecycle RCA (ADR-0040 / PR-LIFE / completion).
 
 It documents a **recovery-adjacent runtime incident**:
 
 ```text
-WiFi reconnect
-    → topology convergence window
-    → membership snapshot divergence
-    → mesh invite / CALL_REJECT signaling storm
+transport recovered
+    → membership / topology convergence window
+    → business signaling not gated
+    → mesh invite / CALL_REJECT storm
 ```
 
 **Excluded regression:** `WiFi flap → recovery lifecycle broken` — not observed in this run. Phase 3.2 recovery architecture remains intact.
+
+**Adjacent problem (not same as ADR-0040):** ADR-0040 fixed *recovery responsibility loss*; this RCA investigates *signaling readiness after recovery* — when the cluster may resume business interaction.
 
 ---
 
@@ -30,7 +44,7 @@ WiFi reconnect
 | Area | Notes |
 |------|-------|
 | WiFi disconnect / reconnect on M03 | `networkId=300` → loss → `networkId=301` rebind |
-| Topology / membership snapshot divergence | `members=M01,M02` on M03 (self absent) |
+| Topology / membership snapshot divergence | `members=M01,M02` on M03 — **reframed** (Q3-lite: likely remote-only `groupMembers` projection; not proven self-loss) |
 | `CANONICAL_MISMATCH` + `GROUP_RESYNC_REQUEST` | Membership layer self-detection |
 | `CALL_REJECT` storm | ~930 total log lines across three devices |
 | Mesh invite retry during unstable window | `MESH_OFFERED` while `membershipDigestAligned=false` |
@@ -105,7 +119,7 @@ M03 WiFi returns (20:25:38)
     |       |
     |       +-- CALL_REJECT reason=BUSY (bidirectional)
     |
-    +-- M03 local snapshot: members=M01,M02 (self missing)
+    +-- M03 local snapshot: members=M01,M02 (remote-only projection; localModuleId=M03 separate)
     |
     +-- CANONICAL_MISMATCH detected
     |
@@ -141,7 +155,7 @@ Decoded reject reason in application logs: **`BUSY`** — not `STALE_SESSION`, `
 
 Handler path: `TalkbackCoordinator.handleCallReject()` → mesh conference branch → `evictMeshInvitee` / `host-owned conference kept`.
 
-### O3 — Self identity absent from M03 local topology
+### O3 — Topology snapshot `members` omits local (Q3-lite: Semantic A, not violation)
 
 At 20:26:53 on M03:
 
@@ -151,7 +165,11 @@ membershipDigestAligned=true
 membershipReconciled=true
 ```
 
-M03's local module ID is not in `members`. Canonical expectation: `[M01, M02, M03]`.
+**Q3-lite verdict:** `TOPOLOGY_SNAPSHOT.members` is projected from `groupMembers` only (`canonicalMemberModuleIds()`). After `applyMembershipSnapshot()` with a remote-only roster, `groupMembers=[M01,M02]` while `memberModules` includes M03 — **Semantic A (remotes only)**. `localModuleId=M03` is a separate field. `membershipDigestAligned=true` means remote roster hash matches authority, **not** that local ∈ `groupMembers`.
+
+**Not established:** self-invariant violation. **Do not patch** with force-append-self.
+
+**Audit:** [q3-lite-membership-view-semantics-audit.md](./q3-lite-membership-view-semantics-audit.md)
 
 ### O4 — M02 continues mesh offers while membership not aligned
 
@@ -187,7 +205,7 @@ mesh invite / re-dial traffic resumes
     |
 CALL_REJECT reason=BUSY (storm)
     |
-local topology may diverge (self ∉ members)
+local topology view may lag authority (epoch/hash mismatch)
     |
 CANONICAL_MISMATCH → GROUP_RESYNC_REQUEST (membership self-repair)
 ```
@@ -198,78 +216,212 @@ Membership has mismatch detection and resync request. Signaling appears to lack 
 
 ---
 
-## 6. Open questions
+## 6. Open questions (priority order)
 
-### Q1 — Why does topology instability allow invite retry?
+Investigation order: **Q3-lite → Q1 → Q2**. Define readiness facts before gating; reduce storm by suppressing bad invites, not by prettifying reject strings.
 
-**Ask:** Is there a gate equivalent to `membershipConverged == false` or `membershipDigestAligned == false` on outbound mesh invite / re-dial?
+### P0 — Q3-lite: Membership view semantics — **COMPLETE**
 
-**Audit targets:**
+**Audit:** [q3-lite-membership-view-semantics-audit.md](./q3-lite-membership-view-semantics-audit.md)
 
-- Mesh planner / topology scheduler (`MESH_OFFERED` emission path)
-- `membershipDigestAlignedWithAuthority()` usage in `TalkbackCoordinator`
-- `groupTopologyReadiness=MEMBERSHIP_PENDING` → invite admission
+**Q3.1 Snapshot semantics:** Path-dependent — **Semantic A (remote-only)** on broadcast/observation; **Semantic B (full roster)** possible on `payload.members` apply path. `members=M01,M02` on M03 is **not** proven violation.
 
-**Field signal:** M02 emitted `MESH_OFFERED` with `membershipDigestAligned=false`.
+**Q3.2 Digest ownership:** Single source for `TopologyDigest.memberHash` — `groupMembers` only (not `memberModules`). `membershipDigestAligned` vs `CANONICAL_MISMATCH` are different probes; not necessarily contradictory.
+
+**Q3.3 Fence inputs:** `membershipDigestAlignedWithAuthority`, `membershipReconciled`, `groupTopologyReadiness`, `isMembershipResyncInFlight` **exist** but are **not wired** to `completeGroupMesh()` / `offerGroupMeshJoin()`.
+
+**Forbidden (unchanged):** membership self-heal patch, force-append-self, epoch/digest changes.
 
 ---
 
-### Q2 — Is BUSY semantically correct here?
+### P1 — Q1: Invite admission fence (H1 validation target)
 
-**Ask:** Does `CALL_REJECT reason=BUSY` mean "target has active incompatible call" or is it overloaded for "cannot accept transient mesh invite during convergence"?
+**Ask:** When membership is not converged, should outbound mesh invite be suppressed?
 
-**Field signal:**
+**Static audit (preliminary — supports H1, not root cause):**
+
+| Path | Membership gate? |
+|------|------------------|
+| `completeGroupMesh()` → `offerGroupMeshJoin()` | **No** `membershipDigestAligned` / `membershipReconciled` check |
+| `GroupMeshReconciler.canOfferJoin()` | ICE checking / backoff only |
+| `scheduleGroupMeshRetries()` (500/1500/3000 ms) | Retries mesh without membership gate |
+| `shouldDeferConferenceFullMesh()` | Non-host + edge recovering only; not general convergence |
+
+**Field signal:** M02 `MESH_OFFERED` while `membershipDigestAligned=false`, `groupTopologyReadiness=MEMBERSHIP_PENDING`.
+
+**H1 to validate:** blocking outbound mesh invite while not ready eliminates reject storm.
+
+---
+
+### P2 — Q2: BUSY reject semantics (quality; not storm root)
+
+**Ask:** Is `CALL_REJECT reason=BUSY` overloaded for convergence/transient reject?
+
+**Static audit (preliminary):** `sendGroupBusyReject()`, `handleGroupInvite` failure paths, and mesh `handleCallReject` use `BUSY` for existing session / cannot-accept-now — no `REJECT_CONVERGENCE_PENDING` or `REJECT_RECOVERY_TRANSIENT`.
+
+**Defer** until P1 fence validated. BUSY storm is a **symptom**; primary fix is not sending invites during non-ready window.
+
+---
+
+## 7. Signaling readiness model (fence design constraint)
+
+**Forbidden approach:** time-based grace as readiness.
 
 ```text
-Mesh invite rejected by M03 reason=BUSY (session kept)
-Mesh invite rejected by M01 reason=BUSY (host-owned conference kept)
+WiFi reconnect → sleep 5s → allow invite   ❌
 ```
 
-Conference is already active — peers are re-inviting each other, not starting a new incompatible call. Possible **semantic pollution** of BUSY.
+**Required approach:** fact-based readiness predicate.
 
-**Audit targets:**
+```text
+TransportReady
+      +
+MembershipConverged      (membershipDigestAlignedWithAuthority + membershipReconciled)
+      +
+TopologyDigestStable     (authorityDigestKnown + epoch/hash match)
+      +
+NoPendingResync          (!isMembershipResyncInFlight)
+          ↓
+    SignalingAdmissionReady   (design sketch — see Q3-lite §5)
+```
 
-- `buildSignedEnvelope(SignalType.CALL_REJECT, …, "BUSY")` call sites in `TalkbackCoordinator`
-- Conditions that select BUSY vs DECLINED vs canonical-yield payloads
+> Time is not readiness. Facts are readiness.
 
----
+Likely gate sites (implementation **not authorized** until directed run passes): `completeGroupMesh()`, `offerGroupMeshJoin()`, mesh retry scheduler.
 
-### Q3 — Why does M03 lose self from local members?
-
-**Ask:** Which stage drops M03 from `members`?
-
-| Candidate | Question |
-|-----------|----------|
-| Snapshot source | Does incoming snapshot omit self? |
-| Merge / apply | Does apply filter self under epoch competition? |
-| Epoch race | Does stale authority view overwrite local self-inclusion? |
-
-**Field signal:** `members=M01,M02` with `membershipDigestAligned=true` and `membershipReconciled=true` — suggests local view considers itself aligned while self is absent. Contradiction worth tracing.
-
-**Related concept (do not change):** Phase 3.2 `canonicalRoster` / `onlineMembers()` invariant — self ∈ canonical roster.
+**Not in scope:** new FSM, recovery lifecycle change, completion change.
 
 ---
 
-## 7. Phase 2 plan (not authorized)
+## 8. Phase 2 directed run card
 
-| Step | Action |
-|------|--------|
-| P2-1 | Static audit: mesh invite emission gates vs `membershipDigestAligned` |
-| P2-2 | Static audit: BUSY reject call sites and semantic mapping |
-| P2-3 | Static audit: topology snapshot `members` construction — self inclusion |
-| P2-4 | Directed re-run: M03 WiFi flap only, same topology, capture Q1–Q3 tokens |
-| P2-5 | If fence gap confirmed → new ADR (signaling convergence fence); not ADR-0040 amendment |
+**Case:** `reconnect-convergence-fence-validation`  
+**Goal:** Validate H1 — when membership not converged, suppressing outbound mesh invite eliminates `CALL_REJECT` storm.
 
-**Forbidden in Phase 2 without new ADR:**
+### T0 — Baseline
 
-- Completion predicate change
-- RNA-5/6 change
-- UI banner as workaround
-- Enlarged recovery budget
+Conference: M01 host, M02 peer, M03 peer (DUT). SSID `happy`.
+
+Confirm before flap:
+
+```text
+membershipDigestAligned=true
+MESH_OFFERED=0 (in critical window baseline)
+CALL_REJECT=0 (in critical window baseline)
+conference OPERATIONAL
+```
+
+### T1 — Trigger
+
+On M03 only:
+
+```text
+disable WiFi → wait disconnect observed → enable WiFi
+```
+
+Capture on all nodes:
+
+```text
+NETWORK_CHANGED / onLost / NETWORK_CAPABILITY_AVAILABLE
+ICE_STATE
+MEMBERSHIP_EPOCH / rosterEpoch
+TOPOLOGY_DIGEST / memberHash
+CANONICAL_MISMATCH
+GROUP_RESYNC_REQUEST
+```
+
+### T2 — Critical window (primary evidence)
+
+While **any** of:
+
+```text
+membershipDigestAligned=false
+OR groupTopologyReadiness=MEMBERSHIP_PENDING
+OR CANONICAL_MISMATCH observed
+OR GROUP_RESYNC_REQUEST in flight
+```
+
+Count per device:
+
+```text
+MESH_OFFERED
+GROUP_INVITE_SENT / Group mesh join offered
+CALL_REJECT (by reason if decodable)
+```
+
+**Expected (current behavior, unfenced):**
+
+```text
+membership not ready → MESH_OFFERED++ → CALL_REJECT storm
+```
+
+### T3 — Fence expected behavior (post-fix validation)
+
+When fence implemented, same run should show:
+
+```text
+membership not ready → MESH_OFFER_SUPPRESSED reason=CONVERGENCE_PENDING
+```
+
+Not:
+
+```text
+offer → reject → retry → offer → reject
+```
+
+### T4 — Recovery confirmation
+
+Wait until:
+
+```text
+membershipDigestAligned=true
+canonical match (no CANONICAL_MISMATCH)
+```
+
+Then:
+
+```text
+MESH_OFFERED allowed
+CALL_REJECT burst = 0
+conference returns to OPERATIONAL
+```
+
+### Pass / fail
+
+| Outcome | Verdict |
+|---------|---------|
+| T2 shows offers during not-ready + storm | H1 supported; fence authorized for design |
+| T2 shows no offers during not-ready but storm persists | H1 refuted; widen RCA |
+| T3 post-fix: suppressed + no storm | Fence fix verified |
+| T3 post-fix: suppressed but storm persists | Additional admission path exists |
+
+**Log directory naming:** `logs/rca-m03-fence-validation-YYYYMMDD-HHMMSS/`
 
 ---
 
-## 8. Relationship to other tracks
+## 9. Phase 2 plan and authorization boundary
+
+| Step | Status | Action |
+|------|--------|--------|
+| P0 | **COMPLETE** | Q3-lite: [four-view audit](./q3-lite-membership-view-semantics-audit.md) |
+| P1 | **NEXT** | Directed run T0–T4 (H1 validation) |
+| P2 | PENDING | If H1 confirmed → lightweight Post-Reconnect Convergence Contract draft |
+| P3 | NOT AUTHORIZED | Invite admission gate implementation |
+| P4 | NOT AUTHORIZED | BUSY reason refactor |
+
+**Forbidden without new contract / explicit authorization:**
+
+- Recovery lifecycle / ADR-0040 changes
+- Completion / RNA-5/6 changes
+- Membership self-heal patch
+- Time-based sleep fence
+- UI workaround as runtime fix
+
+**Effort estimate (if Q3-lite finds no hidden conflict):** readiness predicate ~0.5d · invite gate ~1–2d · UT/directed test ~1d · doc ~0.5d · BUSY reason deferred.
+
+---
+
+## 10. Relationship to other tracks
 
 | Track | Relationship |
 |-------|--------------|
@@ -280,17 +432,28 @@ Conference is already active — peers are re-inviting each other, not starting 
 
 ---
 
-## 9. Status board entry
+## 11. Status board entry
 
 ```text
-Runtime:
-  WiFi reconnect membership divergence     RCA OPEN (this document)
-  CALL_REJECT storm                        RCA OPEN (this document)
+ADR-0040 Recovery Lifecycle        VERIFIED (no regression evidence)
 
-Hypothesis:
-  reconnect convergence fence missing      UNDER INVESTIGATION
+PR-UI-1                            MERGED
+PR-UI-2                            VALID UX · independent · not runtime fix
 
-Not claimed:
-  membership bug                           (no root cause yet)
-  recovery lifecycle regression            (excluded by evidence)
+RCA-M03-WIFI-RECONNECT             OPEN
+  Phase:                             Phase-2 Audit
+  Q3-lite:                            COMPLETE (q3-lite-membership-view-semantics-audit.md)
+  Next:                              Q1 directed run (fence validation)
+
+Hypothesis H1 (convergence fence)    SUPPORTED (static + Q3-lite) · field verify PENDING
+Q2 (BUSY semantic overload)          CONFIRMED (static) · fix NOT AUTHORIZED
+Q3 (self roster)                     CLOSED — Semantic A; not proven violation
+
+Not authorized:
+  recovery changes · completion changes · membership self-heal patch
+  BUSY semantics refactor · time-based sleep fence
+
+Discipline:
+  WiFi flap = trigger only
+  define signaling readiness before fixing failure appearance
 ```
