@@ -4,7 +4,7 @@
 
 **Status:** **ACCEPTED** (2026-08-08) — **Option A**  
 **Architecture:** **CLOSED** — package **P1 + O1 + F1/F4** ([architecture close](../analysis/adr0043-architecture-close.md))  
-**Implementation:** **v0 AUTHORIZED** ([implementation authorization](../analysis/adr0043-implementation-authorization.md)) · **Field NOT AUTHORIZED**  
+**Implementation:** **v0 MERGED** · **Appendix B PASS** ([adjudication](../analysis/adr0043-appendix-b-adjudication.md)) · **Field NOT AUTHORIZED**  
 **Does NOT authorize** field runs, timeout changes, handler softening, or scope beyond the authorization doc.
 
 ```text
@@ -12,7 +12,8 @@ ADR-0043
 Decision:              ACCEPT
 Selected option:       A
 Architecture:          CLOSED · P1 + O1 + F1/F4
-Implementation:        v0 AUTHORIZED (narrow)
+Implementation:        v0 MERGED · behavior PASS
+Appendix B:              PASS
 Field:                 NOT AUTHORIZED
 ```
 

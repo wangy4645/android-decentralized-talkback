@@ -1,8 +1,9 @@
 # ADR-0043 Appendix B — Passive Observation Checklist
 
-**Status:** **ACTIVE** · **passive observation only** · **Field NOT AUTHORIZED**  
+**Status:** **PASS** · **passive observation COMPLETE** · **Field NOT AUTHORIZED**  
 **Date:** 2026-08-08  
 **Baseline:** PR **#128 MERGED** (`7820d87`) · Seam I v0 on `main`  
+**Adjudication:** [adr0043-appendix-b-adjudication.md](./adr0043-appendix-b-adjudication.md)  
 **Parents:** [adr0043-implementation-authorization.md](./adr0043-implementation-authorization.md) · [adr0043-implementation-verification-gate.md](./adr0043-implementation-verification-gate.md) · [0043-conference-recovery-membership-context-boundary.md](../adr/0043-conference-recovery-membership-context-boundary.md)
 
 ---
@@ -13,9 +14,10 @@
 ADR-0043 Seam I v0:     MERGED (main)
 Implementation:         merged baseline
 Desk verification:      PASS (19/19)
-Appendix B:             ACTIVE (this doc)
-Field authorization:    NOT AUTHORIZED
+Appendix B:             PASS (adr0043-appendix-b-adjudication.md)
+Field authorization:    NOT AUTHORIZED (gate APPROVED: adr0043-field-authorization-gate.md)
 ADR-0042 stash:         isolated — do not reopen yet
+Outstanding:            RNA intent lifecycle observation · Seam II · F2/F3/F5
 ```
 
 ---

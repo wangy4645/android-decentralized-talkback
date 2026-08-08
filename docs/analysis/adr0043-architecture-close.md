@@ -13,7 +13,11 @@
 ```text
 Architecture direction:   CLOSED / ACCEPTED
 Implementation auth:      ACCEPTED · v0 runtime AUTHORIZED (narrow)
-Field:                    NOT AUTHORIZED
+Implementation behavior:  PASS (desk + Appendix B logs)
+Appendix B:               PASS
+Field Gate:               APPROVED (definition only)
+Field run:                NOT AUTHORIZED
+Outstanding:              RNA intent lifecycle · Seam II · F2/F3/F5
 ```
 
 ---
