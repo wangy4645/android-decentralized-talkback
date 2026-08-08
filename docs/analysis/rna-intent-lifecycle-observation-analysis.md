@@ -124,7 +124,7 @@ Answering these requires a **separate** authorization — not ADR-0043 field run
 | Modify P1/O1/completion predicate | **Reject** — wrong track |
 | Field run for recovery success | **Reject** — wrong metric |
 | Directed RNA intent observation | **Candidate** — separate run card |
-| ADR-0042 transport review | **Parallel** — see adr0042-stash-review.md |
+| ADR-0042 transport review | **COMPLETE** — see [adr0042-transport-truth-boundary-review.md](./adr0042-transport-truth-boundary-review.md) |
 
 ---
 

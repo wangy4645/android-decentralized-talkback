@@ -3,7 +3,7 @@
 **Status:** **REVIEW ONLY** · **stash NOT applied** · **main unchanged**  
 **Date:** 2026-08-08  
 **Stash:** `stash@{0}` — `local backlog and adr0042 docs`  
-**Context:** ADR-0043 CLOSED; evaluate whether ADR-0042 work should re-enter mainline
+**Context:** ADR-0043 CLOSED · [transport truth boundary review](./adr0042-transport-truth-boundary-review.md) (**COMPLETE**)
 
 ---
 
