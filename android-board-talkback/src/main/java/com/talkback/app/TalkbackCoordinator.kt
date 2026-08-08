@@ -82,6 +82,12 @@ import com.talkback.core.session.MembershipResyncRecord
 import com.talkback.core.session.MembershipResyncState
 import com.talkback.core.session.RecoveryMembershipContext
 import com.talkback.core.session.WiredMembershipEpochProbe
+import com.talkback.core.session.membershipcontext.ConferenceRecoveryMembershipDispatchAuthorizer
+import com.talkback.core.session.membershipcontext.MembershipContextExistenceAnswer
+import com.talkback.core.session.membershipcontext.MembershipContextExistenceEvidence
+import com.talkback.core.session.membershipcontext.MembershipContextExistenceQuery
+import com.talkback.core.session.membershipcontext.MembershipDispatchAuthorizationResult
+import com.talkback.core.session.membershipcontext.SignalingMembershipContextExistenceProjector
 import com.talkback.core.session.ConferenceEdgeKey
 import com.talkback.core.session.ConferenceHostEndpointResolver
 import com.talkback.core.session.ConferenceIceConnectedSideEffects
@@ -132,6 +138,8 @@ import com.talkback.core.model.AuthorityDigestFreshness
 import com.talkback.core.model.AuthorityDigestObservation
 import com.talkback.core.model.AuthorityDigestSource
 import com.talkback.core.model.GroupResyncRequestPayload
+import com.talkback.core.model.MembershipContextExistenceQueryPayload
+import com.talkback.core.model.MembershipContextExistenceResponsePayload
 import com.talkback.core.model.TopologyDigest
 import com.talkback.core.session.GroupMeshReconciler
 import com.talkback.core.session.GroupMeshPlanner
@@ -871,6 +879,12 @@ class TalkbackCoordinator(
     )
     private val membershipAuthorityResolver = DefaultMembershipAuthorityResolver { channelId ->
         authorityDigestForChannel(channelId)
+    }
+    /** ADR-0043 Seam I v0: P1 projector for authority-grounded membership context existence. */
+    private val membershipContextExistenceProjector: SignalingMembershipContextExistenceProjector by lazy {
+        SignalingMembershipContextExistenceProjector { authorityId, payload ->
+            sendMembershipContextExistenceProbe(authorityId, payload)
+        }
     }
     /** Last HELLO floor snapshot from the session floor authority (diagnostics only). */
     private val lastSeenAuthorityFloorSnapshotByChannel = ConcurrentHashMap<String, FloorSnapshotDigest>()
@@ -3041,6 +3055,22 @@ class TalkbackCoordinator(
     ) {
         val authorityId = resolveMembershipAuthorityIdForChannel(channelId) ?: return
         if (authorityId == localModuleId.value) return
+        val authResult = evaluateMembershipContextDispatchAuthorization(
+            channelId = channelId,
+            episodeId = episodeId,
+            conferenceSessionId = conferenceSession.id,
+            authorityId = authorityId
+        )
+        if (!authResult.granted) {
+            logMembershipContextDispatchBlocked(
+                channelId = channelId,
+                episodeId = episodeId,
+                transportTrigger = transportTrigger,
+                authorityId = authorityId,
+                result = authResult
+            )
+            return
+        }
         val peer = resolvePeerForModule(authorityId) ?: return
         val requestSession = findGroupSessionForMembership(channelId, conferenceSession.id)
             ?: conferenceSession
@@ -3110,6 +3140,171 @@ class TalkbackCoordinator(
                     "state=${MembershipResyncState.PENDING_BLOCKED.name}"
             )
         }
+    }
+
+    private fun membershipContextExistenceQuery(
+        channelId: String,
+        decisionEpoch: Long,
+        conferenceSessionId: String
+    ): MembershipContextExistenceQuery =
+        MembershipContextExistenceQuery(
+            channelId = channelId,
+            decisionEpoch = decisionEpoch,
+            correlationId = ConferenceRecoveryMembershipDispatchAuthorizer.correlationId(
+                channelId,
+                decisionEpoch,
+                conferenceSessionId
+            ),
+            conferenceSessionId = conferenceSessionId
+        )
+
+    private fun evaluateMembershipContextDispatchAuthorization(
+        channelId: String,
+        episodeId: Long,
+        conferenceSessionId: String,
+        authorityId: String
+    ): MembershipDispatchAuthorizationResult {
+        val query = membershipContextExistenceQuery(channelId, episodeId, conferenceSessionId)
+        val evidence = membershipContextExistenceProjector.obtainEvidence(query)
+        val result = ConferenceRecoveryMembershipDispatchAuthorizer.evaluate(
+            query,
+            evidence,
+            expectedAuthorityId = authorityId
+        )
+        if (!result.granted && result.shouldProbeAuthority) {
+            membershipContextExistenceProjector.requestAuthorityProbe(query, authorityId)
+        }
+        return result
+    }
+
+    private fun logMembershipContextDispatchBlocked(
+        channelId: String,
+        episodeId: Long,
+        transportTrigger: String,
+        authorityId: String,
+        result: MembershipDispatchAuthorizationResult
+    ) {
+        log(
+            "GROUP_RESYNC_DISPATCH_BLOCKED reason=ADR0043_${result.blockReason?.name ?: "UNKNOWN"} " +
+                "channel=$channelId episodeId=$episodeId authority=$authorityId " +
+                "trigger=$transportTrigger probeRequested=${result.shouldProbeAuthority}"
+        )
+    }
+
+    private fun sendMembershipContextExistenceProbe(
+        authorityId: String,
+        payload: MembershipContextExistenceQueryPayload
+    ): Boolean {
+        val peer = resolvePeerForModule(authorityId) ?: return false
+        val requestSession = sessions.values.firstOrNull {
+            it.accepted && it.channelId == payload.channelId && isConferenceSession(it)
+        } ?: return false
+        val remote = endpointForModule(requestSession, ModuleId(authorityId)) ?: return false
+        val envelope = buildSignedEnvelope(
+            SignalType.MEMBERSHIP_CONTEXT_EXISTENCE_QUERY,
+            requestSession.local,
+            remote,
+            requestSession.id,
+            payload.encode()
+        )
+        val sent = runCatching {
+            signalingChannel.send(peer, envelope)
+        }.onFailure {
+            log("Signal send failed type=${envelope.type} err=${it.message}")
+        }.isSuccess
+        if (sent) {
+            log(
+                "MEMBERSHIP_CONTEXT_EXISTENCE_QUERY_SENT channel=${payload.channelId} " +
+                    "epoch=${payload.decisionEpoch} correlation=${payload.correlationId} to=$authorityId"
+            )
+        }
+        return sent
+    }
+
+    private fun handleMembershipContextExistenceQuery(signal: SignalEnvelope, fromPeer: PeerTarget) {
+        val payload = MembershipContextExistenceQueryPayload.decode(signal.payload) ?: return
+        val requesterId = signal.from.moduleId.value
+        val membershipContext = resolveMembershipContextForResync(payload.channelId)
+        val answer = if (membershipContext != null) {
+            MembershipContextExistenceAnswer.PRESENT
+        } else {
+            MembershipContextExistenceAnswer.ABSENT
+        }
+        log(
+            "MEMBERSHIP_CONTEXT_EXISTENCE_QUERY_RECEIVED channel=${payload.channelId} " +
+                "epoch=${payload.decisionEpoch} correlation=${payload.correlationId} " +
+                "requester=$requesterId answer=${answer.name}"
+        )
+        val responseSession = membershipContext
+            ?: sessions.values.firstOrNull {
+                it.accepted && it.channelId == payload.channelId && isConferenceSession(it)
+            }
+            ?: return
+        val requesterEndpoint = endpointForDialableModule(ModuleId(requesterId)) ?: return
+        val responsePayload = MembershipContextExistenceResponsePayload(
+            channelId = payload.channelId,
+            decisionEpoch = payload.decisionEpoch,
+            correlationId = payload.correlationId,
+            answer = answer.name
+        )
+        val peer = resolvePeerForModule(requesterId) ?: fromPeer
+        val envelope = buildSignedEnvelope(
+            SignalType.MEMBERSHIP_CONTEXT_EXISTENCE_RESPONSE,
+            responseSession.local,
+            requesterEndpoint,
+            responseSession.id,
+            responsePayload.encode()
+        )
+        runCatching {
+            signalingChannel.send(peer, envelope)
+        }.onFailure {
+            log("Signal send failed type=${envelope.type} err=${it.message}")
+        }.onSuccess {
+            log(
+                "MEMBERSHIP_CONTEXT_EXISTENCE_RESPONSE_SENT channel=${payload.channelId} " +
+                    "epoch=${payload.decisionEpoch} correlation=${payload.correlationId} " +
+                    "answer=${answer.name} to=$requesterId"
+            )
+        }
+    }
+
+    private fun handleMembershipContextExistenceResponse(signal: SignalEnvelope, @Suppress("UNUSED_PARAMETER") fromPeer: PeerTarget) {
+        val payload = MembershipContextExistenceResponsePayload.decode(signal.payload) ?: return
+        val responderId = signal.from.moduleId.value
+        val expectedAuthorityId = resolveMembershipAuthorityIdForChannel(payload.channelId)
+        if (expectedAuthorityId == null || responderId != expectedAuthorityId) {
+            log(
+                "MEMBERSHIP_CONTEXT_EXISTENCE_RESPONSE_REJECTED reason=AUTHORITY_MISMATCH " +
+                    "channel=${payload.channelId} responder=$responderId " +
+                    "expected=${expectedAuthorityId ?: "UNKNOWN"}"
+            )
+            return
+        }
+        val evidence = SignalingMembershipContextExistenceProjector.evidenceFromResponse(responderId, payload)
+            ?: return
+        membershipContextExistenceProjector.recordAuthorityResponse(evidence)
+        log(
+            "MEMBERSHIP_CONTEXT_EXISTENCE_EVIDENCE answer=${evidence.answer.name} " +
+                "channel=${evidence.channelId} epoch=${evidence.decisionEpoch} " +
+                "correlation=${evidence.correlationId} authority=$responderId"
+        )
+        retryMembershipConvergenceAfterContextEvidence(evidence)
+    }
+
+    private fun retryMembershipConvergenceAfterContextEvidence(
+        evidence: MembershipContextExistenceEvidence
+    ) {
+        if (evidence.answer != MembershipContextExistenceAnswer.PRESENT) return
+        sessions.values
+            .filter { isConferenceSession(it) && it.accepted && it.channelId == evidence.channelId }
+            .forEach { session ->
+                val episodeId = recoveryEpisodeIdForConference(session) ?: return@forEach
+                if (episodeId != evidence.decisionEpoch) return@forEach
+                maybeRequestMembershipConvergenceForConferenceRecovery(
+                    session,
+                    "MEMBERSHIP_CONTEXT_EVIDENCE"
+                )
+            }
     }
 
     /**
@@ -4178,6 +4373,10 @@ class TalkbackCoordinator(
             SignalType.GROUP_JOIN -> handleGroupJoin(signal, fromPeer)
             SignalType.GROUP_LEAVE -> handleGroupLeave(signal)
             SignalType.GROUP_RESYNC_REQUEST -> handleGroupResyncRequest(signal, fromPeer)
+            SignalType.MEMBERSHIP_CONTEXT_EXISTENCE_QUERY ->
+                handleMembershipContextExistenceQuery(signal, fromPeer)
+            SignalType.MEMBERSHIP_CONTEXT_EXISTENCE_RESPONSE ->
+                handleMembershipContextExistenceResponse(signal, fromPeer)
             SignalType.CONFERENCE_REJOIN -> handleConferenceRejoin(signal, fromPeer)
             SignalType.RECOVERY_REATTACH_ACK -> handleRecoveryReattachAck(signal, fromPeer)
             SignalType.WEBRTC_ICE -> handleIce(signal)
