@@ -51,25 +51,24 @@ Q3 Presentation Semantics
 
 Open ADR
 ========
-ADR-0044 REVIEWING
-  decision candidate: DQ1=B · DQ2=Degraded(+diagnostic) · DQ3=NO CHANGE
-  formal Accept: PENDING
-  impl NOT AUTHORIZED
+ADR-0044 ACCEPTED
+  Decision: ACTIVE/TERMINAL presentation model
+  Impl: AUTHORIZED (presentation only)
+  Field: NOT AUTHORIZED
   review: docs/analysis/adr0044-decision-review.md
 
 
 Runtime change
 ==============
-NONE AUTHORIZED
+Presentation-only AUTHORIZED under ADR-0044
+Recovery / obligation / residency / banner: NOT AUTHORIZED
 
 
 Future candidate (independent track)
 ====================================
-ADR-0044 User Visible Connectivity Semantics for Media Residency
-  — REVIEWING / decision candidate recorded
-  — docs: docs/adr/0044-... · docs/analysis/adr0044-decision-review.md
-  — formal Accept PENDING · impl NOT AUTHORIZED
-  — NOT attached to WiFi recovery / RNA / ADR-0043
+ADR-0044 implementation PR (presentation only)
+  — UVCP → EndpointStatus → UI
+  — Field validation NOT AUTHORIZED until separate gate
 ```
 
 ---

@@ -1,7 +1,6 @@
-# ADR-0044 — Decision Review (Candidate)
+# ADR-0044 — Decision Review
 
-**Status:** **REVIEWING** · **decision candidate recorded** · **NOT ACCEPTED** · **impl NOT AUTHORIZED**  
-**Date:** 2026-08-09  
+**Status:** **ACCEPTED** (2026-08-09) · **no amend** · presentation-only impl AUTHORIZED · Field NOT AUTHORIZED  
 **ADR:** [0044-user-visible-connectivity-semantics-media-residency.md](../adr/0044-user-visible-connectivity-semantics-media-residency.md)  
 **Upstream:** [mobile-validation-track-close.md](./mobile-validation-track-close.md)
 
@@ -13,13 +12,13 @@
 ADR-0044 Presentation Semantics
 
 Status:
-    DRAFT → REVIEWING
+    DRAFT → REVIEWING → ACCEPTED
 
 Decision:
-    CANDIDATE RECORDED (not formal Accept)
+    ACCEPT candidates (no amend)
 
 Implementation:
-    NOT AUTHORIZED
+    AUTHORIZED (presentation only)
 
 Field:
     NOT AUTHORIZED
@@ -27,98 +26,17 @@ Field:
 
 ---
 
-## Purpose
+## Formal Accept
 
-Freeze the **user-visible semantics model** before any code plan.
+Candidates from [aeedf9e](https://github.com/wangy4645/android-decentralized-talkback/commit/aeedf9e) review are **Accepted without amendment**.
 
-```text
-Freeze semantics first
-        ↓
-Formal Accept (separate step)
-        ↓
-Only then authorize presentation-only impl
-```
+| DQ | Accepted decision |
+| -- | ----------------- |
+| DQ1 | **B** — separate active recovery vs terminal unavailable |
+| DQ2 | User **Degraded** · Diagnostic **Media unavailable** |
+| DQ3 | **NO CHANGE** — conference banner / P1a boundary |
 
----
-
-## Decision candidates
-
-### DQ1 — Distinguish active vs terminal?
-
-```text
-Candidate: B — Distinguish
-```
-
-**Rationale:** Two independent fact axes already exist:
-
-```text
-Recovery Activity     active repair?     yes / no
-Media Availability    usable?            yes / no
-```
-
-Today both collapse into `EndpointStatus.RECONNECTING`, so users read “actively repairing” when repair may already have ended.
-
-**Constraint (normative for this candidate):**
-
-```text
-Presentation state
-    ≠
-Recovery lifecycle state
-```
-
-Choosing B does **not** authorize mirroring the recovery FSM into UI:
-
-```text
-✗ RECOVERING / RETRYING / WAITING / FAILED / PARTIAL_FAILED / …
-```
-
-Only a minimal active-vs-terminal vocabulary split is in scope if Accept follows.
-
----
-
-### DQ2 — Terminal residency user vocabulary?
-
-```text
-Candidate ranking:
-
-1. User visible:  Degraded          (recommended)
-2. Diagnostic:    Media unavailable (detail / logs / advanced)
-3. Connection issue                (too broad — not preferred as primary)
-```
-
-**Recommended split:**
-
-```text
-EndpointStatus (user):
-    DEGRADED
-
-Diagnostic / detail layer:
-    Media unavailable
-```
-
-**Rationale:** “Media unavailable” is precise but engineering-facing; “Degraded” is common network-product language for mesh/conference. Keep technical precision in diagnostics, not primary peer chrome.
-
-**Not decided as formal Accept yet** — remains candidate pending ADR Accept.
-
----
-
-### DQ3 — Conference banner?
-
-```text
-Candidate: NO CHANGE
-```
-
-```text
-single peer media residency
-        ≠
-conference Poor Network banner
-```
-
-P1a Case A field PASS remains frozen. ADR-0044 must not reopen that boundary.
-
----
-
-## Decision Summary (candidate — not Accept)
+### Decision Summary (normative)
 
 ```text
 1. Adopt separated presentation semantics:
@@ -129,29 +47,32 @@ P1a Case A field PASS remains frozen. ADR-0044 must not reopen that boundary.
 
 3. Keep conference banner projection unchanged.
 
-4. Introduce / remap presentation vocabulary only after
-   formal ADR Accept — not during this review memo.
+4. Presentation vocabulary remapping is authorized
+   only on the UVCP → EndpointStatus → UI path.
 ```
 
----
-
-## Still forbidden
-
-Until **formal Accept** of ADR-0044:
+### Constraint
 
 ```text
-✗ EndpointStatus enum change
-✗ UVCP projection change
-✗ string resource change
-✗ field validation for reconnect copy
-✗ FAILED_MEDIA_RECOVERY modification
-✗ force ONLINE / clear residency
+Presentation state ≠ Recovery lifecycle state
+(no FSM-mirror vocabulary explosion)
 ```
 
 ---
 
-## Next formal step
+## Accept does not authorize
 
-1. Product / architecture **Accept** or **Amend** this candidate set on ADR-0044.  
-2. On Accept: write short Accept amendment (decision + vocabulary table).  
-3. Only then open presentation-only implementation PR.
+```text
+- FAILED_MEDIA_RECOVERY lifecycle changes
+- obligation completion changes
+- ICE recovery changes
+- membership convergence changes
+- conference banner behavior changes
+- automatic ONLINE projection after deadline
+```
+
+---
+
+## Next
+
+Minimal presentation-only implementation PR. No Q4 / further desk expansion.
