@@ -2,8 +2,9 @@
 
 ## Status
 
-**ACCEPTED** (2026-08-09) · **presentation-only implementation AUTHORIZED** · **Field NOT AUTHORIZED**  
-**Decision review:** [adr0044-decision-review.md](../analysis/adr0044-decision-review.md) (candidates → Accept, no amend)
+**ACCEPTED** (2026-08-09) · **Implementation MERGED** (PR #130) · **Field AUTHORIZED** (thin validation)  
+**Decision review:** [adr0044-decision-review.md](../analysis/adr0044-decision-review.md) (candidates → Accept, no amend)  
+**Field run card:** [adr0044-field-run-card.md](../analysis/adr0044-field-run-card.md)
 
 **Parents:**
 
@@ -15,8 +16,8 @@
 ADR-0044
 Decision:              ACCEPT (no amend)
 Model:                 ACTIVE / TERMINAL presentation vocabulary
-Implementation:        AUTHORIZED (presentation path only)
-Field:                 NOT AUTHORIZED
+Implementation:        MERGED (PR #130 · presentation path only)
+Field:                 AUTHORIZED (thin validation)
 
 Does NOT reopen:
   WiFi Recovery Architecture
@@ -163,7 +164,7 @@ Recovery FSM
 Completion predicate
 Obligation state
 Media residency clear logic
-Field validation campaigns (until separately authorized)
+Field validation — see [adr0044-field-run-card.md](../analysis/adr0044-field-run-card.md) (AUTHORIZED thin)
 ```
 
 ---
@@ -187,8 +188,8 @@ ADR-0044
 ========
 Status:          ACCEPTED
 Decision:        ACTIVE/TERMINAL presentation model
-Implementation:  AUTHORIZED (presentation only)
-Field:           NOT AUTHORIZED
+Implementation:  MERGED (PR #130)
+Field:           AUTHORIZED (thin validation)
 
 WiFi Recovery Architecture     CLOSED
 ADR-0043 / RNA                 FROZEN · NO REOPEN
@@ -200,6 +201,5 @@ FAILED_MEDIA desk Q1–Q3        CLOSED OBSERVATION
 
 ## Next step
 
-Design a **minimal presentation-only implementation PR** (UVCP → EndpointStatus → UI).  
-No recovery / obligation / residency / banner behavior changes.  
-Field validation separately authorized later.
+Execute [adr0044-field-run-card.md](../analysis/adr0044-field-run-card.md): single thin presentation validation.  
+PASS → Field CLOSED. FAIL → presentation-only; no recovery reopen.
