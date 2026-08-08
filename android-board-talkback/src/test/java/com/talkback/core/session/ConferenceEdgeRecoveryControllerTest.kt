@@ -1708,7 +1708,9 @@ class ConferenceEdgeRecoveryControllerTest {
                 reattachCalls++
                 dispatchRound++
                 if (dispatchRound == 1) {
-                    ReattachDispatchOutcome.SEND_FAILED
+                    // Sync-scoped (ADR-0042): SEND_FAILED must not enter FAILED_MEDIA.
+                    // Keep this supersede-from-FAILED scenario via PEER_UNREACHABLE.
+                    ReattachDispatchOutcome.PEER_UNREACHABLE
                 } else {
                     ReattachDispatchOutcome.DEFERRED
                 }

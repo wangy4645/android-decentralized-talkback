@@ -4158,13 +4158,38 @@ class ConferenceEdgeRecoveryController internal constructor(
             ReattachDispatchOutcome.SESSION_CANCELLED -> {
                 cancelEdge(key, "session_cancelled")
             }
-            ReattachDispatchOutcome.PEER_UNREACHABLE,
-            ReattachDispatchOutcome.SEND_FAILED -> {
+            ReattachDispatchOutcome.PEER_UNREACHABLE -> {
                 enterFailedMediaResidency(record, reason = "reattach_send_failed")
                 onLog(
                     "RECOVERY_DECISION session=${key.sessionId} edge=${key.remoteModuleId} " +
                         "attempt=${record.recoveryAttemptId}$triggerPart " +
                         "decision=DISPATCH_REATTACH approved=false"
+                )
+            }
+            ReattachDispatchOutcome.SEND_FAILED -> {
+                // ADR-0042 INV-T2: SEND_FAILED terminates this transmission instance only.
+                // Must not escalate into FAILED_MEDIA residency (X2-adjacent) or leave
+                // REATTACH_REQUESTED / TRANSPORT_SENT as false in-flight.
+                record.phase = EdgeRecoveryPhase.RECOVERY_PENDING
+                record.reattachDeliveryState = ReattachDeliveryState.QUEUED
+                record.outboundDispatchAttemptId = null
+                record.outboundDispatchObligationGeneration = null
+                recordMediaActionDeferred(
+                    record = record,
+                    owner = MediaActionOwner.PARTICIPANT_REATTACH,
+                    reason = DeferredReason.MEDIA_NOT_READY,
+                    wakeupBinding = WakeupBinding(
+                        sourceType = WakeupSourceType.ROUTE_CONVERGED,
+                        sourceKey = edgeWakeupKey(key.sessionId, key.remoteModuleId)
+                    ),
+                    trigger = trigger?.name ?: "DISPATCH_REATTACH_SEND_FAILED"
+                )
+                scheduleWatchdog(record)
+                onLog(
+                    "RECOVERY_DECISION session=${key.sessionId} edge=${key.remoteModuleId} " +
+                        "attempt=${record.recoveryAttemptId}$triggerPart " +
+                        "decision=DISPATCH_REATTACH approved=false outcome=SEND_FAILED " +
+                        "obligationOpen=true"
                 )
             }
         }
