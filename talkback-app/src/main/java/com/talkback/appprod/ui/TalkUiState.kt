@@ -154,7 +154,10 @@ data class TalkUiState(
         inProgress = false,
         mediaConnecting = false,
         recovering = false
-    )
+    ),
+    /** P1a — meeting poor-network banner / pill (ConferenceNetworkBannerProjection). */
+    val conferenceNetworkPresentation: ConferenceNetworkPresentation.State =
+        ConferenceNetworkPresentation.State()
 )
 
 data class ConversationListUiState(

@@ -619,7 +619,7 @@ class TalkbackRuntimeManager(private val appContext: Context) {
             .map(::moduleIdFromMemberKey)
             .filter { it != localModule }
             .mapNotNull { rt.qosSnapshotForModule(it) }
-        return aggregateMeetingQos(rt.conferenceNetworkIndicator().toQualityLabel(), snapshots)
+        return aggregateMeetingQos(snapshots)
     }
 
     fun invitePeersToMeeting(config: AppConfig, moduleIds: List<String>): Result<Int> {
@@ -667,18 +667,21 @@ class TalkbackRuntimeManager(private val appContext: Context) {
     }
 
     private fun aggregateMeetingQos(
-        globalLabel: String,
         snapshots: List<QosSnapshot>
     ): ChannelMeetingQos {
         if (snapshots.isEmpty()) {
-            return ChannelMeetingQos(globalLabel, null, null)
+            return ChannelMeetingQos("N/A", null, null)
         }
         val rttValues = snapshots.map { it.rttMs }.filter { it >= 0 }
         val lossValues = snapshots.map { it.packetLossPercent }.filter { it >= 0.0 }
         val avgRtt = rttValues.average().takeIf { !it.isNaN() }?.toLong()
         val avgLoss = lossValues.average().takeIf { !it.isNaN() }
-        // Network label MUST come from ConferenceNetworkIndicator via runtime facade (#80).
-        return ChannelMeetingQos(globalLabel, avgRtt, avgLoss)
+        val label = when {
+            lossValues.any { it >= 5.0 } || rttValues.any { it >= 300 } -> "Poor"
+            rttValues.isNotEmpty() || lossValues.isNotEmpty() -> "Good"
+            else -> "N/A"
+        }
+        return ChannelMeetingQos(label, avgRtt, avgLoss)
     }
 
     private fun moduleIdFromMemberKey(key: String): String {
