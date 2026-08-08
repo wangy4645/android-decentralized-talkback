@@ -1,6 +1,6 @@
 # RNA Intent Lifecycle — Contract Review
 
-**Status:** **REVIEW COMPLETE** · **observation only** · **no run card** · **no implementation authorization**  
+**Status:** **CLOSED** · **see** [rna-intent-observation-close.md](./rna-intent-observation-close.md)  
 **Date:** 2026-08-08  
 **Episode:** `logs/adr0043-appendix-b-20260808-185802/` · M02→M03 · `intentId=R1`  
 **Parents:** [rna-intent-lifecycle-hypothesis.md](./rna-intent-lifecycle-hypothesis.md) · [rna-intent-lifecycle-observation-analysis.md](./rna-intent-lifecycle-observation-analysis.md)
@@ -186,12 +186,11 @@ R1 creation trigger:
 ICE_RESTART_GATE_BLOCKED reason=OFFER_AWAITING_ANSWER
 ```
 
-Contract question for future observation (not answered here):
+**O1 answered** in [rna-negotiation-gate-o1-review.md](./rna-negotiation-gate-o1-review.md):
 
 ```text
-Did the awaited negotiation answer ever become available?
-If yes — why no NEGOTIATION_CAN_EXECUTE → drain → EXECUTED?
-If no  — EXPIRED after budget is consistent with RNA-5 budget semantics.
+Answer never materialized (Case 2: CALL_REJECT/BUSY, not SDP answer)
+NEGOTIATION_CAN_EXECUTE never fired → budget EXPIRED is RNA-5-consistent
 ```
 
 ---
@@ -208,11 +207,11 @@ RNA:      intent R1 lifecycle — CREATED → blocked → EXPIRED (no EXECUTED)
 
 ## Open questions (post-review)
 
-| # | Question | Blocks run card? |
-|---|----------|----------------|
-| O1 | Why `OFFER_AWAITING_ANSWER` persisted through L2 recovery? | Yes — need log correlation with negotiation state |
-| O2 | After EXPIRED + deferral clear, why obligation/UI stayed SYNC_PENDING ~3min? | Yes — separate from intent terminal; obligation/completion track |
-| O3 | Should EXPIRED trigger successor intent or obligation close? | Architecture — not observable from this episode alone |
+| # | Question | Status |
+|---|----------|--------|
+| O1 | Why `OFFER_AWAITING_ANSWER` persisted through L2 recovery? | **CLOSED** — [rna-negotiation-gate-o1-review.md](./rna-negotiation-gate-o1-review.md) |
+| O2 | After EXPIRED + deferral clear, why obligation/UI stayed SYNC_PENDING ~3min? | **CLOSED** — [rna-obligation-projection-o2-review.md](./rna-obligation-projection-o2-review.md) · Model A/B **not adjudicated** |
+| O3 | Should EXPIRED trigger successor intent or obligation close? | **NOT STARTED** — design choice; requires ADR if pursued |
 
 ---
 

@@ -1,6 +1,6 @@
 # RNA Intent Lifecycle — Observation Hypothesis
 
-**Status:** **DRAFT** · **observation only** · **no runtime authorization** · **no field authorization**  
+**Status:** **CLOSED** · **desk observation complete** · **see** [rna-intent-observation-close.md](./rna-intent-observation-close.md)  
 **Date:** 2026-08-08  
 **Parents:** [rna-intent-lifecycle-observation-analysis.md](./rna-intent-lifecycle-observation-analysis.md) · [adr0042-transport-truth-boundary-review.md](./adr0042-transport-truth-boundary-review.md) · [adr0043-checkpoint-close.md](./adr0043-checkpoint-close.md)
 
@@ -9,11 +9,30 @@
 ## Status board
 
 ```text
-ADR-0043       CLOSED ✅
-ADR-0042       REVIEWED ✅
-RNA intent     HYPOTHESIS OPEN (this doc)
-RNA run        NOT AUTHORIZED
-Field          NOT AUTHORIZED
+ADR-0043 Seam I
+    Architecture        CLOSED ✅
+    Implementation      MERGED ✅
+    Verification        PASS ✅
+    Field               NOT AUTHORIZED
+
+ADR-0042
+    Boundary review     COMPLETE ✅
+    Runtime semantics   CLOSED ✅
+
+RNA Intent Observation
+    H1 Intent owner             CLOSED ✅
+    H2 Terminal lifecycle       CLOSED ✅
+    H3 Close authority          CLOSED ✅
+    O1 Negotiation seam         CLOSED ✅
+    O2 Projection observation   CLOSED ✅
+
+Open architecture questions:  NONE
+
+Deferred:
+    O3 successor intent policy
+    Seam II
+    F2 / F3 / F5
+    Field Observation Run
 ```
 
 ---
@@ -254,15 +273,18 @@ Completion blocked on DEFERRED_INTENT_UNCOVERED while intentTerminal=NONE
 
 ---
 
-## Next step (not this doc)
+## Next step (not authorized)
 
 ```text
-Resolve H1–H3 from existing logs + code contracts
+RNA desk observation CLOSED (H1–H3 · O1 · O2)
         ↓
-If gaps remain → Directed Observation Run Card (separate authorization)
+Model A/B: NOT adjudicated — no ADR candidate from this episode
+O3 (successor intent): NOT STARTED — design choice, not observation
+        ↓
+Resume only on: field evidence · explicit ADR trigger · Seam II authorization
 ```
 
-**Do not** open run card until authority questions have named observables.
+**Do not** open RNA run card or O3 without independent authorization.
 
 ---
 
