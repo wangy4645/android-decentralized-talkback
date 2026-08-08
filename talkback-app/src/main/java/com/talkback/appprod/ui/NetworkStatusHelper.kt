@@ -5,8 +5,6 @@ import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.os.Build
 import com.talkback.appprod.R
-import com.talkback.appprod.TalkbackApp
-import com.talkback.core.session.ConferenceNetworkIndicator
 
 object NetworkStatusHelper {
     data class Status(
@@ -15,31 +13,7 @@ object NetworkStatusHelper {
         val transportRes: Int? = null
     )
 
-    fun current(context: Context): Status {
-        val app = TalkbackApp.get(context)
-        val runtime = app.runtimeManager.getRuntime()
-        if (app.serviceRunning && runtime != null) {
-            return when (runtime.conferenceNetworkIndicator()) {
-                ConferenceNetworkIndicator.EXCELLENT -> Status(
-                    R.string.network_quality_excellent,
-                    R.string.settings_network_detail_qos_excellent
-                )
-                ConferenceNetworkIndicator.GOOD -> Status(
-                    R.string.network_quality_good,
-                    R.string.settings_network_detail_qos_good
-                )
-                ConferenceNetworkIndicator.DEGRADED -> Status(
-                    R.string.network_quality_poor,
-                    R.string.settings_network_detail_qos_poor
-                )
-                ConferenceNetworkIndicator.UNKNOWN -> Status(
-                    R.string.network_quality_na,
-                    R.string.settings_network_detail_qos_na
-                )
-            }
-        }
-        return deviceLinkStatus(context)
-    }
+    fun current(context: Context): Status = deviceLinkStatus(context)
 
     private fun deviceLinkStatus(context: Context): Status {
         val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager

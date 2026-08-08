@@ -143,6 +143,6 @@ object ConferenceDisplayStateResolver {
             connectingParticipantHint = state.meeting.connectingParticipantHint
         ),
         muted = state.conferenceMuted,
-        poorNetwork = state.meeting.networkLabel == "Poor" || state.networkLabel == "Poor"
+        poorNetwork = state.conferenceNetworkPresentation.showPoorNetworkStatusPill
     )
 }

@@ -235,7 +235,7 @@ class MeetingFragment : Fragment() {
 
         if (!live) return
 
-        val poorNetwork = state.meeting.networkLabel == "Poor" || state.networkLabel == "Poor"
+        val poorNetwork = state.conferenceNetworkPresentation.showBanner
         view.findViewById<TextView>(R.id.txtMeetingPoorNetwork).isVisible = poorNetwork
 
         val avatar = view.findViewById<ImageView>(R.id.imgMeetingSpeakerAvatar)

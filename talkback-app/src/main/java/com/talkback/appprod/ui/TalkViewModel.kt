@@ -1155,8 +1155,29 @@ class TalkViewModel(
         } else {
             null
         }
-        val meetingNetworkLabel = meetingQos?.networkLabel
-            ?: runtime.conferenceNetworkIndicator().toQualityLabel()
+        val meetingNetworkLabel = meetingQos?.networkLabel ?: "N/A"
+        val conferenceNetworkPresentation = if (conferenceMediaLive && session != null) {
+            val sessionId = session.sessionId
+            val peerConnectivity = ConferenceNetworkPresentation.peerConnectivityFromParticipants(
+                sessionId = sessionId,
+                participants = session.visibleParticipants,
+                speakingModuleId = speakingModuleId,
+                isRecoveringPeer = { moduleId ->
+                    edgeRecoveringPeer(runtime, sessionId, moduleId)
+                },
+                isMediaUnavailablePeer = { moduleId ->
+                    edgeMediaUnavailablePeer(runtime, sessionId, moduleId)
+                }
+            )
+            ConferenceNetworkPresentation.resolve(
+                conferenceLive = conferenceMediaLive,
+                localLanOnline = localLanOnline,
+                joinedParticipantCount = meetingJoinedCount,
+                peerConnectivity = peerConnectivity
+            )
+        } else {
+            ConferenceNetworkPresentation.State()
+        }
         val conferenceDisplay = ConferenceDisplayStateResolver.resolve(
             lifecycle = ConferenceLifecycleFacts(
                 conferenceActive = conferenceActive,
@@ -1176,7 +1197,7 @@ class TalkViewModel(
                 connectingParticipantHint = connectingParticipantHint
             ),
             muted = conferenceMuted,
-            poorNetwork = meetingNetworkLabel == "Poor" || runtime.conferenceNetworkIndicator().toQualityLabel() == "Poor"
+            poorNetwork = conferenceNetworkPresentation.showPoorNetworkStatusPill
         )
 
         return TalkUiState(
@@ -1242,7 +1263,8 @@ class TalkViewModel(
                 noiseSuppression = config.meetingNoiseSuppression,
                 locked = config.meetingLocked
             ),
-            conferenceDisplay = conferenceDisplay
+            conferenceDisplay = conferenceDisplay,
+            conferenceNetworkPresentation = conferenceNetworkPresentation
         )
     }
 
