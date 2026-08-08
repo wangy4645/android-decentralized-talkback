@@ -190,11 +190,14 @@ class UdpSignalingChannel(
         sendInternal(target, envelope, countsAsLocalOutbound = true)
     }
 
+    override fun sendReportingSubmission(target: PeerTarget, envelope: SignalEnvelope): Boolean =
+        sendInternal(target, envelope, countsAsLocalOutbound = true)
+
     override fun sendRepairAnnounce(target: PeerTarget, envelope: SignalEnvelope) {
         sendInternal(target, envelope, countsAsLocalOutbound = false)
     }
 
-    private fun sendInternal(target: PeerTarget, envelope: SignalEnvelope, countsAsLocalOutbound: Boolean) {
+    private fun sendInternal(target: PeerTarget, envelope: SignalEnvelope, countsAsLocalOutbound: Boolean): Boolean {
         ensureSocketBound("send")
         val data = runCatching { encode(envelope).toByteArray() }.getOrElse { byteArrayOf() }
         val dst = "${target.host}:${target.port}"
@@ -255,6 +258,7 @@ class UdpSignalingChannel(
                 "SIGNAL_DATAGRAM_SEND_FAILED socketId=$socketId dst=$dst err=${it.message}"
             )
         }
+        return result.isSuccess
     }
 
     override fun onMessage(listener: (SignalEnvelope, PeerTarget) -> Unit) {

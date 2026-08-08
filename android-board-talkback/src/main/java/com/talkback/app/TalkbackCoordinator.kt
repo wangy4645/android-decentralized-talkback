@@ -4796,29 +4796,35 @@ class TalkbackCoordinator(
                 "attempt=${lineage?.attemptId ?: 0L} obligationGen=${lineage?.obligationGeneration ?: 0L} " +
                 reachability.formatProbeFields()
         )
-        var sent = false
-        runCatching {
-            signalingChannel.send(peer, envelope)
-        }.onSuccess {
-            sent = true
-            conferenceEdgeRecoveryController.registerReattachTransportNonce(
-                participantSessionId,
-                authorityId,
-                envelope.nonce
-            )
-            log(
-                "RECOVERY_REATTACH_SENT session=$participantSessionId ch=$channelId to=$authorityId " +
-                    "nonce=${envelope.nonce} transportResult=SENT deliveryState=TRANSPORT_SENT " +
-                    "attempt=${lineage?.attemptId ?: 0L} obligationGen=${lineage?.obligationGeneration ?: 0L} " +
-                    reachability.formatProbeFields()
-            )
-        }.onFailure {
+        // ADR-0042 INV-T1: SENT only on local sendto / submission success — not WRITE_ACCEPTED
+        // and not a non-throwing send() return.
+        val submitted = runCatching {
+            signalingChannel.sendReportingSubmission(peer, envelope)
+        }.getOrElse { err ->
             log(
                 "RECOVERY_REATTACH_SEND_FAILED session=$hostSessionId ch=$channelId " +
-                    "to=$authorityId err=${it.message} ${reachability.formatProbeFields()}"
+                    "to=$authorityId err=${err.message} ${reachability.formatProbeFields()}"
             )
+            false
         }
-        if (!sent) return ReattachDispatchOutcome.SEND_FAILED
+        if (!submitted) {
+            log(
+                "RECOVERY_REATTACH_SEND_FAILED session=$hostSessionId ch=$channelId " +
+                    "to=$authorityId err=sendto_failed ${reachability.formatProbeFields()}"
+            )
+            return ReattachDispatchOutcome.SEND_FAILED
+        }
+        conferenceEdgeRecoveryController.registerReattachTransportNonce(
+            participantSessionId,
+            authorityId,
+            envelope.nonce
+        )
+        log(
+            "RECOVERY_REATTACH_SENT session=$participantSessionId ch=$channelId to=$authorityId " +
+                "nonce=${envelope.nonce} transportResult=SENT deliveryState=TRANSPORT_SENT " +
+                "attempt=${lineage?.attemptId ?: 0L} obligationGen=${lineage?.obligationGeneration ?: 0L} " +
+                reachability.formatProbeFields()
+        )
         if (hostSessionId.isNotBlank()) {
             pendingRejoinByChannel[channelId] = hostSessionId
         }
