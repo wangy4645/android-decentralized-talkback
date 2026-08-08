@@ -1,10 +1,11 @@
 # ADR-0043 — Implementation Verification Gate
 
-**Status:** **PASS** · **desk verification COMPLETE** · **PR review READY** · **Field NOT AUTHORIZED**  
+**Status:** **PASS** · **desk verification COMPLETE** · **PR #128 MERGED** (`7820d87`) · **Appendix B ACTIVE** · **Field NOT AUTHORIZED**  
 **Date:** 2026-08-08  
 **Authorization:** [adr0043-implementation-authorization.md](./adr0043-implementation-authorization.md) (**ACCEPTED**)  
 **Architecture:** [adr0043-architecture-close.md](./adr0043-architecture-close.md) (**CLOSED**)  
-**Branch:** `feat/adr-0043-seam-i-v0`
+**Appendix B:** [adr0043-appendix-b-passive-observation-checklist.md](./adr0043-appendix-b-passive-observation-checklist.md) (**ACTIVE**)  
+**Baseline:** `main` @ `7820d87`
 
 ---
 
@@ -15,7 +16,8 @@ Architecture ACCEPT          → CLOSED (prior)
 Implementation NOT AUTHORIZED → crossed (v0 code landed)
 Implementation Authorization  → ACCEPTED (document)
 Implementation Verification   → PASS (this gate)
-PR review                     → READY
+PR #128                       → MERGED (7820d87)
+Appendix B passive observation → ACTIVE
 Field validation              → NOT AUTHORIZED (separate gate)
 ```
 
