@@ -232,18 +232,16 @@ Fixing X2 before X1 verification would conflate "bypassed failure entry" with "f
 ```text
 RCA-M03                          CLOSED
 ADR-0040                         VERIFIED PASS
-PR #126 / X1-A                   VERIFIED PASS (CLOSED)
-X1-B Admission Progression         OPEN · NOT ENTERED · NOT ADJUDICATED
-Experiment Design                  COMPLETE
-Next Validation                    Experiment A (2-node M03↔M02)
-Field Run                          NOT STARTED
-Code / PR                          NONE
-M03→M02 (3-party ×4)             SCENARIO_MISS — do not replay
-M03→M01                          Result B ×4 (evidence only)
-Bilateral Glare                    NOT VERIFIED (deferred after Exp A)
-X2 Residency                       HOLD
-Implementation                     FROZEN
-Gate                             PAUSED pending Experiment A
+X1-A Event Graph
+  M03→M01                        VERIFIED (receipt → reevaluate)
+  M03→M02                        NOT OBSERVED (delivery miss)
+X1-B Progression                 NOT ENTERED · NOT ADJUDICATED
+Experiment A                     Entry PASS · Delivery MISS
+Experiment A'                    NEXT (receipt acquisition · session hygiene)
+3-party ×4                       SCENARIO_MISS — do not replay
+Implementation                   FROZEN
+X2                               HOLD
+Gate                             PAUSED pending Experiment A'
 ```
 
 **Do not during verification:** blind replay current topology · label SCENARIO_MISS as X1-B FAIL · patch from M01旁证 · change timeout budget · open X2 · patch UI · declare WiFi fixed.

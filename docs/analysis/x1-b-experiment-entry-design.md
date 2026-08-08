@@ -154,7 +154,20 @@ Do not require glare on first successful entry.
 
 ---
 
-### Experiment A — Two-device baseline (M03↔M02) **【优先】**
+## Experiment A result (20260808)
+
+```text
+Gate 0.5-B / Entry    PASS (first REATTACH_THEN_ICE_RESTART on M03→M02)
+Delivery              MISS (no REMOTE_RECEIPT_ACKED)
+X1-B                  NOT ADJUDICATED
+```
+
+Log: `logs/post-x1b-exp-a-2node-20260808-141401`  
+Contamination signal: M01 ghost roster on M02 (`pending=1`, `M01 not discovered`)
+
+**Next:** [Experiment A' — session hygiene](./x1-b-experiment-a-prime-2node-run-card.md)
+
+---
 
 | Field | Value |
 |-------|-------|

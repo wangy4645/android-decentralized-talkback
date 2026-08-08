@@ -164,16 +164,14 @@ B. experiment did not enter path    (SCENARIO_MISS / SCENARIO_MISS_BEFORE_TRIGGE
 ## Route after Experiment A
 
 ```text
-Experiment A
-    |
-    +-- PASS (boundary/accepted)
-    |      → 3-node glare validation (Experiment B)
-    |
-    +-- Result B (entry PASS, no boundary)
-    |      → X1-B progression ADR discussion (not implementation yet)
-    |
-    +-- SCENARIO_MISS
-           → revise 2-node entry setup only; do not return to 3-node yet
+Experiment A (completed)
+  Entry PASS · Delivery MISS → see Experiment A' below
+
+Experiment A'
+  Gate 2 Case D1 (receipt)  → Gate 3 X1-B adjudication
+  Gate 2 Case D2            → DELIVERY_PATH_ISSUE · stay frozen
+
+See: [Experiment A' session hygiene run card](./x1-b-experiment-a-prime-2node-run-card.md)
 ```
 
 ---
