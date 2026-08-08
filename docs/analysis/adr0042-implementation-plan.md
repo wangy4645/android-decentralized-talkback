@@ -1,16 +1,17 @@
 # ADR-0042 Implementation Plan
 
-**Status:** **PLAN APPROVED** · **IMPLEMENTATION AUTHORIZED** (2026-08-08) — P0 branch `adr0042-p0-reattach-transport-truth`; Field still PAUSED  
+**Status:** **PLAN APPROVED** · **IMPLEMENTATION COMPLETE** · **APPROVED FOR MERGE REVIEW** (2026-08-08) — desk verification PASS; Field still PAUSED  
 **Date:** 2026-08-08  
 **ADR:** [0042-recovery-reattach-transport-delivery-semantics.md](../adr/0042-recovery-reattach-transport-delivery-semantics.md)  
 **Parents:** [T1/T2 follow-up](./transport-reattach-send-semantics-followup.md) · evidence `logs/recovery-reattach-delivery-path-20260808-150025/`
 
 ```text
-ADR-0042        IMPLEMENTATION AUTHORIZED (P0 only)
+ADR-0042        IMPLEMENTATION COMPLETE · APPROVED FOR MERGE REVIEW
 This document   PLAN APPROVED
-Runtime         IMPLEMENTATION STARTED (reattach consumer path only)
-Field           PAUSED
-Impl branch     AUTHORIZED (adr0042-p0-reattach-transport-truth)
+Branch          adr0042-p0-reattach-transport-truth
+Desk verify     PASS (red→green + invariant suite)
+Runtime         P0 landed on branch (not yet merged)
+Field           PAUSED (targeted validation only after merge review)
 X1-B / X2       NOT ENTERED / HOLD
 ```
 
@@ -23,10 +24,25 @@ Seam:            transport result consumer PRIMARY (gate NOT PRIMARY)
 Ownership:       recovery obligation owner (retry A)
 Token:           Correct-in-place (SENT == SENDTO_SUCCESS)
 Tests:           Sync-scoped + add
-Proof:           Red-then-green REQUIRED
+Proof:           Red-then-green REQUIRED → PASS
 P2:              D-min ONLY
+P0 impl review:  APPROVED (2026-08-08)
 Rejected:        new state · new coordinator · New-field-migrate · Add-only · Green-only · gate-as-fix-locus · D-strict-in-P2
 ```
+
+### P0 implementation review (2026-08-08) — PASS
+
+| Gate | Result |
+|------|--------|
+| 1. Red-then-green evidence chain | **PASS** |
+| 2. Correct-in-place does not change ownership | **PASS** (consumer facts; obligation owns eligibility) |
+| 3. Failure domain not enlarged | **PASS** (`SEND_FAILED ≠ FAILED_MEDIA`; true SENT keeps `transport_in_flight`) |
+
+**Commits:** `43d6e75` red · `91ff295` fix · `3d7ef75` invariant suite
+
+**Unchanged:** X1-A VERIFIED · X1-B NOT ENTERED · ADR-0035 · recovery admission gate · completion · X2
+
+**Next (not done):** merge review → targeted field validation (narrow: no false SENT / no FAILED_MEDIA / obligation eligible; SENDTO_SUCCESS receipt path unchanged). Do **not** reopen X1-B. Do **not** declare field fix from desk alone.
 
 **Purpose of this plan:** answer only —
 
