@@ -69,7 +69,7 @@ stateReason=MEDIA_RECOVERED_BUT_INTENT_UNCOVERED
 completionReason=DEFERRED_INTENT_UNCOVERED
 ```
 
-Routed separately: [adr0043-rna-intent-lifecycle-observation.md](./adr0043-rna-intent-lifecycle-observation.md)
+Routed separately: [rna-intent-lifecycle-observation-analysis.md](./rna-intent-lifecycle-observation-analysis.md)
 
 ---
 
