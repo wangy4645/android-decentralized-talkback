@@ -51,7 +51,11 @@ Q3 Presentation Semantics
 
 Open ADR
 ========
-ADR-0044 DRAFT (decision pending · impl NOT AUTHORIZED)
+ADR-0044 REVIEWING
+  decision candidate: DQ1=B · DQ2=Degraded(+diagnostic) · DQ3=NO CHANGE
+  formal Accept: PENDING
+  impl NOT AUTHORIZED
+  review: docs/analysis/adr0044-decision-review.md
 
 
 Runtime change
@@ -62,10 +66,10 @@ NONE AUTHORIZED
 Future candidate (independent track)
 ====================================
 ADR-0044 User Visible Connectivity Semantics for Media Residency
-  — DRAFT / decision pending
-  — docs: docs/adr/0044-user-visible-connectivity-semantics-media-residency.md
+  — REVIEWING / decision candidate recorded
+  — docs: docs/adr/0044-... · docs/analysis/adr0044-decision-review.md
+  — formal Accept PENDING · impl NOT AUTHORIZED
   — NOT attached to WiFi recovery / RNA / ADR-0043
-  — impl NOT AUTHORIZED until Accept
 ```
 
 ---

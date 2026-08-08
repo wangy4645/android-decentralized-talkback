@@ -2,8 +2,10 @@
 
 ## Status
 
-**DRAFT** · **decision pending** · **docs only** · **no runtime authorization**  
+**REVIEWING** · **decision candidate recorded** · **NOT ACCEPTED** · **docs only** · **no runtime authorization**  
 **Date:** 2026-08-09  
+**Decision review:** [adr0044-decision-review.md](../analysis/adr0044-decision-review.md)
+
 **Parents:**
 
 - [ADR-0034](./0034-user-visible-connectivity-projection.md) — UVCP vocabulary (Accepted)
@@ -19,7 +21,25 @@ This ADR does NOT reopen:
 This ADR asks only:
   Is the user-visible connectivity vocabulary sufficient
   for already-correct media residency truth?
+
+Status ladder:
+  DRAFT → REVIEWING (now) → Accept/Amend → impl authorized
 ```
+
+### Decision candidates (REVIEWING — not Accept)
+
+| DQ | Candidate |
+| -- | --------- |
+| DQ1 | **B — Distinguish** active recovery vs terminal unavailable |
+| DQ2 | User: **Degraded**; Diagnostic: **Media unavailable** |
+| DQ3 | **NO CHANGE** to conference banner (P1a frozen) |
+
+```text
+Presentation state ≠ Recovery lifecycle state
+(no FSM-mirror vocabulary explosion)
+```
+
+Full rationale: [adr0044-decision-review.md](../analysis/adr0044-decision-review.md)
 
 ---
 
@@ -246,8 +266,9 @@ obligation / completion / retry changes
 ```text
 ADR-0044
 ========
-DRAFT
-Decision:     PENDING (DQ1 / DQ2 / DQ3)
+REVIEWING
+Decision:     CANDIDATE (DQ1=B · DQ2=Degraded+diagnostic · DQ3=NO CHANGE)
+              formal Accept: PENDING
 Impl:         NOT AUTHORIZED
 Field:        NOT AUTHORIZED
 
@@ -263,6 +284,6 @@ FAILED_MEDIA desk Q1–Q3        CLOSED OBSERVATION
 
 ## Next step
 
-1. Product / architecture decide **DQ1** (and DQ2 if B).  
-2. Record Accept / Reject / Amend on this ADR.  
-3. Only then open a presentation-only implementation PR.
+1. Review [adr0044-decision-review.md](../analysis/adr0044-decision-review.md).  
+2. Formal **Accept** or **Amend** on this ADR (separate docs commit).  
+3. Only after Accept: presentation-only implementation PR.
