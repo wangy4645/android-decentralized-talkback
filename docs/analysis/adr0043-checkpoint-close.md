@@ -43,7 +43,8 @@ Field Observation Run          (gate APPROVED; run NOT AUTHORIZED)
 Seam II                        (wait / establish / terminate)
 F2 / F3 / F5                   (freshness extensions)
 RNA intent lifecycle           (see rna-intent-lifecycle-observation-analysis.md)
-ADR-0042 stash recovery        (review COMPLETE — adr0042-transport-truth-boundary-review.md)
+ADR-0042 stash recovery        (review COMPLETE)
+RNA intent lifecycle           (HYPOTHESIS OPEN — rna-intent-lifecycle-hypothesis.md)
 ```
 
 ---

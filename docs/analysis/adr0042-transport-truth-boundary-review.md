@@ -19,7 +19,7 @@ Appendix B M03 SYNC_PENDING:
   NOT Classification A — transport fact missing
 ```
 
-**Next track:** RNA directed observation (after this review).  
+**Next track:** RNA hypothesis — [rna-intent-lifecycle-hypothesis.md](./rna-intent-lifecycle-hypothesis.md) (**DRAFT**)  
 **Not next:** ADR-0042 merge (already on main) · Field Observation Run · ADR-0043 reopen.
 
 ---

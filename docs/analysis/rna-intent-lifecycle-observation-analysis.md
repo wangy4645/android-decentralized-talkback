@@ -113,7 +113,7 @@ no EDGE_RECOVERED
 4. Does this reproduce on directed RNA runs or only passive observation?
 ```
 
-Answering these requires a **separate** authorization — not ADR-0043 field run.
+Answering these requires a **separate** authorization — see [rna-intent-lifecycle-hypothesis.md](./rna-intent-lifecycle-hypothesis.md).
 
 ---
 

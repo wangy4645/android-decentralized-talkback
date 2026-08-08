@@ -3,7 +3,7 @@
 **Status:** **OBSERVATION ONLY** · **not ADR-0043 regression** · **not Field FAIL**  
 **Date:** 2026-08-08  
 **Source run:** `logs/adr0043-appendix-b-20260808-185802/`  
-**Related:** Appendix B [adjudication](./adr0043-appendix-b-adjudication.md) (**PASS**) · [analysis](./rna-intent-lifecycle-observation-analysis.md)
+**Related:** Appendix B [adjudication](./adr0043-appendix-b-adjudication.md) (**PASS**) · [analysis](./rna-intent-lifecycle-observation-analysis.md) · [hypothesis](./rna-intent-lifecycle-hypothesis.md)
 
 ---
 
