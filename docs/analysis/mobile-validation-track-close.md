@@ -51,7 +51,7 @@ Q3 Presentation Semantics
 
 Open ADR
 ========
-NONE
+ADR-0044 DRAFT (decision pending · impl NOT AUTHORIZED)
 
 
 Runtime change
@@ -61,9 +61,11 @@ NONE AUTHORIZED
 
 Future candidate (independent track)
 ====================================
-Presentation Semantics ADR
-  — not started
-  — not attached to WiFi recovery / RNA / ADR-0043
+ADR-0044 User Visible Connectivity Semantics for Media Residency
+  — DRAFT / decision pending
+  — docs: docs/adr/0044-user-visible-connectivity-semantics-media-residency.md
+  — NOT attached to WiFi recovery / RNA / ADR-0043
+  — impl NOT AUTHORIZED until Accept
 ```
 
 ---
