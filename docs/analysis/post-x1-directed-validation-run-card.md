@@ -39,15 +39,25 @@ CONTROL_BOUNDARY or legitimate terminal
 
 ---
 
-## X1-A scenario (contract-directed)
+## X1-A scenario (glare-enhanced — contract-directed)
 
-Construct **delivery + glare + admission unresolved**, not accidental flap luck:
+**Only M03 flaps.** M01/M02 stay on WiFi to maximize bilateral glare + receipt success.
 
 ```text
-T0  Three-party conference stable — no USER_LEAVE
-T1  M03 WiFi OFF 15–30s → ON
-T2  Soak ≥ 5 min (allow bilateral recovery competition on M03→M02 edge)
-T3  Stop + adjudicate (M03 log, initiator edge M03→M02)
+T0  Three-party conference stable on happy — no USER_LEAVE
+    M01/M02: do NOT flap
+T1  Only M03 WiFi OFF 15–30s → ON
+T2  Soak ≥ 5 min (M02 may compete recovery while M03 initiates)
+T3  Stop + adjudicate → collect [X1 Evidence Matrix](./x1-validation-gate.md#x1-evidence-matrix-contract-verification)
+```
+
+**Core condition:**
+
+```text
+single-edge recovery (M03)
++ remote competing recovery possibility
++ receipt success
++ bilateral glare
 ```
 
 **Must observe on M03 (initiator → M02):**
@@ -99,7 +109,18 @@ FAILED_MEDIA_RECOVERY ... failureClass=CONTROL_RECONCILIATION_TIMEOUT
 | `PASS_FULL` | L1+L2+L3 — **Gate PASS** |
 | `PASS_PARTIAL` | L1+L2, L3 not observed — investigate; **Gate not closed** |
 | `INCONCLUSIVE` | No receipt path — **rerun required** |
-| `FAIL_*` | **Gate FAIL** |
+| `FAIL_*` | **Gate FAIL** — see Case A/B in [validation gate](./x1-validation-gate.md#failure-routing-frozen--do-not-reopen-rca) |
+
+---
+
+## Failure routing (quick reference)
+
+| Case | Signal | Route |
+|------|--------|-------|
+| — | No receipt | INCONCLUSIVE — rerun glare-enhanced |
+| A | Receipt, no reevaluate | Wiring only |
+| B | Reevaluate, premature timeout | ADR-X1 predicate revision |
+| C | Boundary OK, UI sticky | X2 may open |
 
 ---
 

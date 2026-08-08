@@ -115,7 +115,35 @@ $admissionDefer = Any-Match $m03 "RECOVERY_WATCHDOG_DEFERRED.*ADMISSION_PENDING"
 $o4Premature = $failLine -and $receiptBeforeFail -and $reevalBeforeFail -and (-not $o3Boundary) -and (-not $admissionDefer)
 
 $receiptObserved = $o1Receipt -or (Any-Match $m03 "REMOTE_RECEIPT_ACKED")
+$reattachRequested = Any-Match $m03 "REATTACH_REQUESTED|RECOVERY_REATTACH_SENT.*remote=$PrimaryEdge"
 $deferObserved = $admissionDefer
+$failedMedia = [bool]$failLine
+$e2Shortcut = $o2E2Bypass
+
+[void]$sb.AppendLine("=== X1 Evidence Matrix (M03->$PrimaryEdge) ===")
+function MatrixRow([string]$id, [string]$evidence, [string]$observed, [string]$expected) {
+    return "| $id | $evidence | $observed | $expected |"
+}
+[void]$sb.AppendLine("| ID | Evidence | Observed | Expected |")
+[void]$sb.AppendLine("|----|----------|----------|----------|")
+[void]$sb.AppendLine((MatrixRow "E1" "REATTACH_SENT" ($(if ($reattachRequested) { "YES" } else { "NO" }) "required"))
+[void]$sb.AppendLine((MatrixRow "E2" "REMOTE_RECEIPT_ACKED" ($(if ($receiptObserved) { "YES" } else { "NO" }) "required"))
+[void]$sb.AppendLine((MatrixRow "E3" "RECOVERY_CONTROL_ADMISSION_REEVALUATE" ($(if ($o1Reeval) { "YES" } else { "NO" }) "required after E2"))
+[void]$sb.AppendLine((MatrixRow "E5" "DROP_OWNERSHIP_CONFLICT / glare" ($(if ($o2Glare) { "YES" } else { "NO" }) "expected under glare"))
+[void]$sb.AppendLine((MatrixRow "E6" "E2 shortcut boundary" ($(if ($e2Shortcut) { "YES (bad)" } else { "NO/suppressed" }) "suppressed if glare"))
+[void]$sb.AppendLine((MatrixRow "E7" "WATCHDOG_DEFERRED ADMISSION_PENDING" ($(if ($deferObserved) { "YES" } else { "NO" }) "expected if glare"))
+[void]$sb.AppendLine((MatrixRow "E8" "CONTROL_BOUNDARY / ACCEPTED" ($(if ($o3Boundary) { "YES" } else { "NO" }) "required L3"))
+[void]$sb.AppendLine((MatrixRow "E9" "FAILED_MEDIA_RECOVERY premature" ($(if ($o4Premature) { "YES (bad)" } elseif ($failedMedia) { "YES (review)" } else { "NO" }) "must not after E2+E3"))
+[void]$sb.AppendLine("")
+
+$failureCase = if (-not $receiptObserved) { "INCONCLUSIVE (no receipt — delivery-failure path)" }
+               elseif ($receiptObserved -and (-not $o1Reeval)) { "CASE_A (receipt without reevaluate — wiring)" }
+               elseif ($o1Reeval -and $o4Premature) { "CASE_B (reevaluate but premature timeout — predicate)" }
+               elseif ($o3Boundary -and (-not $o4Premature)) { "NONE (success path)" }
+               elseif ($o1Reeval -and (-not $o4Premature) -and (-not $o3Boundary)) { "PASS_PARTIAL (L3 pending)" }
+               else { "REVIEW" }
+[void]$sb.AppendLine("FAILURE_ROUTING: $failureCase")
+[void]$sb.AppendLine("")
 
 [void]$sb.AppendLine("=== L1-L4 (Validation Gate) ===")
 $l1 = if (-not $receiptObserved) { "NOT_OBSERVED" } elseif ($o1Reeval) { "PASS" } else { "FAIL" }
@@ -162,6 +190,7 @@ $gate = if ($verdict -eq "PASS_FULL") { "GATE_PASS" }
         else { "GATE_OPEN" }
 [void]$sb.AppendLine("OVERALL: $verdict")
 [void]$sb.AppendLine("VALIDATION_GATE: $gate")
+[void]$sb.AppendLine("FAILURE_CASE: $failureCase")
 
 $text = $sb.ToString()
 $text | Set-Content $out -Encoding UTF8

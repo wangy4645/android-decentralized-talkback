@@ -94,6 +94,89 @@ Evaluate in order. **Do not use UI as primary pass signal.**
 
 ---
 
+## X1 Evidence Matrix (contract verification)
+
+Do **not** ask only "did recovery succeed." Ask whether the system followed the X1 state machine.
+
+Record on **M03 initiator edge → M02** (primary):
+
+| # | Evidence | Expected | Required |
+|---|----------|----------|----------|
+| E1 | `REATTACH_REQUESTED` / `RECOVERY_REATTACH_SENT` | present | **yes** |
+| E2 | `REMOTE_RECEIPT_ACKED` (or `RECOVERY_REATTACH_RECEIPT`) | present | **yes** |
+| E3 | `RECOVERY_CONTROL_ADMISSION_REEVALUATE` | after E2 | **yes** |
+| E4 | Admission state | `DELIVERED_BUT_NOT_ADMITTED` (implicit: receipt + `controlPlaneStarted=false`) | supporting |
+| E5 | `DROP_OWNERSHIP_CONFLICT` / glare facts | expected under bilateral glare | supporting |
+| E6 | E2 shortcut (`REATTACH_MEDIA_ALREADY_LIVE` boundary on initiator) | **suppressed** when glare unresolved | supporting |
+| E7 | `RECOVERY_WATCHDOG_DEFERRED` + `ADMISSION_PENDING` | expected when glare unresolved | supporting |
+| E8 | `CONTROL_PLANE_BOUNDARY` or `REATTACH_ACCEPTED` | terminal success path | **yes** (L3) |
+| E9 | `FAILED_MEDIA_RECOVERY` / `CONTROL_RECONCILIATION_TIMEOUT` | **must not** appear after E2+E3 without legitimate terminal | **yes** (L2) |
+
+**Interpretation table (frozen):**
+
+| E2 receipt | E3 reevaluate | E9 premature fail | Meaning |
+|------------|---------------|-------------------|---------|
+| no | — | — | **INCONCLUSIVE** — delivery-failure path; does not validate X1 |
+| yes | no | — | **FAIL Case A** — wiring incomplete |
+| yes | yes | yes | **FAIL Case B** — predicate insufficient |
+| yes | yes | no + E8 | **GATE PASS** |
+| yes | yes | no, no E8 | **PASS_PARTIAL** — investigate ownership resolution |
+
+---
+
+## Failure routing (frozen — do not reopen RCA)
+
+| Case | Observation | Route | Do NOT |
+|------|-------------|-------|--------|
+| **A** | `REMOTE_RECEIPT_ACKED` without `REEVALUATE` | PR #126 wiring: event source · callback · coordinator bridge | Touch FSM / X2 / UI |
+| **B** | `REEVALUATE` present but still premature timeout | ADR-X1 revision (predicate) | Open X2 |
+| **C** | `CONTROL_BOUNDARY` success but UI sticky | **First** point X2 residency may open | Patch UI as workaround |
+
+**INCONCLUSIVE** (no receipt): rerun with glare-enhanced stimulus — not a code failure.
+
+---
+
+## Glare-enhanced stimulus (X1-A)
+
+Do **not** use plain WiFi flap alone. Maximize bilateral glare + receipt success probability:
+
+```text
+T0  Three-party conference stable on SSID happy — M01/M02/M03 all ONLINE
+    M01/M02: do NOT flap WiFi
+T1  Only M03 WiFi OFF 15–30s → ON
+T2  Soak ≥ 5 min (allow M02 competing recovery while M03 initiates)
+T3  Stop + adjudicate (M03 log, edge M03→M02)
+```
+
+X1 core condition:
+
+```text
+single-edge recovery (M03)
++ remote competing recovery possibility (M02/M01 stay up)
++ receipt success
++ bilateral glare
+```
+
+---
+
+## Post-GATE-PASS: X2 disposition
+
+If Gate PASS shows:
+
+```text
+REMOTE_RECEIPT_ACKED → REEVALUATE → CONTROL_BOUNDARY → CONNECTED
+```
+
+Then X2 (`FAILED_MEDIA_RECOVERY` residency exit) **remains HOLD** and downgrades to:
+
+```text
+latent defensive contract (not active user-path bug)
+```
+
+Do **not** open X2 for state-machine completeness. Open X2 only on **Case C** field evidence.
+
+---
+
 ## Closure sequence (frozen)
 
 ```text
@@ -121,7 +204,22 @@ Fixing X2 before X1 verification would conflate "bypassed failure entry" with "f
 
 ---
 
-## Status board
+## Architecture sign-off (frozen)
+
+```text
+Root cause:     Post-ADR-0040 Control Admission Contract Gap
+Fix:            PR #126 (merged)
+Confidence:     Medium-high (desk); field proof pending
+Next milestone: Validation Gate PASS (X1-A evidence matrix)
+```
+
+**Do not during verification:** change timeout · residency · UI · revert · expand ADR · open X2 (unless Case C).
+
+**Single question for next run:**
+
+> Under real bilateral glare, does `REMOTE_RECEIPT_ACKED` advance the attempt from delivered-but-not-admitted to legitimate control admission — instead of waiting for timeout?
+
+---
 
 ```text
 RCA-M03 diagnosis        CLOSED
