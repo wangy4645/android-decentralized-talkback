@@ -529,20 +529,28 @@ If any answer is not NO → plan REJECT / revise; do not open impl branch.
 ```text
 ADR-0042 ACCEPTED FOR IMPLEMENTATION REVIEW     ✅
 Design grilling / boundary freeze               ✅ CLOSED
-This plan                                       ✅ PLAN APPROVED (2026-08-08)
-Implementation branch                           ✅ AUTHORIZED (adr0042-p0-reattach-transport-truth)
-Runtime scope                                   P0 reattach consumer only
-  Commit 1: red reproduction
-  Commit 2: Correct-in-place fix
-  Commit 3: invariant suite
+This plan                                       ✅ PLAN APPROVED
+Implementation                                  ✅ COMPLETE on adr0042-p0-reattach-transport-truth
+P0 implementation review                        ✅ APPROVED FOR MERGE REVIEW (2026-08-08)
+Desk verification                               ✅ PASS (red→green + invariant suite)
+Merge                                           ← NEXT (explicit)
+Targeted field validation                       ← after merge; PAUSED until gate
 D-strict                                        DEFERRED
-Field validation                                PAUSED
+X1-B                                            NOT ENTERED
 ```
 
-**Branch forbid list:** X1/X1-B · ADR-0035 · receipt · completion · watchdog · X2 · UI/presence · global send() rewrite · retry coordinator.
+**Branch forbid list (still):** X1/X1-B · ADR-0035 · receipt · completion · watchdog · X2 · UI/presence · global send() rewrite · retry coordinator.
 
-**Post-impl review only:** (1) red reproduces old violation (2) Correct-in-place changes truth not ownership (3) no failure-domain enlargement (esp. X2-adjacent).
+**Impl review gates:** (1) red reproduces old violation ✅ (2) Correct-in-place changes truth not ownership ✅ (3) no failure-domain enlargement ✅
 
+**Field acceptance (when opened — narrow only):**
+
+```text
+SEND_FAILED path:    no false SENT · no FAILED_MEDIA · obligation remains eligible
+SENDTO_SUCCESS path: normal receipt path unchanged
+```
+
+Do not reopen X1-B. Do not announce field fix from desk alone.
 ---
 
 ## 10. One-line plan statement
