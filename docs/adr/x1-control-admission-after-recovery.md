@@ -2,7 +2,7 @@
 
 ## Status
 
-**Status:** PROPOSED — **REVIEW GATE** (docs only — implementation BLOCKED until approved)  
+**Status:** APPROVED FOR IMPLEMENTATION (2026-08-08)  
 **Date:** 2026-08-08  
 **Parents:** [X1 mini design note](../analysis/post-adr0040-control-admission-contract-mini-design.md) · [validation run card](../analysis/post-adr0040-control-admission-validation-run-card.md) · ADR-0040 (VERIFIED) · ADR-0021
 
@@ -391,37 +391,27 @@ Excluded:
 
 ## 8. Review gate checklist
 
-Required before **APPROVED**:
+All constraints satisfied — **APPROVED FOR IMPLEMENTATION** (2026-08-08).
 
 | # | Constraint | Status |
 |---|------------|--------|
-| 1 | Motivation: timeout eligibility, not recovery success | ✅ in this revision |
-| 2 | `DELIVERED_BUT_NOT_ADMITTED` enter + exit lifecycle | ✅ in this revision |
-| 3 | Glare as timeout predicate input | ✅ in this revision |
-| 4 | E2 suppressed under unresolved glare (X1 v1) | ✅ in this revision |
-
-After approval:
-
-```text
-ADR-X1 APPROVED
-        ↓
-implementation branch
-        ↓
-small PR (wiring + predicate + 2 tests)
-```
+| 1 | Motivation: timeout eligibility, not recovery success | ✅ |
+| 2 | `DELIVERED_BUT_NOT_ADMITTED` enter + exit lifecycle | ✅ |
+| 3 | Glare as timeout predicate input | ✅ |
+| 4 | E2 suppressed under unresolved glare (X1 v1) | ✅ |
 
 ---
 
 ## 9. Status board
 
 ```text
-RCA-M03                  CLOSED for diagnosis
+RCA-M03 diagnosis        CLOSED
 X1 mechanism             CONFIRMED
-ADR-X1                   PROPOSED — REVIEW GATE
-Implementation           BLOCKED until contract approved
+ADR-X1 contract          APPROVED FOR IMPLEMENTATION
+PR #126                  MERGE APPROVED (not "WiFi fixed")
+Validation Gate          ACTIVE — [x1-validation-gate.md](../analysis/x1-validation-gate.md)
+Field X1-A               REQUIRED post-merge (receipt → reevaluate → no premature timeout)
 X2 residency exit        HOLD
-
-Evidence:
-    attempt-7  forensic
-    attempt-10 independent reproduction
 ```
+
+**Merge conclusion must not close verification.** Directed validation X1-A must observe receipt-driven admission reevaluation before RCA-M03 verification closure.

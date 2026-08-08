@@ -459,7 +459,33 @@ class ConferenceEdgeRecoveryController internal constructor(
                     "owner=$ownerModuleId trigger=$trigger"
             )
         }
+        record.unresolvedNegotiationOwnerConflict = false
         observeNegotiationOwner(record, trigger)
+    }
+
+    /** ADR-X1: mark unresolved bilateral ownership conflict on this edge attempt. */
+    fun onNegotiationOwnerConflict(sessionId: String, remoteModuleId: String, trigger: String) {
+        val record = edges[ConferenceEdgeKey(sessionId, remoteModuleId)] ?: return
+        if (!record.phase.isActivelyRecovering()) return
+        record.unresolvedNegotiationOwnerConflict = true
+        onLog(
+            "RECOVERY_CONTROL_ADMISSION_CONFLICT session=$sessionId edge=$remoteModuleId " +
+                "attempt=${record.recoveryAttemptId} trigger=$trigger " +
+                "admissionPending=${ControlAdmissionPredicate.isAdmissionPending(record)}"
+        )
+        notifyChanged(sessionId)
+    }
+
+    /** ADR-X1: explicit terminal admission rejection — enables legitimate attempt timeout. */
+    fun onTerminalAdmissionRejection(sessionId: String, remoteModuleId: String, reason: String) {
+        val record = edges[ConferenceEdgeKey(sessionId, remoteModuleId)] ?: return
+        record.terminalAdmissionRejected = true
+        record.unresolvedNegotiationOwnerConflict = false
+        onLog(
+            "RECOVERY_CONTROL_ADMISSION_REJECTED session=$sessionId edge=$remoteModuleId " +
+                "attempt=${record.recoveryAttemptId} reason=$reason"
+        )
+        notifyChanged(sessionId)
     }
 
     fun onNegotiationGlareAcceptRemote(sessionId: String, remoteModuleId: String, reason: String) {
@@ -598,6 +624,7 @@ class ConferenceEdgeRecoveryController internal constructor(
                 "nonce=$nonce attempt=$attemptId obligationGen=$obligationGeneration " +
                 "deliveryState=REMOTE_RECEIPT_ACKED controlPlaneStarted=${record.controlPlaneStarted()}"
         )
+        reevaluateControlAdmission(record)
         notifyChanged(sessionId)
         return true
     }
@@ -2053,6 +2080,42 @@ class ConferenceEdgeRecoveryController internal constructor(
         return false
     }
 
+    private fun shouldDeferWatchdogForAdmissionPending(record: EdgeRecoveryRecord): Boolean {
+        if (!ControlAdmissionPredicate.isAdmissionPending(record)) return false
+        return !ControlAdmissionPredicate.isRecoveryAttemptTimeoutEligible(
+            record = record,
+            nowMs = clock(),
+            attemptBudgetMs = attemptBudgetMs
+        )
+    }
+
+    /** ADR-X1: receipt enters admission reevaluation graph without promoting delivery to admission. */
+    private fun reevaluateControlAdmission(record: EdgeRecoveryRecord) {
+        if (!record.phase.isActivelyRecovering()) return
+        val key = record.key
+        val snapshot = buildCompletionEvaluationSnapshot(record)
+        val signature = projectRecoveryCapabilitySignature(
+            snapshot = snapshot,
+            initiatesReattach = record.initiatesReattach,
+            controlPlaneStarted = record.controlPlaneStarted()
+        )
+        onLog(
+            "RECOVERY_CONTROL_ADMISSION_REEVALUATE session=${key.sessionId} edge=${key.remoteModuleId} " +
+                "attempt=${record.recoveryAttemptId} trigger=REMOTE_RECEIPT_ACKED " +
+                "admissionPending=${ControlAdmissionPredicate.isAdmissionPending(record)} " +
+                "glareUnresolved=${ControlAdmissionPredicate.hasUnresolvedNegotiationOwnerConflict(record)}"
+        )
+        refreshControlReconciliationFact(record)
+        runCompletionEvaluationStub(
+            record = record,
+            snapshot = snapshot,
+            signature = signature,
+            trigger = RecoveryReevaluateTrigger.REMOTE_RECEIPT_ACKED
+        )
+        emitCompletionObservations(record, snapshot, RecoveryReevaluateTrigger.REMOTE_RECEIPT_ACKED)
+        scheduleWatchdog(record)
+    }
+
     private fun enterFailedRequiresUserAction(record: EdgeRecoveryRecord) {
         record.phase = EdgeRecoveryPhase.FAILED_REQUIRES_USER_ACTION
         val terminalAt = clock()
@@ -2763,6 +2826,9 @@ class ConferenceEdgeRecoveryController internal constructor(
         record.phase = EdgeRecoveryPhase.REATTACH_ACCEPTED
         record.recoveryViaInboundReattach = true
         record.reattachDeliveryState = ReattachDeliveryState.ACCEPTED
+        record.unresolvedNegotiationOwnerConflict = false
+        record.terminalAdmissionRejected = false
+        record.explicitOwnershipResolutionFailure = false
         logPhaseTransition(record, existing?.phase, record.phase, "REATTACH_ACCEPTED")
         logRecoveryDecision(
             sessionId = sessionId,
@@ -3107,6 +3173,7 @@ class ConferenceEdgeRecoveryController internal constructor(
      * MUST NOT treat ICE_CONNECTED / mediaRestored alone as control-plane started.
      */
     private fun reattachMediaAlreadyLiveEvidenceSatisfied(record: EdgeRecoveryRecord): Boolean {
+        if (ControlAdmissionPredicate.shouldSuppressE2Shortcut(record)) return false
         if (!record.edgeObligationOpen()) return false
         if (!record.initiatesReattach) return false
         if (!hasReattachDeliveryEvidence(record)) return false
@@ -3125,6 +3192,7 @@ class ConferenceEdgeRecoveryController internal constructor(
     /** Shared CONTROL_PLANE_BOUNDARY exit (H1/H3): phase + log + existing completion evaluator. */
     private fun crossControlPlaneBoundary(record: EdgeRecoveryRecord, reason: String) {
         val key = record.key
+        record.unresolvedNegotiationOwnerConflict = false
         record.phase = EdgeRecoveryPhase.ICE_RESTARTING
         onLog(
             "RECOVERY_CONTROL_PLANE_BOUNDARY session=${key.sessionId} remote=${key.remoteModuleId} " +
@@ -3527,6 +3595,15 @@ class ConferenceEdgeRecoveryController internal constructor(
                     "RECOVERY_WATCHDOG_DEFERRED session=${key.sessionId} edge=${key.remoteModuleId} " +
                         "obligationGen=${still.obligationGeneration} attempt=${still.recoveryAttemptId} " +
                         "reason=CONTROL_RECONCILIATION_PENDING"
+                )
+                scheduleWatchdog(still)
+                return@schedule
+            }
+            if (shouldDeferWatchdogForAdmissionPending(still)) {
+                onLog(
+                    "RECOVERY_WATCHDOG_DEFERRED session=${key.sessionId} edge=${key.remoteModuleId} " +
+                        "obligationGen=${still.obligationGeneration} attempt=${still.recoveryAttemptId} " +
+                        "reason=ADMISSION_PENDING"
                 )
                 scheduleWatchdog(still)
                 return@schedule

@@ -2587,4 +2587,90 @@ class ConferenceEdgeRecoveryControllerTest {
         assertTrue(controller.factsForSession("sess-res").anyFailedMediaRecovery)
         assertFalse(decisionLogs.any { it.contains("RECOVERY_EDGE_RECOVERED") })
     }
+
+    /**
+     * ADR-X1 Test A (attempt-10 regression): receipt + glare + no admission within budget
+     * must not enter FAILED_MEDIA_RECOVERY prematurely.
+     */
+    @Test
+    fun adrX1_receiptWithGlareWithinAdmissionBudget_doesNotFailPrematurely() {
+        controller = buildController(
+            attemptBudgetMs = 500L,
+            isIceConnected = { _, _ -> false },
+            onRequestReattach = { sessionId, _, remoteModuleId ->
+                reattachCalls++
+                controller.registerReattachTransportNonce(sessionId, remoteModuleId, "nonce-x1a")
+                ReattachDispatchOutcome.SENT
+            }
+        )
+        controller.onIceStateChanged(
+            sessionId = "sess-x1a",
+            channelId = "CH-1",
+            remoteModuleId = "M02",
+            iceState = "DISCONNECTED",
+            eligibility = eligible(),
+            initiatesReattach = true
+        )
+        Thread.sleep(80)
+        val attemptId = controller.attemptLineageObservation("sess-x1a", "M02")!!.attemptId
+        val obligationGen = controller.obligationGeneration("sess-x1a", "M02")!!
+        assertTrue(
+            controller.onRecoveryReattachReceipt(
+                sessionId = "sess-x1a",
+                remoteModuleId = "M02",
+                nonce = "nonce-x1a",
+                attemptId = attemptId,
+                obligationGeneration = obligationGen
+            )
+        )
+        controller.onNegotiationOwnerConflict(
+            sessionId = "sess-x1a",
+            remoteModuleId = "M02",
+            trigger = "INBOUND_RECOVERY_OFFER"
+        )
+        nowMs = 200L
+        Thread.sleep(250)
+        assertFalse(
+            decisionLogs.any { it.contains("FAILED_MEDIA_RECOVERY") && it.contains("remote=M02") }
+        )
+        assertTrue(decisionLogs.any { it.contains("RECOVERY_CONTROL_ADMISSION_REEVALUATE") })
+        assertTrue(controller.factsForSession("sess-x1a").anyRecovering)
+    }
+
+    /** ADR-X1 Test B: explicit terminal admission rejection still permits legitimate timeout. */
+    @Test
+    fun adrX1_explicitAdmissionReject_stillFailsAtTimeout() {
+        controller = buildController(
+            attemptBudgetMs = 300L,
+            onRequestReattach = { sessionId, _, remoteModuleId ->
+                reattachCalls++
+                controller.registerReattachTransportNonce(sessionId, remoteModuleId, "nonce-x1b")
+                ReattachDispatchOutcome.SENT
+            }
+        )
+        controller.onIceStateChanged(
+            sessionId = "sess-x1b",
+            channelId = "CH-1",
+            remoteModuleId = "M02",
+            iceState = "DISCONNECTED",
+            eligibility = eligible(),
+            initiatesReattach = true
+        )
+        Thread.sleep(80)
+        val attemptId = controller.attemptLineageObservation("sess-x1b", "M02")!!.attemptId
+        val obligationGen = controller.obligationGeneration("sess-x1b", "M02")!!
+        controller.onRecoveryReattachReceipt(
+            sessionId = "sess-x1b",
+            remoteModuleId = "M02",
+            nonce = "nonce-x1b",
+            attemptId = attemptId,
+            obligationGeneration = obligationGen
+        )
+        controller.onTerminalAdmissionRejection("sess-x1b", "M02", "explicit_reject")
+        Thread.sleep(350)
+        assertTrue(
+            decisionLogs.any { it.contains("FAILED_MEDIA_RECOVERY") && it.contains("remote=M02") }
+        )
+        assertTrue(decisionLogs.any { it.contains("RECOVERY_CONTROL_ADMISSION_REJECTED") })
+    }
 }

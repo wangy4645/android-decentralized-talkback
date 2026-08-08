@@ -5942,6 +5942,11 @@ class TalkbackCoordinator(
                     wireOwner = wireResult.wireOwner ?: "NONE",
                     trigger = "INBOUND_RECOVERY_OFFER"
                 )
+                conferenceEdgeRecoveryController.onNegotiationOwnerConflict(
+                    sessionId = session.id,
+                    remoteModuleId = peerId,
+                    trigger = "INBOUND_RECOVERY_OFFER"
+                )
                 observeGlareDecision(
                     session = session,
                     peerId = peerId,

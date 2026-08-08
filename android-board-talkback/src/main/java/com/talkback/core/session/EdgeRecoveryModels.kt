@@ -460,7 +460,13 @@ internal data class EdgeRecoveryRecord(
     /** Wall-clock when [attemptClockOwnershipDeferred] was set (diagnostic only). */
     var attemptClockOwnershipDeferredSinceMs: Long? = null,
     /** PR-LIFE-2-B: emit [RECOVERY_ATTEMPT_OWNERSHIP_LOST] at most once per attempt episode. */
-    var ownershipLostDiagnosticEmitted: Boolean = false
+    var ownershipLostDiagnosticEmitted: Boolean = false,
+    /** ADR-X1: bilateral glare — E2 shortcut suppressed while true. */
+    var unresolvedNegotiationOwnerConflict: Boolean = false,
+    /** ADR-X1: explicit terminal admission rejection (not delivery failure). */
+    var terminalAdmissionRejected: Boolean = false,
+    /** ADR-X1: ownership resolution failed terminally (distinct from transient glare). */
+    var explicitOwnershipResolutionFailure: Boolean = false
 ) {
     /** True while this record owns an active recovery attempt (ADR-0022 P0.5). */
     fun hasActiveAttempt(): Boolean = phase.isActivelyRecovering()
