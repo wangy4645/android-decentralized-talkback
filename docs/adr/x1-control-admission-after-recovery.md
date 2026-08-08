@@ -405,9 +405,13 @@ All constraints satisfied — **APPROVED FOR IMPLEMENTATION** (2026-08-08).
 ## 9. Status board
 
 ```text
-RCA-M03                  CLOSED for diagnosis
+RCA-M03 diagnosis        CLOSED
 X1 mechanism             CONFIRMED
-ADR-X1                   APPROVED FOR IMPLEMENTATION
-Implementation           UNBLOCKED (receipt wiring + predicate + 2 tests)
+ADR-X1 contract          APPROVED FOR IMPLEMENTATION
+PR #126                  MERGE APPROVED (not "WiFi fixed")
+Validation Gate          ACTIVE — [x1-validation-gate.md](../analysis/x1-validation-gate.md)
+Field X1-A               REQUIRED post-merge (receipt → reevaluate → no premature timeout)
 X2 residency exit        HOLD
 ```
+
+**Merge conclusion must not close verification.** Directed validation X1-A must observe receipt-driven admission reevaluation before RCA-M03 verification closure.
