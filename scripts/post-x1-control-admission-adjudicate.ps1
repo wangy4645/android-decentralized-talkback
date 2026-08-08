@@ -126,14 +126,22 @@ function MatrixRow([string]$id, [string]$evidence, [string]$observed, [string]$e
 }
 [void]$sb.AppendLine("| ID | Evidence | Observed | Expected |")
 [void]$sb.AppendLine("|----|----------|----------|----------|")
-[void]$sb.AppendLine((MatrixRow "E1" "REATTACH_SENT" ($(if ($reattachRequested) { "YES" } else { "NO" }) "required"))
-[void]$sb.AppendLine((MatrixRow "E2" "REMOTE_RECEIPT_ACKED" ($(if ($receiptObserved) { "YES" } else { "NO" }) "required"))
-[void]$sb.AppendLine((MatrixRow "E3" "RECOVERY_CONTROL_ADMISSION_REEVALUATE" ($(if ($o1Reeval) { "YES" } else { "NO" }) "required after E2"))
-[void]$sb.AppendLine((MatrixRow "E5" "DROP_OWNERSHIP_CONFLICT / glare" ($(if ($o2Glare) { "YES" } else { "NO" }) "expected under glare"))
-[void]$sb.AppendLine((MatrixRow "E6" "E2 shortcut boundary" ($(if ($e2Shortcut) { "YES (bad)" } else { "NO/suppressed" }) "suppressed if glare"))
-[void]$sb.AppendLine((MatrixRow "E7" "WATCHDOG_DEFERRED ADMISSION_PENDING" ($(if ($deferObserved) { "YES" } else { "NO" }) "expected if glare"))
-[void]$sb.AppendLine((MatrixRow "E8" "CONTROL_BOUNDARY / ACCEPTED" ($(if ($o3Boundary) { "YES" } else { "NO" }) "required L3"))
-[void]$sb.AppendLine((MatrixRow "E9" "FAILED_MEDIA_RECOVERY premature" ($(if ($o4Premature) { "YES (bad)" } elseif ($failedMedia) { "YES (review)" } else { "NO" }) "must not after E2+E3"))
+$e1obs = if ($reattachRequested) { "YES" } else { "NO" }
+$e2obs = if ($receiptObserved) { "YES" } else { "NO" }
+$e3obs = if ($o1Reeval) { "YES" } else { "NO" }
+$e5obs = if ($o2Glare) { "YES" } else { "NO" }
+$e6obs = if ($e2Shortcut) { "YES (bad)" } else { "NO/suppressed" }
+$e7obs = if ($deferObserved) { "YES" } else { "NO" }
+$e8obs = if ($o3Boundary) { "YES" } else { "NO" }
+$e9obs = if ($o4Premature) { "YES (bad)" } elseif ($failedMedia) { "YES (review)" } else { "NO" }
+[void]$sb.AppendLine((MatrixRow "E1" "REATTACH_SENT" $e1obs "required"))
+[void]$sb.AppendLine((MatrixRow "E2" "REMOTE_RECEIPT_ACKED" $e2obs "required"))
+[void]$sb.AppendLine((MatrixRow "E3" "RECOVERY_CONTROL_ADMISSION_REEVALUATE" $e3obs "required after E2"))
+[void]$sb.AppendLine((MatrixRow "E5" "DROP_OWNERSHIP_CONFLICT / glare" $e5obs "expected under glare"))
+[void]$sb.AppendLine((MatrixRow "E6" "E2 shortcut boundary" $e6obs "suppressed if glare"))
+[void]$sb.AppendLine((MatrixRow "E7" "WATCHDOG_DEFERRED ADMISSION_PENDING" $e7obs "expected if glare"))
+[void]$sb.AppendLine((MatrixRow "E8" "CONTROL_BOUNDARY / ACCEPTED" $e8obs "required L3"))
+[void]$sb.AppendLine((MatrixRow "E9" "FAILED_MEDIA_RECOVERY premature" $e9obs "must not after E2+E3"))
 [void]$sb.AppendLine("")
 
 $failureCase = if (-not $receiptObserved) { "INCONCLUSIVE (no receipt — delivery-failure path)" }

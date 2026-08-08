@@ -3,7 +3,7 @@
 **Status:** AUTHORIZED — **Validation Gate ACTIVE** (post-merge)  
 **Case:** `post-x1-directed-validation` / **X1-A**  
 **Date:** 2026-08-08  
-**Parent:** [X1 Validation Gate](./x1-validation-gate.md) · [ADR-X1](../adr/x1-control-admission-after-recovery.md) · [pre-fix run card](./post-adr0040-control-admission-validation-run-card.md)
+**Parent:** [X1 Validation Gate](./x1-validation-gate.md) · [X1-B progression](./x1-b-admission-progression-validation.md) · [ADR-X1](../adr/x1-control-admission-after-recovery.md) · [pre-fix run card](./post-adr0040-control-admission-validation-run-card.md)
 
 **Goal:** Prove ADR-X1 **event path** on initiator edge — not generic WiFi smoke, not UI validation.
 

@@ -13,7 +13,30 @@ Field validation:      REQUIRED before RCA-M03 closure
 X2 residency exit:       HOLD
 ```
 
-**Rationale:** Implementation risk is no longer "wrong direction" but "implementation does not cover ADR-X1 state transitions." Merge unblocks mainline; closure requires receipt-driven event-path evidence.
+**Rationale:** X1-A (event wiring) is **PASS** on field evidence. Gate remains OPEN for **X1-B** (admission progression) and bilateral glare contract. See [X1-B validation](./x1-b-admission-progression-validation.md).
+
+---
+
+## Two-phase X1 model (frozen)
+
+```text
+X1-A  Event graph (CLOSED)
+      Delivery fact → Admission reevaluation ✅
+
+X1-B  Progression graph (OPEN)
+      reevaluate → ADMISSION_PENDING → ? → CONTROL_BOUNDARY / terminal
+```
+
+| Track | Status | Evidence |
+|-------|--------|----------|
+| **X1-A** Delivery → Reevaluation | **PASS** | M03→M01 attempt-3: `REMOTE_RECEIPT_ACKED` → `RECOVERY_CONTROL_ADMISSION_REEVALUATE` |
+| **X1-B** Admission Progression | **OPEN** | Same run: reeval yes, no `CONTROL_PLANE_BOUNDARY`; `MEDIA_PATH_FAILED` |
+| **Bilateral glare contract** | **NOT VERIFIED** | `glareUnresolved=false` on attempt-3; M03→M02 no reattach |
+| **X2 residency** | **HOLD** | Same upstream region; not a new residency defect |
+
+**Wrong attribution (do not write):** "X1没修好" · "PR #126 failed" · reopen merge/APK/UI investigation.
+
+**Correct:** Phase 1 gap fixed; Phase 2 progression under observation.
 
 ---
 
@@ -207,25 +230,18 @@ Fixing X2 before X1 verification would conflate "bypassed failure entry" with "f
 ## Architecture sign-off (frozen)
 
 ```text
-Root cause:     Post-ADR-0040 Control Admission Contract Gap
-Fix:            PR #126 (merged)
-Confidence:     Medium-high (desk); field proof pending
-Next milestone: Validation Gate PASS (X1-A evidence matrix)
+RCA-M03                          CLOSED
+ADR-0040                         VERIFIED PASS
+ADR-X1                           IMPLEMENTED
+X1-A Delivery → Reevaluation     PASS
+X1-B Admission Progression       OPEN
+Bilateral Glare Contract         NOT VERIFIED
+X2 Residency                     HOLD
+Gate                             OPEN (X1-B + bilateral)
 ```
 
-**Do not during verification:** change timeout · residency · UI · revert · expand ADR · open X2 (unless Case C).
+**Do not during verification:** change timeout budget · open X2 · patch UI · declare WiFi fixed.
 
-**Single question for next run:**
+**Stage:** PR #126 proved delivery is handled; verifying whether admission completes after reevaluation.
 
-> Under real bilateral glare, does `REMOTE_RECEIPT_ACKED` advance the attempt from delivered-but-not-admitted to legitimate control admission — instead of waiting for timeout?
-
----
-
-```text
-RCA-M03 diagnosis        CLOSED
-ADR-X1 contract          APPROVED
-PR #126 implementation   MERGE APPROVED
-Validation Gate          ACTIVE — field evidence REQUIRED
-X2 residency             HOLD
-WiFi "fixed" declaration BLOCKED until Gate PASS
-```
+See also: [X1-B admission progression validation](./x1-b-admission-progression-validation.md)
