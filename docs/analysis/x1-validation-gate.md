@@ -249,6 +249,6 @@ Gate                             PAUSED — redesign experiment entry
 
 **Do not during verification:** blind replay current topology · label SCENARIO_MISS as X1-B FAIL · patch from M01旁证 · change timeout budget · open X2 · patch UI · declare WiFi fixed.
 
-**Stage:** PR #126 duty complete. Bottleneck is **experiment entry design** (disconnect-time ownership), not X1-B implementation.
+**Stage:** PR #126 duty complete. Bottleneck is **experiment entry design** — see [X1-B experiment entry design](./x1-b-experiment-entry-design.md).
 
 See also: [X1-B admission progression](./x1-b-admission-progression-validation.md) · [X1-B initiator-edge validation run card](./x1-b-initiator-edge-validation-run-card.md)
