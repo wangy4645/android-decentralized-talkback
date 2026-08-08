@@ -42,11 +42,11 @@ Out:  run card · field authorization · completion predicate change
 **Gate chain (not yet entered):**
 
 ```text
-RNA Observation Hypothesis (this doc)
+RNA Observation Hypothesis (rna-intent-lifecycle-hypothesis.md)
         ↓
-Observation Model / Authority Questions resolved
+Contract Review (rna-intent-lifecycle-contract-review.md) ← COMPLETE
         ↓
-（必要时）Directed Observation Run Card
+（必要时）Directed Observation Run Card — NOT AUTHORIZED
 ```
 
 ---
