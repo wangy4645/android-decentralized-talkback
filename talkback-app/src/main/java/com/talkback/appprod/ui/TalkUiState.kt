@@ -26,7 +26,8 @@ enum class EndpointStatus {
     SYNCING,
     /**
      * Soft degradation / terminal media residency (ADR-0034 / ADR-0044).
-     * Includes mediaUnavailable with no active repair — not "Reconnecting…".
+     * Known connectivity/media issue without active repair — not "Reconnecting…".
+     * User-visible projection only: does not imply retry, failure ownership, or lifecycle transition.
      */
     DEGRADED,
     /**

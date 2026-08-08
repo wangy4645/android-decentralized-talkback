@@ -65,8 +65,10 @@ object UserVisibleConnectivityProjection {
      * ADR-0044: [mediaUnavailable] alone MUST NOT force control [SYNCING]. That previously
      * collapsed terminal residency into RECONNECTING via MEDIA_UNAVAILABLE+SYNCING.
      * Terminal path: MEDIA_UNAVAILABLE + STABLE → DEGRADED.
-     * Active repair: recovering / controlSyncPending / path-loss-without-residency → SYNCING,
-     * which with MEDIA_UNAVAILABLE yields RECONNECTING.
+     *
+     * @param recovering derived from recovery authority
+     *   (`isEdgeRecovering` / `conferenceEdgeRecovering` / phase.isActivelyRecovering).
+     *   Must not be inferred from transport/media availability (ICE / [mediaUnavailable]).
      */
     fun deriveAxes(
         receivePathLive: Boolean,
