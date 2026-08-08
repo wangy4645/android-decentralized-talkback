@@ -14,6 +14,10 @@ enum class SignalType {
     GROUP_LEAVE,
     /** Member requests authoritative GROUP_INVITE resync from anchor / bootstrap primary. */
     GROUP_RESYNC_REQUEST,
+    /** ADR-0043 P1: issuer queries authority for accepted membership context existence. */
+    MEMBERSHIP_CONTEXT_EXISTENCE_QUERY,
+    /** ADR-0043 P1: authority answers membership context existence for scope + epoch. */
+    MEMBERSHIP_CONTEXT_EXISTENCE_RESPONSE,
     /** Participant requests silent rejoin into an existing host conference (no new invite UX). */
     CONFERENCE_REJOIN,
     /** ADR-0035: recovery offer ingress ACK (not SDP answer). */
