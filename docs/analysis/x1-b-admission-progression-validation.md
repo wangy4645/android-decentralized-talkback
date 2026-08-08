@@ -1,134 +1,114 @@
 # X1-B Admission Progression Validation
 
-**Status:** OPEN (observation only — no code change)  
+**Status:** OPEN — target path NOT ENTERED (not adjudicated)  
 **Date:** 2026-08-08  
 **Parent:** [X1 Validation Gate](./x1-validation-gate.md) · [ADR-X1](../adr/x1-control-admission-after-recovery.md)  
-**Field evidence:** `logs/post-x1-directed-20260808-123422/` (M03→M01 attempt-3)
+**Run card:** [X1-B initiator-edge validation](./x1-b-initiator-edge-validation-run-card.md)
 
-**Goal:** Verify **admission progression** after receipt-driven reevaluation — not WiFi smoke, not UI.
+**Goal:** Verify initiator-edge admission progression after receipt on **M03→M02** when experiment preconditions are met.
+
+---
+
+## Frozen status board
 
 ```text
-X1-A (CLOSED)                    X1-B (OPEN)
-Delivery fact                         reevaluate
-      ↓                                    ↓
-Admission reevaluation ✅              ADMISSION_PENDING
-      ↓                                    ↓
-                                         ? progression trigger ?
-      ↓                                    ↓
-                                   CONTROL_BOUNDARY / terminal
+RCA-M03                     CLOSED
+ADR-0040                    VERIFIED PASS
+PR #126 / X1-A              VERIFIED PASS (CLOSED)
+X1-B progression            OPEN
+X1-B target path            NOT ENTERED (×4) — NOT ADJUDICATED
+X1-B pass/fail              NOT PROVEN (either direction)
+Scenario construction       INSUFFICIENT (current bottleneck)
+Gate 0.5                    0.5-A + 0.5-B (disconnect-time owner check)
+M03→M02                     SCENARIO_MISS ×4
+M03→M01                     Result B ×4 (evidence only)
+P-A                         candidate (not decided)
+Bilateral glare             NOT VERIFIED
+Implementation              FROZEN
+X2                          HOLD
 ```
+
+**Stage conclusion:** PR #126 duty complete. Remaining work is **experiment entry design** + **progression contract** observation — not implementation patch on current evidence.
+
+**Stop:** blind replay of current topology. See run card Gate 0.5-B.
+
+---
+
+## Key architecture finding
+
+```text
+pre-flap ownership (localOwner=M03 in STABLE)
+        ≠
+disconnect-time recovery ownership (existing_owner=M02 at ICE_DISCONNECTED)
+```
+
+Four runs prove: **current experiment cannot stably construct X1-B required ownership topology.** This is ADR-0040 ownership selection behavior — **not** X1-B implementation failure.
 
 ---
 
 ## Two-phase model (frozen)
 
-| Phase | Name | Question | Status |
-|-------|------|----------|--------|
-| **X1-A** | Event graph | Does `REMOTE_RECEIPT_ACKED` enter `reevaluateControlAdmission()`? | **PASS** (M03→M01 attempt-3) |
-| **X1-B** | Progression graph | After reevaluate, does admission reach boundary or legitimate terminal? | **OPEN** |
-
-**Do not regress attribution:** PR #126 did not fail. Old bug (receipt with zero reaction) is **closed**.
+| Phase | Question | Status |
+|-------|----------|--------|
+| **X1-A** | Does `REMOTE_RECEIPT_ACKED` enter `reevaluateControlAdmission()`? | **VERIFIED PASS** |
+| **X1-B** | After reevaluate, does admission reach boundary or legitimate terminal? | **OPEN — NOT ADJUDICATED** |
 
 ---
 
-## X1-B open hypothesis (candidate only)
+## Path split (do not merge)
 
-After reevaluate, attempt may remain in `DELIVERED_BUT_NOT_ADMITTED` / `ADMISSION_PENDING` with no subsequent admission evaluation until watchdog terminal.
-
-**Candidate causes (mutually exclusive until proven):**
-
-| ID | Hypothesis | Evidence needed |
-|----|------------|-----------------|
-| **P-A** | Missing reevaluation trigger on `ICE_CONNECTED` / handshake progress | Second `RECOVERY_CONTROL_ADMISSION_REEVALUATE` after receipt |
-| **P-B** | Missing control admission transition predicate | Handshake facts present but no boundary |
-| **P-C** | No progression trigger exists (receipt → pending → timeout only) | No second reevaluate before terminal |
-
-**Not decided.** Do not patch until one path is proven.
+| Path | Context | Status |
+|------|---------|--------|
+| **Path A** | `glareUnresolved=false` (M01 ×4) | Result B tendency — evidence only |
+| **Path B** | `glareUnresolved=true` (M03→M02 target) | NOT VERIFIED — never entered |
 
 ---
 
-## Progression paths to observe (A / B / C)
-
-### Path A — ICE / transport recovery
+## M03→M01旁证 (×4 — evidence only)
 
 ```text
-REMOTE_RECEIPT_ACKED → reevaluate → ICE_CONNECTED → reevaluate? → CONTROL_PLANE_BOUNDARY
+REMOTE_RECEIPT_ACKED → REEVALUATE (admissionPending=true)
+        → CONTROL_HANDSHAKE_PENDING → defer → FAILED_MEDIA_RECOVERY
 ```
 
-### Path B — Control handshake progress
+| Confirmed | Not confirmed |
+|-----------|---------------|
+| X1-A wiring | X1-B defect |
+| Pending state exists | Progression contract failure |
+| Watchdog defer works | Bilateral glare path |
 
-```text
-REMOTE_RECEIPT_ACKED → reevaluate → CONTROL_HANDSHAKE_PROGRESS → reevaluate? → boundary
-```
-
-### Path C — No progression (X1.1 candidate)
-
-```text
-REMOTE_RECEIPT_ACKED → reevaluate → ADMISSION_PENDING → (no further reevaluate) → timeout
-```
+**Cannot upgrade to:** "X1-B defect confirmed" — expected completion path on target edge was never available.
 
 ---
 
-## X1-B directed case matrix
+## M03→M02 (×4 SCENARIO_MISS)
 
-| Case | Receipt | Glare | Expected | Field status |
-|------|---------|-------|----------|--------------|
-| **A** | yes | no | receipt → reeval → boundary (or legitimate terminal) | **PARTIAL** (M03→M01 attempt-3: reeval yes, boundary no) |
-| **B** | yes | yes | defer + boundary | **NOT OBSERVED** |
-| **C** | yes | yes + unresolved conflict | stay pending, no premature fail | **NOT OBSERVED** |
-| **D** | no | any | normal timeout (not X1-A regression) | **OBSERVED** (M03→M02 ICE_RESTART_ONLY) |
+Every run: `existing_owner=M02` at disconnect → `ICE_RESTART_ONLY` → no reattach/receipt on target edge.
 
-**Bilateral glare contract:** NOT VERIFIED until Case B or C on **M03→M02** (or equivalent initiator reattach edge).
+**Verdict:** NOT ADJUDICATED. Not X1-B FAIL.
 
 ---
 
-## Target log chain (X1-B pass)
+## Result matrix (only after Gate 0.5-B + Gate 1 HIT)
 
-Must observe on initiator edge after receipt:
-
-```text
-REMOTE_RECEIPT_ACKED
-RECOVERY_CONTROL_ADMISSION_REEVALUATE
-(control handshake / ICE facts — supporting)
-RECOVERY_CONTROL_ADMISSION_REEVALUATE   [optional second trigger — Path A/B]
-CONTROL_PLANE_BOUNDARY or REATTACH_ACCEPTED
-```
-
-If missing last two → classify P-A / P-B / P-C before any patch.
-
----
-
-## Watchdog log order (record only — not bug)
-
-Observed sequence:
-
-```text
-RECOVERY_ATTEMPT_TIMEOUT (log)
-RECOVERY_WATCHDOG_DEFERRED ADMISSION_PENDING
-RECOVERY_WATCHDOG_STARTED (reschedule)
-```
-
-**Interpretation (frozen pending code audit):** Timeout log may precede defer eligibility check. **Do not** treat as state pollution until confirmed whether terminal state mutates before defer return.
-
-**Next check:** After `WATCHDOG_DEFERRED`, is `attemptTerminal=true` or phase already `FAILED_MEDIA_RECOVERY`? (attempt-3: defer at 12:36:32 did **not** terminal; failure at 12:36:45.)
+| Result | Conclusion |
+|--------|------------|
+| **A** | X1-B PASS |
+| **B** | X1-A PASS · X1-B OPEN / P-A candidate |
+| **C** | X1-B glare contract issue |
+| **0.5-B fail** | SCENARIO_MISS_BEFORE_TRIGGER |
+| **Gate 1 miss** | SCENARIO_MISS |
 
 ---
 
 ## Discipline (frozen)
 
-- Do **not** open X2 for `media=CONNECTED` + `SYNCING` / Poor Network
-- Do **not** patch UI / timeout budget / residency
-- Next round: **X1-B observation only** — prioritize M03→M02 reattach + glare
+- Gate 0.5-A + 0.5-B required before flap
+- No blind replay on saturated topology
+- No X1.1 / predicate / watchdog patch
+- No X2 without boundary + sticky presence
+- M01旁证 does not authorize implementation change
 
----
+**One-line gate question:**
 
-## Status board
-
-```text
-X1-A Delivery → Reevaluation     PASS
-X1-B Admission Progression       OPEN
-Bilateral Glare Contract         NOT VERIFIED
-X2 Residency                     HOLD
-```
-
-**Stage conclusion:** PR #126 proved **delivery is no longer ignored**; current work verifies **whether admission can complete after reevaluation**.
+> When M03 owns M03→M02 **at disconnect time**, does admission pending have a legal path toward completion?

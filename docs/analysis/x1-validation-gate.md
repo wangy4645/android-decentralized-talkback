@@ -232,16 +232,23 @@ Fixing X2 before X1 verification would conflate "bypassed failure entry" with "f
 ```text
 RCA-M03                          CLOSED
 ADR-0040                         VERIFIED PASS
-ADR-X1                           IMPLEMENTED
-X1-A Delivery → Reevaluation     PASS
-X1-B Admission Progression       OPEN
-Bilateral Glare Contract         NOT VERIFIED
-X2 Residency                     HOLD
-Gate                             OPEN (X1-B + bilateral)
+PR #126 / X1-A                   VERIFIED PASS (CLOSED)
+X1-B Admission Progression         OPEN
+X1-B target path                   NOT ENTERED (×4) — NOT ADJUDICATED
+X1-B pass/fail                     NOT PROVEN (either direction)
+Scenario construction              INSUFFICIENT (bottleneck)
+Gate 0.5                           0.5-A + 0.5-B (disconnect-time owner)
+M03→M02                          SCENARIO_MISS ×4
+M03→M01                          Result B ×4 (evidence only)
+P-A                              candidate (not decided)
+Bilateral Glare Contract           NOT VERIFIED
+X2 Residency                       HOLD
+Implementation                     FROZEN
+Gate                             PAUSED — redesign experiment entry
 ```
 
-**Do not during verification:** change timeout budget · open X2 · patch UI · declare WiFi fixed.
+**Do not during verification:** blind replay current topology · label SCENARIO_MISS as X1-B FAIL · patch from M01旁证 · change timeout budget · open X2 · patch UI · declare WiFi fixed.
 
-**Stage:** PR #126 proved delivery is handled; verifying whether admission completes after reevaluation.
+**Stage:** PR #126 duty complete. Bottleneck is **experiment entry design** (disconnect-time ownership), not X1-B implementation.
 
-See also: [X1-B admission progression validation](./x1-b-admission-progression-validation.md)
+See also: [X1-B admission progression](./x1-b-admission-progression-validation.md) · [X1-B initiator-edge validation run card](./x1-b-initiator-edge-validation-run-card.md)
