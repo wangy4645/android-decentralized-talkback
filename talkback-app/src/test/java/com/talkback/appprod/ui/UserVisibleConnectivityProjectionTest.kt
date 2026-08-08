@@ -91,6 +91,52 @@ class UserVisibleConnectivityProjectionTest {
         assertEquals(UserVisibleConnectivityState.CONNECTED, state)
     }
 
+    /** ADR-0044: active recovery + media unavailable → RECONNECTING */
+    @Test
+    fun adr0044_activeRecovery_mediaUnavailable_isReconnecting() {
+        val axes = UserVisibleConnectivityProjection.deriveAxes(
+            receivePathLive = true,
+            mediaEverLive = true,
+            recovering = true,
+            mediaUnavailable = true
+        )
+        val state = UserVisibleConnectivityProjection.project(axes)
+        assertEquals(UserVisibleConnectivityState.RECONNECTING, state)
+        assertEquals(MediaUsability.MEDIA_UNAVAILABLE, axes.media)
+        assertEquals(ControlSyncState.SYNCING, axes.control)
+    }
+
+    /** ADR-0044: terminal residency — media unavailable, no active repair → DEGRADED */
+    @Test
+    fun adr0044_terminalResidency_mediaUnavailable_notRecovering_isDegraded() {
+        val axes = UserVisibleConnectivityProjection.deriveAxes(
+            receivePathLive = true,
+            mediaEverLive = true,
+            recovering = false,
+            mediaUnavailable = true,
+            controlSyncPending = false
+        )
+        val state = UserVisibleConnectivityProjection.project(axes)
+        assertEquals(UserVisibleConnectivityState.DEGRADED, state)
+        assertNotEquals(UserVisibleConnectivityState.RECONNECTING, state)
+        assertEquals(MediaUsability.MEDIA_UNAVAILABLE, axes.media)
+        assertEquals(ControlSyncState.STABLE, axes.control)
+    }
+
+    /** ADR-0044: healthy media → CONNECTED (ONLINE chrome) */
+    @Test
+    fun adr0044_healthy_mediaAvailable_isConnected() {
+        val state = UserVisibleConnectivityProjection.project(
+            UserVisibleConnectivityProjection.deriveAxes(
+                receivePathLive = true,
+                mediaEverLive = true,
+                recovering = false,
+                mediaUnavailable = false
+            )
+        )
+        assertEquals(UserVisibleConnectivityState.CONNECTED, state)
+    }
+
     @Test
     fun mediaOk_mustNeverMapToReconnecting() {
         for (control in ControlSyncState.entries) {

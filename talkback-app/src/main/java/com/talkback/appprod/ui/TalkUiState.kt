@@ -24,9 +24,16 @@ enum class EndpointStatus {
     CONNECTING,
     /** Media usable; control plane still synchronizing (ADR-0034). */
     SYNCING,
-    /** Media usable; soft degradation (ADR-0034). */
+    /**
+     * Soft degradation / terminal media residency (ADR-0034 / ADR-0044).
+     * Known connectivity/media issue without active repair — not "Reconnecting…".
+     * User-visible projection only: does not imply retry, failure ownership, or lifecycle transition.
+     */
     DEGRADED,
-    /** Conference peer media lost; repair/recovery active (ADR-0034). */
+    /**
+     * Active repair / reconnect attempt in progress (ADR-0034 / ADR-0044).
+     * MUST NOT be used for terminal FAILED_MEDIA residency after repair stopped.
+     */
     RECONNECTING,
     /** Invite timed out or was not answered. */
     EXPIRED

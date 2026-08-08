@@ -1,9 +1,12 @@
 package com.talkback.appprod.ui
 
 /**
- * User-visible connectivity projection (ADR-0034 / INV-PRES-001..009).
+ * User-visible connectivity projection (ADR-0034 / INV-PRES-001..009; ADR-0044).
  *
  * Pure mapping only: no timers, caches, mutations, admission, or recovery ownership.
+ *
+ * ADR-0044: active repair and terminal media residency MUST NOT share RECONNECTING.
+ * Terminal residency (`mediaUnavailable` + not recovering) maps to DEGRADED.
  */
 object UserVisibleConnectivityProjection {
 
@@ -58,6 +61,14 @@ object UserVisibleConnectivityProjection {
     /**
      * Fact-adapter boundary: derive coarse axes from local presentation inputs.
      * Lifecycle booleans may inform [ControlSyncState] only — never become UI states themselves.
+     *
+     * ADR-0044: [mediaUnavailable] alone MUST NOT force control [SYNCING]. That previously
+     * collapsed terminal residency into RECONNECTING via MEDIA_UNAVAILABLE+SYNCING.
+     * Terminal path: MEDIA_UNAVAILABLE + STABLE → DEGRADED.
+     *
+     * @param recovering derived from recovery authority
+     *   (`isEdgeRecovering` / `conferenceEdgeRecovering` / phase.isActivelyRecovering).
+     *   Must not be inferred from transport/media availability (ICE / [mediaUnavailable]).
      */
     fun deriveAxes(
         receivePathLive: Boolean,
@@ -75,10 +86,10 @@ object UserVisibleConnectivityProjection {
             }
         val control = when {
             controlDegraded -> ControlSyncState.DEGRADED
-            recovering ||
-                controlSyncPending ||
-                mediaUnavailable ||
-                (mediaEverLive && !receivePathLive) -> ControlSyncState.SYNCING
+            recovering || controlSyncPending -> ControlSyncState.SYNCING
+            // Path loss without explicit residency bit (ADR-0034 Case B repair-path semantics).
+            // When mediaUnavailable already marks terminal residency, keep STABLE → DEGRADED.
+            mediaEverLive && !receivePathLive && !mediaUnavailable -> ControlSyncState.SYNCING
             else -> ControlSyncState.STABLE
         }
         return ConnectivityAxes(media, control)

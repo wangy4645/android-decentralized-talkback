@@ -61,25 +61,33 @@ class ConferenceNetworkPresentationTest {
 
     @Test
     fun peerConnectivityFromParticipants_usesUvcpNotIceAggregate() {
-        val participants = listOf(
-            remoteParticipant("M03", ConferenceParticipantDisplayState.VISIBLE_RECONNECTING),
-            remoteParticipant("M01", ConferenceParticipantDisplayState.VISIBLE_CONNECTED)
-        )
-        val connectivity = ConferenceNetworkPresentation.peerConnectivityFromParticipants(
-            sessionId = "sess-1",
-            participants = participants,
-            speakingModuleId = null,
-            isRecoveringPeer = { it == "M03" },
-            isMediaUnavailablePeer = { false }
-        )
-        assertEquals(2, connectivity.size)
-        val state = ConferenceNetworkPresentation.resolve(
-            conferenceLive = true,
-            localLanOnline = true,
-            joinedParticipantCount = 3,
-            peerConnectivity = connectivity
-        )
-        assertEquals(BannerScope.NONE, state.bannerScope)
+        MeetingPresenceDisplay.receivePathLivenessProvider = object : ReceivePathLivenessProvider {
+            override fun receivePathLive(sessionId: String, remoteModuleId: String): Boolean = true
+            override fun mediaEverLive(sessionId: String, remoteModuleId: String): Boolean = true
+        }
+        try {
+            val participants = listOf(
+                remoteParticipant("M03", ConferenceParticipantDisplayState.VISIBLE_RECONNECTING),
+                remoteParticipant("M01", ConferenceParticipantDisplayState.VISIBLE_CONNECTED)
+            )
+            val connectivity = ConferenceNetworkPresentation.peerConnectivityFromParticipants(
+                sessionId = "sess-1",
+                participants = participants,
+                speakingModuleId = null,
+                isRecoveringPeer = { it == "M03" },
+                isMediaUnavailablePeer = { false }
+            )
+            assertEquals(2, connectivity.size)
+            val state = ConferenceNetworkPresentation.resolve(
+                conferenceLive = true,
+                localLanOnline = true,
+                joinedParticipantCount = 3,
+                peerConnectivity = connectivity
+            )
+            assertEquals(BannerScope.NONE, state.bannerScope)
+        } finally {
+            MeetingPresenceDisplay.receivePathLivenessProvider = NoOpReceivePathLivenessProvider
+        }
     }
 
     private fun remoteParticipant(

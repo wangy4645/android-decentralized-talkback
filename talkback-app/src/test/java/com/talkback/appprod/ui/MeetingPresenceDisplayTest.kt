@@ -221,7 +221,13 @@ class MeetingPresenceDisplayTest {
                 mediaUnavailablePeer = true
             )
         )
-        assertEquals(EndpointStatus.RECONNECTING, state.endpointStatus)
+        // ADR-0044: terminal residency (mediaUnavailable, not recovering) → DEGRADED, not RECONNECTING.
+        assertEquals(EndpointStatus.DEGRADED, state.endpointStatus)
+        assertEquals(
+            UserVisibleConnectivityProjection.UserVisibleConnectivityState.DEGRADED,
+            state.visibleConnectivity
+        )
+        // LocalReachability remains ADR-0030 diagnostic presence (may still say RECONNECTING).
         assertEquals(
             LocalReachability.ParticipantPresenceState.RECONNECTING,
             state.reachability.state
