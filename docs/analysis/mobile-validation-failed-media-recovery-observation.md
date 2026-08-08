@@ -1,9 +1,10 @@
 # Mobile Validation — FAILED_MEDIA_RECOVERY Observation
 
-**Status:** **DRAFT** · **observation only** · **no runtime authorization** · **no behavior change proposal**  
-**Date:** 2026-08-08  
+**Status:** **SUPERSEDED by track close** · observation retained as episode baseline · **no runtime authorization**  
+**Date:** 2026-08-08 · **Closed:** 2026-08-09  
 **Episode:** `logs/mobile-validation-20260808-205929/` · session `9b36c96d-69c3-4f1d-91e9-c6296a49da3b`  
-**Parents:** [rna-intent-observation-close.md](./rna-intent-observation-close.md) · [adr0043-checkpoint-close.md](./adr0043-checkpoint-close.md)
+**Parents:** [rna-intent-observation-close.md](./rna-intent-observation-close.md) · [adr0043-checkpoint-close.md](./adr0043-checkpoint-close.md)  
+**Close:** [mobile-validation-track-close.md](./mobile-validation-track-close.md) · Q1–Q3 desk complete
 
 ---
 
@@ -11,16 +12,12 @@
 
 ```text
 WiFi Recovery Architecture          CLOSED ✅
-WiFi Recovery Product Validation   ACTIVE
+Mobile Validation                   CLOSED OBSERVATION ✅
+  P1a                               CLOSED (Case A PASS)
+  FAILED_MEDIA desk Q1–Q3           COMPLETE
+  Future: Presentation Semantics ADR (independent; NOT STARTED)
 
-Observed:
-  FAILED_MEDIA_RECOVERY projection anomaly (desk analysis pending)
-
-Related (separate track):
-  P1a presentation wiring gap — see §5
-
-Pending:
-  media lifecycle desk review (Q1–Q3)
+See: mobile-validation-track-close.md
 ```
 
 ---

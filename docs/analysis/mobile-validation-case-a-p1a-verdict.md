@@ -11,11 +11,11 @@
 
 ```text
 P1a Presentation Boundary          CLOSED ✅
-FAILED_MEDIA_RECOVERY Semantics    ACTIVE ⏳  (separate track)
+FAILED_MEDIA_RECOVERY Desk         CLOSED OBSERVATION ✅
+  (see mobile-validation-track-close.md)
 ADR-0043 / RNA                     FROZEN · NO REOPEN ✅
 WiFi Recovery Architecture         CLOSED ✅
 ```
-
 ---
 
 ## 1. Scope
