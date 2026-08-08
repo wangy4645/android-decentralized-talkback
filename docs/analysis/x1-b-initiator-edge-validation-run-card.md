@@ -28,7 +28,7 @@ X2                          HOLD
 
 **Architecture conclusion (×4 runs):** Current experiment cannot stably construct the recovery ownership topology required for X1-B. This is **not** X1-B implementation failure — it is **ADR-0040 ownership selection** on M03→M02 at disconnect time.
 
-**Stop:** blind replay of current topology. See [experiment entry design](./x1-b-experiment-entry-design.md).
+**Stop:** blind replay of current 3-party topology. Next: [Experiment A — 2-node run card](./x1-b-experiment-a-2node-run-card.md).
 
 ---
 

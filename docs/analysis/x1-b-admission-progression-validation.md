@@ -4,7 +4,8 @@
 **Date:** 2026-08-08  
 **Parent:** [X1 Validation Gate](./x1-validation-gate.md) · [ADR-X1](../adr/x1-control-admission-after-recovery.md)  
 **Run card:** [X1-B initiator-edge validation](./x1-b-initiator-edge-validation-run-card.md)  
-**Entry design:** [X1-B experiment entry design](./x1-b-experiment-entry-design.md)
+**Entry design:** [X1-B experiment entry design](./x1-b-experiment-entry-design.md)  
+**Next run:** [Experiment A — 2-node run card](./x1-b-experiment-a-2node-run-card.md) (AUTHORIZED · field run NOT STARTED)
 
 **Goal:** Verify initiator-edge admission progression after receipt on **M03→M02** when experiment preconditions are met.
 

@@ -275,12 +275,17 @@ If any missing → **`SCENARIO_MISS`** or **`SCENARIO_MISS_BEFORE_TRIGGER`** —
 
 ## Next steps (authorized sequence)
 
-1. ✅ This design note (docs only)
-2. ⏳ Select **Experiment A** (2-node) as first entry attempt — separate run card when authorized
-3. ⏳ One validation run only after entry matrix row is chosen and Gate 0.5-B defined for that topology
+1. ✅ Experiment entry design — [x1-b-experiment-entry-design.md](./x1-b-experiment-entry-design.md)
+2. ✅ **Experiment A run card** — [x1-b-experiment-a-2node-run-card.md](./x1-b-experiment-a-2node-run-card.md) **(AUTHORIZED — field run NOT STARTED)**
+3. ⏳ Execute Experiment A when operator authorizes
 4. ⏳ Gate 2 adjudication only on entry PASS
+5. ⏳ 3-node glare validation only after Experiment A PASS
 
-**No code · no PR · no validation run until entry design is signed off for a specific matrix row.**
+**No code · no PR · no field run until operator starts Experiment A.**
+
+### Experiment A priority
+
+**P0 — 2-node M03↔M02 baseline** — prove progression on minimal topology before returning to 3-node glare.
 
 ---
 
