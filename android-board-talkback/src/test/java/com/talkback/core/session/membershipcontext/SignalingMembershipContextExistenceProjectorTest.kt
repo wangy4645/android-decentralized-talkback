@@ -21,10 +21,10 @@ class SignalingMembershipContextExistenceProjectorTest {
         }
     }
 
-    private fun query(epoch: Long = 5L) = MembershipContextExistenceQuery(
+    private fun query(epoch: Long = 5L, correlationId: String = "CH-01:5:conf-1") = MembershipContextExistenceQuery(
         channelId = "CH-01",
         decisionEpoch = epoch,
-        correlationId = "CH-01:5:conf-1",
+        correlationId = correlationId,
         conferenceSessionId = "conf-1"
     )
 
@@ -54,6 +54,46 @@ class SignalingMembershipContextExistenceProjectorTest {
         assertFalse(projector.requestAuthorityProbe(q, "M01"))
         assertFalse(projector.requestAuthorityProbe(q, "M01"))
         assertEquals(2, sendCount)
+    }
+
+    @Test
+    fun sameEpoch_queryResponseQuery_pendingClearedAndReprobeAllowed() {
+        val q = query()
+        assertTrue(projector.requestAuthorityProbe(q, "M01"))
+        assertFalse(projector.requestAuthorityProbe(q, "M01"))
+        assertEquals(1, sentProbes.size)
+
+        projector.recordAuthorityResponse(
+            MembershipContextExistenceEvidence(
+                answer = MembershipContextExistenceAnswer.PRESENT,
+                channelId = q.channelId,
+                decisionEpoch = q.decisionEpoch,
+                correlationId = q.correlationId,
+                authorityId = "M01",
+                authorityOriginated = true
+            )
+        )
+
+        assertTrue(projector.requestAuthorityProbe(q, "M01"))
+        assertEquals(2, sentProbes.size)
+    }
+
+    @Test
+    fun differentCorrelation_sameEpoch_doesNotReuseStalePresent() {
+        val first = query(correlationId = "CH-01:5:conf-1")
+        projector.recordAuthorityResponse(
+            MembershipContextExistenceEvidence(
+                answer = MembershipContextExistenceAnswer.PRESENT,
+                channelId = first.channelId,
+                decisionEpoch = first.decisionEpoch,
+                correlationId = first.correlationId,
+                authorityId = "M01",
+                authorityOriginated = true
+            )
+        )
+        val second = query(correlationId = "CH-01:5:conf-2")
+        val evidence = projector.obtainEvidence(second)
+        assertEquals(MembershipContextExistenceAnswer.UNKNOWN, evidence.answer)
     }
 
     @Test

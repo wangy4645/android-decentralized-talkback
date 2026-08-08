@@ -131,6 +131,21 @@ class ConferenceRecoveryMembershipDispatchAuthorizerTest {
     }
 
     @Test
+    fun ip001_spoofAuthorityResponse_rejectsPresent() {
+        val result = authorizer.evaluate(
+            query(),
+            evidence(
+                MembershipContextExistenceAnswer.PRESENT,
+                authorityId = "M02"
+            ),
+            expectedAuthorityId = "M01"
+        )
+        assertFalse(result.granted)
+        assertEquals(MembershipDispatchBlockReason.AUTHORITY_MISMATCH, result.blockReason)
+        assertTrue(result.shouldProbeAuthority)
+    }
+
+    @Test
     fun authorityMismatch_blocksPresent() {
         val result = authorizer.evaluate(
             query(),
