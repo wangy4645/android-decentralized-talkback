@@ -58,6 +58,7 @@ class ConferenceEdgeRecoveryControllerTest {
             true
         },
         isIceConnected: (String, String) -> Boolean = { _, _ -> false },
+        isReceivePathLive: (String, String) -> Boolean = { _, _ -> false },
         canDispatchRecoveryMediaAction: (String, String) -> Boolean = { _, _ ->
             harnessReachability.canDispatchRecoverySignal()
         },
@@ -73,6 +74,7 @@ class ConferenceEdgeRecoveryControllerTest {
         onRequestReattach = onRequestReattach,
         onIceRestart = onIceRestart,
         isIceConnected = isIceConnected,
+        isReceivePathLive = isReceivePathLive,
         canDispatchRecoveryMediaAction = canDispatchRecoveryMediaAction,
         membershipEpochProbe = membershipEpochProbe
     )
@@ -2550,15 +2552,16 @@ class ConferenceEdgeRecoveryControllerTest {
     }
 
     /**
-     * OBS-M03 H-RES-1 / field attempt-2: ICE level-stable CONNECTED after obligation closes
-     * does not clear FAILED_MEDIA_RECOVERY residency (no new onIceConnected edge).
+     * ADR-0045: ICE alone after deadline must not clear residency (E4 incomplete when
+     * receivePathLive=false). No new onIceConnected rising-edge required for evaluation.
      */
     @Test
-    fun failedMediaRecovery_obligationClosedWhileIceStable_residencyPersists() {
+    fun failedMediaRecovery_obligationClosedWhileIceStable_residencyPersistsWithoutReceivePath() {
         controller = buildController(
             observationWindowMs = 150L,
             attemptBudgetMs = 120L,
             isIceConnected = { _, _ -> true },
+            isReceivePathLive = { _, _ -> false },
             membershipEpochProbe = membershipConvergedProbe(),
             onRequestReattach = { _, _, _ ->
                 reattachCalls++
@@ -2587,6 +2590,81 @@ class ConferenceEdgeRecoveryControllerTest {
         )
         assertTrue(controller.isMediaUnavailable("sess-res", "M02"))
         assertTrue(controller.factsForSession("sess-res").anyFailedMediaRecovery)
+        assertFalse(decisionLogs.any { it.contains("RECOVERY_EDGE_RECOVERED") })
+        assertTrue(decisionLogs.any { it.contains("FAILED_MEDIA_RESIDENCY_CLEAR_HELD") })
+    }
+
+    /** ADR-0045 P2: deadline close with snapshot E4 already true clears via ClearPolicy. */
+    @Test
+    fun adr0045_deadlineClose_withE4_clearsResidencyViaPolicy() {
+        controller = buildController(
+            observationWindowMs = 150L,
+            attemptBudgetMs = 120L,
+            isIceConnected = { _, _ -> true },
+            isReceivePathLive = { _, _ -> true },
+            membershipEpochProbe = membershipConvergedProbe(),
+            onRequestReattach = { _, _, _ ->
+                reattachCalls++
+                ReattachDispatchOutcome.SENT
+            }
+        )
+        controller.onIceStateChanged(
+            sessionId = "sess-adr45d",
+            channelId = "CH-1",
+            remoteModuleId = "M02",
+            iceState = "FAILED",
+            eligibility = eligible(),
+            initiatesReattach = true
+        )
+        Thread.sleep(200)
+        assertTrue(controller.factsForSession("sess-adr45d").anyFailedMediaRecovery)
+        Thread.sleep(200)
+        assertTrue(controller.edgeObligationClosed("sess-adr45d", "M02"))
+        assertEquals(
+            ObligationCloseReason.OBLIGATION_DEADLINE,
+            controller.obligationCloseReason("sess-adr45d", "M02")
+        )
+        assertFalse(controller.isMediaUnavailable("sess-adr45d", "M02"))
+        assertFalse(controller.factsForSession("sess-adr45d").anyFailedMediaRecovery)
+        assertTrue(decisionLogs.any { it.contains("FAILED_MEDIA_RESIDENCY_CLEARED") })
+        assertFalse(decisionLogs.any { it.contains("RECOVERY_EDGE_RECOVERED") })
+    }
+
+    /** ADR-0045 P3: after deadline without E4, later ICE event with E4 admits clear. */
+    @Test
+    fun adr0045_onIceConnected_afterDeadline_withE4_clearsViaPolicy() {
+        var receiveLive = false
+        controller = buildController(
+            observationWindowMs = 150L,
+            attemptBudgetMs = 120L,
+            isIceConnected = { _, _ -> true },
+            isReceivePathLive = { _, _ -> receiveLive },
+            membershipEpochProbe = membershipConvergedProbe(),
+            onRequestReattach = { _, _, _ ->
+                reattachCalls++
+                ReattachDispatchOutcome.SENT
+            }
+        )
+        controller.onIceStateChanged(
+            sessionId = "sess-adr45i",
+            channelId = "CH-1",
+            remoteModuleId = "M02",
+            iceState = "FAILED",
+            eligibility = eligible(),
+            initiatesReattach = true
+        )
+        Thread.sleep(400)
+        assertTrue(controller.edgeObligationClosed("sess-adr45i", "M02"))
+        assertTrue(controller.isMediaUnavailable("sess-adr45i", "M02"))
+
+        receiveLive = true
+        controller.onIceConnected("sess-adr45i", "M02")
+        assertFalse(controller.isMediaUnavailable("sess-adr45i", "M02"))
+        assertEquals(
+            ObligationCloseReason.OBLIGATION_DEADLINE,
+            controller.obligationCloseReason("sess-adr45i", "M02")
+        )
+        assertTrue(decisionLogs.any { it.contains("FAILED_MEDIA_RESIDENCY_CLEARED") })
         assertFalse(decisionLogs.any { it.contains("RECOVERY_EDGE_RECOVERED") })
     }
 
