@@ -1,10 +1,11 @@
 # ADR-0044 — Thin Field Run Card
 
-**Status:** **AUTHORIZED** · presentation validation only  
+**Status:** **CLOSED** · **PASS** (Case A) · see [adr0044-field-verdict.md](./adr0044-field-verdict.md)  
 **Date:** 2026-08-09  
 **Parent:** [0044-user-visible-connectivity-semantics-media-residency.md](../adr/0044-user-visible-connectivity-semantics-media-residency.md)  
 **Impl:** PR #130 · merge `62951da` (incl. KDoc `25c86c8`)  
-**Adjudicate:** `scripts/adr0044-field-adjudicate.ps1`
+**Adjudicate:** `scripts/adr0044-field-adjudicate.ps1`  
+**Evidence:** `logs/adr0044-field-20260809-080841/`
 
 ```text
 Field Authorization: ADR-0044 presentation validation only
@@ -24,7 +25,7 @@ FAILED_MEDIA desk Q1-Q3          CLOSED OBSERVATION ✅
 ADR-0044
   Decision                       ACCEPTED ✅
   Implementation                 MERGED ✅
-  Field                          AUTHORIZED (thin validation)
+  Field                          PASS ✅ · CLOSED
   Scope                          Presentation only
 ```
 
