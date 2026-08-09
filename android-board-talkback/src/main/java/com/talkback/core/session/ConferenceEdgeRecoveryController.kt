@@ -2994,7 +2994,8 @@ class ConferenceEdgeRecoveryController internal constructor(
         sessionId: String,
         remoteModuleId: String,
         recoveryReason: RecoveryReason = RecoveryReason.NETWORK_RECOVERY,
-        source: RecoverySource = RecoverySource.ICE_MONITOR
+        source: RecoverySource = RecoverySource.ICE_MONITOR,
+        disposition: ReattachDisposition = ReattachDisposition.CONVERGING
     ) {
         if (!isConnectivityRecoverySource(source) || !isConnectivityRecoveryReason(recoveryReason)) {
             logRecoveryDecision(
@@ -3030,7 +3031,17 @@ class ConferenceEdgeRecoveryController internal constructor(
             )
             return
         }
-        val record = existing ?: run {
+        if (disposition == ReattachDisposition.NON_CONVERGING_REATTACH) {
+            handleNonConvergingReattachAccepted(
+                sessionId = sessionId,
+                remoteModuleId = remoteModuleId,
+                existing = existing,
+                recoveryReason = recoveryReason,
+                source = source
+            )
+            return
+        }
+        var record = existing ?: run {
             upsertEdge(
                 key,
                 channelId = "",
@@ -3047,21 +3058,39 @@ class ConferenceEdgeRecoveryController internal constructor(
         }
         cancelDebounce(key)
         // #79 / ADR-0022 P1: ACCEPTED supersedes the prior attempt and cancels its watchdog.
-        // New attempt owns a fresh budget starting at ICE-restarting / accepted lifecycle.
+        // ADR-0048: post-RECOVERED / closed obligation opens a fresh convergence ownership episode.
         if (existing != null) {
-            val priorAttempt = record.recoveryAttemptId
-            logHandoffToReattach(record, remoteModuleId, priorAttempt)
-            supersedeAttempt(
-                record,
-                trigger = "REATTACH_INBOUND",
-                scheduleNewWatchdog = false
-            )
-            onLog(
-                "RECOVERY_DECISION session=$sessionId edge=$remoteModuleId " +
-                    "attempt=${record.recoveryAttemptId} priorAttempt=$priorAttempt " +
-                    "trigger=${RecoveryDecisionTrigger.REATTACH_ACCEPTED} " +
-                    "decision=SUPERSEDED approved=true"
-            )
+            val priorAttempt = existing.recoveryAttemptId
+            logHandoffToReattach(existing, remoteModuleId, priorAttempt)
+            record = if (needsNewObligationEpisode(existing)) {
+                onLog(
+                    "RECOVERY_DECISION session=$sessionId edge=$remoteModuleId " +
+                        "attempt=$priorAttempt priorAttempt=$priorAttempt " +
+                        "trigger=${RecoveryDecisionTrigger.REATTACH_ACCEPTED} " +
+                        "decision=SUPERSEDED approved=true " +
+                        "disposition=CONVERGING trigger=POST_RECOVERED_INBOUND_REATTACH"
+                )
+                openNewRecoveryObligation(
+                    key = key,
+                    channelId = existing.channelId,
+                    phase = EdgeRecoveryPhase.REATTACH_ACCEPTED,
+                    initiatesReattach = false,
+                    trigger = "POST_RECOVERED_INBOUND_REATTACH"
+                )
+            } else {
+                supersedeAttempt(
+                    record,
+                    trigger = "REATTACH_INBOUND",
+                    scheduleNewWatchdog = false
+                )
+                onLog(
+                    "RECOVERY_DECISION session=$sessionId edge=$remoteModuleId " +
+                        "attempt=${record.recoveryAttemptId} priorAttempt=$priorAttempt " +
+                        "trigger=${RecoveryDecisionTrigger.REATTACH_ACCEPTED} " +
+                        "decision=SUPERSEDED approved=true"
+                )
+                record
+            }
         }
         record.phase = EdgeRecoveryPhase.REATTACH_ACCEPTED
         record.recoveryViaInboundReattach = true
@@ -3083,7 +3112,8 @@ class ConferenceEdgeRecoveryController internal constructor(
         )
         onLog(
             "RECOVERY_REATTACH_ACCEPTED session=$sessionId remote=$remoteModuleId " +
-                "attempt=${record.recoveryAttemptId} recoveryReason=$recoveryReason source=$source"
+                "attempt=${record.recoveryAttemptId} recoveryReason=$recoveryReason source=$source " +
+                "disposition=$disposition"
         )
         issueBoundedIceRestart(record, recoveryReason)
         // Soak gap (#83): ICE may already be CONNECTED with no fresh CONNECTED event.
@@ -3098,6 +3128,40 @@ class ConferenceEdgeRecoveryController internal constructor(
             notifyAttemptLineageObservation(record, "transport_recovered_ice_connected")
             runIceRestorationCompletionEvaluation(record)
         }
+        notifyChanged(sessionId)
+    }
+
+    /**
+     * ADR-0048 INV-048-005: explicit non-converging inbound reattach must not enter
+     * ownerless actively-recovering residency.
+     */
+    private fun handleNonConvergingReattachAccepted(
+        sessionId: String,
+        remoteModuleId: String,
+        existing: EdgeRecoveryRecord?,
+        recoveryReason: RecoveryReason,
+        source: RecoverySource
+    ) {
+        if (isSessionCancelled(sessionId)) {
+            onLog("RECOVERY_EVENT_DROPPED session=$sessionId remote=$remoteModuleId reason=session_cancelled")
+            return
+        }
+        onLog(
+            "RECOVERY_REATTACH_NON_CONVERGING session=$sessionId remote=$remoteModuleId " +
+                "disposition=NON_CONVERGING_REATTACH recoveryReason=$recoveryReason source=$source " +
+                "phase=${existing?.phase ?: "NONE"}"
+        )
+        logRecoveryDecision(
+            sessionId = sessionId,
+            edge = remoteModuleId,
+            trigger = RecoveryDecisionTrigger.REATTACH_ACCEPTED,
+            recoveryReason = recoveryReason,
+            terminationReason = RecoveryTerminationReason.UNKNOWN,
+            policy = RecoveryDecisionPolicy.NO_RECOVERY,
+            approved = true,
+            rejectReason = "NON_CONVERGING_REATTACH",
+            attempt = existing?.recoveryAttemptId
+        )
         notifyChanged(sessionId)
     }
 
