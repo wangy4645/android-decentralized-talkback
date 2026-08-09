@@ -2,7 +2,7 @@
 
 ## Status
 
-**ACCEPTED** (2026-08-09) · **Grill Q1–Q8 ACCEPTED** · **Review clarifications applied** · **Phase 1 MERGED (PR #131)** · **Phase 2 MERGED (PR #133)** · **Phase 2.1 MERGED (PR #136)** · **Field Phase 2.1 PAUSED (no qualifying case)** · successor observation: [mobile-validation-successor-recovery-pending-observation.md](../analysis/mobile-validation-successor-recovery-pending-observation.md) · run card: [adr0045-field-run-card.md](../analysis/adr0045-field-run-card.md)
+**ACCEPTED** (2026-08-09) · **Grill Q1–Q8 ACCEPTED** · **Review clarifications applied** · **Phase 1 MERGED (PR #131)** · **Phase 2 MERGED (PR #133)** · **Phase 2.1 MERGED (PR #136)** · **Field Phase 2.1 PAUSED (no qualifying case)** · successor observation: [mobile-validation-successor-recovery-pending-observation.md](../analysis/mobile-validation-successor-recovery-pending-observation.md) (Q7=S2 · [ADR-0046 candidate](./0046-successor-admission-terminal-convergence-contract-candidate.md)) · run card: [adr0045-field-run-card.md](../analysis/adr0045-field-run-card.md)
 
 **Parents:**
 
@@ -26,9 +26,9 @@ Implementation:
   Field #2 (20260809-094259)  NOT ADR-0045 case
     M03→M02                   PASS (clear still holds)
     M02→M03                   SYNCING — successor RECOVERY_PENDING (independent observation)
-  Successor observation       Q1–Q6 SEALED (S1 continue observation; G2+G1)
-  Next                        sample expansion only; do not force FAILED_MEDIA for 2.1
-  Do not                      UVCP-hide SYNCING · absorb into ADR-0045
+  Successor observation       Q1–Q7 SEALED (Q7=S2; ADR-0046 CANDIDATE; not accepted)
+  Next                        ADR-0046 candidate docs only; do not force FAILED_MEDIA for 2.1
+  Do not                      UVCP-hide SYNCING · absorb into ADR-0045 · “fix unstable”
 
 Primary invariant:
   residency clear ≠ completion success ≠ presentation projection
