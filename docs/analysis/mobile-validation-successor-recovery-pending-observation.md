@@ -1,9 +1,10 @@
 # Successor Recovery Pending — Observation
 
-**Status:** **OBSERVATION ACTIVE** · Q1–Q3 **TRACE COMPLETE** · **no ADR** · **no fix** · **no runtime authorization**  
+**Status:** **OBSERVATION ACTIVE** · Q1–Q3 **TRACE COMPLETE** · Q4–Q5 **OPEN** · **no ADR** · **no fix** · **no runtime authorization**  
 **Date:** 2026-08-09  
-**Classification:** Recovery convergence observation  
-**Not:** ADR-0045 regression · ADR-0044 presentation defect · residency clear gap
+**Classification:** Recovery **obligation lifecycle completeness** observation  
+**Naming:** Successor Recovery Pending Residency (observation language — **not** “successor recovery bug”)  
+**Not:** ADR-0045 regression · ADR-0044 presentation defect · residency clear gap · WiFi Recovery reopen
 
 **Evidence:** `logs/adr0045-field-20260809-094259/` · session `a73272cb-74c2-4fd6-bf50-918a66806df1` · observer **M02** → peer **M03** · pid `30507`
 
@@ -19,11 +20,16 @@
 ## Status board
 
 ```text
+Checkpoint (2026-08-09) — healthy fork
+
 ADR-0044 Presentation              CLOSED ✅
 
-ADR-0045 Residency Clear           ACCEPTED
+ADR-0045 Failed Media Clear        ACCEPTED / IMPLEMENTED PARTIAL ✅
   Policy                           PASS ✅
-  Phase 2 / 2.1 Field              PAUSED (no qualifying FAILED_MEDIA case on M02)
+  Phase 1                          MERGED ✅
+  Phase 2.0 Field                  partial evidence
+  Phase 2.1 Field                  PAUSED ⏸️
+  FAILED_MEDIA Q1–Q7               CLOSED ✅
 
 Field #1 (20260809-093047)
   M03→M02 clear                    PASS
@@ -31,25 +37,27 @@ Field #1 (20260809-093047)
 
 Field #2 (20260809-094259)
   M03→M02 clear                    PASS (ADR-0045 still holds)
-  M02→M03 SYNCING                  NEW OBSERVATION (this doc)
-  Domain                           successor recovery convergence
+  M02→M03 SYNCING                  THIS TRACK
+  Domain                           Recovery obligation lifecycle completeness
+  ADR-0045 ClearPolicy             correctly NOT invoked (no GATE)
 
 Successor Recovery Pending
-  Observation                      ACTIVE 🔎
-  Q1 Phase owner                   TRACE COMPLETE
-  Q2 Obligation close              TRACE COMPLETE
-  Q3 SYNCING semantics             TRACE COMPLETE
-  Fix / ADR                        ❌ not authorized
+  Observation                      OPEN / ACTIVE ✅
+  Q1 Phase owner                   COMPLETE ✅
+  Q2 Obligation close              COMPLETE ✅
+  Q3 SYNCING semantics             COMPLETE ✅
+  Q4 Lifecycle contract            OPEN
+  Q5 Close authority               OPEN
+  Runtime change                   NONE AUTHORIZED
+  ADR                              NONE
 
-ADR-0045 Residency Clear
-  Policy                           PASS ✅
-  Phase 2.1 Field                  PAUSED ⏸️
-  Field                            WAIT (qualifying FAILED_MEDIA only)
-
-Do NOT:
-  force FAILED_MEDIA to validate Phase 2.1 while this is open
-  fold into ADR-0045 / ADR-0044 / Directed #5
-  UVCP-hide SYNCING / ignore obligationOpen / force CONNECTED
+Forbidden while this track is open:
+  ✗ modify ADR-0045 / add residency clear triggers
+  ✗ change SYNCING copy / map RECOVERY_PENDING → DEGRADED
+  ✗ ICE_CONNECTED auto-ends obligation / writes phase=CONNECTED
+  ✗ UVCP hide SYNCING / ignore obligationOpen
+  ✗ resurrect WiFi Recovery Architecture
+  ✗ force FAILED_MEDIA Field to “finish” Phase 2.1
 ```
 
 ---
@@ -262,12 +270,25 @@ UI identity is the same; architecture meaning: **B under A** — Sync is the cor
 ## Trace verdict (still observation)
 
 ```text
-Core question answered:
-  "Why did successor recovery obligation not converge?"
+Exposed layer:
+  Recovery obligation lifecycle completeness
+  (not media residency clear; not presentation)
+
+Core question (refined):
+  Does a successor recovery obligation under NEGOTIATION_SETTLING
+  possess a final convergence / terminal-admission mechanism?
+
+Field evidence shape:
+  RECOVERY_PENDING
+    + success / failed-media / supersede / leave   ← exist in FSM
+    − timeout / admission expiry after defer       ← missing in Field #2 path
 
 Not:
   "Why did residency clear fail?"
+  "Why is UVCP wrong?"
+```
 
+```text
 Provenance hotspot (not a fix authorization):
   ADMIT_SUCCESSOR + ICE_RESTART defer without attempt watchdog
   → RECOVERY_PENDING can persist while media plane is healthy
@@ -275,11 +296,39 @@ Provenance hotspot (not a fix authorization):
 ```
 
 ```text
-Decision still OPEN (governance):
-  keep as observation
-  vs future ADR (successor / deferred-clock contract)
-  vs bugfix authorization
-  — NOT decided here; NOT ADR-0045
+Quadrants (do not mix):
+  ADR-0044  mediaUnavailable ∧ !recovering → DEGRADED
+  Field #2  mediaAvailable ∧ recovering     → SYNCING  (correct)
+  ADR-0045  FAILED_MEDIA ∧ obligationClosed ∧ E4 → clear (GATE absent here)
+```
+
+---
+
+## Next (observation-only; not yet authorized as a grill)
+
+### Q4 — Successor obligation lifecycle contract
+
+> What is the lifecycle contract for a successor obligation?
+
+Answer **only** whether each state **must** have an exit (yes/no/conditional).  
+**Do not** discuss timeout numeric budgets.
+
+| State | Must have an exit? |
+| ----- | ------------------ |
+| `RECOVERY_PENDING` | ? |
+| `NEGOTIATION_SETTLING` (deferred media action) | ? |
+| `OFFER_AWAITING_ANSWER` (ICE restart gate block) | ? |
+
+### Q5 — Close authority for successor obligation
+
+> Who owns closing a successor obligation?
+
+Candidates (pick / refine; **do not** add watchdog yet):
+
+```text
+Recovery Controller
+RecoveryCompletionPolicy
+Successor Admission Policy (new? or existing family)
 ```
 
 ---
@@ -290,12 +339,15 @@ Decision still OPEN (governance):
 PASS criteria for this observation track:
   Q1–Q3 answered with code+log provenance     ✅
   boundary held: not absorbed by ADR-0045/0044 ✅
+  Q4–Q5 only if observation continues         OPEN
 
 FAIL / out of process:
   “fix Sync by clear residency”
   “Phase 2.1 field until FAILED_MEDIA”
   reopen WiFi Recovery Architecture on single sticky Sync
   UVCP hide SYNCING / force CONNECTED / ignore obligationOpen
+  ICE_CONNECTED auto phase=CONNECTED / auto close obligation
+  map RECOVERY_PENDING → DEGRADED
 ```
 
 ---
