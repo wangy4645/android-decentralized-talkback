@@ -197,10 +197,93 @@ post-merge natural ordinary episode
 
 ---
 
-## 9. Log placement
+## 9. 手机操作步骤（现场怎么做）
+
+角色约定：
+
+| 手机 | 角色 |
+|------|------|
+| M01 | 成员机 |
+| M02 | 主持人 / 组会机 |
+| M03 | 成员机 |
+
+WiFi 一律连 **`happy`**（不要连 `happy_5G`）。
+
+---
+
+### 9.1 装包确认（开测前做一次）
+
+1. **M01、M03**：确认已装上本轮 debug 包（电脑侧已 `adb install` 过即可）。
+2. **M02**：打开「文件管理 / 下载」→ 进入 `Download/talkback/` → 点 `talkback-app-debug.apk` 安装（覆盖安装即可）。
+3. 三台都打开 Talkback App，确认能进到主界面。
+
+---
+
+### 9.2 建会（稳定基线）
+
+1. 三台 WiFi 都连上 **`happy`**，信号正常。
+2. 在 **M02** 上创建 / 进入会议（按平时建会流程）。
+3. **M01、M03** 加入同一场会议。
+4. 等三台互相都能正常通话（听得到、界面成员正常），再告诉电脑侧「可以开始抓 log」。
+5. 电脑侧执行抓 log 后，**不要立刻折腾网络**，先保持通话约 30 秒以上。
+
+---
+
+### 9.3 观察窗口里你怎么用手机
+
+目标：让会议**自然**跑一段时间；有恢复就记一下，**不要为了测而去人为制造故障**。
+
+**可以做：**
+
+1. 三台保持在会上，正常说话、静音/取消静音、切后台再回来（日常用法即可）。
+2. 若某台界面上某位成员出现「同步中 / Sync」或短暂连不上：
+   - 用手机记下大概时间（例如 19:40）
+   - 记下是「谁看谁」异常（例如：M01 上看 M03 在同步）
+   - **继续等**，不要急着退出会议
+3. 若过一会儿又恢复正常通话：同样记一下时间，然后可以结束本轮，让电脑侧停抓 log。
+
+**不要做：**
+
+1. 不要进系统设置里开关 WiFi、切换到别的热点、开关飞行模式来「制造恢复」。
+2. 不要故意把某台踢出会议再拉回来当刺激。
+3. 不要强行杀 App、清数据、换 SSID。
+4. 不要为了「Sync 还在」就反复进出会或重装。
+
+（说明：Sync 出现多久**不是**本轮要证明的事；有自然恢复窗口即可。）
+
+---
+
+### 9.4 本轮结束时
+
+1. 若已经出现过至少一次「短暂异常 → 又恢复通话」，或你觉得已经自然观察够久：  
+   告诉电脑侧「可以停 log」。
+2. 停 log **之前**：三台尽量还留在会上（或至少不要立刻卸包）。
+3. 停完之后：可以正常退会；手机不用再看任何日志。
+
+---
+
+### 9.5 电脑侧配合（给你对照，不是手机操作）
+
+开抓 / 停抓由电脑执行（现场只需口头同步即可）：
+
+```powershell
+.\scripts\adr0047-vfield-start-run.ps1
+.\scripts\adr0047-vfield-stop-run.ps1 -LogDir "<开抓时打印的 LogDir>"
+```
+
+---
+
+## 10. Log placement
 
 ```text
 talkback/logs/adr0047-vfield-YYYYMMDD-HHMMSS/
+```
+
+Start / stop:
+
+```powershell
+.\scripts\adr0047-vfield-start-run.ps1
+.\scripts\adr0047-vfield-stop-run.ps1 -LogDir <LogDir>
 ```
 
 Append disposition one-liner (e.g. `SAMPLE_DISPOSITION.txt`):
@@ -214,7 +297,20 @@ markers found (INTENT_BOUND / MANIFESTED / EVALUABILITY_*)
 
 ---
 
-## 10. Prior evidence (pre-merge Case B)
+## 11. Post-merge sample log
+
+| LogDir | Disposition |
+|--------|-------------|
+| `talkback/logs/adr0047-vfield-20260809-193925/` | **NO_ORDINARY_RECOVERY_EPISODE** — 现场一切正常；健康基线，**不是** ADR-0047 PASS/FAIL |
+| `talkback/logs/adr0047-vfield-20260809-193727/` | pre-baseline restart artifact（建会前开抓后重启，不作样本） |
+
+`SAMPLE_DISPOSITION.txt` 已写在 `193925` 目录下。
+
+V-field' 仍 **OPEN（opportunistic）**：日常开会若出现自然恢复再抓；**不**为出样本人为 flap。
+
+---
+
+## 12. Prior evidence (pre-merge Case B)
 
 | LogDir | Role |
 |--------|------|
@@ -222,11 +318,11 @@ markers found (INTENT_BOUND / MANIFESTED / EVALUABILITY_*)
 
 Archive: [vfield-case-b-20260809-112330-media-online-obligation-pending.md](./vfield-case-b-20260809-112330-media-online-obligation-pending.md)
 
-Post-merge samples on builds **≥ PR #148** may corroborate attribution manifest on natural ordinary episodes.
+Post-merge builds **≥ PR #148**；attribution 覆盖仍待 ≥1 条 natural ordinary+defer 样本。
 
 ---
 
-## 11. Governance reminder
+## 13. Governance reminder
 
 ```text
 ADR-0047 ACCEPTED
@@ -239,7 +335,9 @@ ADR-0047 ACCEPTED
         |
         +-- V-desk' ✅ (pre-merge)
         |
-        +-- V-field' ⏳ passive observation (this card)
+        +-- V-field' ⏳ opportunistic (healthy baseline 193925 logged)
         |
         +-- no new ADR / Design grill unless boundary violation
+        |
+        +-- other tracks may proceed; observation does not block
 ```
