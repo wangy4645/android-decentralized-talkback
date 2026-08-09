@@ -442,6 +442,11 @@ internal data class EdgeRecoveryRecord(
      */
     var successorActivationEmitted: Boolean = false,
     /**
+     * ADR-0046: successor admission terminal-convergence contract binding (M1).
+     * Set only by [admitSuccessorObligationEpisode]; not satisfied by SUCCESSOR_REPLACED (X1').
+     */
+    var successorTerminalConvergenceContractBound: Boolean = false,
+    /**
      * ADR-0040 PR-LIFE-1: attempt watchdog deferred for capability (no live timer).
      * Cleared when [RECOVERY_WATCHDOG_STARTED] successfully arms; resumed on L2/wakeup
      * after capability restore — hangup must not be the sole CLEAR path.

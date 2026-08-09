@@ -1,11 +1,11 @@
 # Successor Recovery Pending — Observation
 
-**Status:** **OBSERVATION SEALED (Q1–Q7)** · **Q7 = S2** independent ADR **candidate** · **NOT ACCEPTED** · **no fix** · **no runtime authorization**  
+**Status:** **OBSERVATION SEALED (Q1–Q7)** · **Q7 = S2** · **ADR-0046 ACCEPTED** (Decision YES) · **Implementation NOT AUTHORIZED** · **no fix** · **no runtime authorization**  
 **Date:** 2026-08-09  
 **Classification:** Recovery **obligation lifecycle completeness** observation  
 **Gap (Q5):** **G4** primary **G2** (successor admission contract incomplete) · secondary **G1** (missing terminal exit evaluation)  
-**Scope (Q6):** **S1** — sample expansion (historical); **Q7 overrides to S2 candidate**  
-**ADR candidate:** [0046-successor-admission-terminal-convergence-contract-candidate.md](../adr/0046-successor-admission-terminal-convergence-contract-candidate.md)  
+**Scope (Q6):** **S1** — sample expansion (historical); **Q7 overrides to S2 candidate** → Acceptance A1 → **ACCEPTED**  
+**ADR:** [0046-successor-admission-terminal-convergence-contract.md](../adr/0046-successor-admission-terminal-convergence-contract.md)  
 **Naming:** Successor Recovery Pending Residency (observation language — **not** “successor recovery bug”)  
 **Not:** ADR-0045 regression · ADR-0044 presentation defect · residency clear gap · WiFi Recovery reopen · “Recovery broken”
 
@@ -18,7 +18,7 @@
 
 **Parents / boundaries:**
 
-- [ADR-0046 candidate](../adr/0046-successor-admission-terminal-convergence-contract-candidate.md) — lifecycle contract question only
+- [ADR-0046](../adr/0046-successor-admission-terminal-convergence-contract.md) — **ACCEPTED** successor admission terminal convergence contract (Decision YES); **Implementation NOT AUTHORIZED**
 - [ADR-0045](../adr/0045-post-obligation-failed-media-residency-clear-admission.md) — residency clear; **does not absorb this track**
 - [ADR-0044](../adr/0044-user-visible-connectivity-semantics-media-residency.md) — presentation; SYNCING here follows recovering, not DEGRADED
 - [ADR-0038](../adr/0038-recovery-completion-admission-contract.md) — completion success (orthogonal; do not reopen casually)
@@ -58,18 +58,19 @@ Successor Recovery Pending
   Q4 Lifecycle contract            COMPLETE ✅ (A2 · B1 · C1)
   Q5 Gap classification            COMPLETE ✅ (G4: primary G2 · secondary G1)
   Q6 Scope                         S1 ✅ (historical — sample expansion)
-  Q7 Scope / ADR candidacy         S2 ✅ — ADR-0046 CANDIDATE (not accepted)
+  Q7 Scope / ADR candidacy         S2 ✅ — ADR-0046 CANDIDATE → Acceptance A1 → **ACCEPTED**
   MISS_SETTLING                    ≥3 repeatable ✅
-  P0 SUCCESS / FAILED_MEDIA        still UNKNOWN (not blocking candidate)
+  P0 SUCCESS / FAILED_MEDIA        still UNKNOWN (not blocking Acceptance)
   Runtime change                   NONE AUTHORIZED
-  ADR accepted                     NO
+  ADR accepted                     YES (Decision YES boundary only)
   Fix authorization                NONE
+  Implementation authorization     NONE
 
-Next: ADR-0046 candidate docs only (grill / boundary) — NOT design / NOT impl
-  Candidate: [0046-successor-admission-terminal-convergence-contract-candidate.md](../adr/0046-successor-admission-terminal-convergence-contract-candidate.md)
+Next: Implementation Authorization grill (independent) — NOT design-by-default from Acceptance
+  ADR: [0046-successor-admission-terminal-convergence-contract.md](../adr/0046-successor-admission-terminal-convergence-contract.md)
   Do not merge M03→M01 peer RECONNECTING into ADR-0046
 
-Forbidden while candidate (not accepted):
+Forbidden while Implementation NOT AUTHORIZED:
   ✗ modify ADR-0045 / add residency clear triggers
   ✗ change SYNCING copy / map RECOVERY_PENDING → DEGRADED
   ✗ ICE_CONNECTED auto-ends obligation / writes phase=CONNECTED
@@ -535,18 +536,18 @@ Implementation = NOT AUTHORIZED
 **Adjudication: S2 ACCEPTED** (2026-08-09).
 
 ```text
-Q7 = S2 — independent ADR candidate
-ADR-0046 = CANDIDATE (NOT ACCEPTED)
+Q7 = S2 — independent ADR candidate (historical)
+ADR-0046 = ACCEPTED (Acceptance A1; Decision YES boundary)
 Implementation = NOT AUTHORIZED
 Runtime = NONE
 ```
 
-**Why S2:** MISS_SETTLING is now **repeatable** (≥3: Field #2 + sample #1 + long-soak sample #2). That supports asking whether successor admission must carry a provable terminal convergence contract. Candidate does **not** require SUCCESS/FAILED_MEDIA reachability samples first, and does **not** authorize how to converge.
+**Why S2:** MISS_SETTLING is now **repeatable** (≥3: Field #2 + sample #1 + long-soak sample #2). That supports asking whether successor admission must carry a provable terminal convergence contract. Candidate did **not** require SUCCESS/FAILED_MEDIA reachability samples first, and did **not** authorize how to converge.
 
 **Why not S1:** further same-stimulus MISS loops add little; P0 unknowns remain optional, not blocking candidacy.  
 **Why not S3:** evidence already justifies naming the contract question.
 
-**Candidate doc:** [0046-successor-admission-terminal-convergence-contract-candidate.md](../adr/0046-successor-admission-terminal-convergence-contract-candidate.md)
+**ADR:** [0046-successor-admission-terminal-convergence-contract.md](../adr/0046-successor-admission-terminal-convergence-contract.md)
 
 **Edge isolation:** M02→M03 successor settling = ADR-0046 territory; M03→M01 peer RECONNECTING = separate observation — **not imported**; do not write “Recovery broken”.
 
@@ -565,11 +566,12 @@ Successor Recovery Observation
   Q4 Lifecycle exit contract        COMPLETE ✅  (A2 / B1 / C1)
   Q5 Gap classification             COMPLETE ✅  (G4: G2 primary · G1 secondary)
   Q6 Scope                          S1 ✅ (historical sample expansion)
-  Q7 Scope                          S2 ✅ — ADR-0046 CANDIDATE
+  Q7 Scope                          S2 ✅ — ADR-0046 → ACCEPTED (A1)
 
 Runtime change                      NONE
-ADR accepted                        NO
+ADR accepted                        YES (Decision YES only)
 Fix authorization                   NONE
+Implementation authorization        NONE
 ```
 
 **Fence held by this seal:**
@@ -583,9 +585,10 @@ Fix authorization                   NONE
 ✗ same-stimulus MISS_SETTLING loops
 ✗ merge M03→M01 into ADR-0046
 ✗ “fix unstable” / Recovery broken
+✗ treat Acceptance as Implementation authorization
 ```
 
-**If continued:** ADR-0046 candidate grill / boundary docs only — **not** design of convergence mechanism.
+**If continued:** independent **Implementation Authorization grill** only — **not** design of convergence mechanism by default.
 
 ---
 
@@ -593,9 +596,9 @@ Fix authorization                   NONE
 
 ```text
 PASS criteria for this observation track:
-  Q1–Q7 SEALED (Q7=S2 ADR-0046 candidate)            ✅
+  Q1–Q7 SEALED (Q7=S2 → ADR-0046 ACCEPTED)            ✅
   boundary held: not absorbed by ADR-0045/0044       ✅
-  next: candidate docs only (not impl / not fix)
+  Acceptance ≠ Implementation authorization          ✅
 
 FAIL / out of process:
   “fix Sync by clear residency”
@@ -604,7 +607,7 @@ FAIL / out of process:
   UVCP hide SYNCING / force CONNECTED / ignore obligationOpen
   ICE_CONNECTED auto phase=CONNECTED / auto close obligation
   map RECOVERY_PENDING → DEGRADED
-  implement watchdog/timeout under candidate status
+  implement watchdog/timeout without Implementation Authorization
 ```
 
 ---
@@ -615,7 +618,7 @@ FAIL / out of process:
 - Sample #1: `talkback/logs/successor-sample-20260809-101954/`
 - Sample #2: `talkback/logs/successor-sample-20260809-102648/`
 - Field #1 (ADR-0045 trigger gap): `talkback/logs/adr0045-field-20260809-093047/`
-- ADR-0046 candidate: [0046-successor-admission-terminal-convergence-contract-candidate.md](../adr/0046-successor-admission-terminal-convergence-contract-candidate.md)
+- ADR-0046: [0046-successor-admission-terminal-convergence-contract.md](../adr/0046-successor-admission-terminal-convergence-contract.md)
 - Sample expansion run card: [successor-recovery-lifecycle-sample-expansion-run-card.md](./successor-recovery-lifecycle-sample-expansion-run-card.md)
 - ADR-0045 run card: [adr0045-field-run-card.md](./adr0045-field-run-card.md)
 - Related (independent): ADR-0039 owner-conflict track — **not triggered** by this note alone

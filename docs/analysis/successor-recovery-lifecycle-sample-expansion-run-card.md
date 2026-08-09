@@ -3,9 +3,9 @@
 **Status:** **COMPLETE for candidacy gate** — MISS_SETTLING ≥3 · Q7=S2 · further same-stimulus loops **stopped**  
 **Date:** 2026-08-09  
 **Parent:** [mobile-validation-successor-recovery-pending-observation.md](./mobile-validation-successor-recovery-pending-observation.md)  
-**ADR candidate:** [0046-successor-admission-terminal-convergence-contract-candidate.md](../adr/0046-successor-admission-terminal-convergence-contract-candidate.md)  
+**ADR:** [0046-successor-admission-terminal-convergence-contract.md](../adr/0046-successor-admission-terminal-convergence-contract.md) — **ACCEPTED** (Decision YES) · **Implementation NOT AUTHORIZED**  
 **Prior evidence:** Field #2 + `logs/successor-sample-20260809-101954/` + `logs/successor-sample-20260809-102648/`  
-**Authorization:** Q7 = S2 · candidate docs only · **no runtime** · **no fix**
+**Authorization (this card):** historical sample expansion only · **no runtime** · **no fix**
 
 ```text
 Purpose (historical):
@@ -14,7 +14,7 @@ Purpose (historical):
 Outcome:
   MISS_SETTLING repeatable ≥3
   P0 SUCCESS / FAILED_MEDIA still UNKNOWN
-  Q7 → S2 ADR-0046 CANDIDATE (not accepted)
+  Q7 → S2 ADR-0046 → ACCEPTED (A1; Decision YES; Implementation NOT AUTHORIZED)
 
 Not purpose:
   fix convergence
