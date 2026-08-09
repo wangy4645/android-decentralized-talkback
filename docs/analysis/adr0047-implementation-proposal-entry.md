@@ -1,7 +1,8 @@
 # ADR-0047 Implementation Proposal Entry
 
-**Status:** **OPEN** (2026-08-09) · **DP-ACCEPT** · **Runtime-Auth Q1–Q4 = F1** · **Code AUTHORIZED (Allow)** · **Merge until G1'**  
+**Status:** **MERGED** (2026-08-09) · **PR #148** (`434313c`) · **V-field' passive observation AUTHORIZED**  
 **Parent:** [0047-ordinary-recovery-post-defer-evaluability-contract.md](../adr/0047-ordinary-recovery-post-defer-evaluability-contract.md)  
+**V-field' run card:** [adr0047-vfield-run-card-001.md](./adr0047-vfield-run-card-001.md)  
 **Observation:** [vfield-case-b-20260809-112330-media-online-obligation-pending.md](./vfield-case-b-20260809-112330-media-online-obligation-pending.md)
 
 ```text
@@ -32,7 +33,10 @@ Runtime-Auth Q3 = G1'+P1'–P3' ✅
 Runtime-Auth Q4 = F1 ✅
         |
         v
-Implementation (F1 Allow)   ✅ AUTHORIZED — merge until G1'
+Implementation (F1 Allow)   ✅ MERGED (#148)
+        |
+        v
+V-field' passive observation ⏳ (run card 001)
 ```
 
 ---

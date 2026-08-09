@@ -113,6 +113,6 @@ Episode was ordinary `ICE_DISCONNECTED` / `UPSERT_EDGE` recovery with media ONLI
 
 ```text
 Same UI symptom (Sync) ≠ same lifecycle.
-ADMIT_SUCCESSOR long Sync  → ADR-0046 track
-Ordinary edge residency    → ADR-0047 track (Case B evidence)
+ADMIT_SUCCESSOR long Sync  → ADR-0046 track (this card)
+Ordinary edge residency    → ADR-0047 track — [adr0047-vfield-run-card-001.md](./adr0047-vfield-run-card-001.md)
 ```

@@ -2,13 +2,13 @@
 
 ## Status
 
-**ACCEPTED** (2026-08-09) · **Acceptance Q1 = A1** · **Impl-Auth Q1 = I1** · **Design Q1–Q4 = C1'** · **DP-ACCEPT** · **Runtime-Auth Q1–Q4 = F1** · **Code AUTHORIZED (Allow)** · **Merge until G1'**
+**ACCEPTED** (2026-08-09) · **Acceptance Q1 = A1** · **Impl-Auth F1** · **PR #148 MERGED** (`434313c`) · **V-field' post-merge observation AUTHORIZED**
 
 **Parents / observation:**
 
 - [vfield-case-b-20260809-112330-media-online-obligation-pending.md](../analysis/vfield-case-b-20260809-112330-media-online-obligation-pending.md) — Case B hollow residency evidence
 - [adr0047-implementation-proposal-entry.md](../analysis/adr0047-implementation-proposal-entry.md) — Impl-Auth / Design Decision entry
-- [adr0047-design-proposal-c1.md](../analysis/adr0047-design-proposal-c1.md) — C1' design package (**DP-ACCEPT**)
+- [adr0047-vfield-run-card-001.md](../analysis/adr0047-vfield-run-card-001.md) — V-field' post-merge observation (AUTHORIZED)
 
 **Orthogonal (do not amend / merge):**
 
@@ -23,7 +23,7 @@ Case B:       CONFIRMED ✅  (ordinary edge hollow residency — observation)
 ADR-0047:     ACCEPTED ✅  (normative boundary A1'–O1')
 Impl-Auth:    I1 ✅  Planning / Design AUTHORIZED
 DP-ACCEPT:    PASS ✅
-Runtime:      F1 Allow ✅ · merge until G1'
+Runtime:      PR #148 MERGED ✅ · V-field' observation ⏳
 ```
 
 ---
@@ -508,7 +508,8 @@ ADR-0047 ACCEPTED
 | Runtime Authorization | **Q1=RA1 · Q2=R2' · Q3=G1'+P1'–P3' · Q4=F1** |
 | Scope | R2' — ordinary open + defer-exit manifest |
 | Merge gate | G1' — R2' + D1–D7 + P1'–P3'; V-field' post-merge |
-| Direct code / PR | **AUTHORIZED within F1 Allow** (merge blocked until G1') |
+| Direct code / PR | **MERGED #148** (`434313c`) |
+| V-field' | [adr0047-vfield-run-card-001.md](../analysis/adr0047-vfield-run-card-001.md) — **AUTHORIZED** |
 
 ```text
 ADR-0047 ACCEPTED
