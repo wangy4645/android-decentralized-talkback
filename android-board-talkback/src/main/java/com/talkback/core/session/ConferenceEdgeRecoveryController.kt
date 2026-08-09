@@ -1423,6 +1423,13 @@ class ConferenceEdgeRecoveryController internal constructor(
         }
         if (clearDeferralAfterClose && terminal != "EXECUTED") {
             clearDeferralFields(record)
+            // ADR-0046 R-M2 (S2'): negotiation close must not leave successor episode hollow.
+            if (terminal != "SUPERSEDED") {
+                ensureSuccessorEpisodeEvaluability(
+                    record,
+                    "NEGOTIATION_INTENT_CLOSED:$terminal"
+                )
+            }
         }
         return true
     }
@@ -2576,6 +2583,8 @@ class ConferenceEdgeRecoveryController internal constructor(
             priorGen = previousGen,
             priorAttempt = previousAttempt
         )
+        // ADR-0046 M1: admission-time auditable terminal convergence contract binding.
+        bindSuccessorTerminalConvergenceContract(admitted)
         // M1: same resolve path as R1 / SUPERSEDE; immediate=false; watchdog only after dispatch.
         admitted.mediaActionOwner = MediaActionOwner.PENDING
         clearDeferralFields(admitted)
@@ -2605,6 +2614,11 @@ class ConferenceEdgeRecoveryController internal constructor(
                     trigger = "ADMIT_SUCCESSOR:${RecoveryReevaluateTrigger.REMOTE_MODULE_RECOVERED}"
                 )
             }
+            // ADR-0046 M2/R-M2: retain Controller-owned evaluability on successor episode.
+            ensureSuccessorEpisodeEvaluability(
+                admitted,
+                "ADMIT_SUCCESSOR_REATTACH_PATH"
+            )
         } else {
             resolveMediaActionOwner(
                 record = admitted,
@@ -2612,13 +2626,83 @@ class ConferenceEdgeRecoveryController internal constructor(
                 immediate = false,
                 trigger = "ADMIT_SUCCESSOR:${RecoveryReevaluateTrigger.REMOTE_MODULE_RECOVERED}"
             )
-            // issueBoundedIceRestart schedules watchdog on dispatch; deferred must not (INV-REC-023).
+            // issueBoundedIceRestart schedules watchdog on dispatch; deferred must not claim
+            // post-dispatch clock (INV-REC-023). ADR-0046 still requires episode evaluability (R-M2).
+            ensureSuccessorEpisodeEvaluability(admitted, "ADMIT_SUCCESSOR_AFTER_RESOLVE")
         }
         notifyChanged(key.sessionId)
         return SuccessorObligationAdmission(
             obligationGeneration = admitted.obligationGeneration,
             recoveryAttemptId = admitted.recoveryAttemptId
         )
+    }
+
+    /**
+     * ADR-0046 M1: bind successor terminal-convergence contract at admission (auditable).
+     * Does not prove SUCCESS; does not satisfy via later SUCCESSOR_REPLACED (X1').
+     */
+    private fun bindSuccessorTerminalConvergenceContract(record: EdgeRecoveryRecord) {
+        record.successorTerminalConvergenceContractBound = true
+        val key = record.key
+        onLog(
+            "SUCCESSOR_TERMINAL_CONVERGENCE_CONTRACT_BOUND " +
+                "session=${key.sessionId} remote=${key.remoteModuleId} " +
+                "obligationGen=${record.obligationGeneration} attempt=${record.recoveryAttemptId} " +
+                "phase=${record.phase} " +
+                "contract=TERMINAL_CONVERGENCE_OBLIGATION " +
+                "strength=NON_PURELY_EXTERNAL"
+        )
+    }
+
+    /**
+     * ADR-0046 M2 / R-M2 (S2' only): keep Controller-attributed evaluability on a
+     * successor-admitted episode, including across NEGOTIATION_SETTLING defer.
+     *
+     * Reuses existing [scheduleWatchdog] / attempt-clock seams — does not invent a new
+     * timeout mechanism or change global non-successor lifecycle (Z5).
+     *
+     * @return true when a live attempt clock is armed, or evaluability is explicitly pending
+     *         under capability/negotiation defer (still Controller-owned).
+     */
+    private fun ensureSuccessorEpisodeEvaluability(
+        record: EdgeRecoveryRecord,
+        trigger: String
+    ): Boolean {
+        if (!record.successorTerminalConvergenceContractBound) return false
+        if (!record.edgeObligationOpen()) return false
+        if (!record.phase.isActivelyRecovering()) return false
+        val key = record.key
+        if (watchdogTimers.containsKey(key)) {
+            onLog(
+                "SUCCESSOR_EPISODE_EVALUABILITY_RETAINED session=${key.sessionId} " +
+                    "remote=${key.remoteModuleId} attempt=${record.recoveryAttemptId} " +
+                    "obligationGen=${record.obligationGeneration} " +
+                    "reason=WATCHDOG_ALREADY_ARMED trigger=$trigger"
+            )
+            return true
+        }
+        scheduleWatchdog(record)
+        if (watchdogTimers.containsKey(key)) {
+            onLog(
+                "SUCCESSOR_EPISODE_EVALUABILITY_ARMED session=${key.sessionId} " +
+                    "remote=${key.remoteModuleId} attempt=${record.recoveryAttemptId} " +
+                    "obligationGen=${record.obligationGeneration} " +
+                    "via=EXISTING_ATTEMPT_CLOCK trigger=$trigger"
+            )
+            return true
+        }
+        val pending =
+            record.attemptClockOwnershipDeferred ||
+                hasDeferredMediaAction(record)
+        onLog(
+            "SUCCESSOR_EPISODE_EVALUABILITY_PENDING session=${key.sessionId} " +
+                "remote=${key.remoteModuleId} attempt=${record.recoveryAttemptId} " +
+                "obligationGen=${record.obligationGeneration} " +
+                "deferredReason=${record.deferredReason ?: "NONE"} " +
+                "ownershipDeferred=${record.attemptClockOwnershipDeferred} " +
+                "pending=$pending trigger=$trigger"
+        )
+        return pending
     }
 
     /**

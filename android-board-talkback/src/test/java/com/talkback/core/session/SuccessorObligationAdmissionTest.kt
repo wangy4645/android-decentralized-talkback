@@ -20,6 +20,7 @@ class SuccessorObligationAdmissionTest {
     private var iceRestartCalls = 0
     private var canDispatch = true
     private var iceConnected = false
+    private var gateExecutable = true
     private lateinit var controller: ConferenceEdgeRecoveryController
 
     @Before
@@ -29,6 +30,7 @@ class SuccessorObligationAdmissionTest {
         iceRestartCalls = 0
         canDispatch = true
         iceConnected = false
+        gateExecutable = true
         SuppressSuccessorAttemptDebugInjection.resetForTest()
         controller = buildController()
     }
@@ -37,16 +39,17 @@ class SuccessorObligationAdmissionTest {
     fun tearDown() {
         controller.clearAll()
         SuppressSuccessorAttemptDebugInjection.resetForTest()
-        scheduler.shutdownNow()
     }
 
     private fun buildController(
         observationWindowMs: Long = 100L,
-        attemptBudgetMs: Long = 500L
+        attemptBudgetMs: Long = 500L,
+        iceRestartTimeoutMs: Long = 200L
     ) = ConferenceEdgeRecoveryController(
-        localModuleId = "LOCAL",
+        // ICE_RESTART_ONLY bootstrap coordinator = remote; local must match to dispatch.
+        localModuleId = "M02",
         debounceMs = 20L,
-        iceRestartTimeoutMs = 200L,
+        iceRestartTimeoutMs = iceRestartTimeoutMs,
         attemptBudgetMs = attemptBudgetMs,
         observationWindowMs = observationWindowMs,
         clock = { nowMs },
@@ -58,7 +61,18 @@ class SuccessorObligationAdmissionTest {
             false
         },
         isIceConnected = { _, _ -> iceConnected },
-        canDispatchRecoveryMediaAction = { _, _ -> canDispatch }
+        canDispatchRecoveryMediaAction = { _, _ -> canDispatch },
+        probeIceRestartGate = { _, _ ->
+            if (gateExecutable) {
+                IceRestartGateProbe(executable = true)
+            } else {
+                IceRestartGateProbe(
+                    executable = false,
+                    blockReason = IceRestartGateBlockReason.OFFER_AWAITING_ANSWER,
+                    signalingState = "HAVE_LOCAL_OFFER"
+                )
+            }
+        }
     )
 
     private fun eligible() = EdgeRecoveryEligibility(
@@ -100,7 +114,11 @@ class SuccessorObligationAdmissionTest {
         )
         assertTrue(controller.edgeObligationOpen("sess-1", remote))
         val gen1 = controller.obligationGeneration("sess-1", remote)!!
-        assertEquals(1, iceRestartCalls)
+        assertEquals(
+            "iceRestartCalls mismatch",
+            1,
+            iceRestartCalls
+        )
         Thread.sleep(150)
         assertTrue(controller.edgeObligationClosed("sess-1", remote))
         assertFalse(controller.edgeObligationOpen("sess-1", remote))
@@ -319,7 +337,7 @@ class SuccessorObligationAdmissionTest {
     fun gResurrect6_closedWithMediaRestoredResidual_stillAdmits() {
         // Incomplete ICE restart leaves mediaRestored=true; deadline must not make that permanent.
         controller = ConferenceEdgeRecoveryController(
-            localModuleId = "LOCAL",
+            localModuleId = "M02",
             debounceMs = 20L,
             iceRestartTimeoutMs = 200L,
             attemptBudgetMs = 500L,
@@ -560,6 +578,130 @@ class SuccessorObligationAdmissionTest {
         assertEquals(
             before,
             decisionLogs.count { it.contains("RECOVERY_SUCCESSOR_STARTED") }
+        )
+    }
+    // ---- ADR-0046 V-desk D1-D6 (successor terminal convergence contract) ----
+
+    @Test
+    fun adr0046_d1_d2_admitBindsAuditableContract() {
+        driveHostObligationDeadlineClosed()
+        nowMs += 5L
+        decisionLogs.clear()
+
+        notifyReachability(
+            trigger = RecoveryReevaluateTrigger.REMOTE_MODULE_RECOVERED,
+            evidence = RecoveryResurrectionEvidence(
+                kind = RecoveryReevaluateTrigger.REMOTE_MODULE_RECOVERED,
+                observedAtMs = nowMs
+            )
+        )
+
+        assertTrue(controller.edgeObligationOpen("sess-1", "M02"))
+        assertTrue(decisionLogs.any { it.contains("ADMIT_SUCCESSOR_OBLIGATION_EPISODE") })
+        assertTrue(
+            decisionLogs.any {
+                it.contains("SUCCESSOR_TERMINAL_CONVERGENCE_CONTRACT_BOUND") &&
+                    it.contains("contract=TERMINAL_CONVERGENCE_OBLIGATION") &&
+                    it.contains("strength=NON_PURELY_EXTERNAL")
+            }
+        )
+        // D6 orthogonality smoke: no residency-clear involvement required
+        assertFalse(decisionLogs.any { it.contains("RESIDENCY_CLEARED") })
+    }
+
+    @Test
+    fun adr0046_d3_negotiationSettlingKeepsEvaluabilityPending() {
+        driveHostObligationDeadlineClosed()
+        gateExecutable = false
+        nowMs += 5L
+        decisionLogs.clear()
+
+        notifyReachability(
+            trigger = RecoveryReevaluateTrigger.REMOTE_MODULE_RECOVERED,
+            evidence = RecoveryResurrectionEvidence(
+                kind = RecoveryReevaluateTrigger.REMOTE_MODULE_RECOVERED,
+                observedAtMs = nowMs
+            )
+        )
+
+        assertTrue(decisionLogs.any { it.contains("SUCCESSOR_TERMINAL_CONVERGENCE_CONTRACT_BOUND") })
+        assertTrue(
+            decisionLogs.any {
+                it.contains("RECOVERY_MEDIA_ACTION_DEFERRED") &&
+                    it.contains("deferredReason=NEGOTIATION_SETTLING")
+            }
+        )
+        assertTrue(
+            decisionLogs.any {
+                it.contains("SUCCESSOR_EPISODE_EVALUABILITY_PENDING") ||
+                    it.contains("SUCCESSOR_EPISODE_EVALUABILITY_ARMED") ||
+                    it.contains("SUCCESSOR_EPISODE_EVALUABILITY_RETAINED")
+            }
+        )
+        assertTrue(controller.edgeObligationOpen("sess-1", "M02"))
+    }
+
+    @Test
+    fun adr0046_d4_afterNegotiationBudgetExhaust_armsAttemptClock() {
+        controller.clearAll()
+        controller = buildController(
+            iceRestartTimeoutMs = 80L,
+            attemptBudgetMs = 400L
+        )
+        iceRestartCalls = 0
+        gateExecutable = true
+        driveHostObligationDeadlineClosed()
+        gateExecutable = false
+        nowMs += 5L
+        decisionLogs.clear()
+
+        notifyReachability(
+            trigger = RecoveryReevaluateTrigger.REMOTE_MODULE_RECOVERED,
+            evidence = RecoveryResurrectionEvidence(
+                kind = RecoveryReevaluateTrigger.REMOTE_MODULE_RECOVERED,
+                observedAtMs = nowMs
+            )
+        )
+
+        assertTrue(
+            decisionLogs.any { it.contains("deferredReason=NEGOTIATION_SETTLING") }
+        )
+        Thread.sleep(120)
+        assertTrue(
+            "expected NEGOTIATION_BUDGET_EXHAUSTED",
+            decisionLogs.any { it.contains("NEGOTIATION_BUDGET_EXHAUSTED") }
+        )
+        assertTrue(
+            "R-M2 must arm evaluability after negotiation close",
+            decisionLogs.any {
+                it.contains("SUCCESSOR_EPISODE_EVALUABILITY_ARMED") ||
+                    it.contains("RECOVERY_WATCHDOG_STARTED")
+            }
+        )
+        assertTrue(controller.edgeObligationOpen("sess-1", "M02"))
+    }
+
+    @Test
+    fun adr0046_d5_successorReplaceDoesNotSatisfyPriorContract() {
+        driveHostObligationDeadlineClosed()
+        nowMs += 5L
+        decisionLogs.clear()
+
+        notifyReachability(
+            trigger = RecoveryReevaluateTrigger.REMOTE_MODULE_RECOVERED,
+            evidence = RecoveryResurrectionEvidence(
+                kind = RecoveryReevaluateTrigger.REMOTE_MODULE_RECOVERED,
+                observedAtMs = nowMs
+            )
+        )
+        assertEquals(
+            1,
+            decisionLogs.count { it.contains("SUCCESSOR_TERMINAL_CONVERGENCE_CONTRACT_BOUND") }
+        )
+        assertFalse(
+            decisionLogs.any {
+                it.contains("SUCCESSOR_REPLACED") && it.contains("CONTRACT_SATISFIED")
+            }
         )
     }
 }
