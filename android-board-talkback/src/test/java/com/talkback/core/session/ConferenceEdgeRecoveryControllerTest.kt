@@ -2669,6 +2669,122 @@ class ConferenceEdgeRecoveryControllerTest {
     }
 
     /**
+     * ADR-0045 Phase 2.1 P2.1: prior RECOVERED closes obligation; SUPERSEDE then
+     * FAILED_MEDIA entry with E4 already true must evaluate clear (no deadline-close,
+     * no ICE rising-edge).
+     */
+    @Test
+    fun adr0045_p21_enterFailedMedia_obligationAlreadyClosed_withE4_clears() {
+        controller = buildController(
+            observationWindowMs = 10_000L,
+            attemptBudgetMs = 100L,
+            isIceConnected = { _, _ -> true },
+            isReceivePathLive = { _, _ -> true },
+            membershipEpochProbe = membershipConvergedProbe(),
+            onIceRestart = { _, _ ->
+                iceRestartCalls++
+                true
+            }
+        )
+        controller.onIceStateChanged(
+            sessionId = "sess-p21",
+            channelId = "CH-1",
+            remoteModuleId = "M03",
+            iceState = "FAILED",
+            eligibility = eligible(),
+            initiatesReattach = false
+        )
+        controller.onIceConnected("sess-p21", "M03")
+        assertTrue(
+            decisionLogs.any {
+                it.contains("RECOVERY_EDGE_RECOVERED") && it.contains("remote=M03")
+            }
+        )
+        assertEquals(ObligationCloseReason.RECOVERED, controller.obligationCloseReason("sess-p21", "M03"))
+        assertTrue(controller.edgeObligationClosed("sess-p21", "M03"))
+
+        decisionLogs.clear()
+        controller.onRecoveryReattachAccepted(
+            "sess-p21",
+            "M03",
+            RecoveryReason.NETWORK_RECOVERY,
+            RecoverySource.ICE_MONITOR
+        )
+        assertTrue(decisionLogs.any { it.contains("decision=SUPERSEDED") })
+        assertTrue(controller.edgeObligationClosed("sess-p21", "M03"))
+
+        Thread.sleep(250)
+        assertEquals(
+            ObligationCloseReason.RECOVERED,
+            controller.obligationCloseReason("sess-p21", "M03")
+        )
+        assertFalse(controller.isMediaUnavailable("sess-p21", "M03"))
+        assertFalse(controller.factsForSession("sess-p21").anyFailedMediaRecovery)
+        assertTrue(
+            decisionLogs.any {
+                it.contains("FAILED_MEDIA_RECOVERY") && it.contains("remote=M03")
+            }
+        )
+        assertTrue(decisionLogs.any { it.contains("FAILED_MEDIA_RESIDENCY_CLEARED") })
+        assertFalse(
+            decisionLogs.any {
+                it.contains("RECOVERY_EDGE_RECOVERED") && it.contains("remote=M03")
+            }
+        )
+    }
+
+    /**
+     * ADR-0045 Phase 2.1 N6: same post-obligation FAILED_MEDIA entry without receivePathLive
+     * must not clear (ICE alone).
+     */
+    @Test
+    fun adr0045_n6_enterFailedMedia_obligationAlreadyClosed_withoutReceivePath_holds() {
+        controller = buildController(
+            observationWindowMs = 10_000L,
+            attemptBudgetMs = 100L,
+            isIceConnected = { _, _ -> true },
+            isReceivePathLive = { _, _ -> false },
+            membershipEpochProbe = membershipConvergedProbe(),
+            onIceRestart = { _, _ ->
+                iceRestartCalls++
+                true
+            }
+        )
+        controller.onIceStateChanged(
+            sessionId = "sess-n6",
+            channelId = "CH-1",
+            remoteModuleId = "M03",
+            iceState = "FAILED",
+            eligibility = eligible(),
+            initiatesReattach = false
+        )
+        controller.onIceConnected("sess-n6", "M03")
+        assertEquals(ObligationCloseReason.RECOVERED, controller.obligationCloseReason("sess-n6", "M03"))
+
+        decisionLogs.clear()
+        controller.onRecoveryReattachAccepted(
+            "sess-n6",
+            "M03",
+            RecoveryReason.NETWORK_RECOVERY,
+            RecoverySource.ICE_MONITOR
+        )
+        Thread.sleep(250)
+        assertTrue(controller.factsForSession("sess-n6").anyFailedMediaRecovery)
+        assertTrue(controller.isMediaUnavailable("sess-n6", "M03"))
+        assertEquals(
+            ObligationCloseReason.RECOVERED,
+            controller.obligationCloseReason("sess-n6", "M03")
+        )
+        assertTrue(
+            decisionLogs.any {
+                it.contains("FAILED_MEDIA_RESIDENCY_CLEAR_HELD") &&
+                    it.contains("e4_snapshot_unsatisfied")
+            }
+        )
+        assertFalse(decisionLogs.any { it.contains("FAILED_MEDIA_RESIDENCY_CLEARED") })
+    }
+
+    /**
      * ADR-X1 Test A (attempt-10 regression): receipt + glare + no admission within budget
      * must not enter FAILED_MEDIA_RECOVERY prematurely.
      */
