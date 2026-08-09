@@ -447,6 +447,23 @@ internal data class EdgeRecoveryRecord(
      */
     var successorTerminalConvergenceContractBound: Boolean = false,
     /**
+     * ADR-0047 K1': ordinary evaluability class intent bound at obligation open (N1).
+     * Orthogonal to [successorTerminalConvergenceContractBound] (K7' reject).
+     */
+    var ordinaryPostDeferEvaluabilityIntentBound: Boolean = false,
+    /**
+     * ADR-0047 K2': post-defer evaluability attribution manifested no later than defer-exit (N2).
+     */
+    var ordinaryPostDeferEvaluabilityManifested: Boolean = false,
+    /**
+     * ADR-0047 K3': evaluability owner class identity (Controller episode accountability).
+     */
+    var ordinaryEvaluabilityOwnerClass: String? = null,
+    /**
+     * ADR-0047 K5': defer-exit category stamp at manifest (audit only; not mechanism).
+     */
+    var ordinaryDeferExitCategoryAtManifest: String? = null,
+    /**
      * ADR-0040 PR-LIFE-1: attempt watchdog deferred for capability (no live timer).
      * Cleared when [RECOVERY_WATCHDOG_STARTED] successfully arms; resumed on L2/wakeup
      * after capability restore — hangup must not be the sole CLEAR path.
