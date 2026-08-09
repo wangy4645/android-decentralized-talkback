@@ -2,7 +2,7 @@
 
 ## Status
 
-**ACCEPTED** (2026-08-09) · **Grill Q1–Q8 ACCEPTED** · **Review clarifications applied** · **Phase 1 MERGED (PR #131)** · **Phase 2 MERGED (PR #133)** · **Field thin NOT PASS (trigger coverage gap)** · **Phase 2.1 AUTHORIZED (entry trigger only)** · run card: [adr0045-field-run-card.md](../analysis/adr0045-field-run-card.md)
+**ACCEPTED** (2026-08-09) · **Grill Q1–Q8 ACCEPTED** · **Review clarifications applied** · **Phase 1 MERGED (PR #131)** · **Phase 2 MERGED (PR #133)** · **Phase 2.1 MERGED (PR #136)** · **Field thin re-auth after 2.1** · run card: [adr0045-field-run-card.md](../analysis/adr0045-field-run-card.md)
 
 **Parents:**
 
@@ -19,11 +19,11 @@ Model:                 Post-obligation residency clear admission
 Implementation:
   Phase 1 Policy + I1 tests   MERGED (PR #131 · 617d4b8) · PASS
   Phase 2 Trigger             MERGED (PR #133 · 059dfb4) · PARTIAL
-  Phase 2.1 Entry trigger     AUTHORIZED (failed-media entry → tryAdmit; Policy/completion untouched)
-  Field (2026-08-09)          NOT PASS (bilateral)
+  Phase 2.1 Entry trigger     MERGED (PR #136 · 094082b) · failed-media entry → tryAdmit
+  Field (2026-08-09 #1)       NOT PASS (bilateral; trigger coverage gap)
     M03→M02                   PASS (deadline → CLEARED)
-    M02→M03                   FAIL (enter FAILED_MEDIA with obligation already closed; no evaluate)
-  Trigger Coverage            GAP FOUND → Phase 2.1
+    M02→M03                   FAIL (enter FAILED_MEDIA w/ obligation already closed; no evaluate)
+  Field (post-2.1)            AUTHORIZED (thin retest) — same W2 stimulus
 
 Primary invariant:
   residency clear ≠ completion success ≠ presentation projection
