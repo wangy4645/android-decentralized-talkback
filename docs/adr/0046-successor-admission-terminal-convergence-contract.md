@@ -2,13 +2,15 @@
 
 ## Status
 
-**ACCEPTED** (2026-08-09) · **Acceptance Q1 = A1** · **Impl-Auth re-open = AUTHORIZED (Planning / Design Proposal)** · **Runtime NOT AUTHORIZED** · Design Decision pending
+**ACCEPTED** (2026-08-09) · **Acceptance Q1 = A1** · **Impl-Auth F1** · **PR #146 MERGED** (`a485e85`) · **V-desk' PASS** · **V-field' post-merge observation AUTHORIZED**
 
 **Parents / observation:**
 
 - [mobile-validation-successor-recovery-pending-observation.md](../analysis/mobile-validation-successor-recovery-pending-observation.md) — Q1–Q7 sealed; Q7 = **S2**
 - [successor-recovery-lifecycle-sample-expansion-run-card.md](../analysis/successor-recovery-lifecycle-sample-expansion-run-card.md) — sample expansion; MISS_SETTLING ≥3
 - [adr0046-implementation-proposal-entry.md](../analysis/adr0046-implementation-proposal-entry.md) — Impl-Auth re-open proposal entry
+- [adr0046-design-proposal-c1.md](../analysis/adr0046-design-proposal-c1.md) — C1' Design Proposal (DP-ACCEPT)
+- [adr0046-vfield-post-merge-run-card.md](../analysis/adr0046-vfield-post-merge-run-card.md) — post-merge V-field' observation
 - Decision YES grill: see [Grill Appendix](#grill-appendix--decision-yes-semantic-closure-historical)
 - [ADR-0045](./0045-post-obligation-failed-media-residency-clear-admission.md) — failed-media residency clear (**orthogonal**; do not amend)
 - [ADR-0044](./0044-user-visible-connectivity-semantics-media-residency.md) — presentation (**orthogonal**; SYNCING follows recovering)
@@ -16,13 +18,12 @@
 
 ```text
 ADR-0046
-Lifecycle:                ACCEPTED
-Normative content:        Decision YES semantic boundary only
+Lifecycle:                ACCEPTED + RUNTIME MERGED (#146)
+Normative content:        Decision YES semantic boundary (T1'–O1')
 Acceptance:               A1 (2026-08-09)
-Impl-Auth:                RE-OPENED (2026-08-09) — Planning / Design Proposal
-Implementation (runtime): NOT AUTHORIZED until Design Decision
-Planning / Proposal:      OPEN — adr0046-implementation-proposal-entry.md
-Runtime:                  NONE (code unchanged)
+Impl-Auth:                F1 Allow implemented (S2' / G1')
+V-desk':                  PASS (SuccessorObligationAdmissionTest)
+V-field':                 AUTHORIZED post-merge (passive; not merge gate)
 Does NOT amend:           ADR-0045 · ADR-0038 · ADR-0044 · ADR-0022
 Does NOT absorb:          M03→M01 peer non-convergence side observation
 ```
