@@ -39,6 +39,12 @@ enum class EdgeRecoveryPhase {
     }
 }
 
+/** ADR-0048: explicit convergence disposition at inbound reattach admission. */
+enum class ReattachDisposition {
+    CONVERGING,
+    NON_CONVERGING_REATTACH
+}
+
 data class EdgeRecoveryEligibility(
     val lifecycleEstablished: Boolean,
     val localJoined: Boolean,
