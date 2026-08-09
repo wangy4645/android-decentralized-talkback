@@ -2,7 +2,7 @@
 
 ## Status
 
-**ACCEPTED** (2026-08-09) · **Grill Q1–Q8 ACCEPTED** · **Review clarifications applied** · **Phase 1 MERGED (PR #131)** · **Phase 2 MERGED (PR #133)** · **Field AUTHORIZED (thin)** · run card: [adr0045-field-run-card.md](../analysis/adr0045-field-run-card.md)
+**ACCEPTED** (2026-08-09) · **Grill Q1–Q8 ACCEPTED** · **Review clarifications applied** · **Phase 1 MERGED (PR #131)** · **Phase 2 MERGED (PR #133)** · **Field thin NOT PASS (trigger coverage gap)** · **Phase 2.1 AUTHORIZED (entry trigger only)** · run card: [adr0045-field-run-card.md](../analysis/adr0045-field-run-card.md)
 
 **Parents:**
 
@@ -17,9 +17,13 @@ ADR-0045
 Decision:              ACCEPTED
 Model:                 Post-obligation residency clear admission
 Implementation:
-  Phase 1 Policy + I1 tests   MERGED (PR #131 · 617d4b8)
-  Phase 2 Trigger             MERGED (PR #133 · 059dfb4)
-  Field                       AUTHORIZED (thin) — see adr0045-field-run-card.md
+  Phase 1 Policy + I1 tests   MERGED (PR #131 · 617d4b8) · PASS
+  Phase 2 Trigger             MERGED (PR #133 · 059dfb4) · PARTIAL
+  Phase 2.1 Entry trigger     AUTHORIZED (failed-media entry → tryAdmit; Policy/completion untouched)
+  Field (2026-08-09)          NOT PASS (bilateral)
+    M03→M02                   PASS (deadline → CLEARED)
+    M02→M03                   FAIL (enter FAILED_MEDIA with obligation already closed; no evaluate)
+  Trigger Coverage            GAP FOUND → Phase 2.1
 
 Primary invariant:
   residency clear ≠ completion success ≠ presentation projection
@@ -32,6 +36,7 @@ Does NOT reopen:
   ADR-0044 EndpointStatus mapping
   membership / control reconciliation
   Directed #5 / WiFi matrix expansion
+  Q1–Q4 Policy contract (unchanged by Phase 2.1)
 ```
 
 ---
@@ -206,7 +211,7 @@ Controller is never the decision owner.
 
 `ConferenceEdgeRecoveryController` **orchestrates only** (assemble snapshot facts → invoke policy). **Must not** write phase for this exit.
 
-**Evaluation triggers (V1):**
+**Evaluation triggers (V1 + Phase 2.1):**
 
 ```text
 1. After OBLIGATION_DEADLINE close lifecycle response
@@ -216,9 +221,15 @@ Controller is never the decision owner.
 2. ICE restoration / equivalent recovery-edge lifecycle event
    while failed-media + obligationClosed
    → tryAdmitResidencyClear()
+
+3. Phase 2.1 — enter FAILED_MEDIA_RECOVERY while obligation already closed
+   → tryAdmitResidencyClear()
+   (covers prior RECOVERED + SUPERSEDE → FAILED_MEDIA with no deadline-close
+    and no ICE rising-edge; MUST NOT turn deadline into residency GC)
 ```
 
 No timer polling. No fold into completion reevaluation. `receivePathLive` push seam deferred.
+Do **not** make every deadline fire tryAdmit when obligation is already closed.
 
 ### DQ6 — Migration (Grill Q6=M1)
 
@@ -241,6 +252,7 @@ No timer polling. No fold into completion reevaluation. `receivePathLive` push s
 | N3 | Must not relax `markRecovered` `obligation_already_closed` guard to clear residency |
 | N4 | `FAILED_REQUIRES_USER_ACTION` must not be auto-cleared by E4 |
 | N5 | Clear must not emit completion success / mutate closeReason / reopen obligation |
+| N6 | Enter `FAILED_MEDIA_RECOVERY` while obligationClosed + ICE connected + `!receivePathLive` → remain residency; no clear |
 
 **MUST HOLD**
 
@@ -249,6 +261,7 @@ No timer polling. No fold into completion reevaluation. `receivePathLive` push s
 | P1 | GATE ∧ snapshot E4 → ClearPolicy → `CONNECTED` + `mediaUnavailable=false` + closeReason unchanged |
 | P1.a | Same admission **must not** produce `RECOVERED` |
 | P2 | Deadline close with snapshot E4 already true → clear succeeds (no new ICE rising-edge required) |
+| P2.1 | Enter `FAILED_MEDIA_RECOVERY` while obligation already closed + snapshot E4 → clear succeeds (Phase 2.1 entry trigger) |
 | P3 | Deadline with E4 false; later lifecycle event triggers evaluation; snapshot E4 true → clear succeeds |
 
 **MUST NOT TOUCH**

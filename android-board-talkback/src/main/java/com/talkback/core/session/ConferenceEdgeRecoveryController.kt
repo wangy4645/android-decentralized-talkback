@@ -2030,6 +2030,12 @@ class ConferenceEdgeRecoveryController internal constructor(
             notifyAttemptLineageObservation(record, "failed_media_recovery")
         }
         scheduleObligationDeadline(record)
+        // ADR-0045 Phase 2.1: obligation may already be closed (e.g. prior RECOVERED +
+        // SUPERSEDE) when entering failed-media. Deadline timer then no-ops and ICE may
+        // already be CONNECTED — evaluate clear once on entry (trigger only; Policy admits).
+        if (record.obligationClosedAtMs != null) {
+            tryAdmitResidencyClear(record)
+        }
     }
 
     /** ADR-0036 RCA-4 / RCA-6: classify watchdog timeout before entering failed residency. */
