@@ -71,6 +71,11 @@ class ConferenceEdgeRecoveryController internal constructor(
      * Coordinator wires qosMonitor; tests inject to cover already-CONNECTED soak gap.
      */
     private val isIceConnected: (sessionId: String, remoteModuleId: String) -> Boolean = { _, _ -> false },
+    /**
+     * ADR-0045: snapshot [receivePathLive] for post-obligation residency clear admission (E4).
+     * Coordinator wires [ReceivePathLivenessObserver]; default false keeps clear inert in tests.
+     */
+    private val isReceivePathLive: (sessionId: String, remoteModuleId: String) -> Boolean = { _, _ -> false },
     private val onRecoveryStateChanged: (sessionId: String) -> Unit = {},
     /**
      * Observe-only hook for attempt lineage snapshots (ADR-0022 completion causality).
@@ -2144,12 +2149,28 @@ class ConferenceEdgeRecoveryController internal constructor(
                 "OBLIGATION_DEADLINE"
             )
             notifyChanged(key.sessionId)
+            // ADR-0045: post-close lifecycle response — evaluation trigger only (not inside closeObligation).
+            tryAdmitResidencyClear(current)
         }, delayMs, TimeUnit.MILLISECONDS)
         deadlineTimers[key] = future
     }
 
     private fun cancelDeadline(key: ConferenceEdgeKey) {
         deadlineTimers.remove(key)?.cancel(false)
+    }
+
+    /**
+     * ADR-0045: assemble snapshot GATE/E4 facts and invoke [RecoveryResidencyClearPolicy].
+     * Controller orchestrates only — must not write phase for failed-media residency exit.
+     */
+    private fun tryAdmitResidencyClear(record: EdgeRecoveryRecord): Boolean {
+        val key = record.key
+        return RecoveryResidencyClearPolicy.clearFailedMediaResidencyPostObligation(
+            host = completionMutationHost,
+            record = record,
+            iceConnected = isIceConnected(key.sessionId, key.remoteModuleId),
+            receivePathLive = isReceivePathLive(key.sessionId, key.remoteModuleId)
+        )
     }
 
     /**
@@ -3006,8 +3027,13 @@ class ConferenceEdgeRecoveryController internal constructor(
             )
             return
         }
-        // No open recovery obligation: idle CONNECTED bookkeeping only.
+        // No open recovery obligation: idle CONNECTED bookkeeping, except failed-media residency
+        // which MUST go through ADR-0045 ClearPolicy (ICE alone must not clear).
         if (!record.edgeObligationOpen()) {
+            if (record.phase == EdgeRecoveryPhase.FAILED_MEDIA_RECOVERY) {
+                tryAdmitResidencyClear(record)
+                return
+            }
             record.phase = EdgeRecoveryPhase.CONNECTED
             return
         }

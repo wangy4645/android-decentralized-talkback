@@ -450,6 +450,9 @@ class TalkbackCoordinator(
             isIceConnected = { _, remoteModuleId ->
                 qosMonitor.isGroupConnected(remoteModuleId)
             },
+            isReceivePathLive = { sessionId, remoteModuleId ->
+                receivePathLivenessObserver.receivePathLive(sessionId, remoteModuleId)
+            },
             canDispatchRecoveryMediaAction = { sessionId, remoteModuleId ->
                 // Joint / PR52C harness: debug BLOCK must force dispatchReady=false.
                 // Inert when injection is not armed — production reachability unchanged.
