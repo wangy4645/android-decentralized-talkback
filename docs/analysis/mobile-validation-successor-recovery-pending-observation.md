@@ -1,6 +1,6 @@
 # Successor Recovery Pending — Observation
 
-**Status:** **OPEN OBSERVATION** · desk + Field #2 evidence · **no ADR** · **no runtime authorization**  
+**Status:** **OBSERVATION ACTIVE** · Q1–Q3 **TRACE COMPLETE** · **no ADR** · **no fix** · **no runtime authorization**  
 **Date:** 2026-08-09  
 **Classification:** Recovery convergence observation  
 **Not:** ADR-0045 regression · ADR-0044 presentation defect · residency clear gap
@@ -34,10 +34,22 @@ Field #2 (20260809-094259)
   M02→M03 SYNCING                  NEW OBSERVATION (this doc)
   Domain                           successor recovery convergence
 
-Next:
-  Answer Q1–Q3 below (observation / audit only)
-  Do NOT force FAILED_MEDIA to validate Phase 2.1 while this is open
-  Do NOT fold into ADR-0045 / ADR-0044 / Directed #5
+Successor Recovery Pending
+  Observation                      ACTIVE 🔎
+  Q1 Phase owner                   TRACE COMPLETE
+  Q2 Obligation close              TRACE COMPLETE
+  Q3 SYNCING semantics             TRACE COMPLETE
+  Fix / ADR                        ❌ not authorized
+
+ADR-0045 Residency Clear
+  Policy                           PASS ✅
+  Phase 2.1 Field                  PAUSED ⏸️
+  Field                            WAIT (qualifying FAILED_MEDIA only)
+
+Do NOT:
+  force FAILED_MEDIA to validate Phase 2.1 while this is open
+  fold into ADR-0045 / ADR-0044 / Directed #5
+  UVCP-hide SYNCING / ignore obligationOpen / force CONNECTED
 ```
 
 ---
@@ -136,47 +148,139 @@ Not in scope:
 
 ---
 
-## Open questions (answer next; do not invent fixes)
+## Q1–Q3 TRACE (observation only — no fix)
 
-### Q1 — Who owns `RECOVERY_PENDING`?
+### Q1 — Phase owner of `RECOVERY_PENDING`
 
-```text
-Who is the phase owner after ADMIT_SUCCESSOR?
-  - successor episode writer?
-  - negotiation owner (M03) vs local (M02)?
-  - media-action owner vs attempt clock owner?
-```
-
-Field hint: after successor, `selectedOwner=M03` while local=M02; media action assigned `HOST_RESTART` then capability `DEFER_ADMISSION`.
-
-### Q2 — What closes `obligationOpen=true`?
+**Answer (trace):**
 
 ```text
-Not OBLIGATION_DEADLINE (that is failed-media residency path).
-Candidate terminals for successor episode:
-  - successor completion → RECOVERED / markRecovered
-  - attempt timeout → FAILED_MEDIA_* (then ADR-0045 may apply later)
-  - cancel / MEMBERSHIP_LEFT / conference leave
+Authority family: ConferenceEdgeRecoveryController (Recovery)
+Writer of successor phase:
+  admitSuccessorObligationEpisode()
+    → openNewRecoveryObligation(phase=RECOVERY_PENDING)
 ```
 
-Field #2 closed only via **USER_LEAVE** (~2.5 min later) — no completion, no FAILED_MEDIA.
+| Role | Field #2 (M02→M03) | Owner |
+|------|-------------------|--------|
+| Successor admit writer | `ADMIT_SUCCESSOR_OBLIGATION_EPISODE` | Controller / Recovery |
+| Phase mutation | `RECOVERY_PENDING` via `openNewRecoveryObligation` | Controller |
+| Negotiation owner | `selectedOwner=M03` (local=M02) | Negotiation owner resolve |
+| Media-action claim | `HOST_RESTART` then `NEGOTIATION_SETTLING` defer | Media action + gate |
+| Attempt clock | **no** `RECOVERY_WATCHDOG_STARTED` for attempt=3 | **absent** after defer |
 
-### Q3 — Why healthy media ≠ ONLINE?
+**Who may leave `RECOVERY_PENDING` (code paths):**
 
 ```text
-ice=CONNECTED ∧ receivePathLive=true ∧ mediaUnavailable=false
-yet finalPresence=SYNCING
+markRecovered()           → RECOVERED          (CompletionPolicy; needs open obligation + canClose)
+enterFailedMediaResidency → FAILED_MEDIA_*     (typically watchdog ATTEMPT_TIMEOUT)
+supersedeAttempt / ADMIT_SUCCESSOR → replace attempt/gen (still recovering until terminal)
+cancelEdge / MEMBERSHIP_LEFT / leave → close + remove
 ```
 
-Hypothesis to verify (observation only):
+There is **no** “ICE already CONNECTED ⇒ leave RECOVERY_PENDING” writer. ICE alone is not phase owner.
+
+**Field nuance (precondition for successor):**
 
 ```text
-recovering == obligationOpen (or actively recovering phase)
-→ UVCP / ADR-0044 maps to SYNCING
-→ ONLINE requires recovering=false (obligation converged)
+attempt1 RECOVERED (obligationClosed)
+  → late REATTACH SUPERSEDE attempt2 (phase→ICE_RESTARTING; closed stamp preserved)
+  → REMOTE_MODULE_RECOVERED evidence while phase≠RECOVERED ∧ obligationClosed
+  → ADMIT_SUCCESSOR replaces edge (gen+1, RECOVERY_PENDING, obligation reopened)
 ```
 
-Confirm whether `successorPending` / membership / control reconciliation also gate completion (ADR-0038 facts) without calling that an ADR-0045 miss.
+`isFreshRemoteModuleRecoveredEvidence` explicitly rejects `phase==RECOVERED`, but accepts mid-flight `ICE_RESTARTING` if the prior close stamp remains — Field #2 hit that seam.
+
+---
+
+### Q2 — What closes `obligationOpen` on successor path?
+
+**Answer (trace):**
+
+```text
+closeObligation / markRecovered are CompletionPolicy writers.
+OBLIGATION_DEADLINE is failed-media residency path — NOT the successor default.
+```
+
+| Terminal candidate | Required machinery | Field #2 |
+|--------------------|--------------------|----------|
+| Completion → `RECOVERED` | `markRecovered` after completion eval (ICE alone insufficient; control/delivery facts apply) | **never** |
+| Attempt timeout → `FAILED_MEDIA_*` | `scheduleWatchdog` → `ATTEMPT_TIMEOUT` | **never** (attempt=3 watchdog count = 0) |
+| Leave / cancel | `MEMBERSHIP_LEFT` / session cancel | **only close observed** (09:48:06 USER_LEAVE) |
+
+**Why attempt2/3 never timed out to FAILED_MEDIA:**
+
+```text
+admitSuccessor (ICE_RESTART_ONLY path):
+  resolveMediaActionOwner → issueBoundedIceRestart
+  gate blocked OFFER_AWAITING_ANSWER
+  → DEFER (INV-NEG-004: phase/watchdog unchanged)
+  → return without scheduleWatchdog
+
+Comment at admitSuccessor:
+  "watchdog only after dispatch; deferred must not (INV-REC-023)"
+```
+
+Field:
+
+```text
+09:45:26  ICE_RESTART_GATE_BLOCKED … OFFER_AWAITING_ANSWER
+09:45:26  RECOVERY_MEDIA_ACTION_DEFERRED … NEGOTIATION_SETTLING
+09:45:36  intent STALE_DISCARD / NEGOTIATION_BUDGET_EXHAUSTED
+          (no WAKEUP drain → no new dispatch → no watchdog)
+```
+
+So successor obligation stayed open because **neither completion nor attempt-timeout terminal ran**; ICE/receivePath healthy did **not** close it.
+
+---
+
+### Q3 — Why `finalPresence=SYNCING`?
+
+**Answer (trace): projection is consistent — classify as stuck active recovery, not UVCP bug.**
+
+```text
+UserVisibleConnectivityProjection.deriveAxes:
+  recovering || controlSyncPending → ControlSyncState.SYNCING
+  MEDIA_OK + SYNCING → UserVisibleConnectivityState.SYNCING  (= ONLINE? no)
+```
+
+```text
+recovering ⇐ isEdgeRecovering ⇐ phase.isActivelyRecovering()
+RECOVERY_PENDING ∈ isActivelyRecovering()
+mediaUnavailable=false ∧ receivePathLive=true → MEDIA_OK
+```
+
+| Option | Meaning | Field #2 |
+|--------|---------|----------|
+| **A** active recovery | `recovering=true` by phase contract | **true** (phase still `RECOVERY_PENDING`) |
+| **B** stuck recovery | no terminal after defer; obligation never converges | **also true** (Q2) |
+
+UI identity is the same; architecture meaning: **B under A** — Sync is the correct projection of an obligation that never left active recovering. Not ADR-0044 miss; not ADR-0045 (GATE never held).
+
+---
+
+## Trace verdict (still observation)
+
+```text
+Core question answered:
+  "Why did successor recovery obligation not converge?"
+
+Not:
+  "Why did residency clear fail?"
+
+Provenance hotspot (not a fix authorization):
+  ADMIT_SUCCESSOR + ICE_RESTART defer without attempt watchdog
+  → RECOVERY_PENDING can persist while media plane is healthy
+  → SYNCING until leave/cancel
+```
+
+```text
+Decision still OPEN (governance):
+  keep as observation
+  vs future ADR (successor / deferred-clock contract)
+  vs bugfix authorization
+  — NOT decided here; NOT ADR-0045
+```
 
 ---
 
@@ -184,13 +288,14 @@ Confirm whether `successorPending` / membership / control reconciliation also ga
 
 ```text
 PASS criteria for this observation track:
-  Q1–Q3 answered with code+log provenance
-  boundary held: not absorbed by ADR-0045/0044
+  Q1–Q3 answered with code+log provenance     ✅
+  boundary held: not absorbed by ADR-0045/0044 ✅
 
 FAIL / out of process:
   “fix Sync by clear residency”
   “Phase 2.1 field until FAILED_MEDIA”
   reopen WiFi Recovery Architecture on single sticky Sync
+  UVCP hide SYNCING / force CONNECTED / ignore obligationOpen
 ```
 
 ---
