@@ -44,16 +44,21 @@ Field #2 (20260809-094259)
   ADR-0045 ClearPolicy             correctly NOT invoked (no GATE)
 
 Successor Recovery Pending
-  Observation                      OPEN / ACTIVE ✅
+  Observation                      SEALED (Q1–Q6) ✅
   Q1 Phase owner                   COMPLETE ✅
   Q2 Obligation close              COMPLETE ✅
   Q3 SYNCING semantics             COMPLETE ✅
   Q4 Lifecycle contract            COMPLETE ✅ (A2 · B1 · C1)
   Q5 Gap classification            COMPLETE ✅ (G4: primary G2 · secondary G1)
-  Q6 Scope / ADR candidacy         OPEN
+  Q6 Scope / ADR candidacy         S1 ✅ — continue observation (no ADR yet)
   Runtime change                   NONE AUTHORIZED
   ADR                              NONE
   Fix authorization                NONE
+
+Next (if continued): sample expansion only — NOT Q7 fix design
+  Collect under same successor lifecycle:
+    SUCCESS / FAILED_MEDIA / SUPERSEDE / CANCELLED
+  Then revisit S2 (independent ADR candidate) if corroborated
 
 Forbidden while this track is open:
   ✗ modify ADR-0045 / add residency clear triggers
@@ -62,6 +67,7 @@ Forbidden while this track is open:
   ✗ UVCP hide SYNCING / ignore obligationOpen
   ✗ resurrect WiFi Recovery Architecture
   ✗ force FAILED_MEDIA Field to “finish” Phase 2.1
+  ✗ Q7 fix design before sample expansion
 ```
 
 ---
