@@ -1,18 +1,24 @@
 # Successor Recovery Lifecycle Sample Expansion Run Card
 
-**Status:** **AUTHORIZED** — observation sample expansion only  
+**Status:** **COMPLETE for candidacy gate** — MISS_SETTLING ≥3 · Q7=S2 · further same-stimulus loops **stopped**  
 **Date:** 2026-08-09  
 **Parent:** [mobile-validation-successor-recovery-pending-observation.md](./mobile-validation-successor-recovery-pending-observation.md)  
-**Prior evidence:** Field #2 `logs/adr0045-field-20260809-094259/` (settling residency; LEAVE-only close)  
-**Authorization:** Q6 = S1 · **no ADR** · **no runtime** · **no fix**
+**ADR candidate:** [0046-successor-admission-terminal-convergence-contract-candidate.md](../adr/0046-successor-admission-terminal-convergence-contract-candidate.md)  
+**Prior evidence:** Field #2 + `logs/successor-sample-20260809-101954/` + `logs/successor-sample-20260809-102648/`  
+**Authorization:** Q7 = S2 · candidate docs only · **no runtime** · **no fix**
 
 ```text
-Purpose:
-  complete lifecycle evidence coverage
+Purpose (historical):
+  complete lifecycle evidence coverage toward Q7
+
+Outcome:
+  MISS_SETTLING repeatable ≥3
+  P0 SUCCESS / FAILED_MEDIA still UNKNOWN
+  Q7 → S2 ADR-0046 CANDIDATE (not accepted)
 
 Not purpose:
   fix convergence
-  redefine lifecycle contract
+  redefine lifecycle contract in code
   validate UX
   change recovery semantics
 ```

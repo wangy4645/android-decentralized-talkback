@@ -1,17 +1,24 @@
 # Successor Recovery Pending — Observation
 
-**Status:** **OBSERVATION SEALED (Q1–Q6)** · **Q6 = S1** continue observation · **no ADR** · **no fix** · **no runtime authorization**  
+**Status:** **OBSERVATION SEALED (Q1–Q7)** · **Q7 = S2** independent ADR **candidate** · **NOT ACCEPTED** · **no fix** · **no runtime authorization**  
 **Date:** 2026-08-09  
 **Classification:** Recovery **obligation lifecycle completeness** observation  
 **Gap (Q5):** **G4** primary **G2** (successor admission contract incomplete) · secondary **G1** (missing terminal exit evaluation)  
-**Scope (Q6):** **S1** — remain observation until more successor samples; **not** ADR candidate yet  
+**Scope (Q6):** **S1** — sample expansion (historical); **Q7 overrides to S2 candidate**  
+**ADR candidate:** [0046-successor-admission-terminal-convergence-contract-candidate.md](../adr/0046-successor-admission-terminal-convergence-contract-candidate.md)  
 **Naming:** Successor Recovery Pending Residency (observation language — **not** “successor recovery bug”)  
-**Not:** ADR-0045 regression · ADR-0044 presentation defect · residency clear gap · WiFi Recovery reopen
+**Not:** ADR-0045 regression · ADR-0044 presentation defect · residency clear gap · WiFi Recovery reopen · “Recovery broken”
 
-**Evidence:** `logs/adr0045-field-20260809-094259/` · session `a73272cb-74c2-4fd6-bf50-918a66806df1` · observer **M02** → peer **M03** · pid `30507`
+**Evidence:**
+
+- Field #2: `logs/adr0045-field-20260809-094259/` · session `a73272cb-…` · M02→M03
+- Sample #1: `logs/successor-sample-20260809-101954/` · MISS_SETTLING
+- Sample #2: `logs/successor-sample-20260809-102648/` · session `37013d69-…` · long soak MISS_SETTLING
+- Side (not imported): Sample #2 M03→M01 sticky RECONNECTING
 
 **Parents / boundaries:**
 
+- [ADR-0046 candidate](../adr/0046-successor-admission-terminal-convergence-contract-candidate.md) — lifecycle contract question only
 - [ADR-0045](../adr/0045-post-obligation-failed-media-residency-clear-admission.md) — residency clear; **does not absorb this track**
 - [ADR-0044](../adr/0044-user-visible-connectivity-semantics-media-residency.md) — presentation; SYNCING here follows recovering, not DEGRADED
 - [ADR-0038](../adr/0038-recovery-completion-admission-contract.md) — completion success (orthogonal; do not reopen casually)
@@ -44,30 +51,33 @@ Field #2 (20260809-094259)
   ADR-0045 ClearPolicy             correctly NOT invoked (no GATE)
 
 Successor Recovery Pending
-  Observation                      SEALED (Q1–Q6) ✅
+  Observation                      SEALED (Q1–Q7) ✅
   Q1 Phase owner                   COMPLETE ✅
   Q2 Obligation close              COMPLETE ✅
   Q3 SYNCING semantics             COMPLETE ✅
   Q4 Lifecycle contract            COMPLETE ✅ (A2 · B1 · C1)
   Q5 Gap classification            COMPLETE ✅ (G4: primary G2 · secondary G1)
-  Q6 Scope / ADR candidacy         S1 ✅ — continue observation (no ADR yet)
+  Q6 Scope                         S1 ✅ (historical — sample expansion)
+  Q7 Scope / ADR candidacy         S2 ✅ — ADR-0046 CANDIDATE (not accepted)
+  MISS_SETTLING                    ≥3 repeatable ✅
+  P0 SUCCESS / FAILED_MEDIA        still UNKNOWN (not blocking candidate)
   Runtime change                   NONE AUTHORIZED
-  ADR                              NONE
+  ADR accepted                     NO
   Fix authorization                NONE
 
-Next: sample expansion only — [successor-recovery-lifecycle-sample-expansion-run-card.md](./successor-recovery-lifecycle-sample-expansion-run-card.md)
-  Collect under same successor lifecycle:
-    SUCCESS / FAILED_MEDIA / SUPERSEDE / CANCELLED
-  Then Q7 ADR-candidacy only (not fix design); S2 if corroborated
+Next: ADR-0046 candidate docs only (grill / boundary) — NOT design / NOT impl
+  Candidate: [0046-successor-admission-terminal-convergence-contract-candidate.md](../adr/0046-successor-admission-terminal-convergence-contract-candidate.md)
+  Do not merge M03→M01 peer RECONNECTING into ADR-0046
 
-Forbidden while this track is open:
+Forbidden while candidate (not accepted):
   ✗ modify ADR-0045 / add residency clear triggers
   ✗ change SYNCING copy / map RECOVERY_PENDING → DEGRADED
   ✗ ICE_CONNECTED auto-ends obligation / writes phase=CONNECTED
   ✗ UVCP hide SYNCING / ignore obligationOpen
   ✗ resurrect WiFi Recovery Architecture
   ✗ force FAILED_MEDIA Field to “finish” Phase 2.1
-  ✗ Q7 fix design before sample expansion
+  ✗ watchdog / timeout / SuccessorPolicy / “fix unstable”
+  ✗ same-stimulus MISS_SETTLING loops
 ```
 
 ---
@@ -510,12 +520,37 @@ ADR = NONE
 Implementation = NOT AUTHORIZED
 ```
 
-**Why S1:** Q1–Q5 enough to **block wrong fixes** and name the gap; not enough to freeze an ADR-level “admission contract must change in way X.” Field #2 is one settling residency — need SUCCESS / FAILED_MEDIA / SUPERSEDE / CANCELLED samples before S2.
+**Why S1 (at Q6 time):** Q1–Q5 enough to **block wrong fixes** and name the gap; not enough then to freeze an ADR-level contract question from a single episode.
 
-**Why not S2:** would freeze “successor admission contract” as decision before it is chosen — ADR records chosen architecture, not gap labels.  
-**Why not S3:** ADR-0045 / 0038 / 0022 remain out of scope for this evidence.
+### Q7 — Scope decision after sample expansion
 
-### Sealed checkpoint (Q1–Q6)
+> Has observation risen from anomaly to a level that needs a **formal lifecycle contract boundary** (ADR candidate) — without yet deciding how to converge?
+
+| Id | Decision | Meaning |
+| -- | -------- | ------- |
+| **S1** | Continue observation | Keep sampling SUCCESS/FAILED_MEDIA before any ADR candidate. |
+| **S2** | Independent ADR candidate | Authorize **docs-only** candidate naming the terminal-convergence contract question; **not accepted**; **no impl**. |
+| **S3** | Observation frozen / pause | Stop sampling and do not upgrade. |
+
+**Adjudication: S2 ACCEPTED** (2026-08-09).
+
+```text
+Q7 = S2 — independent ADR candidate
+ADR-0046 = CANDIDATE (NOT ACCEPTED)
+Implementation = NOT AUTHORIZED
+Runtime = NONE
+```
+
+**Why S2:** MISS_SETTLING is now **repeatable** (≥3: Field #2 + sample #1 + long-soak sample #2). That supports asking whether successor admission must carry a provable terminal convergence contract. Candidate does **not** require SUCCESS/FAILED_MEDIA reachability samples first, and does **not** authorize how to converge.
+
+**Why not S1:** further same-stimulus MISS loops add little; P0 unknowns remain optional, not blocking candidacy.  
+**Why not S3:** evidence already justifies naming the contract question.
+
+**Candidate doc:** [0046-successor-admission-terminal-convergence-contract-candidate.md](../adr/0046-successor-admission-terminal-convergence-contract-candidate.md)
+
+**Edge isolation:** M02→M03 successor settling = ADR-0046 territory; M03→M01 peer RECONNECTING = separate observation — **not imported**; do not write “Recovery broken”.
+
+### Sealed checkpoint (Q1–Q7)
 
 ```text
 ADR-0044 Presentation              CLOSED ✅
@@ -529,14 +564,15 @@ Successor Recovery Observation
   Q3 SYNCING semantics              COMPLETE ✅
   Q4 Lifecycle exit contract        COMPLETE ✅  (A2 / B1 / C1)
   Q5 Gap classification             COMPLETE ✅  (G4: G2 primary · G1 secondary)
-  Q6 Scope                          S1 ✅ — continue observation
+  Q6 Scope                          S1 ✅ (historical sample expansion)
+  Q7 Scope                          S2 ✅ — ADR-0046 CANDIDATE
 
 Runtime change                      NONE
-ADR                                 NONE
+ADR accepted                        NO
 Fix authorization                   NONE
 ```
 
-**Fence held by this seal (wrong directions blocked):**
+**Fence held by this seal:**
 
 ```text
 ✗ UVCP / SYNCING copy
@@ -544,10 +580,12 @@ Fix authorization                   NONE
 ✗ ICE auto-end obligation / phase=CONNECTED
 ✗ residency clear as Sync fix
 ✗ watchdog/timeout/SuccessorPolicy as unauthorized “next step”
-✗ Q7 fix design before sample expansion
+✗ same-stimulus MISS_SETTLING loops
+✗ merge M03→M01 into ADR-0046
+✗ “fix unstable” / Recovery broken
 ```
 
-**If observation continues:** use [successor-recovery-lifecycle-sample-expansion-run-card.md](./successor-recovery-lifecycle-sample-expansion-run-card.md) only → stop when matrix covered → then Q7 ADR-candidacy (not fix design).
+**If continued:** ADR-0046 candidate grill / boundary docs only — **not** design of convergence mechanism.
 
 ---
 
@@ -555,17 +593,18 @@ Fix authorization                   NONE
 
 ```text
 PASS criteria for this observation track:
-  Q1–Q6 SEALED (Q6=S1 continue observation)          ✅
+  Q1–Q7 SEALED (Q7=S2 ADR-0046 candidate)            ✅
   boundary held: not absorbed by ADR-0045/0044       ✅
-  next: sample expansion only (not Q7 fix design)
+  next: candidate docs only (not impl / not fix)
 
 FAIL / out of process:
   “fix Sync by clear residency”
   “Phase 2.1 field until FAILED_MEDIA”
-  reopen WiFi Recovery Architecture on single sticky Sync
+  reopen WiFi Recovery Architecture on sticky Sync
   UVCP hide SYNCING / force CONNECTED / ignore obligationOpen
   ICE_CONNECTED auto phase=CONNECTED / auto close obligation
   map RECOVERY_PENDING → DEGRADED
+  implement watchdog/timeout under candidate status
 ```
 
 ---
@@ -573,7 +612,10 @@ FAIL / out of process:
 ## References
 
 - Field #2 logs: `talkback/logs/adr0045-field-20260809-094259/`
+- Sample #1: `talkback/logs/successor-sample-20260809-101954/`
+- Sample #2: `talkback/logs/successor-sample-20260809-102648/`
 - Field #1 (ADR-0045 trigger gap): `talkback/logs/adr0045-field-20260809-093047/`
+- ADR-0046 candidate: [0046-successor-admission-terminal-convergence-contract-candidate.md](../adr/0046-successor-admission-terminal-convergence-contract-candidate.md)
 - Sample expansion run card: [successor-recovery-lifecycle-sample-expansion-run-card.md](./successor-recovery-lifecycle-sample-expansion-run-card.md)
 - ADR-0045 run card: [adr0045-field-run-card.md](./adr0045-field-run-card.md)
 - Related (independent): ADR-0039 owner-conflict track — **not triggered** by this note alone
