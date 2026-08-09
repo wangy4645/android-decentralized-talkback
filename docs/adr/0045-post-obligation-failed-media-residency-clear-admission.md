@@ -26,7 +26,9 @@ Implementation:
   Field #2 (20260809-094259)  NOT ADR-0045 case
     M03→M02                   PASS (clear still holds)
     M02→M03                   SYNCING — successor RECOVERY_PENDING (independent observation)
-  Next                        successor observation Q1–Q3; do not force FAILED_MEDIA for 2.1
+  Successor observation       Q1–Q3 TRACE COMPLETE
+  Next                        governance only (keep / ADR / fix auth); do not force FAILED_MEDIA for 2.1
+  Do not                      UVCP-hide SYNCING · absorb into ADR-0045
 
 Primary invariant:
   residency clear ≠ completion success ≠ presentation projection
