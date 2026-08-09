@@ -1,9 +1,10 @@
 # ADR-0045 — Thin Field Run Card
 
-**Status:** **AUTHORIZED** · Field thin validation (not yet run)  
+**Status:** **AUTHORIZED** · Field thin **retest** after Phase 2.1  
 **Date:** 2026-08-09  
 **Parent:** [0045-post-obligation-failed-media-residency-clear-admission.md](../adr/0045-post-obligation-failed-media-residency-clear-admission.md)  
-**Impl:** Phase 1 PR #131 · Phase 2 PR #133 · merge `059dfb4` or later  
+**Impl:** Phase 1 #131 · Phase 2 #133 · Phase 2.1 #136 · merge `094082b` or later  
+**Prior Field:** `logs/adr0045-field-20260809-093047` — M03 PASS / M02 FAIL (trigger gap)  
 **Adjudicate:** `scripts/adr0045-field-adjudicate.ps1`
 
 ```text
@@ -21,9 +22,11 @@ ADR-0044 Presentation            CLOSED ✅
 
 ADR-0045
   Decision                       ACCEPTED ✅
-  Phase 1 Policy                 MERGED ✅ (#131)
-  Phase 2 Trigger                MERGED ✅ (#133)
-  Field                          AUTHORIZED (thin) · NOT RUN
+  Phase 1 Policy                 MERGED ✅ (#131) · PASS
+  Phase 2 Trigger                MERGED ✅ (#133) · PARTIAL
+  Phase 2.1 Entry trigger        MERGED ✅ (#136)
+  Field #1 (20260809-093047)     NOT PASS (M03 PASS / M02 trigger gap)
+  Field #2                       AUTHORIZED (thin retest) · pending
   Scope                          Residency clear admission only
 ```
 
@@ -66,7 +69,7 @@ This Field validates **residency clear admission**, not WiFi Recovery / completi
 
 SSID: **`happy`** only
 
-**APK:** `main` @ merge containing PR #133 (`059dfb4` or later)
+**APK:** `main` @ merge containing PR #136 (`094082b` or later)
 
 ```powershell
 cd talkback
