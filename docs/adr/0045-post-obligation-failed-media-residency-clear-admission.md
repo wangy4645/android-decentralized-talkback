@@ -2,7 +2,7 @@
 
 ## Status
 
-**ACCEPTED** (2026-08-09) · **Grill Q1–Q8 ACCEPTED** · **Review clarifications applied** · **Phase 1 MERGED (PR #131)** · **Phase 2 Trigger: in progress (separate PR)** · **Field NOT AUTHORIZED**
+**ACCEPTED** (2026-08-09) · **Grill Q1–Q8 ACCEPTED** · **Review clarifications applied** · **Phase 1 MERGED (PR #131)** · **Phase 2 MERGED (PR #133)** · **Field NOT AUTHORIZED**
 
 **Parents:**
 
@@ -18,7 +18,7 @@ Decision:              ACCEPTED
 Model:                 Post-obligation residency clear admission
 Implementation:
   Phase 1 Policy + I1 tests   MERGED (PR #131 · 617d4b8)
-  Phase 2 Trigger             AUTHORIZED (deadline + onIceConnected → tryAdmit only)
+  Phase 2 Trigger             MERGED (PR #133 · 059dfb4)
   Field                       NOT AUTHORIZED
 
 Primary invariant:
