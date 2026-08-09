@@ -1,11 +1,12 @@
 # ADR-0045 — Thin Field Run Card
 
-**Status:** **AUTHORIZED** · Field thin **retest** after Phase 2.1  
+**Status:** **PAUSED** · Phase 2.1 thin Field — no qualifying FAILED_MEDIA case on M02  
 **Date:** 2026-08-09  
 **Parent:** [0045-post-obligation-failed-media-residency-clear-admission.md](../adr/0045-post-obligation-failed-media-residency-clear-admission.md)  
 **Impl:** Phase 1 #131 · Phase 2 #133 · Phase 2.1 #136 · merge `094082b` or later  
-**Prior Field:** `logs/adr0045-field-20260809-093047` — M03 PASS / M02 FAIL (trigger gap)  
-**Adjudicate:** `scripts/adr0045-field-adjudicate.ps1`
+**Field #1:** `logs/adr0045-field-20260809-093047` — M03 PASS / M02 trigger gap (ADR-0045)  
+**Field #2:** `logs/adr0045-field-20260809-094259` — **reclassified** → [mobile-validation-successor-recovery-pending-observation.md](./mobile-validation-successor-recovery-pending-observation.md)  
+**Adjudicate:** `scripts/adr0045-field-adjudicate.ps1` (only when GATE holds)
 
 ```text
 Field Authorization: ADR-0045 post-obligation residency clear only
@@ -24,10 +25,11 @@ ADR-0045
   Decision                       ACCEPTED ✅
   Phase 1 Policy                 MERGED ✅ (#131) · PASS
   Phase 2 Trigger                MERGED ✅ (#133) · PARTIAL
-  Phase 2.1 Entry trigger        MERGED ✅ (#136)
+  Phase 2.1 Entry trigger        MERGED ✅ (#136) · Field PAUSED
   Field #1 (20260809-093047)     NOT PASS (M03 PASS / M02 trigger gap)
-  Field #2                       AUTHORIZED (thin retest) · pending
+  Field #2 (20260809-094259)     NOT ADR-0045 — successor SYNCING observation
   Scope                          Residency clear admission only
+  Do not                         force FAILED_MEDIA to mix with successor track
 ```
 
 ---
