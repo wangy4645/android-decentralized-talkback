@@ -208,6 +208,14 @@ _Avoid_: 把 fact 直接当 PEER_EDGE_SIGNALING_READY, 仅 HELLO 才算, 未验�
 Recovery Controller **显式宣布** 当前 **Obligation Episode** terminal（如 episode `CLOSED(RECOVERED)`）。仅当 episode 所拥有的 deferred intents 均被 completion evidence **覆盖**、已执行解消、或 ALL-domain 生命周期终结时，才可宣布。Edge Lifecycle **可能继续**（record 仍在）。见 ADR-0022 R28-E / R28-J / INV-REC-026/027。
 _Avoid_: 用 ICE 连通推断 recovery 完成, 把 episode RECOVERED 当作删 edge, RECOVERED == 某一维（transport）完成即关义务
 
+**Failed Media Residency**:
+Attempt Terminal 进入 `FAILED_MEDIA_RECOVERY*` 后、尚未被 Recovery 权威清除之前的 **mediaUnavailable(P)** 驻留事实。义务可已 `CLOSED(OBLIGATION_DEADLINE)` 而 residency 仍在；**不等于** completion failure 永久态，也**不是** Presentation 可自行消除的 UI 脏位。见 ADR-0030 R30-P-7；clear 见 **Post-obligation Residency Clear Admission**。
+_Avoid_: mediaUnavailable == !receivePathLive, DEGRADED == recovery bug, ICE CONNECTED 即清 residency, UVCP/EndpointStatus 映射消 Degraded
+
+**Post-obligation Residency Clear Admission**:
+Obligation Episode **已关闭之后**，仍允许 Recovery 权威清除 **Failed Media Residency**（phase 离开 failed-media / `mediaUnavailable→false`）的独立准入。与 **Recovery Edge Completed**（ADR-0038 completion success）正交：clear ≠ completion retry。规范见 **[ADR-0045](docs/adr/0045-post-obligation-failed-media-residency-clear-admission.md)**（**ACCEPTED**；Phase 1 Policy+I1 **AUTHORIZED**；Phase 2 trigger 待 Phase 1 review；Field **NOT AUTHORIZED**）。Grill Q1–Q8 ACCEPTED（2026-08-09）。E4 = **snapshot facts**（非 rising-edge 事件要求）；lifecycle event 仅触发 evaluation，admission 仅 ClearPolicy；Authority invariant：ClearPolicy 外不得做 post-obligation failed-media clear。写口 `RecoveryResidencyClearPolicy`；结果 `FAILED_MEDIA_RECOVERY → CONNECTED`（never `RECOVERED`）；Presentation / ADR-0044 只读跟随。
+_Avoid_: 把 clear 当成 markRecovered 绕过 obligation_already_closed, 重跑 ADR-0038 predicate 才能清, ICE_CONNECTED/receivePathLive/UI healthy 单独授权 clear, ResidencyClearManager 旁路 writer, 为消 Degraded 开 SUPERSEDE/retry, E4 当自动清位, mediaRestored 当 clear evidence, clear 落盘为 RECOVERED, ADR-0044/0030/0038 amendment 承载本决策, Phase 1 同期接 Controller trigger, 未授权即做 Field
+
 **Attempt Terminal**:
 当前 **Recovery Attempt** 的结束；含 `RECOVERED`、`FAILED_MEDIA_RECOVERY`、`CANCELLED`、`SUPERSEDED`（含 `ATTEMPT_TIMEOUT` 路径）。**不**终止 **Edge Obligation**。见 ADR-0022 R28-F。
 _Avoid_: attempt_timeout == edge 结束

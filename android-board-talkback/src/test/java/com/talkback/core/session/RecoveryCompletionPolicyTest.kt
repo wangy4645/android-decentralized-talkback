@@ -238,7 +238,7 @@ class RecoveryCompletionPolicyTest {
         assertTrue(logs.any { it.contains("IGNORE_STALE_TERMINAL_FACT") })
     }
 
-    /** INVARIANT: terminal writers live only in RecoveryCompletionPolicy (single-writer seam). */
+    /** INVARIANT: completion terminal writers live only in RecoveryCompletionPolicy (ADR-0038 seam). */
     @Test
     fun invariant_terminalWritersOnlyInCompletionPolicy() {
         val sessionDir = File("src/main/java/com/talkback/core/session")
