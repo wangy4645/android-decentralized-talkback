@@ -15,6 +15,8 @@ import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 
+private const val ORDINARY_EVALUABILITY_OWNER_CLASS = "CONTROLLER_EPISODE_ORDINARY"
+
 /**
  * Per-edge conference recovery policy and state (ADR-0021 R4鈥揜18).
  * Control-plane reattach precedes bounded media ICE restart; termination cancels all edges.
@@ -947,6 +949,7 @@ class ConferenceEdgeRecoveryController internal constructor(
             )
         )
         logPhaseTransition(record, previousPhase, phase, trigger)
+        bindOrdinaryPostDeferEvaluabilityIntent(record, trigger)
         return record
     }
 
@@ -1423,8 +1426,18 @@ class ConferenceEdgeRecoveryController internal constructor(
         }
         if (clearDeferralAfterClose && terminal != "EXECUTED") {
             clearDeferralFields(record)
-            // ADR-0046 R-M2 (S2'): negotiation close must not leave successor episode hollow.
-            if (terminal != "SUPERSEDED") {
+            if (isOrdinaryEvaluabilityEpisode(record)) {
+                manifestOrdinaryPostDeferEvaluabilityAtDeferExit(
+                    record = record,
+                    deferExitCategory = resolveOrdinaryDeferExitCategory(terminal, reason, source),
+                    trigger = "NEGOTIATION_INTENT_CLOSED:$terminal"
+                )
+                ensureOrdinaryEpisodeEvaluability(
+                    record,
+                    "NEGOTIATION_INTENT_CLOSED:$terminal"
+                )
+            } else if (terminal != "SUPERSEDED") {
+                // ADR-0046 R-M2 (S2'): negotiation close must not leave successor episode hollow.
                 ensureSuccessorEpisodeEvaluability(
                     record,
                     "NEGOTIATION_INTENT_CLOSED:$terminal"
@@ -2652,6 +2665,122 @@ class ConferenceEdgeRecoveryController internal constructor(
                 "contract=TERMINAL_CONVERGENCE_OBLIGATION " +
                 "strength=NON_PURELY_EXTERNAL"
         )
+    }
+
+    private fun isOrdinaryEvaluabilityEpisode(record: EdgeRecoveryRecord): Boolean =
+        !record.successorTerminalConvergenceContractBound
+
+    private fun shouldBindOrdinaryEvaluabilityIntent(trigger: String): Boolean =
+        !trigger.startsWith("ADMIT_SUCCESSOR")
+
+    /**
+     * ADR-0047 N1 / K1'–K4': bind ordinary evaluability class intent at obligation open.
+     * Does not prove SUCCESS; orthogonal to ADR-0046 successor contract (K7').
+     */
+    private fun bindOrdinaryPostDeferEvaluabilityIntent(
+        record: EdgeRecoveryRecord,
+        trigger: String
+    ) {
+        if (!shouldBindOrdinaryEvaluabilityIntent(trigger)) return
+        if (!isOrdinaryEvaluabilityEpisode(record)) return
+        if (record.ordinaryPostDeferEvaluabilityIntentBound) return
+        record.ordinaryPostDeferEvaluabilityIntentBound = true
+        record.ordinaryEvaluabilityOwnerClass = ORDINARY_EVALUABILITY_OWNER_CLASS
+        val key = record.key
+        onLog(
+            "ORDINARY_POST_DEFER_EVALUABILITY_INTENT_BOUND " +
+                "session=${key.sessionId} remote=${key.remoteModuleId} " +
+                "obligationGen=${record.obligationGeneration} attempt=${record.recoveryAttemptId} " +
+                "ownerClass=$ORDINARY_EVALUABILITY_OWNER_CLASS " +
+                "contract=POST_DEFER_EVALUABILITY_ATTRIBUTION trigger=$trigger"
+        )
+    }
+
+    /**
+     * ADR-0047 N2 / K2'–K5': manifest post-defer evaluability attribution at defer-exit.
+     */
+    private fun manifestOrdinaryPostDeferEvaluabilityAtDeferExit(
+        record: EdgeRecoveryRecord,
+        deferExitCategory: String,
+        trigger: String
+    ) {
+        if (!record.ordinaryPostDeferEvaluabilityIntentBound) return
+        if (record.ordinaryPostDeferEvaluabilityManifested) return
+        record.ordinaryPostDeferEvaluabilityManifested = true
+        record.ordinaryDeferExitCategoryAtManifest = deferExitCategory
+        val key = record.key
+        onLog(
+            "ORDINARY_POST_DEFER_EVALUABILITY_MANIFESTED " +
+                "session=${key.sessionId} remote=${key.remoteModuleId} " +
+                "obligationGen=${record.obligationGeneration} attempt=${record.recoveryAttemptId} " +
+                "ownerClass=${record.ordinaryEvaluabilityOwnerClass ?: ORDINARY_EVALUABILITY_OWNER_CLASS} " +
+                "deferExitCategory=$deferExitCategory " +
+                "contract=POST_DEFER_EVALUABILITY_ATTRIBUTION trigger=$trigger"
+        )
+    }
+
+    private fun resolveOrdinaryDeferExitCategory(
+        terminal: String,
+        reason: String,
+        source: String
+    ): String = when {
+        terminal == "SUPERSEDED" -> "NEGOTIATION_SUPERSEDE"
+        terminal == "EXECUTED" -> "NEGOTIATION_EXECUTED"
+        reason.contains("NEGOTIATION_BUDGET", ignoreCase = true) -> "NEGOTIATION_BUDGET_EXHAUST"
+        reason.startsWith("OBLIGATION_CLOSE") || source == "OBLIGATION_CLOSE" -> "OBLIGATION_CLOSE"
+        terminal == "EXPIRED" -> "NEGOTIATION_EXPIRED"
+        else -> "DEFER_EXIT:$terminal"
+    }
+
+    /**
+     * ADR-0047 R-N2 (R2' only): keep Controller-attributed post-defer evaluability on an
+     * ordinary episode after defer-exit manifest.
+     *
+     * Reuses existing [scheduleWatchdog] call relationship — not timeout repair (P3'/Z11).
+     */
+    private fun ensureOrdinaryEpisodeEvaluability(
+        record: EdgeRecoveryRecord,
+        trigger: String
+    ): Boolean {
+        if (!record.ordinaryPostDeferEvaluabilityIntentBound) return false
+        if (!record.ordinaryPostDeferEvaluabilityManifested) return false
+        if (!record.edgeObligationOpen()) return false
+        if (!record.phase.isActivelyRecovering()) return false
+        val key = record.key
+        if (watchdogTimers.containsKey(key)) {
+            onLog(
+                "ORDINARY_EPISODE_EVALUABILITY_RETAINED session=${key.sessionId} " +
+                    "remote=${key.remoteModuleId} attempt=${record.recoveryAttemptId} " +
+                    "obligationGen=${record.obligationGeneration} " +
+                    "deferExitCategory=${record.ordinaryDeferExitCategoryAtManifest ?: "NONE"} " +
+                    "reason=WATCHDOG_ALREADY_ARMED trigger=$trigger"
+            )
+            return true
+        }
+        scheduleWatchdog(record)
+        if (watchdogTimers.containsKey(key)) {
+            onLog(
+                "ORDINARY_EPISODE_EVALUABILITY_ARMED session=${key.sessionId} " +
+                    "remote=${key.remoteModuleId} attempt=${record.recoveryAttemptId} " +
+                    "obligationGen=${record.obligationGeneration} " +
+                    "deferExitCategory=${record.ordinaryDeferExitCategoryAtManifest ?: "NONE"} " +
+                    "via=EXISTING_ATTEMPT_CLOCK trigger=$trigger"
+            )
+            return true
+        }
+        val pending =
+            record.attemptClockOwnershipDeferred ||
+                hasDeferredMediaAction(record)
+        onLog(
+            "ORDINARY_EPISODE_EVALUABILITY_PENDING session=${key.sessionId} " +
+                "remote=${key.remoteModuleId} attempt=${record.recoveryAttemptId} " +
+                "obligationGen=${record.obligationGeneration} " +
+                "deferExitCategory=${record.ordinaryDeferExitCategoryAtManifest ?: "NONE"} " +
+                "deferredReason=${record.deferredReason?.name ?: "NONE"} " +
+                "ownershipDeferred=${record.attemptClockOwnershipDeferred} " +
+                "pending=$pending trigger=$trigger"
+        )
+        return pending
     }
 
     /**
@@ -3890,6 +4019,7 @@ class ConferenceEdgeRecoveryController internal constructor(
                 )
                 logPhaseTransition(created, existing?.phase, created.phase, if (newAttempt) "NEW_ATTEMPT" else "UPSERT")
                 emitAttemptLineageTelemetry(created, "ATTEMPT_OPENED:$pathway")
+                bindOrdinaryPostDeferEvaluabilityIntent(created, trigger)
             }
         } else {
             existing.apply {

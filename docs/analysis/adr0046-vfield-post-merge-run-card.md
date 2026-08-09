@@ -97,3 +97,22 @@ PR #146 MERGED
         |
         +-- no automatic new runtime workstream
 ```
+
+---
+
+## Side observation (NOT compliance)
+
+| LogDir | Disposition |
+|--------|-------------|
+| `talkback/logs/adr0046-vfield-20260809-112330/` | **Not** ADR-0046 V-field sample |
+
+Episode was ordinary `ICE_DISCONNECTED` / `UPSERT_EDGE` recovery with media ONLINE + obligation pending (Case B Sync). Routed to **ADR-0047** (not 0046 compliance):
+
+- [vfield-case-b-20260809-112330-media-online-obligation-pending.md](./vfield-case-b-20260809-112330-media-online-obligation-pending.md)
+- [0047-ordinary-recovery-post-defer-evaluability-contract.md](../adr/0047-ordinary-recovery-post-defer-evaluability-contract.md) — **ACCEPTED** (A1)
+
+```text
+Same UI symptom (Sync) ≠ same lifecycle.
+ADMIT_SUCCESSOR long Sync  → ADR-0046 track
+Ordinary edge residency    → ADR-0047 track (Case B evidence)
+```
