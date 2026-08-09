@@ -55,10 +55,10 @@ Successor Recovery Pending
   ADR                              NONE
   Fix authorization                NONE
 
-Next (if continued): sample expansion only — NOT Q7 fix design
+Next: sample expansion only — [successor-recovery-lifecycle-sample-expansion-run-card.md](./successor-recovery-lifecycle-sample-expansion-run-card.md)
   Collect under same successor lifecycle:
     SUCCESS / FAILED_MEDIA / SUPERSEDE / CANCELLED
-  Then revisit S2 (independent ADR candidate) if corroborated
+  Then Q7 ADR-candidacy only (not fix design); S2 if corroborated
 
 Forbidden while this track is open:
   ✗ modify ADR-0045 / add residency clear triggers
@@ -547,7 +547,7 @@ Fix authorization                   NONE
 ✗ Q7 fix design before sample expansion
 ```
 
-**If observation continues:** sample expansion only (SUCCESS / FAILED_MEDIA / SUPERSEDE / CANCELLED under successor lifecycle) → then reconsider S2.
+**If observation continues:** use [successor-recovery-lifecycle-sample-expansion-run-card.md](./successor-recovery-lifecycle-sample-expansion-run-card.md) only → stop when matrix covered → then Q7 ADR-candidacy (not fix design).
 
 ---
 
@@ -574,5 +574,6 @@ FAIL / out of process:
 
 - Field #2 logs: `talkback/logs/adr0045-field-20260809-094259/`
 - Field #1 (ADR-0045 trigger gap): `talkback/logs/adr0045-field-20260809-093047/`
+- Sample expansion run card: [successor-recovery-lifecycle-sample-expansion-run-card.md](./successor-recovery-lifecycle-sample-expansion-run-card.md)
 - ADR-0045 run card: [adr0045-field-run-card.md](./adr0045-field-run-card.md)
 - Related (independent): ADR-0039 owner-conflict track — **not triggered** by this note alone
