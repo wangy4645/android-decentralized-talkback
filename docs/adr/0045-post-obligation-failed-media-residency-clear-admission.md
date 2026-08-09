@@ -2,7 +2,7 @@
 
 ## Status
 
-**ACCEPTED** (2026-08-09) · **Grill Q1–Q8 ACCEPTED** · **Review clarifications applied** · **Implementation: Phase 1 AUTHORIZED** · **Phase 2 trigger: after Phase 1 review** · **Field NOT AUTHORIZED**
+**ACCEPTED** (2026-08-09) · **Grill Q1–Q8 ACCEPTED** · **Review clarifications applied** · **Phase 1 MERGED (PR #131)** · **Phase 2: separate PR after merge** · **Field NOT AUTHORIZED**
 
 **Parents:**
 
@@ -17,8 +17,8 @@ ADR-0045
 Decision:              ACCEPTED
 Model:                 Post-obligation residency clear admission
 Implementation:
-  Phase 1 Policy + I1 tests   AUTHORIZED
-  Phase 2 Trigger             AUTHORIZED after Phase 1 review
+  Phase 1 Policy + I1 tests   MERGED (PR #131 · 617d4b8)
+  Phase 2 Trigger             AUTHORIZED after Phase 1 merge — open as separate PR
   Field                       NOT AUTHORIZED
 
 Primary invariant:
