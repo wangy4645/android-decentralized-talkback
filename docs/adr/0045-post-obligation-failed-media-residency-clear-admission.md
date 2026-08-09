@@ -2,7 +2,7 @@
 
 ## Status
 
-**ACCEPTED** (2026-08-09) · **Grill Q1–Q8 ACCEPTED** · **Review clarifications applied** · **Phase 1 MERGED (PR #131)** · **Phase 2 MERGED (PR #133)** · **Phase 2.1 MERGED (PR #136)** · **Field thin re-auth after 2.1** · run card: [adr0045-field-run-card.md](../analysis/adr0045-field-run-card.md)
+**ACCEPTED** (2026-08-09) · **Grill Q1–Q8 ACCEPTED** · **Review clarifications applied** · **Phase 1 MERGED (PR #131)** · **Phase 2 MERGED (PR #133)** · **Phase 2.1 MERGED (PR #136)** · **Field Phase 2.1 PAUSED (no qualifying case)** · successor observation: [mobile-validation-successor-recovery-pending-observation.md](../analysis/mobile-validation-successor-recovery-pending-observation.md) · run card: [adr0045-field-run-card.md](../analysis/adr0045-field-run-card.md)
 
 **Parents:**
 
@@ -18,12 +18,15 @@ Decision:              ACCEPTED
 Model:                 Post-obligation residency clear admission
 Implementation:
   Phase 1 Policy + I1 tests   MERGED (PR #131 · 617d4b8) · PASS
-  Phase 2 Trigger             MERGED (PR #133 · 059dfb4) · PARTIAL
-  Phase 2.1 Entry trigger     MERGED (PR #136 · 094082b) · failed-media entry → tryAdmit
-  Field (2026-08-09 #1)       NOT PASS (bilateral; trigger coverage gap)
+  Phase 2 Trigger             MERGED (PR #133 · 059dfb4) · PARTIAL (Field #1)
+  Phase 2.1 Entry trigger     MERGED (PR #136 · 094082b) · Field PAUSED (no FAILED_MEDIA case)
+  Field #1 (20260809-093047)  NOT PASS bilateral
     M03→M02                   PASS (deadline → CLEARED)
-    M02→M03                   FAIL (enter FAILED_MEDIA w/ obligation already closed; no evaluate)
-  Field (post-2.1)            AUTHORIZED (thin retest) — same W2 stimulus
+    M02→M03                   FAIL (FAILED_MEDIA + closed; trigger gap)
+  Field #2 (20260809-094259)  NOT ADR-0045 case
+    M03→M02                   PASS (clear still holds)
+    M02→M03                   SYNCING — successor RECOVERY_PENDING (independent observation)
+  Next                        successor observation Q1–Q3; do not force FAILED_MEDIA for 2.1
 
 Primary invariant:
   residency clear ≠ completion success ≠ presentation projection
