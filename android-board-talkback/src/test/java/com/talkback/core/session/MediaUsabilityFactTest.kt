@@ -5,20 +5,46 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * INV-PRES-006 media-axis input: ICE disconnect/fail must yield unavailable,
- * even when failed-media residency has not yet latched.
+ * INV-PRES-006 / RCA-003 IC: UVCP media axis uses [MediaUsabilityFact.currentUnavailable]
+ * (live MediaState only). [isUnavailable] remains diagnostic OR with residency.
  */
 class MediaUsabilityFactTest {
 
     @Test
+    fun currentUnavailable_iceDisconnected_orFailed() {
+        assertTrue(MediaUsabilityFact.currentUnavailable(MediaState.RECONNECTING))
+        assertTrue(MediaUsabilityFact.currentUnavailable(MediaState.FAILED))
+    }
+
+    @Test
+    fun currentUnavailable_connected_isFalse() {
+        assertFalse(MediaUsabilityFact.currentUnavailable(MediaState.CONNECTED))
+        assertFalse(MediaUsabilityFact.currentUnavailable(MediaState.CONNECTING))
+        assertFalse(MediaUsabilityFact.currentUnavailable(MediaState.NONE))
+    }
+
+    @Test
+    fun ic_uvcp_residencyAlone_doesNotMakeCurrentUnavailable() {
+        // R5.3 / IC: FAILED_MEDIA residency ≠ CURRENT_UNAVAILABLE for UVCP input.
+        assertFalse(MediaUsabilityFact.currentUnavailable(MediaState.CONNECTED))
+        // Diagnostic OR still sees residency (not UVCP path).
+        assertTrue(
+            MediaUsabilityFact.isUnavailable(
+                mediaState = MediaState.CONNECTED,
+                failedMediaResidency = true
+            )
+        )
+    }
+
+    @Test
     fun case1_iceDisconnectedMediaState_isUnavailable_withoutFailedResidency() {
-        // Field: ice=DISCONNECTED -> MediaState.RECONNECTING, mediaUnavailable residency=false
         assertTrue(
             MediaUsabilityFact.isUnavailable(
                 mediaState = MediaState.RECONNECTING,
                 failedMediaResidency = false
             )
         )
+        assertTrue(MediaUsabilityFact.currentUnavailable(MediaState.RECONNECTING))
     }
 
     @Test
@@ -37,27 +63,6 @@ class MediaUsabilityFactTest {
             MediaUsabilityFact.isUnavailable(
                 mediaState = MediaState.CONNECTED,
                 failedMediaResidency = false
-            )
-        )
-    }
-
-    @Test
-    fun case3_connectedStable_usable() {
-        assertFalse(
-            MediaUsabilityFact.isUnavailable(
-                mediaState = MediaState.CONNECTED,
-                failedMediaResidency = false
-            )
-        )
-    }
-
-    @Test
-    fun failedResidency_alone_isUnavailable_evenIfMediaConnected() {
-        // ADR-0030 residency still forces unavailable (e.g. FAILED_MEDIA_RECOVERY window).
-        assertTrue(
-            MediaUsabilityFact.isUnavailable(
-                mediaState = MediaState.CONNECTED,
-                failedMediaResidency = true
             )
         )
     }

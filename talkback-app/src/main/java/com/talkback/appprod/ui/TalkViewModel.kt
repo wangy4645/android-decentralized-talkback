@@ -1575,8 +1575,8 @@ class TalkViewModel(
     ): Boolean = runtime.conferenceEdgeRecovering(sessionId, moduleId)
 
     /**
-     * UVCP media-axis input (INV-PRES-006): MediaUsabilityFact over live MediaState +
-     * ADR-0030 failed-media residency (not presence aggregate snapshot).
+     * UVCP media-axis input (INV-PRES-006; RCA-003 R5 / IC): current path unavailability
+     * from live MediaState only — not FAILED_MEDIA incident residency.
      */
     private fun edgeMediaUnavailablePeer(
         runtime: com.talkback.app.TalkbackRuntime,

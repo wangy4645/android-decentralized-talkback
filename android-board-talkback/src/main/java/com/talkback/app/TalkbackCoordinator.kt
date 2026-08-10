@@ -3633,23 +3633,22 @@ class TalkbackCoordinator(
         }
 
     /**
-     * Read-only UVCP / presence media-axis input (INV-PRES-006).
+     * Read-only UVCP media-axis input (INV-PRES-006; RCA-003 R5 / IC).
      *
-     * Composes ADR-0030 failed-media residency with [MediaState] path usability
-     * ([MediaState.RECONNECTING] / [MediaState.FAILED] from ICE_DISCONNECTED / ICE_FAILED).
-     * Does not mutate recovery obligation or projection mapping.
+     * Current path usability from [MediaState] only
+     * ([MediaState.RECONNECTING] / [MediaState.FAILED] ← ICE_DISCONNECTED / ICE_FAILED).
+     * Does **not** OR failed-media residency — residency is incident residue, not current
+     * unavailable (FAILED_MEDIA ≠ CURRENT_UNAVAILABLE). Does not mutate recovery / clear.
      *
-     * IMPORTANT: read [ConferenceParticipantManager] / recovery controller directly inside
-     * this sync block. Do **not** call [conferenceParticipantMedia] here — that nests
-     * another [runOnCoordinatorSync] on the single-thread executor and deadlocks the UI
+     * IMPORTANT: read [ConferenceParticipantManager] directly inside this sync block.
+     * Do **not** call [conferenceParticipantMedia] here — that nests another
+     * [runOnCoordinatorSync] on the single-thread executor and deadlocks the UI
      * (`onCoordinatorThread` is only set for async [runOnCoordinator], not sync submit).
      */
     fun conferenceMediaUnavailable(sessionId: String, remoteModuleId: String): Boolean =
         runOnCoordinatorSync {
-            MediaUsabilityFact.isUnavailable(
-                mediaState = conferenceParticipantManager.participantMedia(sessionId, remoteModuleId),
-                failedMediaResidency =
-                    conferenceEdgeRecoveryController.isMediaUnavailable(sessionId, remoteModuleId)
+            MediaUsabilityFact.currentUnavailable(
+                mediaState = conferenceParticipantManager.participantMedia(sessionId, remoteModuleId)
             )
         }
 

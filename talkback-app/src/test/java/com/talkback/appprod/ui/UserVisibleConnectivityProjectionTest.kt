@@ -3,6 +3,8 @@ package com.talkback.appprod.ui
 import com.talkback.appprod.ui.UserVisibleConnectivityProjection.ControlSyncState
 import com.talkback.appprod.ui.UserVisibleConnectivityProjection.MediaUsability
 import com.talkback.appprod.ui.UserVisibleConnectivityProjection.UserVisibleConnectivityState
+import com.talkback.core.session.MediaState
+import com.talkback.core.session.MediaUsabilityFact
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -268,5 +270,92 @@ class UserVisibleConnectivityProjectionTest {
                     field.name.contains("deadline", ignoreCase = true))
         }
         assertTrue(forbidden.isEmpty())
+    }
+
+    /**
+     * RCA-003 IC matrix: UVCP mediaUnavailable ← [MediaUsabilityFact.currentUnavailable]
+     * only. FAILED_MEDIA residency is ignored at the UVCP seam (R5.3).
+     */
+    @Test
+    fun rca003Ic_failedMediaResidency_plusIceDown_isDegradedOrReconnecting() {
+        val mediaUnavailable = MediaUsabilityFact.currentUnavailable(MediaState.RECONNECTING)
+        assertTrue(mediaUnavailable)
+        // Terminal (no active repair): DEGRADED
+        assertEquals(
+            UserVisibleConnectivityState.DEGRADED,
+            UserVisibleConnectivityProjection.project(
+                UserVisibleConnectivityProjection.deriveAxes(
+                    receivePathLive = false,
+                    mediaEverLive = true,
+                    recovering = false,
+                    mediaUnavailable = mediaUnavailable
+                )
+            )
+        )
+        // Active repair: RECONNECTING (not SYNCING) — ADR-0044
+        assertEquals(
+            UserVisibleConnectivityState.RECONNECTING,
+            UserVisibleConnectivityProjection.project(
+                UserVisibleConnectivityProjection.deriveAxes(
+                    receivePathLive = false,
+                    mediaEverLive = true,
+                    recovering = true,
+                    mediaUnavailable = mediaUnavailable
+                )
+            )
+        )
+    }
+
+    @Test
+    fun rca003Ic_failedMediaResidency_plusIceUp_receiveLive_isHealthy() {
+        // Smoking gun: residency may still be true in diagnostics; UVCP must not see it.
+        val mediaUnavailable = MediaUsabilityFact.currentUnavailable(MediaState.CONNECTED)
+        assertFalse(mediaUnavailable)
+        assertEquals(
+            UserVisibleConnectivityState.CONNECTED,
+            UserVisibleConnectivityProjection.project(
+                UserVisibleConnectivityProjection.deriveAxes(
+                    receivePathLive = true,
+                    mediaEverLive = true,
+                    recovering = false,
+                    mediaUnavailable = mediaUnavailable
+                )
+            )
+        )
+    }
+
+    @Test
+    fun rca003Ic_obligationOpen_mediaOk_isSyncing() {
+        val mediaUnavailable = MediaUsabilityFact.currentUnavailable(MediaState.CONNECTED)
+        assertFalse(mediaUnavailable)
+        assertEquals(
+            UserVisibleConnectivityState.SYNCING,
+            UserVisibleConnectivityProjection.project(
+                UserVisibleConnectivityProjection.deriveAxes(
+                    receivePathLive = true,
+                    mediaEverLive = true,
+                    recovering = true,
+                    mediaUnavailable = mediaUnavailable,
+                    controlSyncPending = true
+                )
+            )
+        )
+    }
+
+    @Test
+    fun rca003Ic_edgeRecovered_currentAvailable_isHealthy() {
+        // EDGE_RECOVERED is not a UVCP input; post-recovery healthy = current available + !recovering.
+        val mediaUnavailable = MediaUsabilityFact.currentUnavailable(MediaState.CONNECTED)
+        assertEquals(
+            UserVisibleConnectivityState.CONNECTED,
+            UserVisibleConnectivityProjection.project(
+                UserVisibleConnectivityProjection.deriveAxes(
+                    receivePathLive = true,
+                    mediaEverLive = true,
+                    recovering = false,
+                    mediaUnavailable = mediaUnavailable
+                )
+            )
+        )
     }
 }

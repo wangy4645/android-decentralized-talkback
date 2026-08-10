@@ -208,7 +208,8 @@ class MeetingPresenceDisplayTest {
     }
 
     @Test
-    fun adr0030_failedMediaResidency_mediaUnavailable_vetoesReceivePathLive() {
+    fun adr0044_currentMediaUnavailable_vetoesReceivePathLive() {
+        // UVCP mediaUnavailablePeer = current path unavailability (RCA-003 IC), not residency.
         MeetingPresenceDisplay.receivePathLivenessProvider = object : ReceivePathLivenessProvider {
             override fun receivePathLive(sessionId: String, remoteModuleId: String): Boolean = true
             override fun mediaEverLive(sessionId: String, remoteModuleId: String): Boolean = true
@@ -221,7 +222,7 @@ class MeetingPresenceDisplayTest {
                 mediaUnavailablePeer = true
             )
         )
-        // ADR-0044: terminal residency (mediaUnavailable, not recovering) → DEGRADED, not RECONNECTING.
+        // ADR-0044: terminal current unavailable (!recovering) → DEGRADED, not RECONNECTING.
         assertEquals(EndpointStatus.DEGRADED, state.endpointStatus)
         assertEquals(
             UserVisibleConnectivityProjection.UserVisibleConnectivityState.DEGRADED,
@@ -242,10 +243,7 @@ class MeetingPresenceDisplayTest {
             override fun receivePathLive(sessionId: String, remoteModuleId: String): Boolean = true
             override fun mediaEverLive(sessionId: String, remoteModuleId: String): Boolean = true
         }
-        val mediaUnavailable = MediaUsabilityFact.isUnavailable(
-            mediaState = MediaState.RECONNECTING,
-            failedMediaResidency = false
-        )
+        val mediaUnavailable = MediaUsabilityFact.currentUnavailable(MediaState.RECONNECTING)
         val ui = MeetingPresenceDisplay.renderConferencePresence(
             presence = ConferencePresenceProjection(
                 joinedCount = 3,
