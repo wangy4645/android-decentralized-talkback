@@ -130,6 +130,19 @@ class ConferenceEdgeRecoveryController internal constructor(
     private val deadlineTimers = ConcurrentHashMap<ConferenceEdgeKey, ScheduledFuture<*>>()
     /** Gate 3C-D: episode-scoped negotiation intent budget (independent of attempt watchdog). */
     private val negotiationIntentTimers = ConcurrentHashMap<ConferenceEdgeKey, ScheduledFuture<*>>()
+    /** ADR-0042 INV-T3-SCHEDULE: obligation-scoped bounded progress window timers. */
+    private val progressWindowTimers = ConcurrentHashMap<ConferenceEdgeKey, ScheduledFuture<*>>()
+    /**
+     * RRA-005 Phase-2: REATTACH delivery observation (truth adapter; no retry/fail/complete).
+     * RCA-002: expired observation notifies controller to release oneshot in-flight latch only.
+     */
+    private val reattachDeliveryProgress = ReattachDeliveryProgressFacade(
+        clock = clock,
+        scheduler = scheduler,
+        onLog = onLog,
+        observationBudgetMs = { iceRestartTimeoutMs },
+        onObservationExpired = { record -> onReattachDeliveryObservationExpired(record) }
+    )
     private val cancelledSessions = ConcurrentHashMap<String, Long>()
     private val cancelledChannels = ConcurrentHashMap<String, Long>()
     private val pendingTransportNonce = ConcurrentHashMap<ConferenceEdgeKey, String>()
@@ -631,6 +644,7 @@ class ConferenceEdgeRecoveryController internal constructor(
                 "nonce=$nonce attempt=$attemptId obligationGen=$obligationGeneration " +
                 "deliveryState=REMOTE_RECEIPT_ACKED controlPlaneStarted=${record.controlPlaneStarted()}"
         )
+        reattachDeliveryProgress.markEvidenceObtained(record)
         reevaluateControlAdmission(record)
         notifyChanged(sessionId)
         return true
@@ -906,7 +920,9 @@ class ConferenceEdgeRecoveryController internal constructor(
         cancelDebounce(key)
         cancelWatchdog(key)
         cancelDeadline(key)
+        cancelProgressWindow(key)
         val existing = edges[key]
+        existing?.let { reattachDeliveryProgress.clear(it) }
         val now = clock()
         val newGeneration = (existing?.obligationGeneration ?: 0L) + 1L
         val previousAttempt = existing?.recoveryAttemptId
@@ -960,15 +976,24 @@ class ConferenceEdgeRecoveryController internal constructor(
         parentAttempt: Long? = null,
         supersededByModule: String? = null
     ) {
-        if (record.mediaActionOwner.isAssigned() && owner != MediaActionOwner.ABORTED) {
+        val existing = record.mediaActionOwner
+        if (existing.isAssigned() && owner != MediaActionOwner.ABORTED) {
             when {
-                record.mediaActionOwner == owner && hasDeferredMediaAction(record) -> Unit
-                record.mediaActionOwner == owner -> return
+                existing == owner && hasDeferredMediaAction(record) -> Unit
+                existing == owner -> return
+                existing.canBeSupersededBy(owner) -> {
+                    // RCA-001: HOST_RESTART supersedes PARTICIPANT_REATTACH (handoff, not clear).
+                    onLog(
+                        "RECOVERY_MEDIA_OWNER_SUPERSEDED session=${record.key.sessionId} " +
+                            "remote=${record.key.remoteModuleId} attempt=${record.recoveryAttemptId} " +
+                            "existing=${existing.logLabel()} requested=${owner.logLabel()}"
+                    )
+                }
                 else -> {
                     onLog(
                         "RECOVERY_MEDIA_OWNER_REJECTED session=${record.key.sessionId} " +
                             "remote=${record.key.remoteModuleId} attempt=${record.recoveryAttemptId} " +
-                            "existing=${record.mediaActionOwner.logLabel()} requested=${owner.logLabel()}"
+                            "existing=${existing.logLabel()} requested=${owner.logLabel()}"
                     )
                     return
                 }
@@ -3539,6 +3564,9 @@ class ConferenceEdgeRecoveryController internal constructor(
         deadlineTimers.clear()
         negotiationIntentTimers.values.forEach { it.cancel(false) }
         negotiationIntentTimers.clear()
+        progressWindowTimers.values.forEach { it.cancel(false) }
+        progressWindowTimers.clear()
+        reattachDeliveryProgress.clearAll()
         edges.clear()
         terminalReevaluateDedup.clear()
         cancelledSessions.clear()
@@ -3970,8 +3998,10 @@ class ConferenceEdgeRecoveryController internal constructor(
         cancelWatchdog(key)
         cancelDeadline(key)
         cancelNegotiationIntentBudget(key)
+        cancelProgressWindow(key)
         val record = edges[key] ?: return
         recoveryOfferDeliveryPolicy.cancel(record)
+        reattachDeliveryProgress.clear(record)
         record.phase = EdgeRecoveryPhase.CANCELLED
         val closeReason = when {
             reason.contains("session_cancelled", ignoreCase = true) ||
@@ -4004,6 +4034,226 @@ class ConferenceEdgeRecoveryController internal constructor(
 
     private fun cancelWatchdog(key: ConferenceEdgeKey) {
         watchdogTimers.remove(key)?.cancel(false)
+    }
+
+    private fun cancelProgressWindow(key: ConferenceEdgeKey) {
+        progressWindowTimers.remove(key)?.cancel(false)
+    }
+
+    private fun clearProgressWindowState(record: EdgeRecoveryRecord) {
+        record.progressWindowState = ProgressWindowState.NONE
+        record.progressWindowStartedAtMs = null
+        record.progressWindowDeadlineAtMs = null
+    }
+
+    /**
+     * ADR-0042 INV-T3-SCHEDULE: arm bounded progress after outbound reattach SEND_FAILED.
+     * Coexists with WAKEUP_ARMED (capability deferral); does not replace it.
+     */
+    private fun armProgressWindowAfterSendFailed(record: EdgeRecoveryRecord) {
+        if (!record.initiatesReattach) return
+        val key = record.key
+        cancelProgressWindow(key)
+        val now = clock()
+        val budgetMs = iceRestartTimeoutMs
+        val obligationDeadline = record.obligationDeadlineAtMs
+        val windowDeadlineAt = if (obligationDeadline != null) {
+            minOf(now + budgetMs, obligationDeadline)
+        } else {
+            now + budgetMs
+        }
+        val delayMs = (windowDeadlineAt - now).coerceAtLeast(0L)
+        record.progressWindowState = ProgressWindowState.ARMED
+        record.progressWindowStartedAtMs = now
+        record.progressWindowDeadlineAtMs = windowDeadlineAt
+        val attemptId = record.recoveryAttemptId
+        val obligationGen = record.obligationGeneration
+        onLog(
+            "RECOVERY_PROGRESS_WINDOW_ARMED session=${key.sessionId} edge=${key.remoteModuleId} " +
+                "attempt=$attemptId obligationGen=$obligationGen budgetMs=$budgetMs " +
+                "deadlineAtMs=$windowDeadlineAt delayMs=$delayMs obligationOpen=true"
+        )
+        val future = scheduler.schedule({
+            val current = edges[key] ?: return@schedule
+            if (current.recoveryAttemptId != attemptId) return@schedule
+            if (current.obligationGeneration != obligationGen) return@schedule
+            if (current.obligationClosedAtMs != null) {
+                if (current.progressWindowState == ProgressWindowState.ARMED) {
+                    observeProgressWindowExpired(current)
+                }
+                return@schedule
+            }
+            onProgressWindowDeadline(current)
+        }, delayMs, TimeUnit.MILLISECONDS)
+        progressWindowTimers[key] = future
+    }
+
+    private fun onProgressWindowDeadline(record: EdgeRecoveryRecord) {
+        when (record.progressWindowState) {
+            ProgressWindowState.ARMED -> onProgressWindowTriggered(record)
+            ProgressWindowState.FIRED -> observeProgressWindowExpired(record)
+            else -> Unit
+        }
+    }
+
+    private fun onProgressWindowTriggered(record: EdgeRecoveryRecord) {
+        if (record.progressWindowState != ProgressWindowState.ARMED) return
+        record.progressWindowState = ProgressWindowState.FIRED
+        val key = record.key
+        onLog(
+            "RECOVERY_PROGRESS_WINDOW_FIRED session=${key.sessionId} edge=${key.remoteModuleId} " +
+                "attempt=${record.recoveryAttemptId} obligationGen=${record.obligationGeneration} " +
+                "deadlineAtMs=${record.progressWindowDeadlineAtMs}"
+        )
+        // INV-T3-SCHEDULE: obligation-owned redispatch opportunity via existing evaluation path.
+        // Does not invent Coordinator schedule ownership; does not call WebRTC from scheduler.
+        reevaluateFromProgressWindow(record)
+        // One-shot window: if reevaluate did not satisfy (SENT), observe expiry — not FAILED_MEDIA.
+        if (record.progressWindowState == ProgressWindowState.FIRED) {
+            observeProgressWindowExpired(record)
+        }
+    }
+
+    /**
+     * Progress window ended without delivery progress. Observation only — not obligation terminal.
+     */
+    private fun observeProgressWindowExpired(record: EdgeRecoveryRecord) {
+        if (record.progressWindowState == ProgressWindowState.SATISFIED ||
+            record.progressWindowState == ProgressWindowState.EXPIRED ||
+            record.progressWindowState == ProgressWindowState.NONE
+        ) {
+            return
+        }
+        record.progressWindowState = ProgressWindowState.EXPIRED
+        val key = record.key
+        onLog(
+            "RECOVERY_PROGRESS_WINDOW_EXPIRED session=${key.sessionId} edge=${key.remoteModuleId} " +
+                "attempt=${record.recoveryAttemptId} obligationGen=${record.obligationGeneration} " +
+                "startedAtMs=${record.progressWindowStartedAtMs} deadlineAtMs=${record.progressWindowDeadlineAtMs}"
+        )
+    }
+
+    private fun satisfyProgressWindowIfActive(record: EdgeRecoveryRecord) {
+        if (record.progressWindowState == ProgressWindowState.NONE ||
+            record.progressWindowState == ProgressWindowState.SATISFIED ||
+            record.progressWindowState == ProgressWindowState.EXPIRED
+        ) {
+            return
+        }
+        cancelProgressWindow(record.key)
+        record.progressWindowState = ProgressWindowState.SATISFIED
+        val key = record.key
+        onLog(
+            "RECOVERY_PROGRESS_WINDOW_SATISFIED session=${key.sessionId} edge=${key.remoteModuleId} " +
+                "attempt=${record.recoveryAttemptId} obligationGen=${record.obligationGeneration}"
+        )
+    }
+
+    /**
+     * Obligation-owned progress evaluation — reuses [runCompletionEvaluationStub] / [onRequestReattach].
+     * Trigger is not a capability-wakeup binding match; external events may still accelerate separately.
+     */
+    private fun reevaluateFromProgressWindow(record: EdgeRecoveryRecord) {
+        if (!record.edgeObligationOpen()) return
+        if (!record.initiatesReattach) return
+        val snapshot = buildCompletionEvaluationSnapshot(record)
+        val signature = projectRecoveryCapabilitySignature(
+            snapshot = snapshot,
+            initiatesReattach = record.initiatesReattach,
+            controlPlaneStarted = record.controlPlaneStarted()
+        )
+        onLog(
+            "RECOVERY_PROGRESS_WINDOW_REEVALUATE session=${record.key.sessionId} " +
+                "edge=${record.key.remoteModuleId} attempt=${record.recoveryAttemptId} " +
+                "obligationGen=${record.obligationGeneration} " +
+                "permitted=${signature.permittedActions.joinToString(",")}"
+        )
+        refreshControlReconciliationFact(record)
+        runCompletionEvaluationStub(
+            record = record,
+            snapshot = snapshot,
+            signature = signature,
+            trigger = RecoveryReevaluateTrigger.LINK_READY
+        )
+        emitCompletionObservations(record, snapshot, RecoveryReevaluateTrigger.LINK_READY)
+        notifyChanged(record.key.sessionId)
+    }
+
+    /**
+     * RCA-002: Phase-2 observation EXPIRED without receipt.
+     *
+     * Releases oneshot `transport_in_flight` (REATTACH_REQUESTED + TRANSPORT_SENT) so a **new**
+     * delivery attempt may be evaluated. Does **not** treat EXPIRED as RETRY_REQUIRED.
+     * Dispatch occurs only when existing capability/dispatch gates allow (opportunity present).
+     */
+    private fun onReattachDeliveryObservationExpired(record: EdgeRecoveryRecord) {
+        if (!record.edgeObligationOpen()) return
+        if (record.reattachDeliveryProgressState != ReattachDeliveryProgressState.EXPIRED) return
+        if (record.reattachDeliveryState == ReattachDeliveryState.REMOTE_RECEIPT_ACKED) return
+        if (!record.initiatesReattach) return
+
+        val key = record.key
+        val releasedInFlight =
+            record.phase == EdgeRecoveryPhase.REATTACH_REQUESTED &&
+                record.reattachDeliveryState == ReattachDeliveryState.TRANSPORT_SENT
+        if (releasedInFlight) {
+            // Mirror SEND_FAILED termination of transmission instance (ADR-0042 INV-T2 shape):
+            // end this delivery attempt's in-flight latch without FAILED_MEDIA / completion.
+            record.phase = EdgeRecoveryPhase.RECOVERY_PENDING
+            record.reattachDeliveryState = ReattachDeliveryState.QUEUED
+            record.outboundDispatchAttemptId = null
+            record.outboundDispatchObligationGeneration = null
+        }
+        onLog(
+            "REATTACH_DELIVERY_OPPORTUNITY_REACQUISITION_ELIGIBLE session=${key.sessionId} " +
+                "edge=${key.remoteModuleId} attempt=${record.recoveryAttemptId} " +
+                "obligationGen=${record.obligationGeneration} " +
+                "priorObservation=EXPIRED releasedInFlight=$releasedInFlight"
+        )
+        // Opportunity check — not "retry because expired". Uses same gates as other redispatches.
+        if (!canDispatchRecoveryMediaAction(key.sessionId, key.remoteModuleId)) {
+            onLog(
+                "REATTACH_DELIVERY_OPPORTUNITY_WAITING session=${key.sessionId} " +
+                    "edge=${key.remoteModuleId} attempt=${record.recoveryAttemptId} " +
+                    "reason=DISPATCH_GATE_NOT_READY"
+            )
+            notifyChanged(key.sessionId)
+            return
+        }
+        reevaluateFromDeliveryOpportunity(record)
+    }
+
+    /**
+     * RCA-002: evaluate a new REATTACH delivery attempt after opportunity eligibility.
+     * Reuses [runCompletionEvaluationStub]; does not invent Coordinator schedule ownership.
+     */
+    private fun reevaluateFromDeliveryOpportunity(record: EdgeRecoveryRecord) {
+        if (!record.edgeObligationOpen()) return
+        if (!record.initiatesReattach) return
+        if (record.reattachDeliveryState == ReattachDeliveryState.REMOTE_RECEIPT_ACKED) return
+        if (record.phase == EdgeRecoveryPhase.REATTACH_REQUESTED) return
+        val snapshot = buildCompletionEvaluationSnapshot(record)
+        val signature = projectRecoveryCapabilitySignature(
+            snapshot = snapshot,
+            initiatesReattach = record.initiatesReattach,
+            controlPlaneStarted = record.controlPlaneStarted()
+        )
+        val trigger = RecoveryReevaluateTrigger.DELIVERY_OPPORTUNITY_REACQUIRED
+        onLog(
+            "REATTACH_DELIVERY_OPPORTUNITY_REEVALUATE session=${record.key.sessionId} " +
+                "edge=${record.key.remoteModuleId} attempt=${record.recoveryAttemptId} " +
+                "obligationGen=${record.obligationGeneration} " +
+                "permitted=${signature.permittedActions.joinToString(",")}"
+        )
+        refreshControlReconciliationFact(record)
+        runCompletionEvaluationStub(
+            record = record,
+            snapshot = snapshot,
+            signature = signature,
+            trigger = trigger
+        )
+        emitCompletionObservations(record, snapshot, trigger)
+        notifyChanged(record.key.sessionId)
     }
 
     private fun upsertEdge(
@@ -4422,12 +4672,15 @@ class ConferenceEdgeRecoveryController internal constructor(
         when (outcome) {
             ReattachDispatchOutcome.SENT -> {
                 cancelDebounce(key)
+                satisfyProgressWindowIfActive(record)
                 record.phase = EdgeRecoveryPhase.REATTACH_REQUESTED
                 record.reattachDeliveryState = ReattachDeliveryState.TRANSPORT_SENT
                 record.outboundDispatchAttemptId = record.recoveryAttemptId
                 record.outboundDispatchObligationGeneration = record.obligationGeneration
                 record.reattachNonce = pendingTransportNonce.remove(key) ?: record.reattachNonce
                 assignMediaActionOwner(record, MediaActionOwner.HOST_RESTART)
+                // RRA-005 Phase-2: arm delivery observation after local SENT (additive to INV-T3).
+                reattachDeliveryProgress.arm(record, edges)
                 val noncePart = record.reattachNonce?.let { " nonce=$it" } ?: ""
                 onLog(
                     "RECOVERY_REATTACH_SENT session=${key.sessionId} remote=${key.remoteModuleId} " +
@@ -4495,6 +4748,7 @@ class ConferenceEdgeRecoveryController internal constructor(
                     trigger = trigger?.name ?: "DISPATCH_REATTACH_SEND_FAILED"
                 )
                 scheduleWatchdog(record)
+                armProgressWindowAfterSendFailed(record)
                 onLog(
                     "RECOVERY_DECISION session=${key.sessionId} edge=${key.remoteModuleId} " +
                         "attempt=${record.recoveryAttemptId}$triggerPart " +
@@ -4594,6 +4848,9 @@ class ConferenceEdgeRecoveryController internal constructor(
         // Also cancel the superseded attempt's watchdog so it cannot emit FAILED (#79).
         cancelDeadline(record.key)
         cancelWatchdog(record.key)
+        cancelProgressWindow(record.key)
+        clearProgressWindowState(record)
+        reattachDeliveryProgress.clear(record)
         record.obligationDeadlineAtMs = null
         record.phase = EdgeRecoveryPhase.RECOVERY_PENDING
         record.recoveryAttemptId = ++attemptSeq
