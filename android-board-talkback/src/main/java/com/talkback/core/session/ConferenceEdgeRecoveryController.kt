@@ -130,6 +130,8 @@ class ConferenceEdgeRecoveryController internal constructor(
     private val deadlineTimers = ConcurrentHashMap<ConferenceEdgeKey, ScheduledFuture<*>>()
     /** Gate 3C-D: episode-scoped negotiation intent budget (independent of attempt watchdog). */
     private val negotiationIntentTimers = ConcurrentHashMap<ConferenceEdgeKey, ScheduledFuture<*>>()
+    /** ADR-0042 INV-T3-SCHEDULE: obligation-scoped bounded progress window timers. */
+    private val progressWindowTimers = ConcurrentHashMap<ConferenceEdgeKey, ScheduledFuture<*>>()
     private val cancelledSessions = ConcurrentHashMap<String, Long>()
     private val cancelledChannels = ConcurrentHashMap<String, Long>()
     private val pendingTransportNonce = ConcurrentHashMap<ConferenceEdgeKey, String>()
@@ -906,6 +908,7 @@ class ConferenceEdgeRecoveryController internal constructor(
         cancelDebounce(key)
         cancelWatchdog(key)
         cancelDeadline(key)
+        cancelProgressWindow(key)
         val existing = edges[key]
         val now = clock()
         val newGeneration = (existing?.obligationGeneration ?: 0L) + 1L
@@ -3539,6 +3542,8 @@ class ConferenceEdgeRecoveryController internal constructor(
         deadlineTimers.clear()
         negotiationIntentTimers.values.forEach { it.cancel(false) }
         negotiationIntentTimers.clear()
+        progressWindowTimers.values.forEach { it.cancel(false) }
+        progressWindowTimers.clear()
         edges.clear()
         terminalReevaluateDedup.clear()
         cancelledSessions.clear()
@@ -3970,6 +3975,7 @@ class ConferenceEdgeRecoveryController internal constructor(
         cancelWatchdog(key)
         cancelDeadline(key)
         cancelNegotiationIntentBudget(key)
+        cancelProgressWindow(key)
         val record = edges[key] ?: return
         recoveryOfferDeliveryPolicy.cancel(record)
         record.phase = EdgeRecoveryPhase.CANCELLED
@@ -4005,6 +4011,120 @@ class ConferenceEdgeRecoveryController internal constructor(
     private fun cancelWatchdog(key: ConferenceEdgeKey) {
         watchdogTimers.remove(key)?.cancel(false)
     }
+
+    private fun cancelProgressWindow(key: ConferenceEdgeKey) {
+        progressWindowTimers.remove(key)?.cancel(false)
+    }
+
+    private fun clearProgressWindowState(record: EdgeRecoveryRecord) {
+        record.progressWindowState = ProgressWindowState.NONE
+        record.progressWindowStartedAtMs = null
+        record.progressWindowDeadlineAtMs = null
+    }
+
+    /**
+     * ADR-0042 INV-T3-SCHEDULE: arm bounded progress after outbound reattach SEND_FAILED.
+     * Coexists with WAKEUP_ARMED (capability deferral); does not replace it.
+     */
+    private fun armProgressWindowAfterSendFailed(record: EdgeRecoveryRecord) {
+        if (!record.initiatesReattach) return
+        val key = record.key
+        cancelProgressWindow(key)
+        val now = clock()
+        val budgetMs = iceRestartTimeoutMs
+        val obligationDeadline = record.obligationDeadlineAtMs
+        val windowDeadlineAt = if (obligationDeadline != null) {
+            minOf(now + budgetMs, obligationDeadline)
+        } else {
+            now + budgetMs
+        }
+        val delayMs = (windowDeadlineAt - now).coerceAtLeast(0L)
+        record.progressWindowState = ProgressWindowState.ARMED
+        record.progressWindowStartedAtMs = now
+        record.progressWindowDeadlineAtMs = windowDeadlineAt
+        val attemptId = record.recoveryAttemptId
+        val obligationGen = record.obligationGeneration
+        onLog(
+            "RECOVERY_PROGRESS_WINDOW_ARMED session=${key.sessionId} edge=${key.remoteModuleId} " +
+                "attempt=$attemptId obligationGen=$obligationGen budgetMs=$budgetMs " +
+                "deadlineAtMs=$windowDeadlineAt delayMs=$delayMs obligationOpen=true"
+        )
+        val future = scheduler.schedule({
+            val current = edges[key] ?: return@schedule
+            if (current.recoveryAttemptId != attemptId) return@schedule
+            if (current.obligationGeneration != obligationGen) return@schedule
+            if (current.obligationClosedAtMs != null) {
+                if (current.progressWindowState == ProgressWindowState.ARMED) {
+                    observeProgressWindowExpired(current)
+                }
+                return@schedule
+            }
+            onProgressWindowDeadline(current)
+        }, delayMs, TimeUnit.MILLISECONDS)
+        progressWindowTimers[key] = future
+    }
+
+    private fun onProgressWindowDeadline(record: EdgeRecoveryRecord) {
+        when (record.progressWindowState) {
+            ProgressWindowState.ARMED -> onProgressWindowTriggered(record)
+            ProgressWindowState.FIRED -> observeProgressWindowExpired(record)
+            else -> Unit
+        }
+    }
+
+    private fun onProgressWindowTriggered(record: EdgeRecoveryRecord) {
+        if (record.progressWindowState != ProgressWindowState.ARMED) return
+        record.progressWindowState = ProgressWindowState.FIRED
+        val key = record.key
+        onLog(
+            "RECOVERY_PROGRESS_WINDOW_FIRED session=${key.sessionId} edge=${key.remoteModuleId} " +
+                "attempt=${record.recoveryAttemptId} obligationGen=${record.obligationGeneration} " +
+                "deadlineAtMs=${record.progressWindowDeadlineAtMs}"
+        )
+        // Commit 2: lifecycle arm + fire observation only.
+        // Commit 3 wires FIRED → existing reevaluation / onRequestReattach reuse.
+        // EXPIRED here means the bounded window elapsed without a satisfied progress
+        // opportunity — not obligation terminal and not FAILED_MEDIA (INV-T2).
+        observeProgressWindowExpired(record)
+    }
+
+    /**
+     * Progress window ended without delivery progress. Observation only — not obligation terminal.
+     */
+    private fun observeProgressWindowExpired(record: EdgeRecoveryRecord) {
+        if (record.progressWindowState == ProgressWindowState.SATISFIED ||
+            record.progressWindowState == ProgressWindowState.EXPIRED ||
+            record.progressWindowState == ProgressWindowState.NONE
+        ) {
+            return
+        }
+        record.progressWindowState = ProgressWindowState.EXPIRED
+        val key = record.key
+        onLog(
+            "RECOVERY_PROGRESS_WINDOW_EXPIRED session=${key.sessionId} edge=${key.remoteModuleId} " +
+                "attempt=${record.recoveryAttemptId} obligationGen=${record.obligationGeneration} " +
+                "startedAtMs=${record.progressWindowStartedAtMs} deadlineAtMs=${record.progressWindowDeadlineAtMs}"
+        )
+    }
+
+    private fun satisfyProgressWindowIfActive(record: EdgeRecoveryRecord) {
+        if (record.progressWindowState == ProgressWindowState.NONE ||
+            record.progressWindowState == ProgressWindowState.SATISFIED ||
+            record.progressWindowState == ProgressWindowState.EXPIRED
+        ) {
+            return
+        }
+        cancelProgressWindow(record.key)
+        record.progressWindowState = ProgressWindowState.SATISFIED
+        val key = record.key
+        onLog(
+            "RECOVERY_PROGRESS_WINDOW_SATISFIED session=${key.sessionId} edge=${key.remoteModuleId} " +
+                "attempt=${record.recoveryAttemptId} obligationGen=${record.obligationGeneration}"
+        )
+    }
+
+    // Commit 3: reevaluateFromProgressWindow → runCompletionEvaluationStub / onRequestReattach
+    // is intentionally not wired in Commit 2.
 
     private fun upsertEdge(
         key: ConferenceEdgeKey,
@@ -4422,6 +4542,7 @@ class ConferenceEdgeRecoveryController internal constructor(
         when (outcome) {
             ReattachDispatchOutcome.SENT -> {
                 cancelDebounce(key)
+                satisfyProgressWindowIfActive(record)
                 record.phase = EdgeRecoveryPhase.REATTACH_REQUESTED
                 record.reattachDeliveryState = ReattachDeliveryState.TRANSPORT_SENT
                 record.outboundDispatchAttemptId = record.recoveryAttemptId
@@ -4495,6 +4616,7 @@ class ConferenceEdgeRecoveryController internal constructor(
                     trigger = trigger?.name ?: "DISPATCH_REATTACH_SEND_FAILED"
                 )
                 scheduleWatchdog(record)
+                armProgressWindowAfterSendFailed(record)
                 onLog(
                     "RECOVERY_DECISION session=${key.sessionId} edge=${key.remoteModuleId} " +
                         "attempt=${record.recoveryAttemptId}$triggerPart " +
@@ -4594,6 +4716,8 @@ class ConferenceEdgeRecoveryController internal constructor(
         // Also cancel the superseded attempt's watchdog so it cannot emit FAILED (#79).
         cancelDeadline(record.key)
         cancelWatchdog(record.key)
+        cancelProgressWindow(record.key)
+        clearProgressWindowState(record)
         record.obligationDeadlineAtMs = null
         record.phase = EdgeRecoveryPhase.RECOVERY_PENDING
         record.recoveryAttemptId = ++attemptSeq
