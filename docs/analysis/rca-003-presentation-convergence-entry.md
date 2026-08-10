@@ -4,6 +4,7 @@
 **Date:** 2026-08-11  
 **Name (frozen):** Presentation Convergence after Recovery  
 **Parent milestone:** [recovery-lastmile-milestone-v1-freeze.md](./recovery-lastmile-milestone-v1-freeze.md)  
+**R4:** [rca-003-r4-conference-media-unavailable-ownership-trace.md](./rca-003-r4-conference-media-unavailable-ownership-trace.md)  
 **R5 sealed:** [rca-003-r5-failed-media-residency-clear-contract.md](./rca-003-r5-failed-media-residency-clear-contract.md)
 
 | Round | Result | Doc |
