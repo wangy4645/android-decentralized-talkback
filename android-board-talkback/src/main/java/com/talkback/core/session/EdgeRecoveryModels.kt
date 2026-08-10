@@ -166,6 +166,13 @@ internal enum class MediaActionOwner {
         ABORTED -> "ABORTED"
         else -> name
     }
+
+    /**
+     * RCA-001: participation intent must not veto restart authority.
+     * `HOST_RESTART` supersedes `PARTICIPANT_REATTACH` (owner transition, not clear).
+     */
+    fun canBeSupersededBy(requested: MediaActionOwner): Boolean =
+        this == PARTICIPANT_REATTACH && requested == HOST_RESTART
 }
 
 /** Closed enum — do not add SENT/DISPATCHING/COMPLETED (those live in [EdgeRecoveryPhase]). */
@@ -379,6 +386,20 @@ internal enum class ProgressWindowState {
     fun isActive(): Boolean = this == ARMED || this == FIRED
 }
 
+/**
+ * RRA-005 Phase-2: REATTACH delivery observation lifecycle (truth only).
+ * Orthogonal to [ProgressWindowState] and [RecoveryOfferDeliveryPhase].
+ */
+internal enum class ReattachDeliveryProgressState {
+    NONE,
+    /** Observation obligation armed after TRANSPORT_SENT; waiting remote evidence. */
+    WAITING_REMOTE_EVIDENCE,
+    /** Remote delivery evidence obtained (e.g. REMOTE_RECEIPT_ACKED). */
+    EVIDENCE_OBTAINED,
+    /** Bounded wait ended without evidence — not failure / not retry mandate. */
+    EXPIRED
+}
+
 internal data class EdgeRecoveryRecord(
     val key: ConferenceEdgeKey,
     var phase: EdgeRecoveryPhase,
@@ -526,7 +547,14 @@ internal data class EdgeRecoveryRecord(
     /**
      * Progress window end — subordinate to [obligationDeadlineAtMs]; not a new obligation budget.
      */
-    var progressWindowDeadlineAtMs: Long? = null
+    var progressWindowDeadlineAtMs: Long? = null,
+    /**
+     * RRA-005 Phase-2: REATTACH delivery observation (orthogonal to ProgressWindow / offer delivery).
+     */
+    var reattachDeliveryProgressState: ReattachDeliveryProgressState =
+        ReattachDeliveryProgressState.NONE,
+    var reattachDeliveryProgressStartedAtMs: Long? = null,
+    var reattachDeliveryProgressDeadlineAtMs: Long? = null
 ) {
     /** True while this record owns an active recovery attempt (ADR-0022 P0.5). */
     fun hasActiveAttempt(): Boolean = phase.isActivelyRecovering()

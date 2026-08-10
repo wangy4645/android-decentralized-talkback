@@ -162,7 +162,13 @@ enum class RecoveryReevaluateTrigger {
     /** ADR-0035 PR4: peer handler processed recovery offer (delivery CONFIRMED). */
     DELIVERY_CONFIRMED,
     /** ADR-X1: outbound REATTACH receipt acknowledged; admission reevaluation required. */
-    REMOTE_RECEIPT_ACKED
+    REMOTE_RECEIPT_ACKED,
+    /**
+     * RCA-002: delivery observation closed without receipt; in-flight latch released.
+     * Not RETRY_REQUIRED — evaluation may open a **new** delivery attempt only when
+     * path/dispatch evidence allows (delivery opportunity reacquisition).
+     */
+    DELIVERY_OPPORTUNITY_REACQUIRED
 }
 
 /**

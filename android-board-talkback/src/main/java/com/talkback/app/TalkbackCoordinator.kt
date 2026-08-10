@@ -74,6 +74,7 @@ import com.talkback.core.session.ChannelModeFsm
 import com.talkback.core.session.ChannelReadiness
 import com.talkback.core.session.ConferenceEdgeRecoveryController
 import com.talkback.core.session.ConferenceBootstrapDeferral
+import com.talkback.core.session.ConferenceSameSessionRejoinAcceptance
 import com.talkback.core.session.DefaultMembershipAuthorityResolver
 import com.talkback.core.session.MembershipAuthorityResolveTrace
 import com.talkback.core.session.MembershipResyncKey
@@ -5490,6 +5491,24 @@ class TalkbackCoordinator(
                     return
                 }
             }
+            // CONFERENCE_SAME_SESSION_REJOIN_ACCEPTANCE: Host rejoin+SDP on still-held
+            // conference must reconnect before prepareForGroupInvite's same-session BUSY.
+            // Ordinary duplicate conference invites (rejoin=false / no SDP) keep BUSY.
+            if (ConferenceSameSessionRejoinAcceptance.shouldAcceptReconnect(
+                    existingType = existing.type,
+                    existingSessionId = existing.id,
+                    existingHostModuleId = existing.initiatorModuleId?.value,
+                    inviteSessionId = signal.sessionId,
+                    callerModuleId = caller.moduleId.value,
+                    payloadRejoin = payload.rejoin,
+                    payloadSdpBlank = payload.sdp.isBlank(),
+                    payloadInitiatorModuleId = payload.initiatorModuleId.takeIf { it.isNotBlank() }
+                )
+            ) {
+                if (acceptGroupInviteReconnect(existing, signal, fromPeer, payload)) {
+                    return
+                }
+            }
         }
 
         if (!prepareForGroupInvite(signal, channelId, caller.moduleId.value)) {
@@ -5670,7 +5689,11 @@ class TalkbackCoordinator(
             .forEach { offerGroupMeshJoin(session, it) }
     }
 
-    /** Existing canonical GROUP session: treat duplicate GROUP_INVITE as ICE-restart reconnect. */
+    /**
+     * Existing same-session mesh invite: apply SDP as ICE-restart reconnect (no new session).
+     * Used for GROUP duplicates and for CONFERENCE Host rejoin after
+     * [ConferenceSameSessionRejoinAcceptance] admits the invite.
+     */
     private fun acceptGroupInviteReconnect(
         session: TalkbackSession,
         signal: SignalEnvelope,
@@ -5684,7 +5707,12 @@ class TalkbackCoordinator(
         val peerId = caller.moduleId.value
         val ice = qosMonitor.snapshot(peerId)?.iceState
         val channelId = session.channelId
-        if (channelId != null &&
+        // Explicit conference Host rejoin skips GROUP mesh ice-restart throttle; Host already
+        // marked recovery intent on the wire (rejoin+SDP). Ordinary GROUP path keeps throttle.
+        val conferenceHostRejoin =
+            session.type == SessionType.CONFERENCE && payload.rejoin
+        if (!conferenceHostRejoin &&
+            channelId != null &&
             session.meshCompletedModules.contains(peerId) &&
             !IceConnectivity.isConnected(ice) &&
             !groupMeshReconciler.canAcceptIceRestart(channelId, peerId, ice)
@@ -5724,7 +5752,8 @@ class TalkbackCoordinator(
                 path = "RECONNECT"
             )
         }
-        log("${sessionTag(session)} Group invite reconnect accepted from ${caller.moduleId.value}")
+        val label = if (session.type == SessionType.CONFERENCE) "Conference" else "Group"
+        log("${sessionTag(session)} $label invite reconnect accepted from ${caller.moduleId.value}")
         updateSessionReceivePlayback(session)
         emitGroupTopologySnapshot(TopologySnapshotReason.RECONNECT, session)
         onGroupConvergenceBoundary(session)
