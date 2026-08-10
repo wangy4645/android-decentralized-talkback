@@ -97,9 +97,9 @@ These are different problems. **Do not edit the recovery chain to “fix” UX/j
 
 | Pri | Action | Track |
 |-----|--------|-------|
-| P0 | This memo + status freeze | **done by landing this doc** |
-| P1 | RCA-003 Presentation Convergence after Recovery | independent; no recovery edits |
-| P2 | Join churn observation (M02 leave / restart / join fail) | Session lifecycle; independent |
+| P0 | This memo + status freeze | **done** |
+| P1 | RCA-003 Presentation Convergence after Recovery — **observe only** | [observation round 1](./rca-003-presentation-convergence-observation-round1.md); no recovery edits |
+| P2 | Join churn observation (M02 leave / restart / join fail) | Session lifecycle; **deferred**; not “WiFi recovery join issue” |
 
 ## Do not change
 
