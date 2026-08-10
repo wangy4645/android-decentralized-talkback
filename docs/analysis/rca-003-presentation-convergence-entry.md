@@ -1,51 +1,49 @@
 # RCA-003 — Presentation Convergence after Recovery
 
-**Status:** OPEN — Round-3 **D-like** · Round-4 **desk authorized** · **no product code** · **no more flap soak**  
-**Date:** 2026-08-10  
+**Status:** OPEN — R4 ownership **COMPLETE** · R5 residency clear **design OPEN** · **no product code**  
+**Date:** 2026-08-11  
 **Name (frozen):** Presentation Convergence after Recovery  
 **Parent milestone:** [recovery-lastmile-milestone-v1-freeze.md](./recovery-lastmile-milestone-v1-freeze.md)
 
 | Round | Result | Doc |
 |-------|--------|-----|
 | 1 | Case C (`EDGE_RECOVERED` absent) | [adj](./rca-003-round1-adjudication-20260810-210401.md) |
-| 2 | Case E — `DEGRADED_STUCK` confirmed | [adj](./rca-003-round2-adjudication-20260810-211253.md) |
-| 3 | D-like — `DEGRADED_TRANSITIONAL` (may self-clear) | [adj](./rca-003-round3-adjudication-20260810-220243.md) |
-| 4 | Identify peer-healthy SoT (`mediaUnavailable` set/clear) | [desk](./rca-003-presentation-convergence-desk-round4.md) |
+| 2 | Case E — `DEGRADED_STUCK` | [adj](./rca-003-round2-adjudication-20260810-211253.md) |
+| 3 | D-like — `DEGRADED_TRANSITIONAL` | [adj](./rca-003-round3-adjudication-20260810-220243.md) |
+| 4 | Ownership trace COMPLETE | [R4](./rca-003-r4-conference-media-unavailable-ownership-trace.md) |
+| 5 | Failed Media Residency Clear Contract | [R5](./rca-003-r5-failed-media-residency-clear-contract.md) |
 
-## Current finding (freeze)
+## Freeze
 
 ```text
-Recovery last-mile: PASS / NOT IMPLICATED
-Presentation convergence depends on a peer-health aggregation path after media recovery.
+RCA-003 R4 COMPLETE
 
-Open: identify degraded projection owner
-      (mediaUnavailable produce/clear)
+Next:
+RCA-003 R5
+Failed Media Residency Clear Contract
+
+Scope: clear/invalidation semantics
+Not: UI · WiFi recovery · ICE · Retry
 ```
 
+## Remaining seam
+
 ```text
-Was:  WiFi recovery unstable / recovering sticky
-Now:  which state decides peer is healthy after recovery?
+FAILED_MEDIA residency lifecycle
+vs
+current media health → pill
 ```
 
-## Model (freeze)
+Not “why recovery fails.”
+
+## R4 three lines (closed)
 
 ```text
-Media lifecycle
-      |
-      v
-Peer health aggregation
-      |
-      v
-Presentation projection
-```
-
-## Closed directions
-
-```text
-WiFi recovery · Phase-2 delivery · media ownership · ICE restart main chain
-simple recovering flag not cleared
+SET:    enterFailedMediaResidency → FAILED_MEDIA_RECOVERY
+CLEAR:  RecoveryResidencyClearPolicy (closed ∧ ice ∧ receivePathLive)
+Consumer: UVCP ← mediaUnavailablePeer
 ```
 
 ## Next
 
-Round-4 desk only — no flap soak.
+R5.1–R5.3 design answers only — then Implementation Candidate (separate auth).
