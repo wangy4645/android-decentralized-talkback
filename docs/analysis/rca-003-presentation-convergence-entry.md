@@ -92,10 +92,10 @@ R5.2  CLEAR = obligationClosed ∧ iceConnected ∧ receivePathLive
 R5.3  FAILED_MEDIA ≠ CURRENT_UNAVAILABLE
 ```
 
-## Next (only if continuing)
+## Next (independent — not RCA-003)
 
 ```text
-New independent track (optional):
-  Session Churn / Mesh Edge Recovery Stability
+RCA-004 Media Edge Recovery Convergence Audit (AUDIT ONLY)
+  docs/analysis/rca-004-media-edge-recovery-convergence-audit-entry.md
 Not: modify recovery · Phase-2 · UVCP for RCA-003
 ```
