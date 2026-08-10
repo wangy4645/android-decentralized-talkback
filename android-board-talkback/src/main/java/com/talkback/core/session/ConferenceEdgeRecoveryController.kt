@@ -4081,11 +4081,13 @@ class ConferenceEdgeRecoveryController internal constructor(
                 "attempt=${record.recoveryAttemptId} obligationGen=${record.obligationGeneration} " +
                 "deadlineAtMs=${record.progressWindowDeadlineAtMs}"
         )
-        // Commit 2: lifecycle arm + fire observation only.
-        // Commit 3 wires FIRED → existing reevaluation / onRequestReattach reuse.
-        // EXPIRED here means the bounded window elapsed without a satisfied progress
-        // opportunity — not obligation terminal and not FAILED_MEDIA (INV-T2).
-        observeProgressWindowExpired(record)
+        // INV-T3-SCHEDULE: obligation-owned redispatch opportunity via existing evaluation path.
+        // Does not invent Coordinator schedule ownership; does not call WebRTC from scheduler.
+        reevaluateFromProgressWindow(record)
+        // One-shot window: if reevaluate did not satisfy (SENT), observe expiry — not FAILED_MEDIA.
+        if (record.progressWindowState == ProgressWindowState.FIRED) {
+            observeProgressWindowExpired(record)
+        }
     }
 
     /**
@@ -4123,8 +4125,35 @@ class ConferenceEdgeRecoveryController internal constructor(
         )
     }
 
-    // Commit 3: reevaluateFromProgressWindow → runCompletionEvaluationStub / onRequestReattach
-    // is intentionally not wired in Commit 2.
+    /**
+     * Obligation-owned progress evaluation — reuses [runCompletionEvaluationStub] / [onRequestReattach].
+     * Trigger is not a capability-wakeup binding match; external events may still accelerate separately.
+     */
+    private fun reevaluateFromProgressWindow(record: EdgeRecoveryRecord) {
+        if (!record.edgeObligationOpen()) return
+        if (!record.initiatesReattach) return
+        val snapshot = buildCompletionEvaluationSnapshot(record)
+        val signature = projectRecoveryCapabilitySignature(
+            snapshot = snapshot,
+            initiatesReattach = record.initiatesReattach,
+            controlPlaneStarted = record.controlPlaneStarted()
+        )
+        onLog(
+            "RECOVERY_PROGRESS_WINDOW_REEVALUATE session=${record.key.sessionId} " +
+                "edge=${record.key.remoteModuleId} attempt=${record.recoveryAttemptId} " +
+                "obligationGen=${record.obligationGeneration} " +
+                "permitted=${signature.permittedActions.joinToString(",")}"
+        )
+        refreshControlReconciliationFact(record)
+        runCompletionEvaluationStub(
+            record = record,
+            snapshot = snapshot,
+            signature = signature,
+            trigger = RecoveryReevaluateTrigger.LINK_READY
+        )
+        emitCompletionObservations(record, snapshot, RecoveryReevaluateTrigger.LINK_READY)
+        notifyChanged(record.key.sessionId)
+    }
 
     private fun upsertEdge(
         key: ConferenceEdgeKey,

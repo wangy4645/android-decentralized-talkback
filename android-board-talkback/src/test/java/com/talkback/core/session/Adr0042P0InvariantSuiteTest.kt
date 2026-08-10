@@ -135,6 +135,10 @@ class Adr0042P0InvariantSuiteTest {
         assertTrue(
             decisionLogs.any { it.contains("outcome=SEND_FAILED") && it.contains("obligationOpen=true") }
         )
+        assertTrue(
+            "INV-T3-SCHEDULE: SEND_FAILED must arm progress window alongside WAKEUP",
+            decisionLogs.any { it.contains("RECOVERY_PROGRESS_WINDOW_ARMED") }
+        )
         assertFalse(controller.factsForSession("sess-adr42").anyFailedMediaRecovery)
         assertTrue(controller.edgeObligationOpen("sess-adr42", "M02"))
         assertTrue(controller.factsForSession("sess-adr42").anyRecovering)
@@ -166,6 +170,39 @@ class Adr0042P0InvariantSuiteTest {
             decisionLogs.any { it.contains("rejectReason=transport_in_flight") }
         )
         assertFalse(controller.factsForSession("sess-adr42").anyFailedMediaRecovery)
+    }
+
+    @Test
+    fun t3b_afterSendFailed_progressWindowFires_redispatchWithoutExternalRouteEvent() {
+        var round = 0
+        nextOutcome = {
+            round++
+            if (round == 1) ReattachDispatchOutcome.SEND_FAILED else ReattachDispatchOutcome.SENT
+        }
+        startParticipantReattach()
+        assertEquals(1, reattachCalls)
+        assertTrue(decisionLogs.any { it.contains("RECOVERY_PROGRESS_WINDOW_ARMED") })
+
+        decisionLogs.clear()
+        reattachCalls = 0
+        // iceRestartTimeoutMs=200 — progress window budget; no ROUTE_CONVERGED / DIGEST.
+        nowMs = 300L
+        Thread.sleep(250)
+
+        assertTrue(
+            "INV-T3-SCHEDULE: progress window must attempt redispatch without external route event",
+            reattachCalls >= 1
+        )
+        assertTrue(
+            decisionLogs.any { it.contains("RECOVERY_PROGRESS_WINDOW_FIRED") }
+        )
+        assertTrue(
+            "successful progress redispatch must satisfy window",
+            decisionLogs.any { it.contains("RECOVERY_PROGRESS_WINDOW_SATISFIED") } ||
+                decisionLogs.any { it.contains("outcome=TRANSPORT_SENT") }
+        )
+        assertFalse(controller.factsForSession("sess-adr42").anyFailedMediaRecovery)
+        assertTrue(controller.edgeObligationOpen("sess-adr42", "M02"))
     }
 
     @Test
