@@ -1,48 +1,51 @@
 # RCA-003 — Presentation Convergence after Recovery
 
-**Status:** OPEN — Round-2 **Case E CONFIRMED** · Round-3 **authorized** · **no product code**  
+**Status:** OPEN — Round-3 **D-like** · Round-4 **desk authorized** · **no product code** · **no more flap soak**  
 **Date:** 2026-08-10  
 **Name (frozen):** Presentation Convergence after Recovery  
 **Parent milestone:** [recovery-lastmile-milestone-v1-freeze.md](./recovery-lastmile-milestone-v1-freeze.md)
 
 | Round | Result | Doc |
 |-------|--------|-----|
-| 1 | Case C (`EDGE_RECOVERED` absent) | [adjudication](./rca-003-round1-adjudication-20260810-210401.md) |
-| 2 | Case E CONFIRMED | [adjudication](./rca-003-round2-adjudication-20260810-211253.md) |
-| 3 | Identify degraded state owner | [observation](./rca-003-presentation-convergence-observation-round3.md) |
+| 1 | Case C (`EDGE_RECOVERED` absent) | [adj](./rca-003-round1-adjudication-20260810-210401.md) |
+| 2 | Case E — `DEGRADED_STUCK` confirmed | [adj](./rca-003-round2-adjudication-20260810-211253.md) |
+| 3 | D-like — `DEGRADED_TRANSITIONAL` (may self-clear) | [adj](./rca-003-round3-adjudication-20260810-220243.md) |
+| 4 | Identify peer-healthy SoT (`mediaUnavailable` set/clear) | [desk](./rca-003-presentation-convergence-desk-round4.md) |
 
-## Frozen finding (after Round-2)
+## Current finding (freeze)
 
 ```text
 Recovery last-mile: PASS / NOT IMPLICATED
-Presentation convergence: OPEN
+Presentation convergence depends on a peer-health aggregation path after media recovery.
 
-Recovery terminal state exists
-Media lifecycle CONNECTED
-Presentation degraded projection persists (DUT view)
+Open: identify degraded projection owner
+      (mediaUnavailable produce/clear)
 ```
 
 ```text
-Was:  WiFi recovery unstable
-Now:  ordinary state-convergence bug after recovery success
+Was:  WiFi recovery unstable / recovering sticky
+Now:  which state decides peer is healthy after recovery?
 ```
 
-## Seam (fixed)
+## Model (freeze)
 
 ```text
-Media Lifecycle State
-          |
-          v
-Presentation Projection State
+Media lifecycle
+      |
+      v
+Peer health aggregation
+      |
+      v
+Presentation projection
 ```
 
-**Do not dig:** WiFi · ICE · reattach · delivery · ownership.
+## Closed directions
 
-## Entry gate (unchanged)
-
-`EDGE_RECOVERED?` — Round-2 **yes** on host; remaining gap is presentation.
+```text
+WiFi recovery · Phase-2 delivery · media ownership · ICE restart main chain
+simple recovering flag not cleared
+```
 
 ## Next
 
-Round-3: T1/T2/T3 + last writer of `degraded` (hypotheses A cache vs B wider axes).  
-Code only after admission.
+Round-4 desk only — no flap soak.
