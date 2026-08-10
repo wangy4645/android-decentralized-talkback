@@ -1,8 +1,9 @@
 # RCA-004 — Media Edge Recovery Convergence Audit
 
-**Status:** OPEN — **AUDIT ONLY**  
+**Status:** AUDIT COMPLETE — **Finding issued** (still no impl)  
 **Date:** 2026-08-11  
 **Name (frozen):** Media Edge Recovery Convergence Audit  
+**Finding:** [rca-004-media-edge-recovery-convergence-finding.md](./rca-004-media-edge-recovery-convergence-finding.md)  
 **Predecessor (CLOSED):** [rca-003-presentation-convergence-entry.md](./rca-003-presentation-convergence-entry.md)  
 **Field seeds:**  
 - [mesh-m02-media-unrecovered-20260811-064426.md](./mesh-m02-media-unrecovered-20260811-064426.md)  
@@ -226,5 +227,9 @@ RCA-003 CLOSE (done)
 
 ## Next action
 
-Execute A1→A2→A3 as **desk read** against code + existing logs (`064426`, `062506`).  
-No new field soak required to start A1–A3.
+```text
+A1–A3 done → Finding issued
+P2 design ONLY if prioritized (admission / dual-owner seam)
+Not: impl · retry · UVCP · edge-scoped redesign jump
+```
+
