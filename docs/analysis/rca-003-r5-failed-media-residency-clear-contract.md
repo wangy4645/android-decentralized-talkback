@@ -1,173 +1,146 @@
-# RCA-003-R5 — Failed Media Residency Clear Contract
+# RCA-003-R5 — Failed Media Residency Clear Contract (SEALED)
 
-**Status:** OPEN — **design only** · Implementation **NOT AUTHORIZED**  
+**Status:** **R5.1–R5.3 ACCEPTED** · Implementation Candidate **NOT AUTHORIZED**  
 **Date:** 2026-08-11  
-**Kind:** Residency Clear Design (small contract track — not a WiFi RCA reopen)  
-**Upstream:** [rca-003-r4-conference-media-unavailable-ownership-trace.md](./rca-003-r4-conference-media-unavailable-ownership-trace.md) **COMPLETE**  
-**Parents (read-only):** [ADR-0045](../adr/0045-post-obligation-failed-media-residency-clear-admission.md) · [ADR-0044](../adr/0044-user-visible-connectivity-semantics-media-residency.md) · [ADR-0030](../adr/0030-presence-projection-contract.md)
+**Kind:** Residency Clear Design (semantic freeze only)  
+**Upstream:** [rca-003-r4-conference-media-unavailable-ownership-trace.md](./rca-003-r4-conference-media-unavailable-ownership-trace.md)  
+**Parents:** [ADR-0045](../adr/0045-post-obligation-failed-media-residency-clear-admission.md) · [ADR-0044](../adr/0044-user-visible-connectivity-semantics-media-residency.md) · [ADR-0030](../adr/0030-presence-projection-contract.md)
 
-## Freeze before design
+## Freeze banner
 
 ```text
 RCA-003 R4 COMPLETE
+RCA-003 R5.1–R5.3 ACCEPTED (semantics)
 
-Next:
-RCA-003 R5
-Failed Media Residency Clear Contract
+Next (optional): Implementation Candidate — separate auth
+Not yet: code · UI · WiFi · ICE · retry · more field soak
+```
 
-Scope:
-  clear / invalidation semantics
-  FAILED_MEDIA residency lifecycle meaning
+---
 
-Not:
-  UI / Meeting pill rewrite
-  WiFi recovery last-mile
-  ICE restart policy
-  Retry / timeout budget
-  Phase-2 delivery / ownership / acceptance
+## R5.1 ACCEPT — FAILED_MEDIA = incident residency
+
+```text
+FAILED_MEDIA_RECOVERY
+    = recovery incident residue
+    = “entered failed recovery path; not yet confirmed cleared”
+
+NOT:
+    = current media unavailable
+```
+
+**Normative one-liner:**
+
+```text
+FAILED_MEDIA_RECOVERY means an uncleared recovery-incident residency,
+not a live assertion that the peer media path is unusable right now.
+```
+
+**Why:** Field shows `MEDIA_LIFECYCLE=CONNECTED` (and ice/receivePath live) while residency still holds → treating it as current availability creates CONNECTED→degraded contradiction.
+
+---
+
+## R5.2 ACCEPT — clear predicate (no EDGE_RECOVERED)
+
+```text
+CLEAR_ALLOWED =
+    obligationClosed
+    AND
+    mediaEvidenceHealthy
+
+mediaEvidenceHealthy =
+    iceConnected
+    AND
+    receivePathLive
 ```
 
 ```text
-Recovery · Delivery · Media ownership · Conference accept  = PASS
-Remaining = FAILED_MEDIA residency lifecycle vs current health projection
+EDGE_RECOVERED is NOT required for residency clear.
+EDGE_RECOVERED = completion truth.
+Residency clear = “should this incident still project?”
 ```
 
-## Problem (one sentence)
+Aligns with ADR-0045 GATE+E4 shape; **does not** add completion as a projection gate (avoids Completion→Projection stuck).
 
-> Why can a connection that is already restored still let `FAILED_MEDIA` history drive the user-visible degraded view?
-
-## Known behavior (from R3/R4 — do not redispute)
+**Early clear while obligation OPEN?**
 
 ```text
-attempt_timeout (+ MEMBERSHIP_CONVERGENCE_*)
-        |
+NO — obligation must be closed before CLEAR_ALLOWED.
+```
+
+(Matches ADR-0045 post-obligation admission; R5 does not authorize open-obligation clear.)
+
+---
+
+## R5.3 ACCEPT — FAILED_MEDIA ≠ CURRENT_UNAVAILABLE
+
+```text
+FAILED_MEDIA          ≠  CURRENT_UNAVAILABLE
+```
+
+| Fact | Consumers |
+|------|-----------|
+| **FAILED_MEDIA / incident residency** | Recovery diagnostics, incident reporting, clear policy |
+| **CURRENT_UNAVAILABLE** (live health) | User projection (`UserVisibleConnectivityProjection` / pill) |
+
+**Forbidden (post-R5 intent):**
+
+```text
+if (failedMediaResidency) show degraded   // as sole current-health input
+```
+
+**Three-layer model (do not merge):**
+
+```text
+Media transport truth
+    ICE_CONNECTED
+    RECEIVE_PATH_LIVE
+
+Recovery incident truth
+    FAILED_MEDIA_RESIDENCY
+        |  CLEAR_ALLOWED (R5.2)
         v
-FAILED_MEDIA_RECOVERY          ← SET residency
-        |
-        v
-mediaUnavailablePeer=true
-        |
-        v
-pill degraded
+    CLEARED
 
-Meanwhile (can already be true):
-ICE CONNECTED · receivePath LIVE · MEDIA CONNECTED · (host) EDGE_RECOVERED
+User projection
+    degraded / syncing / healthy
+    ← current health only (not incident residue)
+```
 
-Clear today (ADR-0045):
-obligation closed ∧ iceConnected ∧ receivePathLive
-→ FAILED_MEDIA_RESIDENCY_CLEARED
-
-Stuck mode (R2):
-CLEAR_HELD when receivePathLive=false after deadline
+```text
+ICE_CONNECTED does not auto-clear residency.
+Residency waits CLEAR_ALLOWED, then projection may recover.
 ```
 
 ---
 
-## Q1 — What is the semantics of FAILED_MEDIA residency?
+## ADR impact (named, not amended here)
 
-**Open decision (must pick one wording):**
+| Artifact | Impact |
+|----------|--------|
+| ADR-0030 `mediaUnavailable(P) ⇔ failed-media residency` | **Tension** with R5.3 — needs amendment / successor ADR before IC changes UVCP inputs |
+| ADR-0045 clear admission | Predicate shape **confirmed**; EDGE_RECOVERED **not** added |
+| ADR-0044 presentation | Continues to map **current** unavailable → DEGRADED; must not read incident as current once decoupled |
+| ADR-0038 / markRecovered | **Orthogonal** — not used as clear gate |
 
-| Option | Meaning | UI implication |
-|--------|---------|----------------|
-| **Current-unavailable** | Peer media is not usable *now* | Fair to drive `mediaUnavailablePeer` |
-| **Incident / history** | Last recovery attempt failed / observation window | Must **not** alone mean current health |
-
-Observed conflict: residency can assert while media is already CONNECTED → behaves like **incident**, UI treats as **current health**.
-
-**Design output required:** one normative sentence:
-
-```text
-FAILED_MEDIA_RECOVERY means: _______________
-It does / does not mean current path unusable.
-```
+R5 seals **intent**. Predicate/decoupling **code** requires Implementation Candidate + ADR path — not this memo alone.
 
 ---
 
-## Q2 — Who owns clear? Should EDGE_RECOVERED be required?
-
-**Current owner (frozen fact):** `RecoveryResidencyClearPolicy` (ADR-0045).
-
-**Current predicate:**
+## Exit: R5 complete when
 
 ```text
-obligationClosed ∧ iceConnected ∧ receivePathLive
+[x] R5.1 ACCEPTED — incident residency
+[x] R5.2 ACCEPTED — clear = closed + mediaEvidenceHealthy; no EDGE_RECOVERED
+[x] R5.3 ACCEPTED — FAILED_MEDIA ≠ CURRENT_UNAVAILABLE
+[ ] Implementation Candidate opened (separate)
 ```
 
-**Open:** add `EDGE_RECOVERED` (or equivalent recovery terminal) as:
-
-| Choice | Effect |
-|--------|--------|
-| **Required** | Stronger coupling to recovery episode success; may delay clear when media self-heals before terminal stamp |
-| **Accelerator only** | May admit earlier clear when terminal exists; does not replace E4 |
-| **Not required** | Keep ADR-0045 as-is; solve via Q3 decoupling instead |
-
-**Sub-question:** if ICE+receivePath healthy but obligation still OPEN, may residency clear **early**?
+## Explicit non-goals (still)
 
 ```text
-Early clear while obligation OPEN?   YES / NO / ONLY IF <predicate>
-```
-
-R5 must answer explicitly — no silent “sometimes.”
-
----
-
-## Q3 — Decouple FAILED_MEDIA from mediaUnavailable?
-
-**Candidate model (preferred direction for discussion — not accepted):**
-
-```text
-RecoveryIncidentState
-  └── FAILED_MEDIA (history / diagnostics)
-
-MediaAvailabilityState
-  └── AVAILABLE / UNAVAILABLE   ← current health only
-
-UserVisibleConnectivityProjection
-  └── consumes MediaAvailabilityState only
-  └── does NOT consume incident history
-```
-
-Analogy: “engine fault light history ≠ engine is broken now.”
-
-**If accepted:** ADR-0030 `mediaUnavailable(P) ⇔ failed-media residency` needs an **amendment path** (new ADR or ADR-0045/0030 clarification) — not a casual UVCP hide.
-
-**If rejected:** keep coupling; tighten clear/invalidation only (Q2).
-
----
-
-## Suggested sequence (no code until IC)
-
-```text
-R5.1  Define FAILED_MEDIA residency lifecycle meaning (Q1)
-        |
-R5.2  Freeze clear predicate (Q2) — EDGE_RECOVERED? early clear?
-        |
-R5.3  Decide decoupling of mediaUnavailable projection (Q3)
-        |
-Implementation Candidate (separate auth)
-```
-
-## Explicit non-goals
-
-```text
-Add timeouts / retries
-Change pill strings without fact change
-Reopen WiFi recovery / ICE / delivery
-UVCP-hide DEGRADED while residency still true (forbidden inversion)
-Absorb into ADR-0038 completion / markRecovered
-```
-
-## Relation to ADR-0045
-
-ADR-0045 already owns **post-obligation** clear admission.  
-R5 asks whether **meaning** of residency and **coupling** to UVCP still match field (CONNECTED + residency → degraded).  
-Any predicate/decoupling change is an **amendment or successor ADR**, not an informal patch.
-
-## Exit criteria for R5
-
-```text
-1. Normative answer to Q1 (one sentence)
-2. Clear predicate table (incl. EDGE_RECOVERED / early-clear YES|NO)
-3. Q3 ACCEPT or REJECT with ADR impact named
-4. Implementation Candidate doc only after 1–3 sealed
+UI string patches
+WiFi recovery / ICE / delivery / ownership reopen
+Extra timeouts / retries
+UVCP-hide while still treating residency as current unavailable without ADR change
 ```
