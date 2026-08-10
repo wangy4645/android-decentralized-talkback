@@ -358,6 +358,27 @@ data class ReattachDispatchLineage(
     val obligationGeneration: Long
 )
 
+/**
+ * ADR-0042 INV-T3-SCHEDULE: obligation-scoped bounded progress window lifecycle.
+ *
+ * Describes **progress schedule state** on an open reattach obligation — not retry algorithm
+ * (no counts, backoff, or policy). Default [NONE] until Commit 2 arms a window on SEND_FAILED.
+ */
+internal enum class ProgressWindowState {
+    /** No progress window established for the current obligation episode. */
+    NONE,
+    /** Bounded progress window armed after outbound reattach SEND_FAILED (INV-T3-SCHEDULE). */
+    ARMED,
+    /** Recovery-owned progress trigger fired (redispatch evaluation entered). */
+    FIRED,
+    /** Progress obligation satisfied (e.g. redispatch opportunity taken or delivery progressed). */
+    SATISFIED,
+    /** Window ended without required progress; distinct from transport delivery failure. */
+    EXPIRED;
+
+    fun isActive(): Boolean = this == ARMED || this == FIRED
+}
+
 internal data class EdgeRecoveryRecord(
     val key: ConferenceEdgeKey,
     var phase: EdgeRecoveryPhase,
@@ -494,7 +515,18 @@ internal data class EdgeRecoveryRecord(
     /** ADR-X1: explicit terminal admission rejection (not delivery failure). */
     var terminalAdmissionRejected: Boolean = false,
     /** ADR-X1: ownership resolution failed terminally (distinct from transient glare). */
-    var explicitOwnershipResolutionFailure: Boolean = false
+    var explicitOwnershipResolutionFailure: Boolean = false,
+    /**
+     * ADR-0042 INV-T3-SCHEDULE: bounded progress window schedule (obligation-scoped).
+     * Observation fields only in Commit 1 — no runtime writer until Controller Commit 2.
+     */
+    var progressWindowState: ProgressWindowState = ProgressWindowState.NONE,
+    /** Wall-clock when [progressWindowState] transitioned to [ProgressWindowState.ARMED]. */
+    var progressWindowStartedAtMs: Long? = null,
+    /**
+     * Progress window end — subordinate to [obligationDeadlineAtMs]; not a new obligation budget.
+     */
+    var progressWindowDeadlineAtMs: Long? = null
 ) {
     /** True while this record owns an active recovery attempt (ADR-0022 P0.5). */
     fun hasActiveAttempt(): Boolean = phase.isActivelyRecovering()
