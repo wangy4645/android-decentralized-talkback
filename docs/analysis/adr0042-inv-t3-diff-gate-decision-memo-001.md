@@ -20,9 +20,9 @@ Commits 1–4                      COMPLETE
   3 Dispatch path reuse          DONE
   4 G4 oracle + G5 Adr0042       DONE
 
-src/main mutation                AUTHORIZED (landed Commits 1–3)
-Desk G4/G5                       GREEN
-APK / field run                    NOT AUTHORIZED
+ADR-0042 §4 merge                COMPLETE (INV-T3-SCHEDULE)
+Field validation run card        DRAFT — recovery-reattach-progress-validation-001.md
+Field / APK                      NOT AUTHORIZED (await run-card APPROVE)
 ```
 
 **Meaning:** Proposed touch surface is **equivalent** to IA-approved surface. Implementation may proceed under frozen constraints below — **not** unbounded.
