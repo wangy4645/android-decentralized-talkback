@@ -9,9 +9,10 @@ import org.junit.Test
 import java.util.concurrent.Executors
 
 /**
- * ADR-0042 P0 — Commit 3 invariant suite (Sync-scoped + add).
+ * ADR-0042 P0 — invariant suite (INV-T1/T2/T3 eligibility + INV-T3-SCHEDULE desk cases).
  *
- * Complements [Adr0042P0ReattachSendFailedReactionTest] (Commit 1 red → green).
+ * Complements [Adr0042P0ReattachSendFailedReactionTest] and
+ * [Adr0042InvT3ScheduleProgressOracleTest] (G4 progress oracle).
  * Does not change ADR-0035 / X1 / completion predicates.
  */
 class Adr0042P0InvariantSuiteTest {
