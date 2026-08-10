@@ -1,9 +1,11 @@
 # WiFi recovery — protocol last-mile v1 soak run card
 
-**Status:** AUTHORIZED (stability verification)  
+**Status:** EXECUTED — protocol PASS (see milestone freeze)  
 **Parent freeze:** [wifi-recovery-last-mile-freeze-20260810.md](./wifi-recovery-last-mile-freeze-20260810.md)  
-**Tag intent:** `recovery-protocol-last-mile-v1` = protocol COMPLETE; **not** behavior exhausted  
-**PR:** [#150](https://github.com/wangy4645/android-decentralized-talkback/pull/150)
+**Milestone:** [recovery-lastmile-milestone-v1-freeze.md](./recovery-lastmile-milestone-v1-freeze.md)  
+**Tag:** `recovery-protocol-last-mile-v1` = protocol COMPLETE; **not** UX/join PASS  
+**PR:** [#150](https://github.com/wangy4645/android-decentralized-talkback/pull/150)  
+**Soak log:** `logs/lastmile-soak-20260810-192332/`
 
 ## Purpose
 
