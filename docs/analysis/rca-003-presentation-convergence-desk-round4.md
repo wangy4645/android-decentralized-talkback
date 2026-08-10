@@ -1,6 +1,6 @@
 # RCA-003 Round-4 — desk: who owns peer-healthy after recovery?
 
-**Status:** AUTHORIZED — **desk / log re-read only; no flap soak; no product code**  
+**Status:** SUPERSEDED by [rca-003-r4-conference-media-unavailable-ownership-trace.md](./rca-003-r4-conference-media-unavailable-ownership-trace.md) (COMPLETE)  
 **Parent:** [rca-003-presentation-convergence-entry.md](./rca-003-presentation-convergence-entry.md)  
 **Round-3:** [rca-003-round3-adjudication-20260810-220243.md](./rca-003-round3-adjudication-20260810-220243.md)
 
