@@ -1,51 +1,48 @@
 # RCA-003 — Presentation Convergence after Recovery
 
-**Status:** OPEN — Round-1 **ADJUDICATED (Case C)** · Round-2 **authorized** · **no code**  
+**Status:** OPEN — Round-2 **Case E CONFIRMED** · Round-3 **authorized** · **no product code**  
 **Date:** 2026-08-10  
 **Name (frozen):** Presentation Convergence after Recovery  
-**Not:** “UI bug” / “WiFi recovery broken” / “修 UI”  
-**Parent milestone:** [recovery-lastmile-milestone-v1-freeze.md](./recovery-lastmile-milestone-v1-freeze.md)  
-**Round-1 adjudication:** [rca-003-round1-adjudication-20260810-210401.md](./rca-003-round1-adjudication-20260810-210401.md)  
-**Round-2 card:** [rca-003-presentation-convergence-observation-round2.md](./rca-003-presentation-convergence-observation-round2.md)
+**Parent milestone:** [recovery-lastmile-milestone-v1-freeze.md](./recovery-lastmile-milestone-v1-freeze.md)
 
-## Entry gate
+| Round | Result | Doc |
+|-------|--------|-----|
+| 1 | Case C (`EDGE_RECOVERED` absent) | [adjudication](./rca-003-round1-adjudication-20260810-210401.md) |
+| 2 | Case E CONFIRMED | [adjudication](./rca-003-round2-adjudication-20260810-211253.md) |
+| 3 | Identify degraded state owner | [observation](./rca-003-presentation-convergence-observation-round3.md) |
 
-```text
-EDGE_RECOVERED 是否已经产生？
-```
-
-Round-1: **no** → Case C · recovery **not** implicated · presentation convergence **not yet** proven.
-
-## Round-1 one-liner
+## Frozen finding (after Round-2)
 
 ```text
-recovering cleared + degraded remains
-≠ recovering sticky after EDGE_RECOVERED
-≠ reopen recovery
+Recovery last-mile: PASS / NOT IMPLICATED
+Presentation convergence: OPEN
+
+Recovery terminal state exists
+Media lifecycle CONNECTED
+Presentation degraded projection persists (DUT view)
 ```
-
-`recovering` and `degraded` are **different projection sources**.  
-`recovering cleared ≠ fully healthy`.
-
-## Goal (updated)
-
-Still prove terminal → presentation propagation when F1=yes.  
-Until then, Round-2 answers only: **degraded lifecycle = transient (D) or durable (E)?**
 
 ```text
-Was:  “恢复后 UI 不对？”
-Now:  “recovering 清除后，degraded projection 的生命周期是什么？”
+Was:  WiFi recovery unstable
+Now:  ordinary state-convergence bug after recovery success
 ```
 
-## Out of scope
+## Seam (fixed)
 
 ```text
-INV-T3 · RRA-005 · RCA-001 · RCA-002 · acceptance · completion · ICE
-Session Churn / Join Stability (separate)
+Media Lifecycle State
+          |
+          v
+Presentation Projection State
 ```
+
+**Do not dig:** WiFi · ICE · reattach · delivery · ownership.
+
+## Entry gate (unchanged)
+
+`EDGE_RECOVERED?` — Round-2 **yes** on host; remaining gap is presentation.
 
 ## Next
 
-1. Execute Round-2 (≥120s, no hangup)  
-2. Classify D / E  
-3. Code only after Case E (or later Case B) admission + design review
+Round-3: T1/T2/T3 + last writer of `degraded` (hypotheses A cache vs B wider axes).  
+Code only after admission.
