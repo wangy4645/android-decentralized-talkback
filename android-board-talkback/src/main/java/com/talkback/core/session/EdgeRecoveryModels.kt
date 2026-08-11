@@ -474,6 +474,13 @@ internal data class EdgeRecoveryRecord(
     /** ADR-0037 Phase 3.2: canonical negotiation owner for this episode+edge. */
     var canonicalNegotiationOwnerModuleId: String? = null,
     /**
+     * ADR-0050 Option A: temporary negotiation lease for ICE-restart admission (INV-1..3).
+     * Bound to [recoveryAttemptId] + [obligationGeneration]; does not transfer ownership.
+     */
+    var negotiationLeaseAttemptId: Long? = null,
+    var negotiationLeaseObligationGeneration: Long? = null,
+    var negotiationLeaseExpiresAtMs: Long? = null,
+    /**
      * RNA-5 v2 / Gate 3C: single terminal writer guard — set when
      * [RECOVERY_NEGOTIATION_INTENT_TERMINAL] is emitted for the current intent episode.
      */
