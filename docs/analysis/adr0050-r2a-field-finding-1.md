@@ -34,14 +34,16 @@ Evidence:
 - NON_OWNER_BLOCKED=0
 
 Open:
-- REMOTE_INGRESS_ABSENT 未归零
+- (scoring) `RECOVERY_REMOTE_INGRESS_ABSENT` 曾被误作 R2a P0 — attribution 已纠正为 delivery 域
 - M03 无 ingress readiness（正确拒发，非 R2a 失败）
 
 Decision:
-Do not modify R2a yet
+Do not modify R2a predicate
 Do not start R2b
-Run one focused readiness attribution round
+Readiness attribution COMPLETE → H2/cross-domain (not H1)
 ```
+
+**Attribution:** [adr0050-r2a-readiness-attribution-audit.md](./adr0050-r2a-readiness-attribution-audit.md) (**COMPLETE**)
 
 **One line:** R2a 已证明「不要盲发 offer」正确；Finding #1 的 ABSENT **不能**证明 READY 不可信（见 attribution）。下一步不是扩架构。
 
