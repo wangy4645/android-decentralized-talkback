@@ -89,17 +89,13 @@ Annotate: flap `T0`, M02 outbound up, soak end.
 | `REMOTE_NEGOTIATION_READY` | appears before dispatch |
 | `RECOVERY_ICE_RESTART_DISPATCHED` | after READY |
 | Answer after offer | in reasonable window (T3) |
-| `REMOTE_INGRESS_ABSENT` | 下降 / 消失 vs 154011 |
 | `NEGOTIATION_NON_OWNER_BLOCKED` | 0 |
 
----
-
-## Do **not** score as R2a fail
+**Do not score as R2a P0:**
 
 ```text
-EDGE_RECOVERED          — episode completion (downstream)
-DEGRADED / UVCP pill    — presentation; if seen ask media CONNECTED only
-ICE CONNECTED alone     — transport, not R2a proof
+RECOVERY_REMOTE_INGRESS_ABSENT   — delivery observation only; not negotiation readiness
+EDGE_RECOVERED / DEGRADED / UI
 ```
 
 If DEGRADED appears: ask only「media 有没有 CONNECTED？」— do not reopen UVCP.
@@ -122,9 +118,9 @@ If DEGRADED appears: ask only「media 有没有 CONNECTED？」— do not reopen
 
 | Case | Observation | Verdict |
 |------|-------------|---------|
-| **A** | READY → OFFER → ANSWER (T3 bounded); ingress-absent ↓ | **R2a VERIFIED** → then ask if R2b needed |
-| **B** | READY → OFFER → still no ANSWER | R2a OK; problem → execution / answer ingress — **no rollback** |
-| **C** | stuck PENDING → `NEGOTIATION_INGRESS_DEADLINE` | gate too conservative → reassess readiness predicate |
+| **A** | READY → DISPATCH → ANSWER (T3 bounded) | **FIELD SUPPORTED** |
+| **B** | READY → DISPATCH → still no ANSWER | R2a OK; execution/answer — **no rollback** |
+| **REFUSE** | PENDING → DEADLINE → no DISPATCH | **correct R2a block** — not failure |
 
 ---
 
@@ -144,9 +140,10 @@ If DEGRADED appears: ask only「media 有没有 CONNECTED？」— do not reopen
 ## Auth
 
 ```text
-#167 merge: DONE (40a984c)
-Directed R2a field soak: AUTHORIZED
-Acceptance: REMOTE_INGRESS_ABSENT + LEASE → READY → OFFER → ANSWER
-Not scored: EDGE_RECOVERED · DEGRADED · UI
-R2b: HOLD
+#167 merge: DONE
+Field Finding #1: FIELD SUPPORTED
+R2a predicate: FROZEN
+Acceptance: LEASE → READY → DISPATCH → ANSWER (not RECOVERY_REMOTE_INGRESS_ABSENT)
+Not scored: EDGE_RECOVERED · DEGRADED · UI · delivery ABSENT
+R2b: HOLD (FUTURE ONLY)
 ```

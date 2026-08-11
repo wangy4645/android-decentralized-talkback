@@ -1,12 +1,30 @@
 # ADR-0050 R2a — Readiness Attribution Audit (desk)
 
-**Status:** **COMPLETE** · Verdict **H2 / CROSS-DOMAIN** (not H1) · **NO PATCH** · 2026-08-11  
-**Parent finding:** [adr0050-r2a-field-finding-1.md](./adr0050-r2a-field-finding-1.md) (**PARTIAL SUCCESS**)  
+**Status:** **COMPLETE** · Verdict **H2 / CROSS-DOMAIN** · **R2a FROZEN** · 2026-08-11  
+**Parent finding:** [adr0050-r2a-field-finding-1.md](./adr0050-r2a-field-finding-1.md) (**FIELD SUPPORTED**)  
 **Evidence base:** `logs/adr0050-r2a-ingress-20260811-163820/` (M01→M02 primary)
 
 ```text
-Goal: attribute READY credibility
-Not: R2a code change · R2b · timeout · UVCP · EDGE_RECOVERED soak
+Goal: attribute READY credibility — CLOSED
+R2a predicate: NO CHANGE
+R2b: HOLD (FUTURE ONLY)
+```
+
+---
+
+## Frozen domain boundary (write into all R2a scoring)
+
+```text
+RECOVERY_REMOTE_INGRESS_ABSENT
+  is not a negotiation readiness signal.
+  It must not be used as R2a admission evidence.
+```
+
+> Recovery delivery observation marker 不参与 NegotiationIngressGate 判定。
+
+```text
+REMOTE_NEGOTIATION_READY          → negotiation admission (R2a)
+RECOVERY_REMOTE_INGRESS_ABSENT      → reattach delivery observation window
 ```
 
 ---
@@ -14,14 +32,11 @@ Not: R2a code change · R2b · timeout · UVCP · EDGE_RECOVERED soak
 ## Board after this audit
 
 ```text
-Q1 READY too weak?     H1 NOT CONFIRMED
-Q2 episode binding     ADEQUATE with residual observability gap
-R2a predicate patch    NOT AUTHORIZED
-R2b                    HOLD
-Field re-soak          NOT REQUIRED for attribution
+ADR-0050 Admission Lease          VERIFIED
+R2a Negotiation Ingress Gate       IMPLEMENTED / FIELD SUPPORTED
+R2a Readiness Predicate            NO CHANGE
+R2b Offer Arbitration              HOLD
 ```
-
-**One line:** 本轮 `REMOTE_INGRESS_ABSENT` **不能**用来否定 R2a READY；它是 reattach **delivery 观察窗**事实，且出现在 `DELIVERY_CONFIRMED` 之后。
 
 ---
 

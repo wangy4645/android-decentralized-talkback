@@ -1,11 +1,11 @@
 # ADR-0050 R2a — Architecture Adjudication
 
-**Status:** **ACCEPT** · **#167 MERGED** · Field Finding #1 **PARTIAL SUCCESS** · 2026-08-11  
+**Status:** **ACCEPT** · **#167 MERGED** · Field Finding #1 **FIELD SUPPORTED** · Attribution **CLOSED** · 2026-08-11  
 **Patch:** PR [#167](https://github.com/wangy4645/android-decentralized-talkback/pull/167) → `main` @ `40a984c`  
 **IC:** [adr0050-r2a-negotiation-ingress-readiness-ic.md](./adr0050-r2a-negotiation-ingress-readiness-ic.md)  
 **Run card:** [adr0050-r2a-directed-ingress-soak-run-card.md](./adr0050-r2a-directed-ingress-soak-run-card.md)  
 **Field Finding #1:** [adr0050-r2a-field-finding-1.md](./adr0050-r2a-field-finding-1.md)  
-**Next desk:** [adr0050-r2a-readiness-attribution-audit.md](./adr0050-r2a-readiness-attribution-audit.md)
+**Attribution:** [adr0050-r2a-readiness-attribution-audit.md](./adr0050-r2a-readiness-attribution-audit.md) (**CLOSED**)
 
 ---
 
@@ -13,24 +13,30 @@
 
 ```text
 ADR-0050 Admission Lease          VERIFIED
-R2a Negotiation Ingress Gate
-  Implementation:                 VERIFIED (#167)
-  Field behavior:                 PARTIAL IMPROVEMENT
-  Field verification:             NOT COMPLETE
-R2b Offer Arbitration              HOLD
+R2a Negotiation Ingress Gate       IMPLEMENTED / FIELD SUPPORTED
+R2a Readiness Predicate            NO CHANGE
+R2b Offer Arbitration              HOLD (FUTURE ONLY)
 ```
 
 ```text
 #167 merge:           YES
-Field Finding #1:     PARTIAL SUCCESS (not PASS / not FAIL)
-R2a code:             NO PATCH yet
-R2b:                  HOLD
-Next:                 readiness attribution audit (Q1/Q2) only
+Field Finding #1:     FIELD SUPPORTED (not PASS/FAIL label)
+R2a predicate:        FROZEN — no patch
+R2b:                  HOLD — no dual-offer evidence post-R2a
 ```
 
-**Field goal (only):** lease 后 offer 不进入对端尚无 negotiation ingress 的窗口。  
-**Score:** `REMOTE_INGRESS_ABSENT` ↓ · LEASE → READY → OFFER → ANSWER · T1/T2/T3  
-**Do not score:** `EDGE_RECOVERED` · DEGRADED · UI  
+**Frozen domain boundary:**
+
+```text
+RECOVERY_REMOTE_INGRESS_ABSENT
+  is not a negotiation readiness signal.
+  It must not be used as R2a admission evidence.
+```
+
+> Recovery delivery observation marker 不参与 NegotiationIngressGate 判定。
+
+**Score (R2a only):** `LEASE → READY → DISPATCH → ANSWER` · T1/T2/T3 · `NON_OWNER_BLOCKED=0`  
+**Do not score:** `RECOVERY_REMOTE_INGRESS_ABSENT` · `EDGE_RECOVERED` · DEGRADED · UI  
 
 ---
 

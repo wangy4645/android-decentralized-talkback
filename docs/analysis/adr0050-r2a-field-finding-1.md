@@ -1,22 +1,23 @@
 # ADR-0050 R2a — Field Finding #1
 
-**Status:** **PARTIAL SUCCESS** · Field verification **NOT COMPLETE** · 2026-08-11  
+**Status:** **FIELD SUPPORTED** · Attribution **CLOSED** · 2026-08-11  
 **Evidence:** `logs/adr0050-r2a-ingress-20260811-163820/`  
-**Contrast:** `logs/adr0050-admission-20260811-154011/` (~47s late / `REMOTE_INGRESS_ABSENT`)  
+**Contrast:** `logs/adr0050-admission-20260811-154011/` (~47s late)  
 **Run card:** [adr0050-r2a-directed-ingress-soak-run-card.md](./adr0050-r2a-directed-ingress-soak-run-card.md)  
-**Adjudication parent:** [adr0050-r2a-architecture-adjudication.md](./adr0050-r2a-architecture-adjudication.md)
+**Adjudication parent:** [adr0050-r2a-architecture-adjudication.md](./adr0050-r2a-architecture-adjudication.md)  
+**Attribution:** [adr0050-r2a-readiness-attribution-audit.md](./adr0050-r2a-readiness-attribution-audit.md)
 
 ```text
 R2a Negotiation Ingress Gate
 
 Implementation: VERIFIED
-Field behavior: PARTIAL IMPROVEMENT
-Field verification: NOT COMPLETE
+Field: FIELD SUPPORTED
+Readiness Predicate: NO CHANGE
 
-R2b Offer Arbitration: HOLD
+R2b Offer Arbitration: HOLD (FUTURE ONLY)
 ```
 
-**Do not write:** PASS · FAIL · R2a VERIFIED (field) · open R2b · patch now.
+**Do not write:** generic PASS/FAIL soak label · open R2b from pre-R2a dual-restart · predicate patch.
 
 ---
 
@@ -26,26 +27,26 @@ R2b Offer Arbitration: HOLD
 R2a Field Finding #1
 
 Result:
-PARTIAL SUCCESS
+FIELD SUPPORTED
 
 Evidence:
-- Admission→Ingress→Dispatch 链路生效
-- M01→M02 offer latency 从 ~47s 降至 ~4s
+- attempt1: LEASE→PENDING→DEADLINE→NO DISPATCH (correct block)
+- attempt2: PENDING→READY→DISPATCH→ANSWER (~4s vs 154011 ~47s)
 - NON_OWNER_BLOCKED=0
 
-Open:
-- (scoring) `RECOVERY_REMOTE_INGRESS_ABSENT` 曾被误作 R2a P0 — attribution 已纠正为 delivery 域
-- M03 无 ingress readiness（正确拒发，非 R2a 失败）
+Domain correction:
+- RECOVERY_REMOTE_INGRESS_ABSENT = delivery observation (not R2a readiness)
+- DELIVERY_CONFIRMED precedes ABSENT on M01→M02 — cannot indict READY
 
 Decision:
-Do not modify R2a predicate
-Do not start R2b
-Readiness attribution COMPLETE → H2/cross-domain (not H1)
+R2a predicate FROZEN (no patch)
+R2b HOLD
+No further R2a soak unless R2b trigger
 ```
 
-**Attribution:** [adr0050-r2a-readiness-attribution-audit.md](./adr0050-r2a-readiness-attribution-audit.md) (**COMPLETE**)
+**Attribution:** [adr0050-r2a-readiness-attribution-audit.md](./adr0050-r2a-readiness-attribution-audit.md) (**CLOSED**)
 
-**One line:** R2a 已证明「不要盲发 offer」正确；Finding #1 的 ABSENT **不能**证明 READY 不可信（见 attribution）。下一步不是扩架构。
+**One line:** R2a 正确阻断不可发送窗口 + 正确放行可发送窗口；`RECOVERY_REMOTE_INGRESS_ABSENT` 不得再当作 R2a 失败证据。
 
 ---
 

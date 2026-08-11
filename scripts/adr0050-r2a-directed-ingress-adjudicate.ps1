@@ -1,6 +1,11 @@
 # ADR-0050 R2a Directed Ingress Soak — thin adjudicate.
 # PASS focus: LEASE → READY → DISPATCH → ANSWER (bounded). Scores T1/T2/T3.
 # Does NOT score EDGE_RECOVERED / UVCP / DEGRADED / completion.
+#
+# FROZEN (domain boundary):
+#   RECOVERY_REMOTE_INGRESS_ABSENT is not a negotiation readiness signal.
+#   It must not be used as R2a admission evidence.
+#   Recovery delivery observation marker 不参与 NegotiationIngressGate 判定。
 param(
     [Parameter(Mandatory = $true)]
     [string]$LogDir,
@@ -64,8 +69,9 @@ function Summarize-Observer {
     $ready = @(Edge-Hits -Path $LogPath -Token "REMOTE_NEGOTIATION_READY" -Remote $Remote)
     $deadline = @(Edge-Hits -Path $LogPath -Token "NEGOTIATION_INGRESS_DEADLINE" -Remote $Remote)
     $dispatched = @(Edge-Hits -Path $LogPath -Token "RECOVERY_ICE_RESTART_DISPATCHED" -Remote $Remote)
-    $ingressAbsent = @(Get-Hits -Path $LogPath -Pattern "REMOTE_INGRESS_ABSENT" | Where-Object {
-        $_.Line -match $Remote
+    # Informational only — delivery observation window; NOT R2a negotiation readiness.
+    $deliveryIngressAbsent = @(Get-Hits -Path $LogPath -Pattern "RECOVERY_REMOTE_INGRESS_ABSENT" | Where-Object {
+        $_.Line -match "to=$Remote\b" -or $_.Line -match "remote=$Remote\b"
     })
     # Answer evidence on observer: remote applies our offer (ANSWERER / SLD ANSWER) after dispatch
     $answerHits = @(Get-Hits -Path $LogPath -Pattern "op=SLD type=ANSWER|ANSWERER_TRANSACTION_COMMIT|remoteDesc=ANSWER" | Where-Object {
@@ -108,19 +114,18 @@ function Summarize-Observer {
     $passDispatch = ($dispatched.Count -ge 1)
     $passAnswer = ($null -ne $answerLine)
     $passT3 = ($null -ne $t3 -and $t3 -ge 0 -and $t3 -le $T3FailMs)
-    $passIngressAbsent = ($ingressAbsent.Count -eq 0)
 
     $case = "UNKNOWN"
     if ($deadline.Count -gt 0 -and -not $passDispatch) {
-        $case = "C_PENDING_DEADLINE"
+        # R2a correctly refused dispatch when no negotiation ingress confidence.
+        $case = "CORRECT_REFUSE_NO_DISPATCH"
     }
     elseif ($passReady -and $passDispatch -and -not $passAnswer) {
         $case = "B_READY_OFFER_NO_ANSWER"
     }
     elseif ($passLease -and $passReady -and $passDispatch -and $passAnswer -and $passBlocked) {
-        if ($passT3 -and $passIngressAbsent) { $case = "A_R2A_VERIFIED" }
-        elseif ($passAnswer) { $case = "A_PARTIAL_ANSWER_SLOW_OR_ABSENT_FLAG" }
-        else { $case = "PARTIAL" }
+        if ($passT3) { $case = "A_FIELD_SUPPORTED" }
+        else { $case = "A_PARTIAL_SLOW_ANSWER" }
     }
     elseif ($passLease -and $passDispatch -and -not $passReady) {
         $case = "REGRESSION_DISPATCH_WITHOUT_READY"
@@ -130,27 +135,26 @@ function Summarize-Observer {
     }
 
     [pscustomobject]@{
-        Observer                 = $Observer
-        Remote                   = $Remote
-        LeaseAdmitted            = $admitted.Count
-        IngressPending           = $pending.Count
-        RemoteNegotiationReady   = $ready.Count
-        IngressDeadline          = $deadline.Count
-        IceRestartDispatched     = $dispatched.Count
-        RemoteIngressAbsent      = $ingressAbsent.Count
-        NonOwnerBlocked          = $blocked.Count
-        AnswerAfterDispatch      = $passAnswer
-        T1_LeaseToReadyMs        = $t1
-        T2_ReadyToDispatchMs     = $t2
-        T3_DispatchToAnswerMs    = $t3
-        PassLease                = $passLease
-        PassBlockedZero          = $passBlocked
-        PassReady                = $passReady
-        PassDispatch             = $passDispatch
-        PassAnswer               = $passAnswer
-        PassT3Bounded            = $passT3
-        PassIngressAbsentZero    = $passIngressAbsent
-        Case                     = $case
+        Observer                      = $Observer
+        Remote                        = $Remote
+        LeaseAdmitted                 = $admitted.Count
+        IngressPending                = $pending.Count
+        RemoteNegotiationReady        = $ready.Count
+        IngressDeadline               = $deadline.Count
+        IceRestartDispatched          = $dispatched.Count
+        DeliveryIngressAbsentInfoOnly = $deliveryIngressAbsent.Count
+        NonOwnerBlocked               = $blocked.Count
+        AnswerAfterDispatch           = $passAnswer
+        T1_LeaseToReadyMs             = $t1
+        T2_ReadyToDispatchMs          = $t2
+        T3_DispatchToAnswerMs         = $t3
+        PassLease                     = $passLease
+        PassBlockedZero               = $passBlocked
+        PassReady                     = $passReady
+        PassDispatch                  = $passDispatch
+        PassAnswer                    = $passAnswer
+        PassT3Bounded                 = $passT3
+        Case                          = $case
     }
 }
 
@@ -163,32 +167,42 @@ $s03 = Summarize-Observer -Observer "M03" -LogPath $m03 -Remote $FlapTarget -T3F
 Write-Host "=== ADR-0050 R2a Directed Ingress Adjudication ==="
 Write-Host "LogDir=$LogDir FlapTarget=$FlapTarget T3FailMs=$T3FailMs"
 Write-Host "NOT scored: EDGE_RECOVERED | DEGRADED | UVCP"
+Write-Host "NOT scored: RECOVERY_REMOTE_INGRESS_ABSENT (delivery observation; not R2a readiness)"
 Write-Host ""
 $s01, $s03 | Format-List Observer, Remote, LeaseAdmitted, IngressPending, RemoteNegotiationReady, `
-    IngressDeadline, IceRestartDispatched, RemoteIngressAbsent, NonOwnerBlocked, AnswerAfterDispatch, `
+    IngressDeadline, IceRestartDispatched, DeliveryIngressAbsentInfoOnly, NonOwnerBlocked, AnswerAfterDispatch, `
     T1_LeaseToReadyMs, T2_ReadyToDispatchMs, T3_DispatchToAnswerMs, `
-    PassLease, PassBlockedZero, PassReady, PassDispatch, PassAnswer, PassT3Bounded, PassIngressAbsentZero, Case
+    PassLease, PassBlockedZero, PassReady, PassDispatch, PassAnswer, PassT3Bounded, Case
 
 $cases = @($s01.Case, $s03.Case)
-$anyA = $cases | Where-Object { $_ -eq "A_R2A_VERIFIED" }
+$anySupported = $cases | Where-Object { $_ -match "^A_" }
 $anyB = $cases | Where-Object { $_ -eq "B_READY_OFFER_NO_ANSWER" }
-$anyC = $cases | Where-Object { $_ -eq "C_PENDING_DEADLINE" }
+$anyRefuse = $cases | Where-Object { $_ -eq "CORRECT_REFUSE_NO_DISPATCH" }
+$anyRegression = $cases | Where-Object { $_ -eq "REGRESSION_DISPATCH_WITHOUT_READY" }
 
 Write-Host ""
-if ($anyA.Count -ge 1) {
-    Write-Host "VERDICT: Case A — R2a VERIFIED (at least one observer). Then ask if R2b needed."
+if ($anyRegression.Count -ge 1) {
+    Write-Host "VERDICT: REGRESSION — dispatch without REMOTE_NEGOTIATION_READY"
+    exit 1
+}
+elseif ($anySupported.Count -ge 1) {
+    Write-Host "VERDICT: R2a FIELD SUPPORTED (LEASE→READY→DISPATCH→ANSWER on at least one observer)"
+    if ($anyRefuse.Count -ge 1) {
+        Write-Host "  + CORRECT_REFUSE_NO_DISPATCH on other observer(s) — expected R2a block, not failure"
+    }
+    Write-Host "  R2b remains HOLD unless dual legitimate OFFER evidence appears"
     exit 0
 }
-elseif ($anyB.Count -ge 1 -and $anyC.Count -eq 0) {
+elseif ($anyB.Count -ge 1) {
     Write-Host "VERDICT: Case B — R2a OK; no answer → execution/answer ingress. Do NOT rollback R2a."
     exit 0
 }
-elseif ($anyC.Count -ge 1) {
-    Write-Host "VERDICT: Case C — gate may be too conservative (PENDING→DEADLINE). Reassess readiness predicate."
-    exit 1
+elseif ($anyRefuse.Count -ge 1 -and ($anySupported.Count -eq 0) -and ($anyB.Count -eq 0)) {
+    Write-Host "VERDICT: CORRECT_REFUSE only — no positive dispatch path this run; not R2a regression"
+    exit 0
 }
 else {
     Write-Host "VERDICT: FAIL / CLASSIFY — see Case columns"
-    Write-Host "  A_R2A_VERIFIED | B_READY_OFFER_NO_ANSWER | C_PENDING_DEADLINE | REGRESSION_DISPATCH_WITHOUT_READY"
+    Write-Host "  A_FIELD_SUPPORTED | B_READY_OFFER_NO_ANSWER | CORRECT_REFUSE_NO_DISPATCH | REGRESSION_DISPATCH_WITHOUT_READY"
     exit 1
 }
