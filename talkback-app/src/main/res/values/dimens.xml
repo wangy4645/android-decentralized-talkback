@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- 快捷按钮 Broadcast/Monitor 等标签字号；Online Endpoints 标题与之共用 -->
+    <!-- 快捷按钮 All Call/Monitor 等标签字号；Online Endpoints 标题与之共用 -->
     <dimen name="tb_action_icon_slot">30dp</dimen>
     <dimen name="tb_action_icon_size">28dp</dimen>
     <dimen name="tb_action_monitor_icon_size">30dp</dimen>
@@ -100,6 +100,11 @@
     <dimen name="settings_input_text_size">12sp</dimen>
     <dimen name="settings_desc_text_size">11sp</dimen>
     <dimen name="settings_hint_text_size">10sp</dimen>
+    <dimen name="feature_placeholder_title_text_size">12sp</dimen>
+    <dimen name="feature_placeholder_status_text_size">9sp</dimen>
+    <dimen name="feature_placeholder_body_text_size">10sp</dimen>
+    <dimen name="feature_placeholder_hint_text_size">9sp</dimen>
+    <dimen name="feature_placeholder_action_text_size">11sp</dimen>
     <dimen name="settings_switch_text_size">12sp</dimen>
     <dimen name="settings_button_text_size">12sp</dimen>
     <dimen name="call_incoming_button_text_size">15sp</dimen>
