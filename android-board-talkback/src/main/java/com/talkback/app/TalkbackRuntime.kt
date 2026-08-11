@@ -357,6 +357,11 @@ class TalkbackRuntime(
         runCatching { coordinator.refreshStaleGroupSession(channelId) }
     }
 
+  /** Debug / field oracle — not wired to production UI in P0. */
+    internal fun forceDestructiveGroupMeshRecovery(channelId: String) {
+        runCatching { coordinator.forceDestructiveGroupMeshRecovery(channelId) }
+    }
+
     fun reconcileGroupMesh(channelId: String) {
         runCatching { coordinator.reconcileGroupMesh(channelId) }
     }
