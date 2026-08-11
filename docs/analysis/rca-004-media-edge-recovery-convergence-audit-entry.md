@@ -1,9 +1,11 @@
 # RCA-004 — Media Edge Recovery Convergence Audit
 
-**Status:** AUDIT COMPLETE — **Finding issued** (still no impl)  
+**Status:** **FINDING COMPLETE** (adjudicated) — no impl  
 **Date:** 2026-08-11  
 **Name (frozen):** Media Edge Recovery Convergence Audit  
 **Finding:** [rca-004-media-edge-recovery-convergence-finding.md](./rca-004-media-edge-recovery-convergence-finding.md)  
+**Adjudicated root:** Negotiation Admission / Dual-role Ownership mismatch  
+**Next ADR (optional):** [0050-negotiation-admission-handoff.md](../adr/0050-negotiation-admission-handoff.md) — NOT STARTED  
 **Predecessor (CLOSED):** [rca-003-presentation-convergence-entry.md](./rca-003-presentation-convergence-entry.md)  
 **Field seeds:**  
 - [mesh-m02-media-unrecovered-20260811-064426.md](./mesh-m02-media-unrecovered-20260811-064426.md)  
@@ -12,20 +14,17 @@
 ## Freeze card
 
 ```text
-RCA-004 Media Edge Recovery Convergence Audit
+RCA-004 Media Edge Recovery Convergence
 
-Scope:
-  inbound media-edge recovery convergence
-
-Mode:
-  audit only
+Status: FINDING COMPLETE
+Root:   Negotiation Admission / Dual-role Ownership mismatch
+Mode:   audit complete — no further field for this RCA
 
 No:
-  implementation
-  ownership redesign
-  retry / ICE timeout / Phase-2
-  UVCP / pill / residency clear
-  Edge-scoped ownership design (until Finding proves shared cause)
+  implementation (until ADR-0050)
+  Edge-scoped ownership redesign
+  retry / ICE timeout / Phase-2 / Delivery / UVCP
+  reopen Ownership supersede / RCA-003
 ```
 
 ## Core question (only)
@@ -218,18 +217,17 @@ common invariant?  no → split bugs
 ## Priority
 
 ```text
-RCA-003 CLOSE (done)
-    → RCA-004 A1–A3 audit
-    → shared invariant?
-         ├─ no  → split
-         └─ yes → design later
+RCA-003 CLOSED
+RCA-004 FINDING COMPLETE
+    → (optional) ADR-0050 Negotiation Admission Handoff — Option A preferred
+    → IC → single-edge patch
+Not: more soak · Edge-scoped redesign · Phase-2 reopen
 ```
 
 ## Next action
 
 ```text
-A1–A3 done → Finding issued
-P2 design ONLY if prioritized (admission / dual-owner seam)
-Not: impl · retry · UVCP · edge-scoped redesign jump
+Stop field hunting.
+If product prioritizes fix: authorize ADR-0050 (lease), not recovery redesign.
 ```
 
