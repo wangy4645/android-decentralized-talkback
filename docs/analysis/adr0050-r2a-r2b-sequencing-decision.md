@@ -8,14 +8,15 @@
 
 ---
 
-## Verdict
+**Verdict**
 
 ```text
 ADR-0050 Admission         CLOSED / VERIFIED
 R2 Finding                 VALID
 NEXT                       R2a → R2b
 PRIORITY                   ingress readiness first, then single offerer
-IMPL                       NOT AUTHORIZED yet (decision freeze only)
+R2a IC                     AUTHORIZED (bounded gate — not unbounded wait)
+R2a patch / R2b            NOT AUTHORIZED
 ```
 
 **One line:** ADR-0050 solved “who may knock”; R2 shows “door not open yet” — fix door state (R2a) before multi-knocker arbitration (R2b).
@@ -39,13 +40,17 @@ then (if still dual writers) → R2b
 
 ---
 
-## R2a scope (when authorized)
+## R2a scope (IC authorized; patch not yet)
+
+**IC:** [adr0050-r2a-negotiation-ingress-readiness-ic.md](./adr0050-r2a-negotiation-ingress-readiness-ic.md)
 
 ```text
-IN:   gate createOffer after lease on REMOTE_NEGOTIATION_READY
-        (peer can receive negotiation — not ICE CONNECTED, not media ready,
-         not heartbeat/HELLO reuse)
-OUT:  ownership · lease permission semantics · retry expand · timeout · UVCP
+IN:   bounded gate before createOffer after lease
+        REMOTE_NEGOTIATION_READY = peer can receive restart offer
+        (NOT ICE/media/EDGE_RECOVERED/heartbeat/HELLO)
+        deadline → existing failure path (no infinite wait)
+OUT:  ownership · lease INV semantics · retry · timeout enlarge · UVCP · R2b
+SHAPE: 协商入口门闩 — not recovery orchestration
 ```
 
 ## R2b scope (after R2a field)
