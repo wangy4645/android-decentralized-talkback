@@ -1,10 +1,42 @@
 # RCA-004 — Media Edge Recovery Convergence Finding (A1–A3)
 
-**Status:** AUDIT COMPLETE (no impl)  
+**Status:** **FINDING COMPLETE** (adjudicated)  
 **Date:** 2026-08-11  
 **Entry:** [rca-004-media-edge-recovery-convergence-audit-entry.md](./rca-004-media-edge-recovery-convergence-audit-entry.md)  
 **Evidence:** `logs/rca003-ic-uvcp-gray-20260811-064426/` · gray-1 `062506`  
-**Code:** `ConferenceEdgeRecoveryController` · `EdgeRecoveryModels` · `RecoveryNegotiationAuthority`
+**Code:** `ConferenceEdgeRecoveryController` · `EdgeRecoveryModels` · `RecoveryNegotiationAuthority`  
+**Next (optional):** [ADR-0050 Negotiation Admission Handoff](../adr/0050-negotiation-admission-handoff.md) — **NOT STARTED** (await product auth)
+
+## Adjudication (frozen)
+
+```text
+RCA-004 Media Edge Recovery Convergence
+
+Status:
+  FINDING COMPLETE
+
+Root class:
+  Negotiation Admission / Dual-role Ownership mismatch
+
+Not:
+  WiFi
+  ICE transport
+  Phase-2 Delivery
+  UVCP
+  Edge key absence
+  Edge-scoped ownership redesign (store already per-edge)
+```
+
+**Black-hole translation:** recovery media action can exist; **negotiation admission** does not follow the media-action actor → execution deadlock.
+
+```text
+Edge(P)
+   ├─ Negotiation Owner = P (remote)  → "you may not drive offer/ICE"
+   └─ Media Action Owner = Local      → "I should HOST_RESTART"
+        → DEADLOCK
+```
+
+Finding-1 (`NON_OWNER_BLOCKED`) and Finding-2 (`NO_MEDIA_ACTION_OWNER` via PENDING) are **two surfaces of one mechanism**: recovery actor cannot obtain effective execution authority.
 
 ---
 
@@ -24,10 +56,6 @@ Common invariant: YES
   On ICE_RESTART_ONLY inbound edges to the flapped peer, negotiation owner is
   elected as the remote (flapped) module; local actor cannot pass ICE-restart
   admission → inbound media action does not complete.
-
-Unknown (not decided):
-  Whether remedy is owner lifetime, dual-role admission rule, or obligation
-  semantics — NOT proven "must redesign to edge-scoped ownership"
 ```
 
 ---
@@ -171,10 +199,25 @@ Surface difference M01 vs M03:
 
 ---
 
-## Gate for P2 design
+## Gate for P2 (product-authorized only)
 
-Only after product prioritizes a fix, design must answer:
+**Do not** open Edge-scoped ownership redesign (A1: store already per-edge).
 
-> When `initiatesReattach=false` and negotiationOwner=remote, who is allowed to complete local ICE restart on that edge — and how does media-action PENDING become assigned or explicitly handed off?
+Thin ADR candidate (number **0050** — ADR-0046 already taken by successor admission):
 
-Until then: **no implementation**.
+> [ADR-0050 Negotiation Admission Handoff](../adr/0050-negotiation-admission-handoff.md) — **NOT STARTED**
+
+Single question:
+
+> When media-action owner ≠ negotiation owner, who obtains temporary negotiation admission?
+
+| Option | Idea | Note |
+|--------|------|------|
+| **A (preferred)** | Media-action owner gets temporary **negotiation lease** for ICE restart | No long-term ownership transfer |
+| B | Always ask remote negotiation owner | Bilateral wait risk |
+| C | Merge dual owners into RecoveryCoordinator | Larger scope |
+
+```text
+No field soak · no Phase-2 · no Delivery · no Ownership supersede reopen · no UVCP
+Impl only after ADR-0050 ACCEPTED + IC
+```
