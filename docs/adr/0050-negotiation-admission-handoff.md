@@ -7,7 +7,8 @@
 **Field (admission):** **GATE VERIFIED** — `logs/adr0050-admission-20260811-154011/`  
   · Admission PASS · Execution OPEN · Completion NOT REACHED  
 **Follow-up:** [adr0050-r1-ice-restart-execution-attribution-audit.md](../analysis/adr0050-r1-ice-restart-execution-attribution-audit.md) ·  
-  [finding](../analysis/adr0050-r1-ice-restart-execution-attribution-finding.md) (**FINDING COMPLETE**)
+  [R1 finding](../analysis/adr0050-r1-ice-restart-execution-attribution-finding.md) (**FINDING COMPLETE**) ·  
+  [R2 arbitration audit](../analysis/adr0050-r2-negotiation-episode-arbitration-audit.md) (**DRAFTED**)
 **Parent finding:** [rca-004-media-edge-recovery-convergence-finding.md](../analysis/rca-004-media-edge-recovery-convergence-finding.md) (**FINDING COMPLETE**)  
 **IC:** [adr0050-phase1-implementation-candidate.md](../analysis/adr0050-phase1-implementation-candidate.md)  
 **Admission run card:** [adr0050-directed-admission-validation-run-card.md](../analysis/adr0050-directed-admission-validation-run-card.md)
@@ -27,15 +28,16 @@ Scope remains Option A only; no ownership redesign / completion / UVCP / members
 Recovery Last-mile                 = CLOSED / PASS
 Presentation Convergence           = CLOSED / PASS (RCA-003)
 Media Edge Recovery Finding        = COMPLETE (RCA-004)
-Negotiation Admission Handoff      = GATE FIELD-VERIFIED (#165 / 154011)
-ICE Restart Execution              = ATTRIBUTED (ADR-0050-R1 FINDING COMPLETE)
+Negotiation Admission Handoff      = GATE FIELD-VERIFIED (#165 / 154011) — **do not reopen**
+ICE Restart Execution              = ATTRIBUTED (ADR-0050-R1)
   Primary: remote ingress absent / answer missing
   Contributing: bilateral restart on M02↔M03
+Negotiation Episode Arbitration    = OPEN (ADR-0050-R2 DRAFTED)
 Completion                         = NOT REACHED
 
 WiFi Recovery Incident Chain v1
   Closed: Delivery · Ownership Handoff · Same-session Rejoin · Presentation · Admission gate
-  Open:   R2 candidate (ingress readiness vs lease arbitration) — separate auth
+  Open:   R2 Negotiation Episode Arbitration (ingress readiness · offerer role) — separate auth
 ```
 
 **Problem rename (do not reverse):**
@@ -157,6 +159,7 @@ New coordinator actor
 Phase 0 ACCEPTED (#164)
   → Phase 1 IC + Phase 2 patch MERGED (#165)
   → Directed admission field: GATE VERIFIED (154011)
-  → ADR-0050-R1 ICE Restart Execution Attribution DRAFTED
-  → do NOT enlarge timeout / UVCP / residency / owner from 154011 alone
+  → ADR-0050-R1 FINDING COMPLETE (ingress absent primary; bilateral contributing)
+  → ADR-0050-R2 Negotiation Episode Arbitration Audit DRAFTED (read-only)
+  → do NOT enlarge timeout / retry / UVCP / roll back lease
 ```

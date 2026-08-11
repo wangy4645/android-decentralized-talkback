@@ -95,6 +95,8 @@ P1 hypothesis **confirmed as contributing** on M02↔M03; **not** the sole expla
 | **P1→P2** | Bilateral restart collision | **CONFIRMED contributing** on M02↔M03 |
 | **P3** | Candidate / STUN after answer | **NOT REACHED** (no answer in budget) |
 
+**Successor:** [adr0050-r2-negotiation-episode-arbitration-audit.md](./adr0050-r2-negotiation-episode-arbitration-audit.md) — offerer/answerer + ingress readiness (read-only).
+
 ---
 
 ## Architecture implication (do not expand wrongly)
