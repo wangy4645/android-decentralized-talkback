@@ -1,10 +1,10 @@
 # ADR-0050-R1 — ICE Restart Execution Attribution Audit
 
-**Status:** **DRAFTED** · Field attribution **NOT STARTED** (await product auth)  
+**Status:** **FINDING COMPLETE** — [adr0050-r1-ice-restart-execution-attribution-finding.md](./adr0050-r1-ice-restart-execution-attribution-finding.md)  
 **Name (frozen):** ICE Restart Execution Attribution  
 **(Not** a recovery redesign · **Not** timeout enlargement · **Not** RNA Directed #5)  
 **Parent:** [0050-negotiation-admission-handoff.md](../adr/0050-negotiation-admission-handoff.md)  
-**Admission field:** `logs/adr0050-admission-20260811-154011/` — **Admission PASS / Execution OPEN**  
+**Admission field:** `logs/adr0050-admission-20260811-154011/` — **Admission PASS / Execution ATTRIBUTED**  
 **Run card (admission):** [adr0050-directed-admission-validation-run-card.md](./adr0050-directed-admission-validation-run-card.md)  
 **Field result:** `logs/adr0050-admission-20260811-154011/FIELD_RESULT.md`
 
@@ -16,7 +16,7 @@
 Delivery              CLOSED
 Media Ownership       CLOSED
 Negotiation Admission CLOSED (ADR-0050 gate FIELD-VERIFIED)
-ICE Restart Execution OPEN  ← this audit
+ICE Restart Execution OPEN  ← this audit (now ATTRIBUTED — see finding)
 Completion            NOT REACHED
 Presentation          CLOSED (RCA-003)
 ```
@@ -119,11 +119,8 @@ Observe: `pcGeneration` / `transportGeneration` / signaling role at `ICE_RESTART
 ## Auth gate
 
 ```text
-DRAFTED (this doc)
-  → product auth for R1 attribution pass (log-only on 154011 first; optional thin re-run)
-  → classify A/B/C
-  → only then decide next ADR knife (arbitration vs signaling vs transport)
+DRAFTED → product auth 「授权」 → FINDING COMPLETE on 154011 (log-only)
+  Primary: REMOTE_INGRESS_ABSENT / answer missing (Case 1)
+  Contributing: bilateral HOST_RESTART offers on M02↔M03
+  → next knife only with separate product auth (R2a ingress readiness vs R2b arbitration)
 ```
-
-**First knife after auth:** attribute **154011 existing logs** (no new flap required).  
-Optional second flap only if log coverage insufficient for A/B/C.

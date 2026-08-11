@@ -6,7 +6,8 @@
 **Implementation:** **MERGED** #165 (`de58d6c`) · Phase-1 IC + Phase-2 lease gate  
 **Field (admission):** **GATE VERIFIED** — `logs/adr0050-admission-20260811-154011/`  
   · Admission PASS · Execution OPEN · Completion NOT REACHED  
-**Follow-up:** [adr0050-r1-ice-restart-execution-attribution-audit.md](../analysis/adr0050-r1-ice-restart-execution-attribution-audit.md) (**DRAFTED**)  
+**Follow-up:** [adr0050-r1-ice-restart-execution-attribution-audit.md](../analysis/adr0050-r1-ice-restart-execution-attribution-audit.md) ·  
+  [finding](../analysis/adr0050-r1-ice-restart-execution-attribution-finding.md) (**FINDING COMPLETE**)
 **Parent finding:** [rca-004-media-edge-recovery-convergence-finding.md](../analysis/rca-004-media-edge-recovery-convergence-finding.md) (**FINDING COMPLETE**)  
 **IC:** [adr0050-phase1-implementation-candidate.md](../analysis/adr0050-phase1-implementation-candidate.md)  
 **Admission run card:** [adr0050-directed-admission-validation-run-card.md](../analysis/adr0050-directed-admission-validation-run-card.md)
@@ -27,12 +28,14 @@ Recovery Last-mile                 = CLOSED / PASS
 Presentation Convergence           = CLOSED / PASS (RCA-003)
 Media Edge Recovery Finding        = COMPLETE (RCA-004)
 Negotiation Admission Handoff      = GATE FIELD-VERIFIED (#165 / 154011)
-ICE Restart Execution              = OPEN (ADR-0050-R1)
+ICE Restart Execution              = ATTRIBUTED (ADR-0050-R1 FINDING COMPLETE)
+  Primary: remote ingress absent / answer missing
+  Contributing: bilateral restart on M02↔M03
 Completion                         = NOT REACHED
 
 WiFi Recovery Incident Chain v1
   Closed: Delivery · Ownership Handoff · Same-session Rejoin · Presentation · Admission gate
-  Open:   ICE Restart Execution Attribution (R1) — not admission rewrite
+  Open:   R2 candidate (ingress readiness vs lease arbitration) — separate auth
 ```
 
 **Problem rename (do not reverse):**
