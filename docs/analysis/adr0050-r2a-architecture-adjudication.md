@@ -1,8 +1,9 @@
 # ADR-0050 R2a — Architecture Adjudication
 
-**Status:** **ACCEPT** · 2026-08-11  
-**Patch:** PR [#167](https://github.com/wangy4645/android-decentralized-talkback/pull/167)  
-**IC:** [adr0050-r2a-negotiation-ingress-readiness-ic.md](./adr0050-r2a-negotiation-ingress-readiness-ic.md)
+**Status:** **ACCEPT** · **#167 MERGED** · Field soak **AUTHORIZED** · 2026-08-11  
+**Patch:** PR [#167](https://github.com/wangy4645/android-decentralized-talkback/pull/167) → `main` @ `40a984c`  
+**IC:** [adr0050-r2a-negotiation-ingress-readiness-ic.md](./adr0050-r2a-negotiation-ingress-readiness-ic.md)  
+**Run card:** [adr0050-r2a-directed-ingress-soak-run-card.md](./adr0050-r2a-directed-ingress-soak-run-card.md)
 
 ---
 
@@ -10,15 +11,19 @@
 
 ```text
 ADR-0050 Admission Lease          VERIFIED
-R2a Negotiation Ingress Gate       IMPLEMENTED (待 field)
+R2a Negotiation Ingress Gate       MERGED (#167) · field AUTHORIZED
 R2b Offer Arbitration              NOT STARTED / HOLD
 ```
 
 ```text
-R2a patch       ACCEPT
-field soak      AUTHORIZED（merge 后）
-R2b             HOLD
+#167 merge:     YES (done)
+field soak:     AUTHORIZED — Directed R2a (narrow)
+R2b:            HOLD
 ```
+
+**Field goal (only):** lease 后 offer 不进入对端尚无 negotiation ingress 的窗口。  
+**Score:** `REMOTE_INGRESS_ABSENT` ↓ · LEASE → READY → OFFER → ANSWER · T1/T2/T3  
+**Do not score:** `EDGE_RECOVERED` · DEGRADED · UI  
 
 ---
 
