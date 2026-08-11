@@ -1,8 +1,15 @@
 # ADR-0050 R2a — Negotiation Ingress Readiness IC
 
-**Status:** **IC AUTHORIZED · FROZEN** · **PATCH AUTHORIZED · IN FLIGHT** · Field **PAUSED**（至 merge 后再授权 directed soak）  
+**Status:** **IC FROZEN** · **PATCH ACCEPT** (PR [#167](https://github.com/wangy4645/android-decentralized-talkback/pull/167)) · Field **AUTHORIZED after merge** · R2b **HOLD**  
+**Adjudication:** [adr0050-r2a-architecture-adjudication.md](./adr0050-r2a-architecture-adjudication.md)  
 **Sequencing:** [adr0050-r2a-r2b-sequencing-decision.md](./adr0050-r2a-r2b-sequencing-decision.md) (**R2a → R2b**)  
 **Parents:** R2 finding · R1 finding · ADR-0050 admission **CLOSED / VERIFIED**
+
+```text
+ADR-0050 Admission Lease          VERIFIED
+R2a Negotiation Ingress Gate       IMPLEMENTED (待 field)
+R2b Offer Arbitration              NOT STARTED / HOLD
+```
 
 ---
 
@@ -135,28 +142,64 @@ Also log: `NEGOTIATION_INGRESS_DEADLINE` when falling to existing failure path (
 
 ---
 
-## Engineering freeze (2026-08-11)
+## Static invariants (INV-R2a — architecture ACCEPT)
+
+### INV-R2a-1 — lease before offer
+
+```text
+LEASE_ADMITTED  before  createOffer / RECOVERY_ICE_RESTART_DISPATCHED
+```
+
+Cannot reverse.
+
+### INV-R2a-2 — ready is negotiation-only
+
+```text
+REMOTE_NEGOTIATION_READY  only  allows offer dispatch after lease
+```
+
+Must **not** substitute: `ICE_CONNECTED` · `HELLO` · `HEARTBEAT` · `EDGE_RECOVERED` · media ready.
+
+### INV-R2a-3 — deadline is not a new terminal
+
+```text
+NEGOTIATION_INGRESS_DEADLINE  ≠  FAILED_MEDIA class
+```
+
+Deadline clears the ingress wait and leaves the attempt to the **existing** timeout / failure attribution path.
+
+---
+
+## Engineering freeze (2026-08-11 · architecture ACCEPT)
 
 ```text
 ADR-0050 Admission / Lease     VERIFIED — do not reopen
-R2a IC                         AUTHORIZED — FROZEN
-R2a patch                      AUTHORIZED — implementing (bounded ingress gate)
-R2b                            后置 — do not fold into R2a
-Field / flap                   PAUSED — no soak until R2a patch merges + explicit field auth
+R2a IC                         FROZEN
+R2a patch                      ACCEPT — merge then field
+R2b                            HOLD — only if dual legitimate OFFER after R2a field
+Field / flap                   AUTHORIZED after merge (narrow markers; not UI DEGRADED)
 ```
 
-**Cadence:** unit tests + static path review → merge → **one** directed field soak → decide R2b.
+**Cadence:** static INV review → **merge #167** → **one** directed field soak → decide R2b **only** on dual-offer evidence.
 
-**Field evidence (when authorized) — not UI DEGRADED:**
+**Field success (narrow — prove timing, not episode close):**
 
 ```text
 LEASE_ADMITTED
-  → NEGOTIATION_INGRESS_WAIT (if entered)
+  → NEGOTIATION_INGRESS_PENDING (optional)
   → REMOTE_NEGOTIATION_READY
   → OFFER_SENT
-  → ANSWER_RECEIVED
-  → ICE_CONNECTED / EDGE_RECOVERED
+  → ANSWER (bounded window)
 ```
+
+| Marker | Expectation |
+|--------|-------------|
+| `REMOTE_INGRESS_ABSENT` | 降低 / 消失 |
+| `NEGOTIATION_INGRESS_PENDING` | 可出现 |
+| `REMOTE_NEGOTIATION_READY` | 出现 |
+| OFFER→ANSWER latency | 降低 |
+
+**Do not score R2a field on:** UI DEGRADED · `EDGE_RECOVERED` alone · “recovery 是否完全收敛”.
 
 **Counterfactual vs 154011:**
 
@@ -165,7 +208,9 @@ OLD: OFFER_SENT → REMOTE_INGRESS_ABSENT → ~47s late receive
 NEW: REMOTE_NEGOTIATION_READY → OFFER_SENT → answer in bounded window
 ```
 
-**Review checklist at patch time:** gate after lease / before createOffer · ready ≠ ICE/media/EDGE_RECOVERED/heartbeat/HELLO · bounded wait · deadline → existing failure only · no R2b in R2a.
+**R2b trigger (HOLD until):** after R2a field, still observe **two legitimate OFFERs** in one episode (SDP collision / answer ambiguity). Do not fold “offer too early” with “offer too many”.
+
+**Review checklist:** gate after lease / before createOffer · ready ≠ ICE/media/EDGE_RECOVERED/heartbeat/HELLO · bounded wait · deadline → existing failure only · no R2b in R2a.
 
 ---
 
