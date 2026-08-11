@@ -97,25 +97,37 @@ These are different problems. **Do not edit the recovery chain to “fix” UX/j
 ## Successor freeze (2026-08-11)
 
 ```text
-Recovery Protocol                 CLOSED / PASS
-Presentation Projection (RCA-003) CLOSED
-Media Edge Finding (RCA-004)      FINDING COMPLETE
+WiFi Recovery Incident Chain v1
 
-Remaining seam:
-  ADR-0050 Negotiation Admission Handoff (NOT STARTED / Option A preferred)
+Closed / PASS:
+  Delivery
+  Ownership Handoff
+  Same-session Rejoin
+  Presentation Projection (RCA-003)
+  Media Edge Finding (RCA-004) = COMPLETE
+
+Open successor:
+  ADR-0050 Negotiation Admission Handoff
+    = ACCEPTED (semantics) · Option A + INV-1..3
+    = Implementation NOT AUTHORIZED
+
+Accurate problem name:
+  Recovery intent exists; negotiation execution admission not granted.
+  Not: “WiFi recovery failed.”
 ```
 
-Triage addendum: inbound media unrecovered with `NEGOTIATION_NON_OWNER_BLOCKED` / `NO_MEDIA_ACTION_OWNER` → **ADR-0050**, not WiFi / UVCP / Phase-2.
+Triage addendum: inbound `NEGOTIATION_NON_OWNER_BLOCKED` / `NO_MEDIA_ACTION_OWNER` → **ADR-0050**, not WiFi / UVCP / Phase-2.
 
 ## Next (ordered)
 
 | Pri | Action | Track |
 |-----|--------|-------|
-| P0 | This memo + protocol freeze | **done** |
-| P1 | RCA-003 Presentation Convergence | **CLOSED** (#157) |
-| P2 | RCA-004 Media Edge Convergence Finding | **FINDING COMPLETE** |
-| P3 | ADR-0050 Negotiation Admission Handoff | **NOT STARTED** — product auth; Option A + INV-1..3 |
-| P4 | Join churn / roster | Session lifecycle; **deferred** |
+| P0 | Protocol + incident-chain freeze | **done** |
+| P1 | RCA-003 Presentation Convergence | **CLOSED** |
+| P2 | RCA-004 Media Edge Finding | **COMPLETE** |
+| P3 | ADR-0050 semantics ACCEPTED | **done** (no impl) |
+| P4 | ADR-0050 Phase-1 IC / Phase-2 patch | **separate auth** |
+| P5 | Join churn / roster | **deferred** |
 
 ## Do not change
 

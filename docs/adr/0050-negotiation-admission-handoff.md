@@ -2,9 +2,8 @@
 
 ## Status
 
-**NOT STARTED** — **PENDING PRODUCT AUTHORIZATION**  
-**Direction frozen:** Option **A** (negotiation lease) preferred  
-**Date:** 2026-08-11  
+**ACCEPTED** (semantics) — **2026-08-11** · **Option A + INV-1..3 FROZEN**  
+**Implementation:** **NOT AUTHORIZED** (Phase 0 only — freeze contract, no code)  
 **Parent finding:** [rca-004-media-edge-recovery-convergence-finding.md](../analysis/rca-004-media-edge-recovery-convergence-finding.md) (**FINDING COMPLETE**)
 
 ```text
@@ -12,150 +11,137 @@ Note: ADR-0046 is already taken
   (Successor Admission Terminal Convergence Contract).
 This handoff ADR is numbered 0050.
 
-RCA-003 CLOSED · RCA-004 FINDING COMPLETE
-Remaining seam: Negotiation Admission Handoff (this ADR)
+Product auth (2026-08-11): accept semantics; do not expand scope; do not implement yet.
 ```
 
-## Architecture cut (healthy boundary)
+## Portfolio cut (authorized freeze)
+
+```text
+Recovery Last-mile                 = CLOSED / PASS
+Presentation Convergence           = CLOSED / PASS
+Media Edge Recovery Finding        = COMPLETE
+Negotiation Admission Handoff      = OPEN SUCCESSOR (this ADR — ACCEPTED semantics)
+
+WiFi Recovery Incident Chain v1
+  Closed: Delivery · Ownership Handoff · Same-session Rejoin · Presentation Projection
+  Open:   ADR-0050 Negotiation Admission Handoff
+```
+
+**Problem rename (do not reverse):**
+
+> Not: “WiFi recovery failed.”  
+> Yes: **Recovery intent exists, but negotiation execution admission was not granted to the recovery actor.**
+
+## Architecture cut
 
 ```text
 WiFi flap
    → Delivery Observation          CLOSED
    → Media Action Ownership        CLOSED
-   → Negotiation Admission         <---- OPEN (this ADR)
+   → Negotiation Admission         <---- OPEN SUCCESSOR (this ADR)
    → ICE Restart
    → EDGE_RECOVERED
    → UVCP Projection               CLOSED
 ```
 
-| Layer | Status | Note |
-|-------|--------|------|
-| Delivery | CLOSED | Evidence plane known |
-| Media Action Owner | CLOSED | No permanent reject (RCA-001 class) |
-| Negotiation Admission | **OPEN** | Dual-role mismatch / no lease |
-| Recovery Completion (RCA-004) | FINDING COMPLETE | Root class identified |
-| Presentation (RCA-003) | CLOSED | No false degraded |
+## Decision (ACCEPTED)
 
-**Not a WiFi recovery bug.** Distributed state-machine seam:
-
-> Intent exists, media-action responsibility exists, but the second authority needed to execute (negotiation admission) is not granted to the recovery actor.
-
-## Context
-
-Inbound `ICE_RESTART_ONLY`: local may claim `HOST_RESTART` / stay `PENDING` while `negotiationOwner = remote`. Dispatch requires `negotiationOwner == local` → `NEGOTIATION_NON_OWNER_BLOCKED`. M01/M03 surfaces differ; **common failure** = no effective execution path for the recovery actor.
-
-Edge store already per-`ConferenceEdgeKey`. **Do not** redesign Edge-scoped ownership.
-
-## Decision question (only)
-
-> When media-action owner ≠ negotiation owner, who obtains **temporary negotiation admission** so ICE restart can execute?
-
-## Options
-
-| ID | Option | Sketch | Risk |
-|----|--------|--------|------|
-| **A** | **Preferred:** Media-action owner gets temporary **negotiation lease** | Long-term ownership unchanged; lease enables ICE restart | Smallest |
-| B | Always defer execution to remote negotiation owner | Bilateral wait under mutual recovery | Higher |
-| C | Merge into RecoveryCoordinator | Clean long-term; large blast radius | Not first knife |
-
-### Option A shape
+**Option A:** Media-action owner may hold a temporary **negotiation lease** that admits ICE restart without transferring long-term negotiation ownership.
 
 ```text
 MediaActionOwner
-      → requests / holds
-NegotiationLease
+      → NegotiationLease
       → ICE restart allowed
 ```
 
-Adds **temporary execution right** only — does **not** redefine who owns the edge, recovery intent, or obligation.
+| ID | Option | Status |
+|----|--------|--------|
+| **A** | Negotiation lease for media-action owner | **ACCEPTED direction** |
+| B | Always remote negotiation owner executes | Rejected for first knife (bilateral wait) |
+| C | Merge into RecoveryCoordinator | Deferred (large blast radius) |
 
-## Frozen invariants (Option A)
+## Frozen invariants
 
 ### INV-1 — Lease ≠ ownership transfer
 
 ```text
-Negotiation lease ≠ ownership transfer
+lease ≠ ownership transfer
 ```
 
-Forbidden:
+Lease = permission to execute negotiation.  
+Not = who owns the edge / recovery intent / obligation.
 
-```text
-HOST_RESTART → change negotiationOwner permanently
-```
-
-Avoids reopening RCA-001-class supersede churn.
+Forbidden: `HOST_RESTART → permanently change negotiationOwner` (RCA-001-class churn).
 
 ### INV-2 — Lease scope
 
 ```text
-Lease scope = single edge + single recovery episode (attempt/gen)
+lease = single edge + single recovery episode
 ```
 
-Forbidden: conference / session / global recovery lease (cross-peer pollution).
+Forbidden: session / conference / channel / global lease (healthy vs failed edges must not couple — e.g. M02→M01 CONNECTED vs M01→M02 FAILED).
 
 ### INV-3 — Lease expiry ≠ recovery failure
 
 ```text
-Lease expiration cannot mark recovery failed
+lease expiry ≠ recovery failed
 ```
 
-Lease is **admission only**. Terminal remains:
-
-```text
-EDGE_RECOVERED  or  FAILED_MEDIA (existing paths)
-```
-
+Lease is admission only. Terminals remain `EDGE_RECOVERED` or `FAILED_MEDIA`.  
 Forbidden: `lease timeout ⇒ recovery fail` as a new failure class.
 
-## Implementation Candidate (when authorized)
+## Phased work
 
-**Touch one gate only** (ICE restart dispatch admission), conceptually:
+| Phase | Work | Auth |
+|-------|------|------|
+| **0 (now)** | ACCEPTED semantics + INV freeze | **DONE** |
+| **1** | Implementation Candidate: when may ICE restart bypass non-owner block? | Separate auth |
+| **2** | Single-gate patch at ICE-restart admission | After IC |
+
+### Phase 1 IC (future — not started)
+
+Answer only:
+
+> When is ICE restart admission allowed to bypass `NEGOTIATION_NON_OWNER_BLOCKED`?
+
+Do **not** answer ownership win, recovery responsibility, or membership.
+
+### Phase 2 patch shape (future — not started)
 
 ```text
-if (negotiationOwner != local) {
-    if (hasValidNegotiationLease(edge, episode)) allow ICE restart
-    else request / deny  // still NON_OWNER without lease
-}
+before: negotiationOwner != local → NON_OWNER_BLOCKED
+
+after:  negotiationOwner != local
+          → valid negotiation lease? → yes: allow restart
+                                    → no:  blocked
 ```
 
-**Do not touch:**
-
-```text
-assignMediaActionOwner
-RecoveryDeliveryProgress / Phase-2
-CompletionPolicy / ADR-0038
-UVCP / RCA-003
-membership / epoch
-Ownership supersede path
-```
+**Touch:** ICE-restart admission gate only.  
+**Do not touch:** `assignMediaActionOwner` · Phase-2 / Delivery · CompletionPolicy · UVCP · membership · supersede · new recovery states.
 
 ## Out of scope (frozen)
 
 ```text
-More WiFi flap soaks to “find root”
-Retry / ICE timeout / ICE strategy patches
+Field soak / WiFi flap matrices
+Retry · ICE timeout · ICE strategy
+Edge ownership redesign
+New recovery states (e.g. NEGOTIATION_RECOVERY_PENDING_V2)
 Split M01 vs M03 into two RCAs
 New coordinator actor
-Phase-2 Delivery · UVCP · Edge-scoped redesign
 ```
 
-## Acceptance (when ACCEPTED + IC)
+## Acceptance (semantics — now)
 
-1. Inbound ICE_RESTART_ONLY with local media action no longer deadlocks solely on remote negotiationOwner.  
-2. Lease grant/deny/expire observable in logs.  
-3. INV-1–INV-3 hold; no UVCP / completion / Phase-2 delta.
+- [x] Option A selected  
+- [x] INV-1..3 frozen  
+- [x] Scope = admission handoff only  
+- [ ] Runtime / IC / patch — **not** this phase  
 
 ## Implementation gate
 
 ```text
-Product auth → ACCEPTED ADR (Option A + INV-1..3) → IC → single-gate patch
-Not: field trial-and-error
-```
-
-## Milestone wording (portfolio)
-
-```text
-Recovery Last-mile:           PASS
-Post-recovery convergence:    PASS except admission handoff
-Open successor:               ADR-0050 Negotiation Admission Handoff
+Phase 0 ACCEPTED (this doc)
+  → separate auth for Phase 1 IC
+  → separate auth for Phase 2 patch
+Not: implement on this acceptance alone
 ```

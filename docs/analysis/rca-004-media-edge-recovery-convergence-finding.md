@@ -1,11 +1,11 @@
-# RCA-004 â€” Media Edge Recovery Convergence Finding (A1â€“A3)
+# RCA-004 â€?Media Edge Recovery Convergence Finding (A1â€“A3)
 
 **Status:** **FINDING COMPLETE** (adjudicated)  
 **Date:** 2026-08-11  
 **Entry:** [rca-004-media-edge-recovery-convergence-audit-entry.md](./rca-004-media-edge-recovery-convergence-audit-entry.md)  
 **Evidence:** `logs/rca003-ic-uvcp-gray-20260811-064426/` Â· gray-1 `062506`  
 **Code:** `ConferenceEdgeRecoveryController` Â· `EdgeRecoveryModels` Â· `RecoveryNegotiationAuthority`  
-**Next (optional):** [ADR-0050 Negotiation Admission Handoff](../adr/0050-negotiation-admission-handoff.md) â€” **NOT STARTED** (await product auth)
+**Next (optional):** [ADR-0050 Negotiation Admission Handoff](../adr/0050-negotiation-admission-handoff.md) â€?**ACCEPTED (semantics); impl NOT AUTHORIZED** (await product auth)
 
 ## Adjudication (frozen)
 
@@ -27,13 +27,13 @@ Not:
   Edge-scoped ownership redesign (store already per-edge)
 ```
 
-**Black-hole translation:** recovery media action can exist; **negotiation admission** does not follow the media-action actor â†’ execution deadlock.
+**Black-hole translation:** recovery media action can exist; **negotiation admission** does not follow the media-action actor â†?execution deadlock.
 
 ```text
 Edge(P)
-   â”œâ”€ Negotiation Owner = P (remote)  â†’ "you may not drive offer/ICE"
-   â””â”€ Media Action Owner = Local      â†’ "I should HOST_RESTART"
-        â†’ DEADLOCK
+   â”œâ”€ Negotiation Owner = P (remote)  â†?"you may not drive offer/ICE"
+   â””â”€ Media Action Owner = Local      â†?"I should HOST_RESTART"
+        â†?DEADLOCK
 ```
 
 Finding-1 (`NON_OWNER_BLOCKED`) and Finding-2 (`NO_MEDIA_ACTION_OWNER` via PENDING) are **two surfaces of one mechanism**: recovery actor cannot obtain effective execution authority.
@@ -44,7 +44,7 @@ Finding-1 (`NON_OWNER_BLOCKED`) and Finding-2 (`NO_MEDIA_ACTION_OWNER` via PENDI
 
 ```text
 Finding-1:
-  M01â†’M02 blocked by negotiation-owner â‰  local at ICE restart dispatch
+  M01â†’M02 blocked by negotiation-owner â‰?local at ICE restart dispatch
   (NEGOTIATION_NON_OWNER_BLOCKED; media-action may already be HOST_RESTART/DEFERRED)
 
 Finding-2:
@@ -55,20 +55,20 @@ Finding-2:
 Common invariant: YES
   On ICE_RESTART_ONLY inbound edges to the flapped peer, negotiation owner is
   elected as the remote (flapped) module; local actor cannot pass ICE-restart
-  admission â†’ inbound media action does not complete.
+  admission â†?inbound media action does not complete.
 ```
 
 ---
 
-## A1 â€” Ownership Binding (fact)
+## A1 â€?Ownership Binding (fact)
 
 ```text
 Owner Scope:
 [ ] Conference
 [ ] Session
-[x] Endpoint          â€” remoteModuleId half of key; negotiation owner is a moduleId
-[x] Edge              â€” store key = ConferenceEdgeKey(sessionId, remoteModuleId)
-[x] Attempt           â€” mediaActionOwner / disposition live on EdgeRecoveryRecord
+[x] Endpoint          â€?remoteModuleId half of key; negotiation owner is a moduleId
+[x] Edge              â€?store key = ConferenceEdgeKey(sessionId, remoteModuleId)
+[x] Attempt           â€?mediaActionOwner / disposition live on EdgeRecoveryRecord
                         with recoveryAttemptId; obligationGeneration on same record
 ```
 
@@ -77,17 +77,17 @@ Owner Scope:
 | Concept | Binding |
 |---------|---------|
 | Edge store | `ConcurrentHashMap<ConferenceEdgeKey, EdgeRecoveryRecord>` |
-| Edge key | `(sessionId, remoteModuleId)` â€” **per local observerâ€™s edge to remote** |
-| Media-action owner | `EdgeRecoveryRecord.mediaActionOwner` enum (`HOST_RESTART` / `PARTICIPANT_REATTACH` / â€¦) + `mediaActionOwnerModuleId` in logs (defaults `localModuleId`) |
+| Edge key | `(sessionId, remoteModuleId)` â€?**per local observerâ€™s edge to remote** |
+| Media-action owner | `EdgeRecoveryRecord.mediaActionOwner` enum (`HOST_RESTART` / `PARTICIPANT_REATTACH` / â€? + `mediaActionOwnerModuleId` in logs (defaults `localModuleId`) |
 | Negotiation owner | `EdgeRecoveryRecord.canonicalNegotiationOwnerModuleId` (module id string) |
 | Negotiation election key | `RecoveryNegotiationKey(sessionId, edgeModuleId, recoveryEpisodeId)` |
 
-**Writer:** `assignMediaActionOwner(record, owner, â€¦)` mutates the **edge record**.  
+**Writer:** `assignMediaActionOwner(record, owner, â€?` mutates the **edge record**.  
 **Not:** a single conference-global media-action owner object.
 
 ---
 
-## A2 â€” Obligation Granularity (fact)
+## A2 â€?Obligation Granularity (fact)
 
 ```text
 Episode / edge record:     per ConferenceEdgeKey (local view of remote)
@@ -100,19 +100,19 @@ Architecture observed:
 
 ```text
 Each local device holds independent edges[sessionId, remote]:
-  M01.edges[M02]  â‰   M03.edges[M02]  â‰   M02.edges[M01]
+  M01.edges[M02]  â‰? M03.edges[M02]  â‰? M02.edges[M01]
 ```
 
-There is **no** shared cross-peer â€œRecoveryEpisode(M02)â€ object that closes all inbound edges together.  
+There is **no** shared cross-peer â€œRecoveryEpisode(M02)â€?object that closes all inbound edges together.  
 Outbound CONNECTED on M02 does **not** clear or complete M01/M03â€™s edge records to M02.
 
 ---
 
-## A3 â€” Admission Predicate
+## A3 â€?Admission Predicate
 
-### Case M01 â€” `NEGOTIATION_NON_OWNER_BLOCKED`
+### Case M01 â€?`NEGOTIATION_NON_OWNER_BLOCKED`
 
-**Predicate (code):** `issueBoundedIceRestart` â†’ after gates:
+**Predicate (code):** `issueBoundedIceRestart` â†?after gates:
 
 ```text
 negotiationOwner = ensureCanonicalNegotiationOwner(...)
@@ -126,63 +126,63 @@ assignMediaActionOwner(HOST_RESTART)
 
 **Why HOST_RESTART intent does not get admission**
 
-1. `initiatesReattach=false` â†’ `ICE_RESTART_ONLY`  
+1. `initiatesReattach=false` â†?`ICE_RESTART_ONLY`  
 2. Bootstrap / resolve: with no existing wire owner, coordinator owner = **remote** when `!initiatesReattach` (`RecoveryNegotiationAuthority.bootstrapCoordinatorOwner`)  
 3. Field: `existing_owner=M02` / `owner=M02 local=M01`  
-4. Local may still log `RECOVERY_MEDIA_ACTION_ASSIGNMENT â€¦ HOST_RESTART` from `resolveMediaActionOwner` **before** `issueBoundedIceRestart`; that log is **not** the same as a successful `assignMediaActionOwner` past the negotiation check  
-5. Deferred path (`recordMediaActionDeferred`) **does** set `mediaActionOwner=HOST_RESTART` without passing the negotiation check â€” so M01 can be â€œassigned but blocked from dispatchâ€
+4. Local may still log `RECOVERY_MEDIA_ACTION_ASSIGNMENT â€?HOST_RESTART` from `resolveMediaActionOwner` **before** `issueBoundedIceRestart`; that log is **not** the same as a successful `assignMediaActionOwner` past the negotiation check  
+5. Deferred path (`recordMediaActionDeferred`) **does** set `mediaActionOwner=HOST_RESTART` without passing the negotiation check â€?so M01 can be â€œassigned but blocked from dispatchâ€?
 
-**Semantic:** negotiation ownership (who may drive offer/ICE restart) â‰  media-action enum claim. Local HOST_RESTART claim is rejected at **negotiation actor** gate.
+**Semantic:** negotiation ownership (who may drive offer/ICE restart) â‰?media-action enum claim. Local HOST_RESTART claim is rejected at **negotiation actor** gate.
 
-### Case M03 â€” `NO_MEDIA_ACTION_OWNER`
+### Case M03 â€?`NO_MEDIA_ACTION_OWNER`
 
 **Field sequence (`064426`):**
 
 ```text
-EDGE_STARTED initiatesReattach=false  â†’ mediaActionOwner := PENDING
+EDGE_STARTED initiatesReattach=false  â†?mediaActionOwner := PENDING
 RECOVERY_MEDIA_ACTION_ASSIGNMENT HOST_RESTART
 NEGOTIATION_NON_OWNER_BLOCKED owner=M02 local=M03
-â€¦ (no RECOVERY_ICE_RESTART_DISPATCHED / no OWNER_ASSIGNED ACTIVE)
-timeout â†’ EXPLICIT_ABORT NO_MEDIA_ACTION_OWNER
+â€?(no RECOVERY_ICE_RESTART_DISPATCHED / no OWNER_ASSIGNED ACTIVE)
+timeout â†?EXPLICIT_ABORT NO_MEDIA_ACTION_OWNER
 ```
 
-**Why â€œno ownerâ€ at timeout**
+**Why â€œno ownerâ€?at timeout**
 
 ```text
 PENDING.isAssigned() == false
 assignMediaActionOwner(HOST_RESTART) only after negotiationOwner == local
-NON_OWNER_BLOCKED returns earlier â†’ record stays PENDING
+NON_OWNER_BLOCKED returns earlier â†?record stays PENDING
 watchdog:
-  !mediaActionOwner.isAssigned() â†’ abortReason = NO_MEDIA_ACTION_OWNER
+  !mediaActionOwner.isAssigned() â†?abortReason = NO_MEDIA_ACTION_OWNER
 ```
 
-So M03 is **not** â€œnever tried to create an actionâ€; it is **â€œintent logged, admission denied, assign never committed, classified as missing owner.â€**
+So M03 is **not** â€œnever tried to create an actionâ€? it is **â€œintent logged, admission denied, assign never committed, classified as missing owner.â€?*
 
 Hypothesis A/B from entry:
 
 | Option | Result |
 |--------|--------|
-| A) no recovery action created | **Rejected** â€” EDGE_STARTED + ASSIGNMENT log exist |
-| B) owner creation failed / not propagated | **Closer** â€” assign past negotiation gate never runs; stays PENDING |
+| A) no recovery action created | **Rejected** â€?EDGE_STARTED + ASSIGNMENT log exist |
+| B) owner creation failed / not propagated | **Closer** â€?assign past negotiation gate never runs; stays PENDING |
 
 ---
 
 ## Common invariant
 
 ```text
-YES â€” shared mechanism class:
+YES â€?shared mechanism class:
 
 Inbound ICE_RESTART_ONLY recovery toward flapped peer P:
   negotiationOwner elects P (remote)
   local L attempts ICE restart / HOST_RESTART
-  L â‰  negotiationOwner â†’ NEGOTIATION_NON_OWNER_BLOCKED
-  â†’ inbound edge media action does not complete
-  â†’ ice stays FAILED/CHECKING (symptom)
-  â†’ UI degraded is correct
+  L â‰?negotiationOwner â†?NEGOTIATION_NON_OWNER_BLOCKED
+  â†?inbound edge media action does not complete
+  â†?ice stays FAILED/CHECKING (symptom)
+  â†?UI degraded is correct
 
 Surface difference M01 vs M03:
   M01 often reaches DEFERRED/ASSIGNED HOST_RESTART then still blocked on dispatch
-  M03 stays PENDING â†’ timeout label NO_MEDIA_ACTION_OWNER
+  M03 stays PENDING â†?timeout label NO_MEDIA_ACTION_OWNER
 ```
 
 **Not claimed:** scope must become edge-scoped redesign (store is already per-edge; tension is **role split + admission**, not missing edge keys).
@@ -203,17 +203,17 @@ Surface difference M01 vs M03:
 
 **Do not** open Edge-scoped ownership redesign (A1: store already per-edge).
 
-Thin ADR (**0050** â€” ADR-0046 already taken):
+Thin ADR (**0050** â€?ADR-0046 already taken):
 
-> [ADR-0050 Negotiation Admission Handoff](../adr/0050-negotiation-admission-handoff.md) â€” **NOT STARTED** Â· Option **A** preferred Â· **INV-1..3** frozen
+> [ADR-0050 Negotiation Admission Handoff](../adr/0050-negotiation-admission-handoff.md) â€?**ACCEPTED (semantics); impl NOT AUTHORIZED** Â· Option **A** preferred Â· **INV-1..3** frozen
 
 ```text
-INV-1  lease â‰  ownership transfer
+INV-1  lease â‰?ownership transfer
 INV-2  lease = single edge + single recovery episode
-INV-3  lease expiry â‰  recovery failed
+INV-3  lease expiry â‰?recovery failed
 ```
 
-IC (when authorized): one ICE-restart admission gate only â€” not assignMediaActionOwner / Phase-2 / Completion / UVCP.
+IC (when authorized): one ICE-restart admission gate only â€?not assignMediaActionOwner / Phase-2 / Completion / UVCP.
 
 ```text
 No field soak Â· no Phase-2 Â· no Delivery Â· no Ownership supersede reopen Â· no UVCP

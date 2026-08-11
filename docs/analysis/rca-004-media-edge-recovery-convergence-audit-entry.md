@@ -5,7 +5,7 @@
 **Name (frozen):** Media Edge Recovery Convergence Audit  
 **Finding:** [rca-004-media-edge-recovery-convergence-finding.md](./rca-004-media-edge-recovery-convergence-finding.md)  
 **Adjudicated root:** Negotiation Admission / Dual-role Ownership mismatch  
-**Next ADR (optional):** [0050-negotiation-admission-handoff.md](../adr/0050-negotiation-admission-handoff.md) — NOT STARTED  
+**Next ADR:** [0050-negotiation-admission-handoff.md](../adr/0050-negotiation-admission-handoff.md) — **ACCEPTED (semantics)** · impl **NOT AUTHORIZED**  
 **Predecessor (CLOSED):** [rca-003-presentation-convergence-entry.md](./rca-003-presentation-convergence-entry.md)  
 **Field seeds:**  
 - [mesh-m02-media-unrecovered-20260811-064426.md](./mesh-m02-media-unrecovered-20260811-064426.md)  
@@ -227,12 +227,11 @@ Not: more soak · Edge-scoped redesign · Phase-2 reopen
 ## Next action
 
 ```text
-Milestone freeze:
-  Recovery Last-mile PASS
-  Post-recovery convergence PASS except admission handoff
-  Open successor: ADR-0050 (Option A + INV-1..3)
+WiFi Recovery Incident Chain v1 — boundary converged
 
-Stop field hunting.
-Product auth → ACCEPTED ADR-0050 → IC → single ICE-restart admission gate patch.
+ADR-0050 ACCEPTED (semantics) · INV-1..3 frozen · Option A
+Implementation NOT AUTHORIZED (await Phase-1 IC auth)
+
+Stop soak · no ownership redesign · no new recovery states
 ```
 
