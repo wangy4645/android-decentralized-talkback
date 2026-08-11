@@ -34,12 +34,14 @@ ICE Restart Execution              = ATTRIBUTED (ADR-0050-R1)
   Primary: remote ingress absent / answer missing
   Contributing: bilateral restart on M02↔M03
 Negotiation Episode Arbitration    = FINDING COMPLETE (ADR-0050-R2)
-  Next: R2a ingress readiness and/or R2b single OFFERER — separate auth
+  Sequencing ACCEPTED: R2a → R2b
+  ([adr0050-r2a-r2b-sequencing-decision.md](../analysis/adr0050-r2a-r2b-sequencing-decision.md))
+  Impl NOT AUTHORIZED
 Completion                         = NOT REACHED
 
 WiFi Recovery Incident Chain v1
   Closed: Delivery · Ownership Handoff · Same-session Rejoin · Presentation · Admission gate
-  Open:   Impl knife choice R2a (ingress) / R2b (offerer role) — separate auth
+  Open:   R2a ingress-ready-before-offer (then R2b offer arbitration) — impl auth pending
 ```
 
 **Problem rename (do not reverse):**

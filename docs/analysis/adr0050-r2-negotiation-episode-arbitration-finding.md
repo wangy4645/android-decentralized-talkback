@@ -100,13 +100,12 @@ Dual OFFERER alone       → glare / collision risk (R1 contributing on M02↔M0
 Together                 → offer into black hole + competing writers
 ```
 
-Next impl ADR (separate auth) should address **both** or explicitly sequence:
+**Product sequencing (ACCEPTED 2026-08-11):** [adr0050-r2a-r2b-sequencing-decision.md](./adr0050-r2a-r2b-sequencing-decision.md)
 
-| Option | Knife | Addresses |
-|--------|-------|-----------|
-| **R2a** | Ingress readiness before offer send | R2.3 / R1 primary |
-| **R2b** | Episode single OFFERER (lease role / arbitration) | R2.1–R2.2 / bilateral |
-| **R2a→R2b** | Ingress first, then arbitration | Prefer if product wants minimal blast |
+| Order | Knife | Why first/second |
+|-------|-------|------------------|
+| **1 R2a** | Ingress readiness before offer | Clears primary failure even with one offerer |
+| **2 R2b** | Episode single offerer (not “owner”) | After R2a; only if dual writers still hurt |
 
 **Forbidden alone:** enlarge timeout · expand retry · roll back 0050.
 
