@@ -63,9 +63,15 @@
     <dimen name="call_identity_to_banner_gap">16dp</dimen>
     <dimen name="call_control_circle_size">56dp</dimen>
     <dimen name="call_control_icon_size">22dp</dimen>
-    <!-- Meeting speaker: double-ring avatar + vertical VU meter (reference design) -->
-    <dimen name="meeting_speaker_outer_size">168dp</dimen>
-    <dimen name="meeting_speaker_inner_size">132dp</dimen>
+    <!-- Meeting speaker: PTT radar drawable; meeting-scaled ring spacing -->
+    <dimen name="meeting_speaker_button_size">132dp</dimen>
+    <dimen name="meeting_speaker_area_size">192dp</dimen>
+    <dimen name="meeting_radar_ring_1">142dp</dimen>
+    <dimen name="meeting_radar_ring_2">152dp</dimen>
+    <dimen name="meeting_radar_ring_3">162dp</dimen>
+    <dimen name="meeting_radar_ring_4">172dp</dimen>
+    <dimen name="meeting_radar_ring_5">182dp</dimen>
+    <dimen name="meeting_radar_ring_6">192dp</dimen>
     <dimen name="meeting_speaker_icon_size">56dp</dimen>
     <dimen name="meeting_volume_meter_width">10dp</dimen>
     <dimen name="meeting_volume_meter_height">112dp</dimen>
