@@ -9,14 +9,19 @@
 ## Frozen status (do not conflate)
 
 ```text
-WiFi Recovery Protocol Chain      PASS
-Recovery UX / Presentation       OPEN
-Session Churn / Join Stability    OPEN
+WiFi Recovery Protocol Chain      CLOSED / VERIFIED
+ADR-0050 + R2a                    FIELD SUPPORTED / FROZEN
+Presentation (RCA-003)            CLOSED
+Media Edge Convergence            DEFERRED (no recover-then-no-media repro)
+Session Churn / Join Stability    OPEN ← P1 next
+R2b Offer Arbitration             HOLD
 ```
+
+**P1 observation card:** [join-stability-m02-observation-run-card.md](./join-stability-m02-observation-run-card.md)
 
 **Do not write:** `Recovery 全部 PASS` / `WiFi recovery solved` / `all related UX PASS`.
 
-Protocol PASS means the observation chain is intact. It does **not** mean post-recovery user experience is closed.
+Protocol PASS means the recovery observation chain is intact. It does **not** mean join stability or post-recovery UX is closed.
 
 ## Milestone PASS (protocol only)
 
