@@ -1,13 +1,14 @@
 # ADR-0050 R2a — Negotiation Ingress Readiness IC
 
-**Status:** **IC FROZEN** · **PATCH ACCEPT** (PR [#167](https://github.com/wangy4645/android-decentralized-talkback/pull/167)) · Field **AUTHORIZED after merge** · R2b **HOLD**  
+**Status:** **IC FROZEN** · **PATCH MERGED (#167 @ 40a984c)** · Field **AUTHORIZED** (directed soak) · R2b **HOLD**  
 **Adjudication:** [adr0050-r2a-architecture-adjudication.md](./adr0050-r2a-architecture-adjudication.md)  
-**Sequencing:** [adr0050-r2a-r2b-sequencing-decision.md](./adr0050-r2a-r2b-sequencing-decision.md) (**R2a → R2b**)  
+**Run card:** [adr0050-r2a-directed-ingress-soak-run-card.md](./adr0050-r2a-directed-ingress-soak-run-card.md)  
+**Sequencing:** R2a → R2b (HOLD until dual legitimate OFFER after R2a field)  
 **Parents:** R2 finding · R1 finding · ADR-0050 admission **CLOSED / VERIFIED**
 
 ```text
 ADR-0050 Admission Lease          VERIFIED
-R2a Negotiation Ingress Gate       IMPLEMENTED (待 field)
+R2a Negotiation Ingress Gate       MERGED · field AUTHORIZED
 R2b Offer Arbitration              NOT STARTED / HOLD
 ```
 
@@ -175,12 +176,12 @@ Deadline clears the ingress wait and leaves the attempt to the **existing** time
 ```text
 ADR-0050 Admission / Lease     VERIFIED — do not reopen
 R2a IC                         FROZEN
-R2a patch                      ACCEPT — merge then field
+R2a patch                      MERGED (#167 @ 40a984c)
 R2b                            HOLD — only if dual legitimate OFFER after R2a field
-Field / flap                   AUTHORIZED after merge (narrow markers; not UI DEGRADED)
+Field / flap                   AUTHORIZED — directed ingress soak (narrow markers)
 ```
 
-**Cadence:** static INV review → **merge #167** → **one** directed field soak → decide R2b **only** on dual-offer evidence.
+**Cadence:** **merge DONE** → **one** directed field soak → decide R2b **only** on dual-offer evidence.
 
 **Field success (narrow — prove timing, not episode close):**
 
