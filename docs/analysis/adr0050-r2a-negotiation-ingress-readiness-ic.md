@@ -1,15 +1,18 @@
 # ADR-0050 R2a — Negotiation Ingress Readiness IC
 
-**Status:** **IC FROZEN** · **PATCH MERGED (#167 @ 40a984c)** · Field **AUTHORIZED** (directed soak) · R2b **HOLD**  
+**Status:** **IC FROZEN** · **PATCH MERGED (#167)** · **FIELD SUPPORTED** · Predicate **NO CHANGE** · R2b **HOLD**  
 **Adjudication:** [adr0050-r2a-architecture-adjudication.md](./adr0050-r2a-architecture-adjudication.md)  
 **Run card:** [adr0050-r2a-directed-ingress-soak-run-card.md](./adr0050-r2a-directed-ingress-soak-run-card.md)  
-**Sequencing:** R2a → R2b (HOLD until dual legitimate OFFER after R2a field)  
+**Field Finding #1:** [adr0050-r2a-field-finding-1.md](./adr0050-r2a-field-finding-1.md)  
+**Attribution:** [adr0050-r2a-readiness-attribution-audit.md](./adr0050-r2a-readiness-attribution-audit.md) (**CLOSED**)  
+**Sequencing:** R2a → R2b (HOLD until dual legitimate OFFER post-R2a)  
 **Parents:** R2 finding · R1 finding · ADR-0050 admission **CLOSED / VERIFIED**
 
 ```text
 ADR-0050 Admission Lease          VERIFIED
-R2a Negotiation Ingress Gate       MERGED · field AUTHORIZED
-R2b Offer Arbitration              NOT STARTED / HOLD
+R2a Negotiation Ingress Gate       IMPLEMENTED / FIELD SUPPORTED
+R2a Readiness Predicate            NO CHANGE
+R2b Offer Arbitration              HOLD (FUTURE ONLY)
 ```
 
 ---
@@ -176,12 +179,19 @@ Deadline clears the ingress wait and leaves the attempt to the **existing** time
 ```text
 ADR-0050 Admission / Lease     VERIFIED — do not reopen
 R2a IC                         FROZEN
-R2a patch                      MERGED (#167 @ 40a984c)
-R2b                            HOLD — only if dual legitimate OFFER after R2a field
-Field / flap                   AUTHORIZED — directed ingress soak (narrow markers)
+R2a patch                      MERGED (#167) · FIELD SUPPORTED
+R2a readiness predicate        NO CHANGE — frozen
+R2b                            HOLD (FUTURE ONLY) — dual-offer evidence required
+Field                          CLOSED for R2a — no further soak unless R2b trigger
 ```
 
-**Cadence:** **merge DONE** → **one** directed field soak → decide R2b **only** on dual-offer evidence.
+**Frozen scoring boundary:**
+
+```text
+RECOVERY_REMOTE_INGRESS_ABSENT ≠ REMOTE_NEGOTIATION_READY failure
+```
+
+**Cadence:** R2a frozen · R2b only on same-episode dual legitimate OFFER evidence.
 
 **Field success (narrow — prove timing, not episode close):**
 
