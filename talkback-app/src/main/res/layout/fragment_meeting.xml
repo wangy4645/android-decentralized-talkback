@@ -54,7 +54,7 @@
                 android:id="@+id/btnMeetingLeaveTop"
                 style="@style/TalkbackToolbarIconButton"
                 android:contentDescription="@string/meeting_leave"
-                android:src="@drawable/ic_call_end"
+                android:src="@drawable/ic_conversation_call"
                 app:tint="@color/tb_danger" />
         </LinearLayout>
 
@@ -173,27 +173,82 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="16dp"
+                    android:clipChildren="false"
+                    android:clipToPadding="false"
                     android:gravity="center_horizontal"
                     android:orientation="vertical">
 
                     <LinearLayout
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
+                        android:clipChildren="false"
+                        android:clipToPadding="false"
                         android:gravity="center_vertical"
                         android:orientation="horizontal">
 
                         <FrameLayout
                             android:id="@+id/frameMeetingAvatarOuter"
-                            android:layout_width="@dimen/meeting_speaker_outer_size"
-                            android:layout_height="@dimen/meeting_speaker_outer_size"
-                            android:background="@drawable/bg_meeting_speaker_outer_ring">
+                            android:layout_width="@dimen/meeting_speaker_area_size"
+                            android:layout_height="@dimen/meeting_speaker_area_size"
+                            android:clipChildren="false"
+                            android:clipToPadding="false">
+
+                            <FrameLayout
+                                android:id="@+id/layoutMeetingRadarRings"
+                                android:layout_width="match_parent"
+                                android:layout_height="match_parent"
+                                android:clipChildren="false"
+                                android:clipToPadding="false">
+
+                                <View
+                                    android:layout_width="@dimen/meeting_radar_ring_6"
+                                    android:layout_height="@dimen/meeting_radar_ring_6"
+                                    android:layout_gravity="center"
+                                    android:alpha="0.10"
+                                    android:background="@drawable/bg_ptt_radar_ring" />
+
+                                <View
+                                    android:layout_width="@dimen/meeting_radar_ring_5"
+                                    android:layout_height="@dimen/meeting_radar_ring_5"
+                                    android:layout_gravity="center"
+                                    android:alpha="0.16"
+                                    android:background="@drawable/bg_ptt_radar_ring" />
+
+                                <View
+                                    android:layout_width="@dimen/meeting_radar_ring_4"
+                                    android:layout_height="@dimen/meeting_radar_ring_4"
+                                    android:layout_gravity="center"
+                                    android:alpha="0.24"
+                                    android:background="@drawable/bg_ptt_radar_ring" />
+
+                                <View
+                                    android:layout_width="@dimen/meeting_radar_ring_3"
+                                    android:layout_height="@dimen/meeting_radar_ring_3"
+                                    android:layout_gravity="center"
+                                    android:alpha="0.34"
+                                    android:background="@drawable/bg_ptt_radar_ring" />
+
+                                <View
+                                    android:layout_width="@dimen/meeting_radar_ring_2"
+                                    android:layout_height="@dimen/meeting_radar_ring_2"
+                                    android:layout_gravity="center"
+                                    android:alpha="0.46"
+                                    android:background="@drawable/bg_ptt_radar_ring" />
+
+                                <View
+                                    android:layout_width="@dimen/meeting_radar_ring_1"
+                                    android:layout_height="@dimen/meeting_radar_ring_1"
+                                    android:layout_gravity="center"
+                                    android:alpha="0.58"
+                                    android:background="@drawable/bg_ptt_radar_ring" />
+                            </FrameLayout>
 
                             <FrameLayout
                                 android:id="@+id/frameMeetingAvatarInner"
-                                android:layout_width="@dimen/meeting_speaker_inner_size"
-                                android:layout_height="@dimen/meeting_speaker_inner_size"
+                                android:layout_width="@dimen/meeting_speaker_button_size"
+                                android:layout_height="@dimen/meeting_speaker_button_size"
                                 android:layout_gravity="center"
-                                android:background="@drawable/bg_meeting_speaker_inner_ring">
+                                android:background="@drawable/bg_ptt_button">
 
                                 <ImageView
                                     android:id="@+id/imgMeetingSpeakerAvatar"

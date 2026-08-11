@@ -242,14 +242,14 @@ class MeetingFragment : Fragment() {
         val mutedIcon = view.findViewById<ImageView>(R.id.imgMeetingMutedIcon)
         val txtSpeaker = view.findViewById<TextView>(R.id.txtMeetingSpeaker)
         val txtSpeakerStatus = view.findViewById<TextView>(R.id.txtMeetingSpeakerStatus)
-        val avatarOuter = view.findViewById<View>(R.id.frameMeetingAvatarOuter)
+        val radarRings = view.findViewById<View>(R.id.layoutMeetingRadarRings)
         val avatarInner = view.findViewById<View>(R.id.frameMeetingAvatarInner)
         val volumeMeter = view.findViewById<MeetingVolumeMeterView>(R.id.meterMeetingVolume)
         if (muted) {
             avatar.isVisible = false
             mutedIcon.isVisible = true
-            avatarOuter.setBackgroundResource(R.drawable.bg_meeting_speaker_outer_ring_muted)
-            avatarInner.setBackgroundResource(R.drawable.bg_meeting_speaker_inner_ring_muted)
+            radarRings.alpha = 0.35f
+            avatarInner.setBackgroundResource(R.drawable.bg_meeting_speaker_button_muted)
             txtSpeaker.text = getString(R.string.meeting_you_muted)
             txtSpeakerStatus.text = getString(R.string.meeting_tap_mic_to_speak)
             txtSpeakerStatus.setTextColor(ContextCompat.getColor(requireContext(), R.color.tb_text_muted))
@@ -257,25 +257,14 @@ class MeetingFragment : Fragment() {
         } else {
             avatar.isVisible = true
             mutedIcon.isVisible = false
+            radarRings.alpha = 1f
+            avatarInner.setBackgroundResource(R.drawable.bg_ptt_button)
             val localSelf = state.endpoints.firstOrNull { it.isLocal }
             val activeSpeaker = state.endpoints.firstOrNull { it.status == EndpointStatus.SPEAKING }
             val speaker = activeSpeaker ?: localSelf ?: state.endpoints.firstOrNull {
                 it.status == EndpointStatus.ONLINE
             }
             val isSpeaking = speaker?.status == EndpointStatus.SPEAKING
-            if (speaker?.isLocal == true && isSpeaking) {
-                avatarOuter.setBackgroundResource(R.drawable.bg_meeting_speaker_outer_ring)
-                avatarInner.setBackgroundResource(R.drawable.bg_meeting_speaker_inner_ring)
-            } else if (speaker?.isLocal == true) {
-                avatarOuter.setBackgroundResource(R.drawable.bg_meeting_speaker_outer_ring_local)
-                avatarInner.setBackgroundResource(R.drawable.bg_meeting_speaker_inner_ring)
-            } else if (isSpeaking) {
-                avatarOuter.setBackgroundResource(R.drawable.bg_meeting_speaker_outer_ring)
-                avatarInner.setBackgroundResource(R.drawable.bg_meeting_speaker_inner_ring)
-            } else {
-                avatarOuter.setBackgroundResource(R.drawable.bg_meeting_speaker_outer_ring)
-                avatarInner.setBackgroundResource(R.drawable.bg_meeting_speaker_inner_ring)
-            }
             txtSpeaker.text = speaker?.displayLabel ?: "--"
             txtSpeakerStatus.text = when {
                 speaker?.isLocal == true && isSpeaking -> getString(R.string.meeting_speaking)
