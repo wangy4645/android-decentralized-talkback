@@ -43,7 +43,7 @@ Do not start R2b
 Run one focused readiness attribution round
 ```
 
-**One line:** R2a 已证明「不要盲发 offer」正确，但尚未证明「READY ⇒ offer 一定可被接收」。下一步钉死 READY 可信度，不扩架构。
+**One line:** R2a 已证明「不要盲发 offer」正确；Finding #1 的 ABSENT **不能**证明 READY 不可信（见 attribution）。下一步不是扩架构。
 
 ---
 
