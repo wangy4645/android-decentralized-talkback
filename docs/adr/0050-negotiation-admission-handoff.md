@@ -3,15 +3,18 @@
 ## Status
 
 **ACCEPTED** (semantics) — **2026-08-11** · **Option A + INV-1..3 FROZEN**  
-**Implementation:** **NOT AUTHORIZED** (Phase 0 only — freeze contract, no code)  
-**Parent finding:** [rca-004-media-edge-recovery-convergence-finding.md](../analysis/rca-004-media-edge-recovery-convergence-finding.md) (**FINDING COMPLETE**)
+**Implementation:** **AUTHORIZED** — Phase-1 IC + Phase-2 single-gate patch (product auth 2026-08-11 「授权」)  
+**Field validation:** **PENDING** — [adr0050-directed-admission-validation-run-card.md](../analysis/adr0050-directed-admission-validation-run-card.md) (**DRAFTED**; not RNA Directed #5)  
+**Parent finding:** [rca-004-media-edge-recovery-convergence-finding.md](../analysis/rca-004-media-edge-recovery-convergence-finding.md) (**FINDING COMPLETE**)  
+**IC:** [adr0050-phase1-implementation-candidate.md](../analysis/adr0050-phase1-implementation-candidate.md)
 
 ```text
 Note: ADR-0046 is already taken
   (Successor Admission Terminal Convergence Contract).
 This handoff ADR is numbered 0050.
 
-Product auth (2026-08-11): accept semantics; do not expand scope; do not implement yet.
+Product auth (2026-08-11): Phase-1 IC + Phase-2 ICE-restart lease admission authorized.
+Scope remains Option A only; no ownership redesign / completion / UVCP / membership.
 ```
 
 ## Portfolio cut (authorized freeze)
@@ -20,7 +23,7 @@ Product auth (2026-08-11): accept semantics; do not expand scope; do not impleme
 Recovery Last-mile                 = CLOSED / PASS
 Presentation Convergence           = CLOSED / PASS
 Media Edge Recovery Finding        = COMPLETE
-Negotiation Admission Handoff      = OPEN SUCCESSOR (this ADR — ACCEPTED semantics)
+Negotiation Admission Handoff      = OPEN SUCCESSOR (Phase-1/2 IMPLEMENTED · Field PENDING)
 
 WiFi Recovery Incident Chain v1
   Closed: Delivery · Ownership Handoff · Same-session Rejoin · Presentation Projection
@@ -94,29 +97,31 @@ Forbidden: `lease timeout ⇒ recovery fail` as a new failure class.
 
 | Phase | Work | Auth |
 |-------|------|------|
-| **0 (now)** | ACCEPTED semantics + INV freeze | **DONE** |
-| **1** | Implementation Candidate: when may ICE restart bypass non-owner block? | Separate auth |
-| **2** | Single-gate patch at ICE-restart admission | After IC |
+| **0** | ACCEPTED semantics + INV freeze | **DONE** (#164) |
+| **1** | Implementation Candidate: when may ICE restart bypass non-owner block? | **AUTHORIZED + WRITTEN** |
+| **2** | Single-gate patch at ICE-restart admission | **AUTHORIZED** (this change) |
 
-### Phase 1 IC (future — not started)
+### Phase 1 IC
 
 Answer only:
 
 > When is ICE restart admission allowed to bypass `NEGOTIATION_NON_OWNER_BLOCKED`?
 
-Do **not** answer ownership win, recovery responsibility, or membership.
+**Answer:** When local media-action owner ∈ {PENDING, HOST_RESTART}, obligation OPEN, and a valid negotiation lease is granted/held for this edge + episode — without mutating `canonicalNegotiationOwnerModuleId`.
 
-### Phase 2 patch shape (future — not started)
+See [adr0050-phase1-implementation-candidate.md](../analysis/adr0050-phase1-implementation-candidate.md).
+
+### Phase 2 patch shape
 
 ```text
 before: negotiationOwner != local → NON_OWNER_BLOCKED
 
 after:  negotiationOwner != local
-          → valid negotiation lease? → yes: allow restart
-                                    → no:  blocked
+          → valid negotiation lease? → yes: NEGOTIATION_LEASE_ADMITTED → continue
+                                    → no:  NON_OWNER_BLOCKED
 ```
 
-**Touch:** ICE-restart admission gate only.  
+**Touch:** ICE-restart admission gate + lease fields/logs only.  
 **Do not touch:** `assignMediaActionOwner` · Phase-2 / Delivery · CompletionPolicy · UVCP · membership · supersede · new recovery states.
 
 ## Out of scope (frozen)
@@ -135,13 +140,15 @@ New coordinator actor
 - [x] Option A selected  
 - [x] INV-1..3 frozen  
 - [x] Scope = admission handoff only  
-- [ ] Runtime / IC / patch — **not** this phase  
+- [x] Phase-1 IC written  
+- [x] Phase-2 gate patch (lease admit)  
 
 ## Implementation gate
 
 ```text
-Phase 0 ACCEPTED (this doc)
-  → separate auth for Phase 1 IC
-  → separate auth for Phase 2 patch
-Not: implement on this acceptance alone
+Phase 0 ACCEPTED (#164)
+  → Phase 1 IC AUTHORIZED + WRITTEN
+  → Phase 2 patch AUTHORIZED (product 「授权」 2026-08-11) · #165
+  → Directed Admission Validation run card DRAFTED
+  → field auth → thin directed run → VERIFIED or classified next layer
 ```

@@ -548,6 +548,60 @@ class ConferenceEdgeRecoveryController internal constructor(
         return record.canonicalNegotiationOwnerModuleId!!
     }
 
+    /**
+     * ADR-0050 Option A: admit ICE restart when local media-action actor holds a valid
+     * negotiation lease. Does not mutate [EdgeRecoveryRecord.canonicalNegotiationOwnerModuleId].
+     */
+    private fun admitIceRestartViaNegotiationLease(
+        record: EdgeRecoveryRecord,
+        negotiationOwner: String
+    ): Boolean {
+        if (!NegotiationAdmissionLease.isEligibleMediaAction(
+                owner = record.mediaActionOwner,
+                obligationClosed = record.obligationClosedAtMs != null
+            )
+        ) {
+            return false
+        }
+        if (!hasValidNegotiationLease(record)) {
+            grantNegotiationLease(record, negotiationOwner)
+        }
+        if (!hasValidNegotiationLease(record)) {
+            return false
+        }
+        onLog(
+            "NEGOTIATION_LEASE_ADMITTED session=${record.key.sessionId} " +
+                "remote=${record.key.remoteModuleId} attempt=${record.recoveryAttemptId} " +
+                "obligationGen=${record.obligationGeneration} " +
+                "negotiationOwner=$negotiationOwner local=$localModuleId " +
+                "mediaActionOwner=${record.mediaActionOwner.logLabel()}"
+        )
+        return true
+    }
+
+    private fun hasValidNegotiationLease(record: EdgeRecoveryRecord): Boolean =
+        NegotiationAdmissionLease.isValid(record, clock()) {
+            onLog(
+                "NEGOTIATION_LEASE_EXPIRED session=${record.key.sessionId} " +
+                    "remote=${record.key.remoteModuleId} attempt=${record.recoveryAttemptId} " +
+                    "obligationGen=${record.obligationGeneration} " +
+                    "expiresAtMs=${record.negotiationLeaseExpiresAtMs} nowMs=${clock()}"
+            )
+        }
+
+    private fun grantNegotiationLease(record: EdgeRecoveryRecord, negotiationOwner: String) {
+        val expiresAt = clock() + attemptBudgetMs
+        NegotiationAdmissionLease.grant(record, expiresAt)
+        onLog(
+            "NEGOTIATION_LEASE_GRANTED session=${record.key.sessionId} " +
+                "remote=${record.key.remoteModuleId} attempt=${record.recoveryAttemptId} " +
+                "obligationGen=${record.obligationGeneration} " +
+                "negotiationOwner=$negotiationOwner local=$localModuleId " +
+                "mediaActionOwner=${record.mediaActionOwner.logLabel()} " +
+                "expiresAtMs=$expiresAt"
+        )
+    }
+
     private fun observeNegotiationOwner(record: EdgeRecoveryRecord, trigger: String) {
         negotiationObservationContext(record.key.sessionId, record.key.remoteModuleId)?.let { ctx ->
             RecoveryNegotiationObservation.emitOwnerResolvedFromContext(ctx, localModuleId, trigger)
@@ -3829,12 +3883,14 @@ class ConferenceEdgeRecoveryController internal constructor(
         }
         val negotiationOwner = ensureCanonicalNegotiationOwner(record, "ICE_RESTART_DISPATCH")
         if (negotiationOwner != localModuleId) {
-            onLog(
-                "NEGOTIATION_NON_OWNER_BLOCKED session=${record.key.sessionId} " +
-                    "remote=${record.key.remoteModuleId} attempt=${record.recoveryAttemptId} " +
-                    "owner=$negotiationOwner local=$localModuleId"
-            )
-            return
+            if (!admitIceRestartViaNegotiationLease(record, negotiationOwner)) {
+                onLog(
+                    "NEGOTIATION_NON_OWNER_BLOCKED session=${record.key.sessionId} " +
+                        "remote=${record.key.remoteModuleId} attempt=${record.recoveryAttemptId} " +
+                        "owner=$negotiationOwner local=$localModuleId"
+                )
+                return
+            }
         }
         record.phase = EdgeRecoveryPhase.ICE_RESTARTING
         record.iceRestartIssued = true
