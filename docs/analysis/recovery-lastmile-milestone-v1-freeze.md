@@ -81,7 +81,8 @@ Now each layer has an observation point. Future “WiFi blip, peer didn’t come
 | no OBTAINED | Delivery |
 | OBTAINED but no reconnect | Acceptance / session |
 | reconnect but no EDGE_RECOVERED | Media / completion |
-| EDGE_RECOVERED but UI recovering | Presentation (RCA-003) |
+| EDGE_RECOVERED but UI recovering | Presentation (RCA-003) — **CLOSED** |
+| inbound ICE restart `NON_OWNER_BLOCKED` / `NO_MEDIA_ACTION_OWNER` | **ADR-0050** admission handoff |
 | member disappears | Roster / session churn |
 
 ## Problem rename (frozen)
@@ -93,13 +94,28 @@ Now:  “After WiFi recovery succeeds, which upper-layer states fail to converge
 
 These are different problems. **Do not edit the recovery chain to “fix” UX/join.**
 
+## Successor freeze (2026-08-11)
+
+```text
+Recovery Protocol                 CLOSED / PASS
+Presentation Projection (RCA-003) CLOSED
+Media Edge Finding (RCA-004)      FINDING COMPLETE
+
+Remaining seam:
+  ADR-0050 Negotiation Admission Handoff (NOT STARTED / Option A preferred)
+```
+
+Triage addendum: inbound media unrecovered with `NEGOTIATION_NON_OWNER_BLOCKED` / `NO_MEDIA_ACTION_OWNER` → **ADR-0050**, not WiFi / UVCP / Phase-2.
+
 ## Next (ordered)
 
 | Pri | Action | Track |
 |-----|--------|-------|
-| P0 | This memo + status freeze | **done** |
-| P1 | RCA-003 Presentation Convergence after Recovery — **observe only** | [observation round 1](./rca-003-presentation-convergence-observation-round1.md); no recovery edits |
-| P2 | Join churn observation (M02 leave / restart / join fail) | Session lifecycle; **deferred**; not “WiFi recovery join issue” |
+| P0 | This memo + protocol freeze | **done** |
+| P1 | RCA-003 Presentation Convergence | **CLOSED** (#157) |
+| P2 | RCA-004 Media Edge Convergence Finding | **FINDING COMPLETE** |
+| P3 | ADR-0050 Negotiation Admission Handoff | **NOT STARTED** — product auth; Option A + INV-1..3 |
+| P4 | Join churn / roster | Session lifecycle; **deferred** |
 
 ## Do not change
 

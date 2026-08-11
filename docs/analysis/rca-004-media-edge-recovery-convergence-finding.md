@@ -203,21 +203,18 @@ Surface difference M01 vs M03:
 
 **Do not** open Edge-scoped ownership redesign (A1: store already per-edge).
 
-Thin ADR candidate (number **0050** — ADR-0046 already taken by successor admission):
+Thin ADR (**0050** — ADR-0046 already taken):
 
-> [ADR-0050 Negotiation Admission Handoff](../adr/0050-negotiation-admission-handoff.md) — **NOT STARTED**
+> [ADR-0050 Negotiation Admission Handoff](../adr/0050-negotiation-admission-handoff.md) — **NOT STARTED** · Option **A** preferred · **INV-1..3** frozen
 
-Single question:
+```text
+INV-1  lease ≠ ownership transfer
+INV-2  lease = single edge + single recovery episode
+INV-3  lease expiry ≠ recovery failed
+```
 
-> When media-action owner ≠ negotiation owner, who obtains temporary negotiation admission?
-
-| Option | Idea | Note |
-|--------|------|------|
-| **A (preferred)** | Media-action owner gets temporary **negotiation lease** for ICE restart | No long-term ownership transfer |
-| B | Always ask remote negotiation owner | Bilateral wait risk |
-| C | Merge dual owners into RecoveryCoordinator | Larger scope |
+IC (when authorized): one ICE-restart admission gate only — not assignMediaActionOwner / Phase-2 / Completion / UVCP.
 
 ```text
 No field soak · no Phase-2 · no Delivery · no Ownership supersede reopen · no UVCP
-Impl only after ADR-0050 ACCEPTED + IC
 ```
