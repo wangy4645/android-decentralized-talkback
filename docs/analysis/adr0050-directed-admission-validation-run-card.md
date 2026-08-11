@@ -1,14 +1,15 @@
 # ADR-0050 — Directed Admission Validation Run Card
 
-**Status:** **DRAFTED** · Field **NOT AUTHORIZED** until PR #165 merged + separate field auth  
+**Status:** **ADMISSION GATE FIELD-VERIFIED** (154011) · full directed EDGE_RECOVERED **NOT PASS** · Execution OPEN → R1  
 **Name:** ADR-0050 Directed Admission Validation  
 **(Not** RNA WiFi-recovery “Directed #5” — that maturity track remains closed.)  
 **Parent:** [0050-negotiation-admission-handoff.md](../adr/0050-negotiation-admission-handoff.md)  
 **IC:** [adr0050-phase1-implementation-candidate.md](./adr0050-phase1-implementation-candidate.md)  
 **Finding:** [rca-004-media-edge-recovery-convergence-finding.md](./rca-004-media-edge-recovery-convergence-finding.md)  
-**Prior unrecovered evidence (pre-lease):** `logs/rca003-ic-uvcp-gray-20260811-064426/`  
+**Field evidence:** `logs/adr0050-admission-20260811-154011/` · [FIELD_RESULT.md](../../logs/adr0050-admission-20260811-154011/FIELD_RESULT.md)  
+**Follow-up:** [adr0050-r1-ice-restart-execution-attribution-audit.md](./adr0050-r1-ice-restart-execution-attribution-audit.md)  
 **Adjudicate:** `scripts/adr0050-directed-admission-adjudicate.ps1`  
-**Impl gate:** PR #165 (`feat/adr-0050-negotiation-lease-phase1`) merged to `main`
+**Impl gate:** PR #165 **MERGED** → `main` @ `de58d6c`
 
 ---
 
@@ -17,8 +18,8 @@
 ```text
 RCA-003 Presentation Convergence     CLOSED
 RCA-004 Media Edge Recovery          FINDING COMPLETE
-ADR-0050 Negotiation Admission       Phase-1/2 IMPLEMENTED (#165)
-                                     Field validation PENDING ← this card
+ADR-0050 Negotiation Admission       GATE FIELD-VERIFIED (#165 / 154011)
+                                     Execution OPEN → ADR-0050-R1
 ```
 
 ## Goal (single)
@@ -176,11 +177,5 @@ M02 outbound recovery to peers is **contrast only** (expect healthy path; not th
 ## Auth gate
 
 ```text
-DRAFTED (this card)
-  → merge #165
-  → product field auth (「开测」 / 「授权场测」)
-  → one thin directed run
-  → adjudicate → VERIFIED or classified next layer
+DRAFTED → MERGED #165 → field auth (「合并然后开测」 2026-08-11) → thin directed run → adjudicate
 ```
-
-**Do not** open large multi-flap soak before one directed admission run PASSes or fails with a classified layer.

@@ -3,10 +3,16 @@
 ## Status
 
 **ACCEPTED** (semantics) — **2026-08-11** · **Option A + INV-1..3 FROZEN**  
-**Implementation:** **AUTHORIZED** — Phase-1 IC + Phase-2 single-gate patch (product auth 2026-08-11 「授权」)  
-**Field validation:** **PENDING** — [adr0050-directed-admission-validation-run-card.md](../analysis/adr0050-directed-admission-validation-run-card.md) (**DRAFTED**; not RNA Directed #5)  
+**Implementation:** **MERGED** #165 (`de58d6c`) · Phase-1 IC + Phase-2 lease gate  
+**Field (admission):** **GATE VERIFIED** — `logs/adr0050-admission-20260811-154011/`  
+  · Admission PASS · Execution OPEN · Completion NOT REACHED  
+**Follow-up:** [adr0050-r1-ice-restart-execution-attribution-audit.md](../analysis/adr0050-r1-ice-restart-execution-attribution-audit.md) ·  
+  [R1 finding](../analysis/adr0050-r1-ice-restart-execution-attribution-finding.md) (**FINDING COMPLETE**) ·  
+  [R2 arbitration audit](../analysis/adr0050-r2-negotiation-episode-arbitration-audit.md) ·  
+  [R2 finding](../analysis/adr0050-r2-negotiation-episode-arbitration-finding.md) (**FINDING COMPLETE**)
 **Parent finding:** [rca-004-media-edge-recovery-convergence-finding.md](../analysis/rca-004-media-edge-recovery-convergence-finding.md) (**FINDING COMPLETE**)  
-**IC:** [adr0050-phase1-implementation-candidate.md](../analysis/adr0050-phase1-implementation-candidate.md)
+**IC:** [adr0050-phase1-implementation-candidate.md](../analysis/adr0050-phase1-implementation-candidate.md)  
+**Admission run card:** [adr0050-directed-admission-validation-run-card.md](../analysis/adr0050-directed-admission-validation-run-card.md)
 
 ```text
 Note: ADR-0046 is already taken
@@ -21,13 +27,21 @@ Scope remains Option A only; no ownership redesign / completion / UVCP / members
 
 ```text
 Recovery Last-mile                 = CLOSED / PASS
-Presentation Convergence           = CLOSED / PASS
-Media Edge Recovery Finding        = COMPLETE
-Negotiation Admission Handoff      = OPEN SUCCESSOR (Phase-1/2 IMPLEMENTED · Field PENDING)
+Presentation Convergence           = CLOSED / PASS (RCA-003)
+Media Edge Recovery Finding        = COMPLETE (RCA-004)
+Negotiation Admission Handoff      = GATE FIELD-VERIFIED (#165 / 154011) — **do not reopen**
+ICE Restart Execution              = ATTRIBUTED (ADR-0050-R1)
+  Primary: remote ingress absent / answer missing
+  Contributing: bilateral restart on M02↔M03
+Negotiation Episode Arbitration    = FINDING COMPLETE (ADR-0050-R2)
+  Sequencing ACCEPTED: R2a → R2b
+  ([adr0050-r2a-r2b-sequencing-decision.md](../analysis/adr0050-r2a-r2b-sequencing-decision.md))
+  Impl NOT AUTHORIZED
+Completion                         = NOT REACHED
 
 WiFi Recovery Incident Chain v1
-  Closed: Delivery · Ownership Handoff · Same-session Rejoin · Presentation Projection
-  Open:   ADR-0050 Negotiation Admission Handoff
+  Closed: Delivery · Ownership Handoff · Same-session Rejoin · Presentation · Admission gate
+  Open:   R2a ingress-ready-before-offer (then R2b offer arbitration) — impl auth pending
 ```
 
 **Problem rename (do not reverse):**
@@ -41,9 +55,9 @@ WiFi Recovery Incident Chain v1
 WiFi flap
    → Delivery Observation          CLOSED
    → Media Action Ownership        CLOSED
-   → Negotiation Admission         <---- OPEN SUCCESSOR (this ADR)
-   → ICE Restart
-   → EDGE_RECOVERED
+   → Negotiation Admission         CLOSED (ADR-0050 gate VERIFIED)
+   → ICE Restart Execution         <---- OPEN (R1)
+   → EDGE_RECOVERED                NOT REACHED
    → UVCP Projection               CLOSED
 ```
 
@@ -147,8 +161,10 @@ New coordinator actor
 
 ```text
 Phase 0 ACCEPTED (#164)
-  → Phase 1 IC AUTHORIZED + WRITTEN
-  → Phase 2 patch AUTHORIZED (product 「授权」 2026-08-11) · #165
-  → Directed Admission Validation run card DRAFTED
-  → field auth → thin directed run → VERIFIED or classified next layer
+  → Phase 1 IC + Phase 2 patch MERGED (#165)
+  → Directed admission field: GATE VERIFIED (154011)
+  → ADR-0050-R1 FINDING COMPLETE (ingress absent primary; bilateral contributing)
+  → ADR-0050-R2 FINDING COMPLETE (dual initiator YES; ingress ungated YES)
+  → impl NOT AUTHORIZED until product picks R2a / R2b / sequence
+  → do NOT enlarge timeout / retry / UVCP / roll back lease
 ```
