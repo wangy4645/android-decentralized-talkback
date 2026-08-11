@@ -26,7 +26,28 @@ Previously `upsertEdge` bootstrapped owner before `recoveryViaInboundReattach` w
 
 ---
 
-## Verification gates
+## Phase 3.2 Product Surface Freeze (PTT UI V1)
+
+**Status:** FROZEN (feat/ptt-action-placeholder-v1)
+
+Product boundary for the Talk page action row — not capability implementation.
+
+| Control | V1 | V2 |
+|---------|----|----|
+| PTT | Core (complete) | Maintain |
+| All Call (was Broadcast) | Placeholder entry | Authorized one-to-all notify |
+| Emergency | Placeholder entry | Priority floor + event |
+| Monitor | Placeholder entry | Listen-only session |
+| Record | Placeholder entry | Local voice note |
+
+**In scope (V1):** rename to All Call; bottom-sheet placeholders; no Meeting redirect from All Call.
+
+**Out of scope (V1):** All Call authorization; Emergency workflow; Monitor; Recording.
+
+**Next track:** Group Stability (Membership soak, Anchor, Join churn).
+
+---
+
 
 | Gate | Scope | Status |
 |------|-------|--------|

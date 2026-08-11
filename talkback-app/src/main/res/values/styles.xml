@@ -249,6 +249,54 @@
         <item name="android:textSize">@dimen/settings_hint_text_size</item>
     </style>
 
+    <style name="FeaturePlaceholderTitle">
+        <item name="android:fontFamily">sans-serif-medium</item>
+        <item name="android:includeFontPadding">false</item>
+        <item name="android:textColor">@color/tb_text_primary</item>
+        <item name="android:textSize">@dimen/feature_placeholder_title_text_size</item>
+    </style>
+
+    <style name="FeaturePlaceholderStatus">
+        <item name="android:layout_width">wrap_content</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:background">@drawable/bg_settings_badge_planned</item>
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:includeFontPadding">false</item>
+        <item name="android:paddingHorizontal">7dp</item>
+        <item name="android:paddingVertical">2dp</item>
+        <item name="android:textColor">@color/tb_text_muted</item>
+        <item name="android:textSize">@dimen/feature_placeholder_status_text_size</item>
+    </style>
+
+    <style name="FeaturePlaceholderBody">
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:includeFontPadding">false</item>
+        <item name="android:lineSpacingExtra">2dp</item>
+        <item name="android:textColor">@color/tb_text_secondary</item>
+        <item name="android:textSize">@dimen/feature_placeholder_body_text_size</item>
+    </style>
+
+    <style name="FeaturePlaceholderHint">
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:includeFontPadding">false</item>
+        <item name="android:textColor">@color/tb_text_muted</item>
+        <item name="android:textSize">@dimen/feature_placeholder_hint_text_size</item>
+    </style>
+
+    <style name="FeaturePlaceholderActionPrimary">
+        <item name="android:fontFamily">sans-serif-medium</item>
+        <item name="android:includeFontPadding">false</item>
+        <item name="android:textColor">@color/tb_primary</item>
+        <item name="android:textSize">@dimen/feature_placeholder_action_text_size</item>
+    </style>
+
+    <style name="FeaturePlaceholderActionSecondary">
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:includeFontPadding">false</item>
+        <item name="android:textColor">@color/tb_text_muted</item>
+        <item name="android:textSize">@dimen/feature_placeholder_action_text_size</item>
+    </style>
+
     <style name="SettingsBadgePlanned">
         <item name="android:layout_width">wrap_content</item>
         <item name="android:layout_height">wrap_content</item>

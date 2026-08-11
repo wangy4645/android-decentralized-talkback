@@ -21,6 +21,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.talkback.appprod.R
+import com.talkback.core.model.EndpointPriority
 import com.talkback.core.session.ChannelReadiness
 import kotlinx.coroutines.launch
 
@@ -470,17 +471,20 @@ class TalkFragment : Fragment() {
             txtMonitor.text = getString(R.string.action_monitor)
             txtEmergency.text = getString(R.string.action_emergency)
             txtRecord.text = getString(R.string.action_record)
-            broadcast.setOnClickListener { viewModel.selectMeetingMode() }
-            monitor.setOnClickListener {
-                Toast.makeText(requireContext(), R.string.feature_coming_soon, Toast.LENGTH_SHORT).show()
-            }
-            emergency.setOnClickListener {
-                Toast.makeText(requireContext(), R.string.feature_coming_soon, Toast.LENGTH_SHORT).show()
-            }
-            record.setOnClickListener {
-                Toast.makeText(requireContext(), R.string.feature_coming_soon, Toast.LENGTH_SHORT).show()
-            }
+            broadcast.setOnClickListener { FeaturePlaceholderBottomSheet.showAllCall(this) }
+            monitor.setOnClickListener { FeaturePlaceholderBottomSheet.showMonitor(this) }
+            emergency.setOnClickListener { showEmergencyPlaceholder() }
+            record.setOnClickListener { FeaturePlaceholderBottomSheet.showRecord(this) }
         }
+    }
+
+    private fun showEmergencyPlaceholder() {
+        val priority = viewModel.activeTaskProfile()?.localPriority
+            ?: viewModel.loadConfig().localPriority
+        FeaturePlaceholderBottomSheet.showEmergency(
+            this,
+            profileReady = priority == EndpointPriority.EMERGENCY
+        )
     }
 
     private fun openMeetingScreen(target: MeetingNavigation = MeetingNavigation.MAIN) {
