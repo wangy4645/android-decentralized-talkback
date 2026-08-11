@@ -58,6 +58,18 @@ class ConferenceEdgeRecoveryController internal constructor(
     private val probeIceRestartGate: (sessionId: String, remoteModuleId: String) -> IceRestartGateProbe =
         { _, _ -> IceRestartGateProbe(executable = true) },
     /**
+     * ADR-0050 R2a: optional override for [REMOTE_NEGOTIATION_READY].
+     * Null → episode tracker via [onRemoteNegotiationIngressObserved] (production / Coordinator).
+     * Default `{ _, _ -> true }` keeps non-R2a unit tests on the pre-gate dispatch path;
+     * R2a-focused tests inject null or a controlled probe.
+     */
+    private val probeRemoteNegotiationIngressReady: ((sessionId: String, remoteModuleId: String) -> Boolean)? =
+        { _, _ -> true },
+    /** ADR-0050 R2a: bounded wait before falling through to existing attempt failure path. */
+    private val negotiationIngressBudgetMs: Long = 3_000L,
+    /** ADR-0050 R2a: max age of post-recovery-start negotiation inbound to count as ready. */
+    private val negotiationIngressFreshMs: Long = 5_000L,
+    /**
      * INV-NEG-015 / INV-NEG-020: when Recovery admits a negotiation-deferred ICE restart intent,
      * Coordinator must establish capability observation baseline=false and immediately recompute
      * (DEFER_ADMISSION seam). [bindAdmissionSeq] MUST be invoked with the baseline observation
@@ -130,6 +142,8 @@ class ConferenceEdgeRecoveryController internal constructor(
     private val deadlineTimers = ConcurrentHashMap<ConferenceEdgeKey, ScheduledFuture<*>>()
     /** Gate 3C-D: episode-scoped negotiation intent budget (independent of attempt watchdog). */
     private val negotiationIntentTimers = ConcurrentHashMap<ConferenceEdgeKey, ScheduledFuture<*>>()
+    /** ADR-0050 R2a: bounded negotiation-ingress wait timers. */
+    private val negotiationIngressTimers = ConcurrentHashMap<ConferenceEdgeKey, ScheduledFuture<*>>()
     /** ADR-0042 INV-T3-SCHEDULE: obligation-scoped bounded progress window timers. */
     private val progressWindowTimers = ConcurrentHashMap<ConferenceEdgeKey, ScheduledFuture<*>>()
     /**
@@ -3618,6 +3632,8 @@ class ConferenceEdgeRecoveryController internal constructor(
         deadlineTimers.clear()
         negotiationIntentTimers.values.forEach { it.cancel(false) }
         negotiationIntentTimers.clear()
+        negotiationIngressTimers.values.forEach { it.cancel(false) }
+        negotiationIngressTimers.clear()
         progressWindowTimers.values.forEach { it.cancel(false) }
         progressWindowTimers.clear()
         reattachDeliveryProgress.clearAll()
@@ -3892,6 +3908,133 @@ class ConferenceEdgeRecoveryController internal constructor(
                 return
             }
         }
+        // ADR-0050 R2a: bounded negotiation ingress gate (after lease, before createOffer).
+        if (!admitIceRestartViaNegotiationIngress(record, recoveryReason)) {
+            return
+        }
+        dispatchIceRestartAfterIngressGate(record, recoveryReason)
+    }
+
+    /**
+     * ADR-0050 R2a: Coordinator stamps negotiation-capable inbound (not HELLO/HEARTBEAT).
+     * Rising edge may complete a pending ingress wait.
+     */
+    fun onRemoteNegotiationIngressObserved(
+        sessionId: String,
+        remoteModuleId: String,
+        observedAtMs: Long = clock()
+    ) {
+        val key = ConferenceEdgeKey(sessionId, remoteModuleId)
+        val record = edges[key] ?: return
+        val prev = record.lastNegotiationCapableInboundAtMs
+        if (prev == null || observedAtMs >= prev) {
+            record.lastNegotiationCapableInboundAtMs = observedAtMs
+        }
+        if (!record.negotiationIngressPending) return
+        if (record.iceRestartIssued) return
+        if (!record.phase.isActivelyRecovering()) return
+        if (!isRemoteNegotiationIngressReady(record)) return
+        onLog(
+            "REMOTE_NEGOTIATION_READY session=${record.key.sessionId} " +
+                "remote=${record.key.remoteModuleId} attempt=${record.recoveryAttemptId} " +
+                "obligationGen=${record.obligationGeneration} " +
+                "lastIngressAtMs=${record.lastNegotiationCapableInboundAtMs} " +
+                "trigger=INGRESS_OBSERVED"
+        )
+        clearNegotiationIngressWait(record)
+        // Re-enter dispatch path; lease already held / owner path re-checked inside.
+        issueBoundedIceRestart(record, RecoveryReason.NETWORK_RECOVERY)
+    }
+
+    private fun admitIceRestartViaNegotiationIngress(
+        record: EdgeRecoveryRecord,
+        recoveryReason: RecoveryReason
+    ): Boolean {
+        if (isRemoteNegotiationIngressReady(record)) {
+            onLog(
+                "REMOTE_NEGOTIATION_READY session=${record.key.sessionId} " +
+                    "remote=${record.key.remoteModuleId} attempt=${record.recoveryAttemptId} " +
+                    "obligationGen=${record.obligationGeneration} " +
+                    "lastIngressAtMs=${record.lastNegotiationCapableInboundAtMs} " +
+                    "trigger=IMMEDIATE"
+            )
+            clearNegotiationIngressWait(record)
+            return true
+        }
+        armNegotiationIngressWait(record, recoveryReason)
+        return false
+    }
+
+    private fun isRemoteNegotiationIngressReady(record: EdgeRecoveryRecord): Boolean {
+        probeRemoteNegotiationIngressReady?.let { probe ->
+            return probe(record.key.sessionId, record.key.remoteModuleId)
+        }
+        return NegotiationIngressGate.isReady(
+            lastNegotiationCapableInboundAtMs = record.lastNegotiationCapableInboundAtMs,
+            recoveryStartedAtMs = record.recoveryStartedAtMs,
+            nowMs = clock(),
+            freshMs = negotiationIngressFreshMs
+        )
+    }
+
+    private fun armNegotiationIngressWait(record: EdgeRecoveryRecord, recoveryReason: RecoveryReason) {
+        val key = record.key
+        val deadlineAt = clock() + negotiationIngressBudgetMs
+        record.negotiationIngressPending = true
+        record.negotiationIngressDeadlineAtMs = deadlineAt
+        onLog(
+            "NEGOTIATION_INGRESS_PENDING session=${key.sessionId} remote=${key.remoteModuleId} " +
+                "attempt=${record.recoveryAttemptId} obligationGen=${record.obligationGeneration} " +
+                "deadlineAtMs=$deadlineAt budgetMs=$negotiationIngressBudgetMs " +
+                "lastIngressAtMs=${record.lastNegotiationCapableInboundAtMs ?: "NONE"}"
+        )
+        cancelNegotiationIngressTimer(key)
+        val attemptId = record.recoveryAttemptId
+        val obligationGen = record.obligationGeneration
+        negotiationIngressTimers[key] = scheduler.schedule({
+            val still = edges[key] ?: return@schedule
+            if (still.recoveryAttemptId != attemptId) return@schedule
+            if (still.obligationGeneration != obligationGen) return@schedule
+            if (!still.negotiationIngressPending) return@schedule
+            if (still.iceRestartIssued) return@schedule
+            if (isRemoteNegotiationIngressReady(still)) {
+                onLog(
+                    "REMOTE_NEGOTIATION_READY session=${still.key.sessionId} " +
+                        "remote=${still.key.remoteModuleId} attempt=${still.recoveryAttemptId} " +
+                        "obligationGen=${still.obligationGeneration} " +
+                        "lastIngressAtMs=${still.lastNegotiationCapableInboundAtMs} " +
+                        "trigger=INGRESS_DEADLINE_POLL"
+                )
+                clearNegotiationIngressWait(still)
+                issueBoundedIceRestart(still, recoveryReason)
+                return@schedule
+            }
+            onLog(
+                "NEGOTIATION_INGRESS_DEADLINE session=${still.key.sessionId} " +
+                    "remote=${still.key.remoteModuleId} attempt=${still.recoveryAttemptId} " +
+                    "obligationGen=${still.obligationGeneration} " +
+                    "deadlineAtMs=${still.negotiationIngressDeadlineAtMs} " +
+                    "lastIngressAtMs=${still.lastNegotiationCapableInboundAtMs ?: "NONE"}"
+            )
+            clearNegotiationIngressWait(still)
+            // Existing failure path: do not invent a new terminal; attempt watchdog owns timeout.
+        }, negotiationIngressBudgetMs, TimeUnit.MILLISECONDS)
+    }
+
+    private fun clearNegotiationIngressWait(record: EdgeRecoveryRecord) {
+        record.negotiationIngressPending = false
+        record.negotiationIngressDeadlineAtMs = null
+        cancelNegotiationIngressTimer(record.key)
+    }
+
+    private fun cancelNegotiationIngressTimer(key: ConferenceEdgeKey) {
+        negotiationIngressTimers.remove(key)?.cancel(false)
+    }
+
+    private fun dispatchIceRestartAfterIngressGate(
+        record: EdgeRecoveryRecord,
+        recoveryReason: RecoveryReason
+    ) {
         record.phase = EdgeRecoveryPhase.ICE_RESTARTING
         record.iceRestartIssued = true
         record.restartDispatchAtMs = clock()
@@ -4054,6 +4197,7 @@ class ConferenceEdgeRecoveryController internal constructor(
         cancelWatchdog(key)
         cancelDeadline(key)
         cancelNegotiationIntentBudget(key)
+        cancelNegotiationIngressTimer(key)
         cancelProgressWindow(key)
         val record = edges[key] ?: return
         recoveryOfferDeliveryPolicy.cancel(record)

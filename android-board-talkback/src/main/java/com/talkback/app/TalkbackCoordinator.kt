@@ -105,6 +105,7 @@ import com.talkback.core.session.IceRestartGateBlockReason
 import com.talkback.core.session.IceRestartGateProbe
 import com.talkback.core.session.InboundReattachLineageVerdict
 import com.talkback.core.session.NegotiationCapabilityObservation
+import com.talkback.core.session.NegotiationIngressGate
 import com.talkback.core.session.ReattachDispatchOutcome
 import com.talkback.core.session.RecoveryCapabilitySignature
 import com.talkback.core.session.RecoveryReason
@@ -477,6 +478,8 @@ class TalkbackCoordinator(
                 }
                 probe
             },
+            // ADR-0050 R2a: production uses episode ingress tracker (null probe).
+            probeRemoteNegotiationIngressReady = null,
             onNegotiationGateDeferred = { sessionId, remoteModuleId, bindAdmissionSeq ->
                 fun admitBaselineAndRecompute() {
                     val admissionSeq = negotiationCapabilityObservation.establishDeferredBaseline(
@@ -4357,6 +4360,15 @@ class TalkbackCoordinator(
             return
         }
         observePeerInboundAfterAuth(signal)
+        if (NegotiationIngressGate.isNegotiationCapableSignal(signal.type)) {
+            val remote = signal.from.moduleId.value
+            if (remote.isNotBlank()) {
+                conferenceEdgeRecoveryController.onRemoteNegotiationIngressObserved(
+                    sessionId = signal.sessionId,
+                    remoteModuleId = remote
+                )
+            }
+        }
         callableModuleGate.markVerified(signal.from.moduleId.value)
         rememberSignalPeer(signal.from.moduleId.value, fromPeer)
         touchSession(signal.sessionId)

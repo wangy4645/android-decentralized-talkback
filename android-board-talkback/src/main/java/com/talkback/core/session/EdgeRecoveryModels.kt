@@ -481,6 +481,14 @@ internal data class EdgeRecoveryRecord(
     var negotiationLeaseObligationGeneration: Long? = null,
     var negotiationLeaseExpiresAtMs: Long? = null,
     /**
+     * ADR-0050 R2a: last negotiation-capable inbound from this remote (not HELLO/HEARTBEAT).
+     * Used for REMOTE_NEGOTIATION_READY; cleared on new attempt open as needed by controller.
+     */
+    var lastNegotiationCapableInboundAtMs: Long? = null,
+    /** ADR-0050 R2a: bounded ingress wait armed (await READY or deadline). */
+    var negotiationIngressPending: Boolean = false,
+    var negotiationIngressDeadlineAtMs: Long? = null,
+    /**
      * RNA-5 v2 / Gate 3C: single terminal writer guard — set when
      * [RECOVERY_NEGOTIATION_INTENT_TERMINAL] is emitted for the current intent episode.
      */
