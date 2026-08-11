@@ -35,14 +35,13 @@ ICE Restart Execution              = ATTRIBUTED (ADR-0050-R1)
   Contributing: bilateral restart on M02↔M03
 Negotiation Episode Arbitration    = FINDING COMPLETE (ADR-0050-R2)
   Sequencing ACCEPTED: R2a → R2b
-  R2a IC AUTHORIZED: [adr0050-r2a-negotiation-ingress-readiness-ic.md](../analysis/adr0050-r2a-negotiation-ingress-readiness-ic.md)
-    (bounded ingress gate — not unbounded wait / not orchestration)
-  R2a patch / R2b impl NOT AUTHORIZED
+  R2a IC AUTHORIZED · FROZEN: [adr0050-r2a-negotiation-ingress-readiness-ic.md](../analysis/adr0050-r2a-negotiation-ingress-readiness-ic.md)
+  R2a patch NOT AUTHORIZED · R2b 后置 · Field PAUSED
 Completion                         = NOT REACHED
 
 WiFi Recovery Incident Chain v1
   Closed: Delivery · Ownership Handoff · Same-session Rejoin · Presentation · Admission gate
-  Open:   R2a IC done → await patch auth; then R2b if still needed
+  Open:   R2a IC FROZEN — await 「授权 R2a patch」; field paused; R2b 后置
 ```
 
 **Problem rename (do not reverse):**

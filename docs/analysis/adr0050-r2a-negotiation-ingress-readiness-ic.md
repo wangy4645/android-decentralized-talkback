@@ -1,6 +1,6 @@
 # ADR-0050 R2a — Negotiation Ingress Readiness IC
 
-**Status:** **AUTHORIZED** (product / architect 2026-08-11) · **IC only — no code yet**  
+**Status:** **IC AUTHORIZED · FROZEN** · **PATCH NOT AUTHORIZED** · Field **PAUSED**  
 **Sequencing:** [adr0050-r2a-r2b-sequencing-decision.md](./adr0050-r2a-r2b-sequencing-decision.md) (**R2a → R2b**)  
 **Parents:** R2 finding · R1 finding · ADR-0050 admission **CLOSED / VERIFIED**
 
@@ -135,14 +135,37 @@ Also log: `NEGOTIATION_INGRESS_DEADLINE` when falling to existing failure path (
 
 ---
 
-## Phased work
+## Engineering freeze (2026-08-11)
 
-| Phase | Work | Auth |
-|-------|------|------|
-| **IC (now)** | This doc — states · probe semantics · gate site · bounds · foreshadow | **AUTHORIZED** |
-| **Patch** | Minimal gate in `issueBoundedIceRestart` path | Separate auth |
-| **Field** | Chain above on M02 flap; compare to 154011 `REMOTE_INGRESS_ABSENT` | After patch |
-| **R2b** | Restart Offer Arbitration — only if dual offerer still hurts post-R2a | After R2a field |
+```text
+ADR-0050 Admission / Lease     VERIFIED — do not reopen
+R2a IC                         AUTHORIZED — FROZEN
+R2a patch                      NOT AUTHORIZED — wait product 「授权」
+R2b                            后置 — do not fold into R2a
+Field / flap                   PAUSED — no soak until R2a patch lands
+```
+
+**Cadence after patch auth:** unit tests + static path review → merge → **one** directed field soak → decide R2b.
+
+**Field evidence (when authorized) — not UI DEGRADED:**
+
+```text
+LEASE_ADMITTED
+  → NEGOTIATION_INGRESS_WAIT (if entered)
+  → REMOTE_NEGOTIATION_READY
+  → OFFER_SENT
+  → ANSWER_RECEIVED
+  → ICE_CONNECTED / EDGE_RECOVERED
+```
+
+**Counterfactual vs 154011:**
+
+```text
+OLD: OFFER_SENT → REMOTE_INGRESS_ABSENT → ~47s late receive
+NEW: REMOTE_NEGOTIATION_READY → OFFER_SENT → answer in bounded window
+```
+
+**Review checklist at patch time:** gate after lease / before createOffer · ready ≠ ICE/media/EDGE_RECOVERED/heartbeat/HELLO · bounded wait · deadline → existing failure only · no R2b in R2a.
 
 ---
 

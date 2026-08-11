@@ -8,15 +8,15 @@
 
 ---
 
-**Verdict**
-
 ```text
 ADR-0050 Admission         CLOSED / VERIFIED
 R2 Finding                 VALID
 NEXT                       R2a → R2b
 PRIORITY                   ingress readiness first, then single offerer
-R2a IC                     AUTHORIZED (bounded gate — not unbounded wait)
-R2a patch / R2b            NOT AUTHORIZED
+R2a IC                     AUTHORIZED · FROZEN
+R2a patch                  NOT AUTHORIZED
+R2b                        后置
+Field                      PAUSED until R2a patch
 ```
 
 **One line:** ADR-0050 solved “who may knock”; R2 shows “door not open yet” — fix door state (R2a) before multi-knocker arbitration (R2b).
