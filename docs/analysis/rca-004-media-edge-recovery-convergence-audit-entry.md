@@ -227,7 +227,12 @@ Not: more soak · Edge-scoped redesign · Phase-2 reopen
 ## Next action
 
 ```text
+Milestone freeze:
+  Recovery Last-mile PASS
+  Post-recovery convergence PASS except admission handoff
+  Open successor: ADR-0050 (Option A + INV-1..3)
+
 Stop field hunting.
-If product prioritizes fix: authorize ADR-0050 (lease), not recovery redesign.
+Product auth → ACCEPTED ADR-0050 → IC → single ICE-restart admission gate patch.
 ```
 
