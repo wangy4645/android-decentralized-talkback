@@ -89,6 +89,59 @@ class GroupMeshReconciler {
         }
     }
 
+    /** Age of current CHECKING/NEW settling window; 0 if not settling. */
+    fun checkingAgeMs(channelId: String, peerModuleId: String): Long {
+        val since = record(channelId, peerModuleId).checkingSinceMs
+        if (since == 0L) return 0L
+        return System.currentTimeMillis() - since
+    }
+
+    /**
+     * Diagnostic only: why [canReconnect] would decline (null = would allow).
+     */
+    fun reconnectSuppressReason(channelId: String, peerModuleId: String, iceState: String?): String? {
+        if (IceConnectivity.isConnected(iceState)) return "ICE_CONNECTED"
+        val checkingReason = checkingSuppressReason(channelId, peerModuleId, iceState)
+        if (checkingReason != null) return checkingReason
+        val record = record(channelId, peerModuleId)
+        val now = System.currentTimeMillis()
+        if (record.state == PeerMeshState.CONNECTING &&
+            now - record.lastAttemptMs < MIN_RECONNECT_OFFER_MS
+        ) {
+            return "MIN_RECONNECT_OFFER_MS"
+        }
+        return offerJoinSuppressReason(channelId, peerModuleId, iceState)
+    }
+
+    /**
+     * Diagnostic only: why [canOfferJoin] would decline (null = would allow).
+     */
+    fun offerJoinSuppressReason(channelId: String, peerModuleId: String, iceState: String?): String? {
+        val checkingReason = checkingSuppressReason(channelId, peerModuleId, iceState)
+        if (checkingReason != null) return checkingReason
+        val record = record(channelId, peerModuleId)
+        val now = System.currentTimeMillis()
+        if (record.state == PeerMeshState.BACKOFF && now - record.lastAttemptMs < record.backoffMs) {
+            return "BACKOFF"
+        }
+        return null
+    }
+
+    private fun checkingSuppressReason(
+        channelId: String,
+        peerModuleId: String,
+        iceState: String?
+    ): String? {
+        if (iceState != "CHECKING" && iceState != "NEW") return null
+        val record = record(channelId, peerModuleId)
+        val now = System.currentTimeMillis()
+        if (record.checkingSinceMs == 0L) return null
+        if (now - record.checkingSinceMs < CHECKING_STUCK_MS) {
+            return "ICE_CHECKING_SUPPRESS"
+        }
+        return null
+    }
+
     fun markConnected(channelId: String, peerModuleId: String) {
         val record = record(channelId, peerModuleId)
         record.state = PeerMeshState.CONNECTED

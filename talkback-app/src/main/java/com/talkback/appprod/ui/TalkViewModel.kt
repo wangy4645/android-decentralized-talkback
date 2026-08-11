@@ -437,10 +437,7 @@ class TalkViewModel(
         }
     }
 
-    suspend fun joinMeeting(reason: String = "unspecified"): PttDownResult = pttMutex.withLock {
-        syncServiceState()
-        val config = configStore.load()
-        val activeBefore = manager.activeChannelSession(config)
+    private fun traceJoinMeetingIntent(config: AppConfig, reason: String, conferenceSessionActive: Boolean) {
         ChannelObservabilityLog.joinMeetingTrace(
             reason = reason,
             channelId = config.defaultChannelId,
@@ -448,9 +445,45 @@ class TalkViewModel(
             meetingPreferred = lastSyncedMeetingPreferred,
             coordinatorChannelMode = manager.getRuntime()?.channelMode(config.defaultChannelId)?.name,
             configChannelMode = config.channelMode.name,
-            conferenceSessionActive = activeBefore?.type == SessionType.CONFERENCE
+            conferenceSessionActive = conferenceSessionActive,
+            phase = "intent",
+            localModuleId = config.moduleId.trim().uppercase(),
+            authorityModuleId = manager.conferenceAuthorityModuleId(config),
+            shouldLocalInitiateConference = manager.shouldLocalInitiateConference(config)
         )
+    }
+
+    private fun traceJoinMeetingOutcome(
+        config: AppConfig,
+        reason: String,
+        chosenPath: String,
+        pathReason: String,
+        conferenceSessionActive: Boolean = manager.activeChannelSession(config)?.type == SessionType.CONFERENCE
+    ) {
+        ChannelObservabilityLog.joinMeetingTrace(
+            reason = reason,
+            channelId = config.defaultChannelId,
+            talkTabMode = userSelectedTab.name,
+            meetingPreferred = lastSyncedMeetingPreferred,
+            coordinatorChannelMode = manager.getRuntime()?.channelMode(config.defaultChannelId)?.name,
+            configChannelMode = config.channelMode.name,
+            conferenceSessionActive = conferenceSessionActive,
+            phase = "outcome",
+            localModuleId = config.moduleId.trim().uppercase(),
+            authorityModuleId = manager.conferenceAuthorityModuleId(config),
+            shouldLocalInitiateConference = manager.shouldLocalInitiateConference(config),
+            chosenPath = chosenPath,
+            pathReason = pathReason
+        )
+    }
+
+    suspend fun joinMeeting(reason: String = "unspecified"): PttDownResult = pttMutex.withLock {
+        syncServiceState()
+        val config = configStore.load()
+        val activeBefore = manager.activeChannelSession(config)
+        traceJoinMeetingIntent(config, reason, activeBefore?.type == SessionType.CONFERENCE)
         if (!serviceRunning || manager.getRuntime() == null) {
+            traceJoinMeetingOutcome(config, reason, "WAIT", "SERVICE_STOPPED", conferenceSessionActive = false)
             return PttDownResult.ServiceStopped
         }
         val meetingConfig = meetingSessionConfig(config)
@@ -472,58 +505,95 @@ class TalkViewModel(
                 TalkbackLog.i(
                     "joinMeeting: reuse conference ready=true visible=${existing.visibleParticipantCount}"
                 )
+                traceJoinMeetingOutcome(config, reason, "REUSE_EXISTING", "CONFERENCE_ALREADY_READY")
                 return PttDownResult.Ok
             }
             TalkbackLog.i(
                 "joinMeeting: conference connecting visible=${existing.visibleParticipantCount}, waiting for mesh"
             )
-            if (manager.pendingConferenceInvite(meetingConfig.defaultChannelId) != null) {
-                if (!acceptPendingOrRejoinConference(meetingConfig)) {
-                    return PttDownResult.NoPeers
+            val resumePath = when {
+                manager.pendingConferenceInvite(meetingConfig.defaultChannelId) != null -> {
+                    if (!acceptPendingOrRejoinConference(meetingConfig)) {
+                        traceJoinMeetingOutcome(config, reason, "ACCEPT_PENDING", "ACCEPT_FAILED")
+                        return PttDownResult.NoPeers
+                    }
+                    "ACCEPT_PENDING"
                 }
-            } else if (manager.hasRejoinableConference(meetingConfig)) {
-                manager.requestConferenceRejoin(meetingConfig)
-            } else if (manager.isConferenceReconnectFailed(meetingConfig)) {
-                manager.requestConferenceRejoin(meetingConfig)
-            } else if (manager.shouldLocalInitiateConference(meetingConfig)) {
-                manager.ensureChannelSession(meetingConfig)
-            } else {
-                manager.requestConferenceRejoin(meetingConfig)
+                manager.hasRejoinableConference(meetingConfig) -> {
+                    manager.requestConferenceRejoin(meetingConfig)
+                    "REJOIN"
+                }
+                manager.isConferenceReconnectFailed(meetingConfig) -> {
+                    manager.requestConferenceRejoin(meetingConfig)
+                    "REJOIN"
+                }
+                manager.shouldLocalInitiateConference(meetingConfig) -> {
+                    manager.ensureChannelSession(meetingConfig)
+                    "CREATE"
+                }
+                else -> {
+                    manager.requestConferenceRejoin(meetingConfig)
+                    "REJOIN"
+                }
             }
             refreshInternal()
             val ready = manager.isChannelMediaReady(configStore.load())
             val visible = manager.activeChannelSession(configStore.load())?.visibleParticipantCount ?: 0
             TalkbackLog.i("joinMeeting: resume conference ready=$ready visible=$visible")
+            traceJoinMeetingOutcome(
+                config,
+                reason,
+                resumePath,
+                if (ready) "RESUME_READY" else "RESUME_CONNECTING"
+            )
             return if (ready || manager.isConferenceHost(configStore.load())) {
                 PttDownResult.Ok
             } else {
                 PttDownResult.Connecting
             }
         }
-        if (manager.pendingConferenceInvite(meetingConfig.defaultChannelId) != null) {
-            if (!acceptPendingOrRejoinConference(meetingConfig)) {
-                return PttDownResult.NoPeers
+        val newPath = when {
+            manager.pendingConferenceInvite(meetingConfig.defaultChannelId) != null -> {
+                if (!acceptPendingOrRejoinConference(meetingConfig)) {
+                    traceJoinMeetingOutcome(config, reason, "ACCEPT_PENDING", "ACCEPT_FAILED")
+                    return PttDownResult.NoPeers
+                }
+                "ACCEPT_PENDING"
             }
-        } else if (manager.hasRejoinableConference(meetingConfig)) {
-            TalkbackLog.i("joinMeeting: silent rejoin into prior host conference")
-            manager.requestConferenceRejoin(meetingConfig)
-        } else if (manager.shouldLocalInitiateConference(meetingConfig)) {
-            manager.ensureChannelSession(meetingConfig)
-        } else {
-            manager.requestConferenceRejoin(meetingConfig)
+            manager.hasRejoinableConference(meetingConfig) -> {
+                TalkbackLog.i("joinMeeting: silent rejoin into prior host conference")
+                manager.requestConferenceRejoin(meetingConfig)
+                "REJOIN"
+            }
+            manager.shouldLocalInitiateConference(meetingConfig) -> {
+                manager.ensureChannelSession(meetingConfig)
+                "CREATE"
+            }
+            else -> {
+                manager.requestConferenceRejoin(meetingConfig)
+                "REJOIN"
+            }
         }
         refreshInternal()
         val joined = manager.activeChannelSession(configStore.load())
         if (joined?.type != SessionType.CONFERENCE) {
             if (manager.isConferenceRejoinInProgress(meetingConfig)) {
                 TalkbackLog.i("joinMeeting: rejoin in progress, waiting for host pull-in")
+                traceJoinMeetingOutcome(config, reason, "WAIT", "REJOIN_IN_PROGRESS")
                 return PttDownResult.Connecting
             }
+            traceJoinMeetingOutcome(config, reason, newPath, "NO_CONFERENCE_SESSION")
             return PttDownResult.NoPeers
         }
         val ready = manager.isChannelMediaReady(configStore.load())
         val joinedRemotes = joined.visibleParticipantCount
         TalkbackLog.i("joinMeeting: new conference ready=$ready visible=$joinedRemotes")
+        traceJoinMeetingOutcome(
+            config,
+            reason,
+            newPath,
+            if (ready) "NEW_CONFERENCE_READY" else "NEW_CONFERENCE_CONNECTING"
+        )
         return if (ready || manager.isConferenceHost(configStore.load())) {
             PttDownResult.Ok
         } else {

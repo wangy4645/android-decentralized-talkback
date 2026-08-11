@@ -33,14 +33,30 @@ object ChannelObservabilityLog {
         meetingPreferred: Boolean?,
         coordinatorChannelMode: String?,
         configChannelMode: String,
-        conferenceSessionActive: Boolean
+        conferenceSessionActive: Boolean,
+        phase: String = "intent",
+        localModuleId: String? = null,
+        userAction: String = "START_MEETING",
+        authorityModuleId: String? = null,
+        shouldLocalInitiateConference: Boolean? = null,
+        chosenPath: String? = null,
+        pathReason: String? = null
     ) {
         val caller = callerFrame()
         log(
             buildString {
                 append("JOIN_MEETING_TRACE")
+                append(" phase=").append(phase)
                 append(" reason=").append(reason)
                 append(" ch=").append(channelId)
+                append(" userAction=").append(userAction)
+                localModuleId?.let { append(" localModuleId=").append(it) }
+                append(" authorityModuleId=").append(authorityModuleId ?: "null")
+                shouldLocalInitiateConference?.let {
+                    append(" shouldLocalInitiateConference=").append(it)
+                }
+                chosenPath?.let { append(" chosenPath=").append(it) }
+                pathReason?.let { append(" pathReason=").append(it) }
                 append(" talkTabMode=").append(talkTabMode)
                 append(" meetingPreferred=").append(meetingPreferred)
                 append(" coordinatorMode=").append(coordinatorChannelMode ?: "null")
