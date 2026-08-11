@@ -1,9 +1,11 @@
 # ADR-0050 R2a — Architecture Adjudication
 
-**Status:** **ACCEPT** · **#167 MERGED** · Field soak **AUTHORIZED** · 2026-08-11  
+**Status:** **ACCEPT** · **#167 MERGED** · Field Finding #1 **PARTIAL SUCCESS** · 2026-08-11  
 **Patch:** PR [#167](https://github.com/wangy4645/android-decentralized-talkback/pull/167) → `main` @ `40a984c`  
 **IC:** [adr0050-r2a-negotiation-ingress-readiness-ic.md](./adr0050-r2a-negotiation-ingress-readiness-ic.md)  
-**Run card:** [adr0050-r2a-directed-ingress-soak-run-card.md](./adr0050-r2a-directed-ingress-soak-run-card.md)
+**Run card:** [adr0050-r2a-directed-ingress-soak-run-card.md](./adr0050-r2a-directed-ingress-soak-run-card.md)  
+**Field Finding #1:** [adr0050-r2a-field-finding-1.md](./adr0050-r2a-field-finding-1.md)  
+**Next desk:** [adr0050-r2a-readiness-attribution-audit.md](./adr0050-r2a-readiness-attribution-audit.md)
 
 ---
 
@@ -11,14 +13,19 @@
 
 ```text
 ADR-0050 Admission Lease          VERIFIED
-R2a Negotiation Ingress Gate       MERGED (#167) · field AUTHORIZED
-R2b Offer Arbitration              NOT STARTED / HOLD
+R2a Negotiation Ingress Gate
+  Implementation:                 VERIFIED (#167)
+  Field behavior:                 PARTIAL IMPROVEMENT
+  Field verification:             NOT COMPLETE
+R2b Offer Arbitration              HOLD
 ```
 
 ```text
-#167 merge:     YES (done)
-field soak:     AUTHORIZED — Directed R2a (narrow)
-R2b:            HOLD
+#167 merge:           YES
+Field Finding #1:     PARTIAL SUCCESS (not PASS / not FAIL)
+R2a code:             NO PATCH yet
+R2b:                  HOLD
+Next:                 readiness attribution audit (Q1/Q2) only
 ```
 
 **Field goal (only):** lease 后 offer 不进入对端尚无 negotiation ingress 的窗口。  

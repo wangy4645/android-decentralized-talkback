@@ -1,15 +1,20 @@
 # ADR-0050 R2a — Negotiation Ingress Readiness IC
 
-**Status:** **IC FROZEN** · **PATCH MERGED (#167 @ 40a984c)** · Field **AUTHORIZED** (directed soak) · R2b **HOLD**  
+**Status:** **IC FROZEN** · **PATCH MERGED (#167)** · Field Finding #1 **PARTIAL SUCCESS / NOT COMPLETE** · R2b **HOLD**  
 **Adjudication:** [adr0050-r2a-architecture-adjudication.md](./adr0050-r2a-architecture-adjudication.md)  
 **Run card:** [adr0050-r2a-directed-ingress-soak-run-card.md](./adr0050-r2a-directed-ingress-soak-run-card.md)  
-**Sequencing:** R2a → R2b (HOLD until dual legitimate OFFER after R2a field)  
+**Field Finding #1:** [adr0050-r2a-field-finding-1.md](./adr0050-r2a-field-finding-1.md)  
+**Next:** [adr0050-r2a-readiness-attribution-audit.md](./adr0050-r2a-readiness-attribution-audit.md) (**NO PATCH**)  
+**Sequencing:** R2a → R2b (HOLD until dual legitimate OFFER after R2a field close)  
 **Parents:** R2 finding · R1 finding · ADR-0050 admission **CLOSED / VERIFIED**
 
 ```text
 ADR-0050 Admission Lease          VERIFIED
-R2a Negotiation Ingress Gate       MERGED · field AUTHORIZED
-R2b Offer Arbitration              NOT STARTED / HOLD
+R2a Negotiation Ingress Gate
+  Implementation:                 VERIFIED
+  Field behavior:                 PARTIAL IMPROVEMENT
+  Field verification:             NOT COMPLETE
+R2b Offer Arbitration              HOLD
 ```
 
 ---
@@ -176,12 +181,13 @@ Deadline clears the ingress wait and leaves the attempt to the **existing** time
 ```text
 ADR-0050 Admission / Lease     VERIFIED — do not reopen
 R2a IC                         FROZEN
-R2a patch                      MERGED (#167 @ 40a984c)
-R2b                            HOLD — only if dual legitimate OFFER after R2a field
-Field / flap                   AUTHORIZED — directed ingress soak (narrow markers)
+R2a patch                      MERGED (#167) · Implementation VERIFIED
+R2a field                      Finding #1 PARTIAL SUCCESS · verification NOT COMPLETE
+R2b                            HOLD — no dual-offer evidence this run
+Field next                     readiness attribution audit (Q1/Q2) — NO PATCH yet
 ```
 
-**Cadence:** **merge DONE** → **one** directed field soak → decide R2b **only** on dual-offer evidence.
+**Cadence:** Finding #1 closed as PARTIAL → **attribution desk** → only then predicate IC / re-field.
 
 **Field success (narrow — prove timing, not episode close):**
 
