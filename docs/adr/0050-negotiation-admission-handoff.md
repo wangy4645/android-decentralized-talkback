@@ -8,7 +8,8 @@
   · Admission PASS · Execution OPEN · Completion NOT REACHED  
 **Follow-up:** [adr0050-r1-ice-restart-execution-attribution-audit.md](../analysis/adr0050-r1-ice-restart-execution-attribution-audit.md) ·  
   [R1 finding](../analysis/adr0050-r1-ice-restart-execution-attribution-finding.md) (**FINDING COMPLETE**) ·  
-  [R2 arbitration audit](../analysis/adr0050-r2-negotiation-episode-arbitration-audit.md) (**DRAFTED**)
+  [R2 arbitration audit](../analysis/adr0050-r2-negotiation-episode-arbitration-audit.md) ·  
+  [R2 finding](../analysis/adr0050-r2-negotiation-episode-arbitration-finding.md) (**FINDING COMPLETE**)
 **Parent finding:** [rca-004-media-edge-recovery-convergence-finding.md](../analysis/rca-004-media-edge-recovery-convergence-finding.md) (**FINDING COMPLETE**)  
 **IC:** [adr0050-phase1-implementation-candidate.md](../analysis/adr0050-phase1-implementation-candidate.md)  
 **Admission run card:** [adr0050-directed-admission-validation-run-card.md](../analysis/adr0050-directed-admission-validation-run-card.md)
@@ -32,12 +33,13 @@ Negotiation Admission Handoff      = GATE FIELD-VERIFIED (#165 / 154011) — **d
 ICE Restart Execution              = ATTRIBUTED (ADR-0050-R1)
   Primary: remote ingress absent / answer missing
   Contributing: bilateral restart on M02↔M03
-Negotiation Episode Arbitration    = OPEN (ADR-0050-R2 DRAFTED)
+Negotiation Episode Arbitration    = FINDING COMPLETE (ADR-0050-R2)
+  Next: R2a ingress readiness and/or R2b single OFFERER — separate auth
 Completion                         = NOT REACHED
 
 WiFi Recovery Incident Chain v1
   Closed: Delivery · Ownership Handoff · Same-session Rejoin · Presentation · Admission gate
-  Open:   R2 Negotiation Episode Arbitration (ingress readiness · offerer role) — separate auth
+  Open:   Impl knife choice R2a (ingress) / R2b (offerer role) — separate auth
 ```
 
 **Problem rename (do not reverse):**
@@ -160,6 +162,7 @@ Phase 0 ACCEPTED (#164)
   → Phase 1 IC + Phase 2 patch MERGED (#165)
   → Directed admission field: GATE VERIFIED (154011)
   → ADR-0050-R1 FINDING COMPLETE (ingress absent primary; bilateral contributing)
-  → ADR-0050-R2 Negotiation Episode Arbitration Audit DRAFTED (read-only)
+  → ADR-0050-R2 FINDING COMPLETE (dual initiator YES; ingress ungated YES)
+  → impl NOT AUTHORIZED until product picks R2a / R2b / sequence
   → do NOT enlarge timeout / retry / UVCP / roll back lease
 ```

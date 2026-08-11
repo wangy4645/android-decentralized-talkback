@@ -1,6 +1,6 @@
 # ADR-0050-R2 — Negotiation Episode Arbitration Audit
 
-**Status:** **DRAFTED** · Field / code **NOT AUTHORIZED** (await product auth)  
+**Status:** **FINDING COMPLETE** — [adr0050-r2-negotiation-episode-arbitration-finding.md](./adr0050-r2-negotiation-episode-arbitration-finding.md)  
 **Name (frozen):** Negotiation Episode Arbitration Audit  
 **(Not** timeout · **Not** retry enlargement · **Not** ownership transfer · **Not** UVCP)  
 **Parent:** [0050-negotiation-admission-handoff.md](../adr/0050-negotiation-admission-handoff.md)  
@@ -123,8 +123,9 @@ If **no** → reclassify before coding.
 ## Auth gate
 
 ```text
-DRAFTED (this doc)
-  → product auth for R2 read-only pass
-  → answer R2.1–R2.3 from 154011 (+ narrow follow-up logs if needed)
-  → FINDING → only then authorize implementation ADR
+DRAFTED → product auth 「授权 请继续」 → FINDING COMPLETE on 154011
+  R2.1 YES dual HOST_RESTART / episode (M02↔M03)
+  R2.2 YES lease lacks offerer role (design gap)
+  R2.3 YES ingress not gated before offer (47s late receive)
+  → impl only after separate knife choice (R2a / R2b / sequenced)
 ```
