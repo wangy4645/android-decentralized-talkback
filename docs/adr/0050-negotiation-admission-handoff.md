@@ -4,6 +4,7 @@
 
 **ACCEPTED** (semantics) — **2026-08-11** · **Option A + INV-1..3 FROZEN**  
 **Implementation:** **AUTHORIZED** — Phase-1 IC + Phase-2 single-gate patch (product auth 2026-08-11 「授权」)  
+**Field validation:** **PENDING** — [adr0050-directed-admission-validation-run-card.md](../analysis/adr0050-directed-admission-validation-run-card.md) (**DRAFTED**; not RNA Directed #5)  
 **Parent finding:** [rca-004-media-edge-recovery-convergence-finding.md](../analysis/rca-004-media-edge-recovery-convergence-finding.md) (**FINDING COMPLETE**)  
 **IC:** [adr0050-phase1-implementation-candidate.md](../analysis/adr0050-phase1-implementation-candidate.md)
 
@@ -22,7 +23,7 @@ Scope remains Option A only; no ownership redesign / completion / UVCP / members
 Recovery Last-mile                 = CLOSED / PASS
 Presentation Convergence           = CLOSED / PASS
 Media Edge Recovery Finding        = COMPLETE
-Negotiation Admission Handoff      = OPEN SUCCESSOR (this ADR — Phase-1/2 AUTHORIZED)
+Negotiation Admission Handoff      = OPEN SUCCESSOR (Phase-1/2 IMPLEMENTED · Field PENDING)
 
 WiFi Recovery Incident Chain v1
   Closed: Delivery · Ownership Handoff · Same-session Rejoin · Presentation Projection
@@ -147,5 +148,7 @@ New coordinator actor
 ```text
 Phase 0 ACCEPTED (#164)
   → Phase 1 IC AUTHORIZED + WRITTEN
-  → Phase 2 patch AUTHORIZED (product 「授权」 2026-08-11)
+  → Phase 2 patch AUTHORIZED (product 「授权」 2026-08-11) · #165
+  → Directed Admission Validation run card DRAFTED
+  → field auth → thin directed run → VERIFIED or classified next layer
 ```
