@@ -1,5 +1,6 @@
 package com.talkback.core.session
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -47,10 +48,27 @@ class GroupMeshReconcilerTest {
     }
 
     @Test
-    fun clearsCheckingStampOnConnect() {
+    fun reconnectSuppressReasonWhileChecking() {
         reconciler.markIceChecking("CH-01", "M02")
+        assertEquals(
+            "ICE_CHECKING_SUPPRESS",
+            reconciler.reconnectSuppressReason("CH-01", "M02", "CHECKING")
+        )
+    }
+
+    @Test
+    fun reconnectSuppressReasonWhenConnected() {
         reconciler.markConnected("CH-01", "M02")
+        assertEquals(
+            "ICE_CONNECTED",
+            reconciler.reconnectSuppressReason("CH-01", "M02", "CONNECTED")
+        )
+    }
+
+    @Test
+    fun checkingAgeMsTracksSettlingWindow() {
         reconciler.markIceChecking("CH-01", "M02")
-        assertFalse(reconciler.canOfferJoin("CH-01", "M02", "CHECKING"))
+        val age = reconciler.checkingAgeMs("CH-01", "M02")
+        assertTrue(age in 0L..100L)
     }
 }
