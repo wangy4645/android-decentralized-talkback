@@ -55,6 +55,67 @@ class GroupBootstrapAdmissionSupportTest {
     }
 
     @Test
+    fun evaluateEdgeReadyRetry_issuesInvite_whenEligible() {
+        val intent = GroupBootstrapAdmissionSupport.markWaiting(
+            GroupBootstrapAdmissionSupport.create("CH-01", "M02", "DISCOVERED_NO_SESSION"),
+            "WAITING_EDGE_NOT_READY:LOCAL_NOT_BIDIRECTIONAL"
+        )
+        val endpoint = EndpointAddress(ModuleId("M02"), EndpointId("E02"))
+        val decision = GroupBootstrapAdmissionSupport.evaluateEdgeReadyRetry(
+            GroupBootstrapAdmissionSupport.EdgeReadyEvaluationInput(
+                intent = intent,
+                endpoint = endpoint,
+                peerEdgeReady = true,
+                authorityAdmissible = true,
+                isInviteProducer = true,
+                admissionIncomplete = true,
+                cooldownElapsed = true
+            )
+        )
+        val invite = decision as GroupBootstrapAdmissionSupport.EdgeReadyDecision.IssueInvite
+        assertEquals("M02", invite.moduleId)
+        assertEquals(endpoint, invite.endpoint)
+    }
+
+    @Test
+    fun evaluateEdgeReadyRetry_defersWhenAuthorityNotAdmissible() {
+        val intent = GroupBootstrapAdmissionSupport.create("CH-01", "M02", "DISCOVERED_NO_SESSION")
+        val decision = GroupBootstrapAdmissionSupport.evaluateEdgeReadyRetry(
+            GroupBootstrapAdmissionSupport.EdgeReadyEvaluationInput(
+                intent = intent,
+                endpoint = EndpointAddress(ModuleId("M02"), EndpointId("E02")),
+                peerEdgeReady = true,
+                authorityAdmissible = false,
+                isInviteProducer = true,
+                admissionIncomplete = true,
+                cooldownElapsed = true
+            )
+        )
+        val deferred = decision as GroupBootstrapAdmissionSupport.EdgeReadyDecision.Deferred
+        assertEquals("AUTHORITY_NOT_ADMISSIBLE", deferred.reason)
+    }
+
+    @Test
+    fun evaluateEdgeReadyRetry_noActionWhenInviteAlreadySent() {
+        val intent = GroupBootstrapAdmissionSupport.markInviteSent(
+            GroupBootstrapAdmissionSupport.create("CH-01", "M02", "DISCOVERED_NO_SESSION"),
+            "grp:CH-01"
+        )
+        val decision = GroupBootstrapAdmissionSupport.evaluateEdgeReadyRetry(
+            GroupBootstrapAdmissionSupport.EdgeReadyEvaluationInput(
+                intent = intent,
+                endpoint = EndpointAddress(ModuleId("M02"), EndpointId("E02")),
+                peerEdgeReady = true,
+                authorityAdmissible = true,
+                isInviteProducer = true,
+                admissionIncomplete = true,
+                cooldownElapsed = true
+            )
+        )
+        assertEquals(GroupBootstrapAdmissionSupport.EdgeReadyDecision.NoAction, decision)
+    }
+
+    @Test
     fun shouldSuppressGroupJoinFallback_whenIntentWaiting() {
         val session = TalkbackSession(
             id = "grp:CH-01",

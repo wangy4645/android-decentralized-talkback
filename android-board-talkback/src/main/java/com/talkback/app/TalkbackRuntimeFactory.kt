@@ -234,6 +234,11 @@ object TalkbackRuntimeFactory {
             peerEdgeSignalingReadiness.onPeerEdgeSignalingReady = { moduleId ->
                 coordinator.onPeerEdgeSignalingReady(moduleId)
             }
+            val prrLostHandler = peerEdgeSignalingReadiness.onPeerEdgeSignalingLost
+            peerEdgeSignalingReadiness.onPeerEdgeSignalingLost = { event ->
+                prrLostHandler?.invoke(event)
+                coordinator.onPeerEdgeSignalingLost(event)
+            }
         }
         coordinator.updateStaticPeers(staticPeers)
         val runtime = TalkbackRuntime(

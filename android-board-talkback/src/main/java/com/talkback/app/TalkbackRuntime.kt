@@ -422,6 +422,10 @@ class TalkbackRuntime(
     internal fun testTriggerGroupMeshReconnect(sessionId: String, moduleId: String): Int =
         runCatching { coordinator.testTriggerGroupMeshReconnect(sessionId, moduleId) }.getOrDefault(0)
 
+    internal fun testNotifyPeerEdgeSignalingReady(moduleId: String) {
+        runCatching { coordinator.testNotifyPeerEdgeSignalingReady(moduleId) }
+    }
+
     internal fun testSendGroupJoinToPeer(
         targetPort: Int,
         sessionId: String,

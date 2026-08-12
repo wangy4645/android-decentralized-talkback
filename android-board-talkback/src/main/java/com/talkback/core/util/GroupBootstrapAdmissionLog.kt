@@ -17,4 +17,10 @@ object GroupBootstrapAdmissionLog {
 
     fun fallbackSuppressedMessage(channelId: String, peerModuleId: String, reason: String): String =
         "GROUP_BOOTSTRAP_FALLBACK_SUPPRESSED ch=$channelId peer=$peerModuleId reason=$reason"
+
+    fun edgeReadyEvaluatedMessage(channelId: String, peerModuleId: String, decision: String): String =
+        "GROUP_BOOTSTRAP_EDGE_READY_EVALUATED ch=$channelId peer=$peerModuleId decision=$decision"
+
+    fun edgeReadyDeferredMessage(channelId: String, peerModuleId: String, reason: String): String =
+        "GROUP_BOOTSTRAP_EDGE_READY_DEFERRED ch=$channelId peer=$peerModuleId reason=$reason"
 }

@@ -152,6 +152,7 @@ import com.talkback.core.session.FormerAdmittedPeer
 import com.talkback.core.session.GroupE4RejoinAdmissionSupport
 import com.talkback.core.session.GroupBootstrapAdmissionSupport
 import com.talkback.core.session.BootstrapAdmissionIntent
+import com.talkback.core.session.BootstrapAdmissionIntentState
 import com.talkback.core.session.GroupMembershipSupport
 import com.talkback.core.model.AuthorityDigestFreshness
 import com.talkback.core.model.AuthorityDigestObservation
@@ -1036,6 +1037,7 @@ class TalkbackCoordinator(
     private val lastPlaybackEnabledBySession = ConcurrentHashMap<String, Boolean>()
     private val lastEnsureCanonicalInviteMsByModule = ConcurrentHashMap<String, Long>()
     private val lastE4RejoinInviteMsByModule = ConcurrentHashMap<String, Long>()
+    private val lastBootstrapAdmissionEdgeRetryMsByKey = ConcurrentHashMap<String, Long>()
     private val seenNoncesByModule = ConcurrentHashMap<String, MutableMap<String, Long>>()
     private val pendingMeetingStartIntentByChannel =
         ConcurrentHashMap<String, Pair<MeetingMode, Set<EndpointId>>>()
@@ -1986,7 +1988,11 @@ class TalkbackCoordinator(
         val newInvitees = invitees.filter { invitee ->
             invitee.moduleId != local.moduleId && invitee.key !in existingKeys
         }
-        if (newInvitees.isEmpty()) {
+        val bootstrapRetries = invitees.filter { invitee ->
+            invitee.moduleId != local.moduleId &&
+                isBootstrapAdmissionInviteRetry(session, channelId, invitee.moduleId.value)
+        }
+        if (newInvitees.isEmpty() && bootstrapRetries.isEmpty()) {
             val reconnect = invitees.filter { invitee ->
                 invitee.moduleId != local.moduleId &&
                     !isFormerlyAdmittedNotInCanonicalRoster(session, invitee.moduleId.value) &&
@@ -2015,8 +2021,9 @@ class TalkbackCoordinator(
         applyGroupTopology(session, session.groupMembers.size)
         val payloadBase = groupPayloadBase(session)
 
+        val inviteDispatchTargets = (newInvitees + bootstrapRetries).distinctBy { it.moduleId.value }
         var sent = 0
-        newInvitees.forEach { remote ->
+        inviteDispatchTargets.forEach { remote ->
             val moduleId = remote.moduleId.value
             if (moduleId in session.remotePeersByModule &&
                 qosMonitor.isGroupConnected(moduleId)
@@ -3489,7 +3496,143 @@ class TalkbackCoordinator(
                         isRetry = true
                     )
                 }
+            evaluateBootstrapAdmissionOnEdgeReady(remoteModuleId)
         }
+    }
+
+    internal fun onPeerEdgeSignalingLost(event: com.talkback.core.signaling.peer.PeerEdgeSignalingLost) {
+        runOnCoordinator {
+            val remoteModuleId = event.remoteModuleId
+            bootstrapAdmissionIntentsByKey.entries.forEach { (key, intent) ->
+                if (intent.key.targetModuleId != remoteModuleId) return@forEach
+                if (intent.state != BootstrapAdmissionIntentState.INVITE_SENT) return@forEach
+                val session = sessions.values.firstOrNull {
+                    it.channelId == intent.key.channelId &&
+                        it.type == SessionType.GROUP &&
+                        it.accepted
+                } ?: return@forEach
+                if (!GroupBootstrapAdmissionSupport.peerAdmissionIncomplete(session, remoteModuleId)) return@forEach
+                bootstrapAdmissionIntentsByKey[key] = GroupBootstrapAdmissionSupport.markWaiting(
+                    intent,
+                    "EDGE_LOST:${event.reason}"
+                )
+            }
+        }
+    }
+
+    private fun evaluateBootstrapAdmissionOnEdgeReady(remoteModuleId: String) {
+        val peerEdgeReady = peerEdgeSignalingReadiness?.isReady(remoteModuleId) ?: true
+        if (!peerEdgeReady) return
+        bootstrapAdmissionIntentsByKey.values
+            .filter { it.key.targetModuleId == remoteModuleId }
+            .forEach { intent ->
+                val session = sessions.values.firstOrNull {
+                    it.channelId == intent.key.channelId &&
+                        it.type == SessionType.GROUP &&
+                        it.accepted &&
+                        !it.isForegroundSuspended()
+                } ?: return@forEach
+                runBootstrapAdmissionEdgeReadyEvaluation(session, intent, remoteModuleId)
+            }
+    }
+
+    private fun runBootstrapAdmissionEdgeReadyEvaluation(
+        session: TalkbackSession,
+        intent: BootstrapAdmissionIntent,
+        remoteModuleId: String
+    ) {
+        val channelId = session.channelId ?: return
+        if (!isMembershipAuthority(session)) return
+        val dialableIds = dialableRemoteModuleIds()
+        val authoritySnapshot = resolveGroupAuthoritySnapshot(
+            channelId,
+            session,
+            dialableIds,
+            dialableIds + localModuleId
+        )
+        val endpoint = endpointForDialableModule(ModuleId(remoteModuleId))
+            ?: session.pendingInviteeEndpoints[remoteModuleId]
+        val now = System.currentTimeMillis()
+        val retryKey = storageKey(channelId, remoteModuleId)
+        val lastRetryMs = lastBootstrapAdmissionEdgeRetryMsByKey[retryKey] ?: 0L
+        val decision = GroupBootstrapAdmissionSupport.evaluateEdgeReadyRetry(
+            GroupBootstrapAdmissionSupport.EdgeReadyEvaluationInput(
+                intent = intent,
+                endpoint = endpoint,
+                peerEdgeReady = peerEdgeSignalingReadiness?.isReady(remoteModuleId) ?: true,
+                authorityAdmissible = groupChannelAuthority.mayPerformMaintenance(authoritySnapshot),
+                isInviteProducer = isMembershipAuthority(session),
+                admissionIncomplete = GroupBootstrapAdmissionSupport.peerAdmissionIncomplete(
+                    session,
+                    remoteModuleId
+                ),
+                cooldownElapsed = now - lastRetryMs >= BOOTSTRAP_ADMISSION_EDGE_RETRY_COOLDOWN_MS
+            )
+        )
+        when (decision) {
+            GroupBootstrapAdmissionSupport.EdgeReadyDecision.NoAction -> {
+                log(
+                    GroupBootstrapAdmissionLog.edgeReadyEvaluatedMessage(
+                        channelId,
+                        remoteModuleId,
+                        "NO_ACTION"
+                    )
+                )
+            }
+            is GroupBootstrapAdmissionSupport.EdgeReadyDecision.Deferred -> {
+                log(
+                    GroupBootstrapAdmissionLog.edgeReadyDeferredMessage(
+                        channelId,
+                        remoteModuleId,
+                        decision.reason
+                    )
+                )
+                log(
+                    GroupBootstrapAdmissionLog.edgeReadyEvaluatedMessage(
+                        channelId,
+                        remoteModuleId,
+                        "DEFERRED:${decision.reason}"
+                    )
+                )
+            }
+            is GroupBootstrapAdmissionSupport.EdgeReadyDecision.IssueInvite -> {
+                log(
+                    GroupBootstrapAdmissionLog.edgeReadyEvaluatedMessage(
+                        channelId,
+                        remoteModuleId,
+                        "ISSUE_INVITE"
+                    )
+                )
+                applyBootstrapAdmissionEdgeReadyInvite(session, decision.moduleId, decision.endpoint, retryKey, now)
+            }
+        }
+    }
+
+    private fun applyBootstrapAdmissionEdgeReadyInvite(
+        session: TalkbackSession,
+        moduleId: String,
+        endpoint: EndpointAddress,
+        retryKey: String,
+        nowMs: Long
+    ) {
+        val sent = sendGroupMeshInvitesInternal(session.id, listOf(endpoint))
+        if (sent <= 0) return
+        lastBootstrapAdmissionEdgeRetryMsByKey[retryKey] = nowMs
+        log(
+            "GROUP_BOOTSTRAP_EDGE_READY_INVITE_ISSUED session=${session.id} ch=${session.channelId} " +
+                "peer=$moduleId rosterEpoch=${session.rosterEpoch}"
+        )
+    }
+
+    private fun isBootstrapAdmissionInviteRetry(
+        session: TalkbackSession,
+        channelId: String,
+        moduleId: String
+    ): Boolean {
+        val intent = bootstrapAdmissionIntent(channelId, moduleId) ?: return false
+        if (!GroupBootstrapAdmissionSupport.eligibleForEdgeReadyRetry(intent)) return false
+        if (!GroupBootstrapAdmissionSupport.peerAdmissionIncomplete(session, moduleId)) return false
+        return peerEdgeSignalingReadiness?.isReady(moduleId) ?: true
     }
 
     private fun isMembershipAuthorityForChannel(channelId: String): Boolean {
@@ -12243,6 +12386,10 @@ class TalkbackCoordinator(
         reconnectExistingGroupMeshPeers(session, listOf(remote))
     }
 
+    internal fun testNotifyPeerEdgeSignalingReady(moduleId: String) = runOnCoordinator {
+        onPeerEdgeSignalingReady(moduleId)
+    }
+
     private fun runE4RejoinAdmissionEvaluation(
         session: TalkbackSession,
         reachableModuleIds: Set<String>?
@@ -13475,6 +13622,7 @@ class TalkbackCoordinator(
         private const val CONFERENCE_INVITE_MIN_INTERVAL_MS = 5_000L
         private const val ENSURE_CANONICAL_INVITE_COOLDOWN_MS = 5_000L
         private const val E4_REJOIN_INVITE_COOLDOWN_MS = 5_000L
+        private const val BOOTSTRAP_ADMISSION_EDGE_RETRY_COOLDOWN_MS = 5_000L
     }
 
     private fun sessionTag(session: TalkbackSession): String =

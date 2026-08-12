@@ -1,9 +1,27 @@
 package com.talkback.core.session
 
+import com.talkback.core.model.EndpointAddress
+
 /**
  * #179 Phase 1 — pure bootstrap admission intent lifecycle (producer contract).
  */
 object GroupBootstrapAdmissionSupport {
+
+    sealed interface EdgeReadyDecision {
+        data object NoAction : EdgeReadyDecision
+        data class Deferred(val reason: String) : EdgeReadyDecision
+        data class IssueInvite(val moduleId: String, val endpoint: EndpointAddress) : EdgeReadyDecision
+    }
+
+    data class EdgeReadyEvaluationInput(
+        val intent: BootstrapAdmissionIntent,
+        val endpoint: EndpointAddress?,
+        val peerEdgeReady: Boolean,
+        val authorityAdmissible: Boolean,
+        val isInviteProducer: Boolean,
+        val admissionIncomplete: Boolean,
+        val cooldownElapsed: Boolean
+    )
 
     fun key(channelId: String, targetModuleId: String): BootstrapAdmissionIntentKey =
         BootstrapAdmissionIntentKey(channelId, targetModuleId)
@@ -70,6 +88,34 @@ object GroupBootstrapAdmissionSupport {
     ): Boolean {
         if (hasUnresolvedBootstrapAdmissionIntent(intent)) return true
         return isBootstrapAdmissionPeer(session, moduleId)
+    }
+
+    /** #179-C: edge-ready retry only from pre-invite states (idempotency guard). */
+    fun eligibleForEdgeReadyRetry(intent: BootstrapAdmissionIntent): Boolean =
+        intent.state == BootstrapAdmissionIntentState.PENDING ||
+            intent.state == BootstrapAdmissionIntentState.WAITING_EDGE_READY
+
+    fun peerAdmissionIncomplete(session: TalkbackSession, moduleId: String): Boolean {
+        if (moduleId in session.pendingInviteeEndpoints) return true
+        val canonical = GroupMembershipSupport.canonicalMemberModuleIds(session)
+            .map { it.value }
+            .toSet()
+        if (moduleId !in canonical) return true
+        return moduleId !in session.meshCompletedModules
+    }
+
+    fun evaluateEdgeReadyRetry(input: EdgeReadyEvaluationInput): EdgeReadyDecision {
+        if (!eligibleForEdgeReadyRetry(input.intent)) return EdgeReadyDecision.NoAction
+        if (!input.peerEdgeReady) return EdgeReadyDecision.Deferred("PEER_EDGE_NOT_READY")
+        if (!input.isInviteProducer) return EdgeReadyDecision.Deferred("NOT_INVITE_PRODUCER")
+        if (!input.authorityAdmissible) return EdgeReadyDecision.Deferred("AUTHORITY_NOT_ADMISSIBLE")
+        if (!input.admissionIncomplete) return EdgeReadyDecision.NoAction
+        if (input.endpoint == null) return EdgeReadyDecision.Deferred("PEER_NOT_DISCOVERED")
+        if (!input.cooldownElapsed) return EdgeReadyDecision.Deferred("COOLDOWN_ACTIVE")
+        return EdgeReadyDecision.IssueInvite(
+            moduleId = input.intent.key.targetModuleId,
+            endpoint = input.endpoint
+        )
     }
 
     /** Bootstrap admission = pending invitee not yet in canonical roster. */
