@@ -2,7 +2,7 @@
 
 ## Status
 
-**ACCEPTED** (2026-08-12) · Grill complete · Clarifications A–C applied · Implementation **AUTHORIZED** (separate PR; scope locked per § Implementation guidance)
+**ACCEPTED** (2026-08-12) · Grill complete · Clarifications A–C applied · Implementation **MERGED** ([#177](https://github.com/wangy4645/android-decentralized-talkback/pull/177) · `3642e38` · 2026-08-12)
 
 **Tracker:** [#176](https://github.com/wangy4645/android-decentralized-talkback/issues/176) — RCA COMPLETE · CONTRACT FROZEN on issue · this ADR supersedes issue comment stack as normative contract
 
@@ -20,7 +20,7 @@ ADR-0053
 Decision:              ACCEPTED
 Domain:                GROUP channel bootstrap authority
 Problem class:         stale GROUP session ownership after asymmetric session loss
-Implementation target: GroupChannelAuthority + 4 coordinator seams (separate PR)
+Implementation target: GroupChannelAuthority + coordinator seams — **MERGED #177**
 Does NOT reopen:       ADR-0052 / #174 · WiFi recovery · RNA-5/6 · completion predicate
                        · Meeting-as-required-path · JOIN retry aging · QUEUED timeout
 ```
