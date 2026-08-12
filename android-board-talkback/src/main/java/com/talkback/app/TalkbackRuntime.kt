@@ -249,6 +249,33 @@ class TalkbackRuntime(
     internal fun testEvictGroupMember(sessionId: String, moduleId: String) =
         coordinator.testEvictGroupMember(sessionId, moduleId)
 
+    internal fun testRosterEpoch(sessionId: String): Long =
+        coordinator.testRosterEpoch(sessionId)
+
+    internal fun testPendingInviteeModuleIds(sessionId: String): Set<String> =
+        coordinator.testPendingInviteeModuleIds(sessionId)
+
+    internal fun testIsCanonicalGroupMember(sessionId: String, moduleId: String): Boolean =
+        coordinator.testIsCanonicalGroupMember(sessionId, moduleId)
+
+    internal fun testHasFormerlyAdmittedPeer(sessionId: String, moduleId: String): Boolean =
+        coordinator.testHasFormerlyAdmittedPeer(sessionId, moduleId)
+
+    internal fun testGroupMemberModuleIds(sessionId: String): List<String> =
+        coordinator.testGroupMemberModuleIds(sessionId)
+
+    internal fun testEvictGroupMemberAtomic(sessionId: String, moduleId: String): Triple<Boolean, Boolean, Long> =
+        coordinator.testEvictGroupMemberAtomic(sessionId, moduleId)
+
+    internal fun testE4EvaluationDebug(sessionId: String): String =
+        coordinator.testE4EvaluationDebug(sessionId)
+
+    internal fun testRunE4RejoinAdmission(sessionId: String, reachableModuleId: String): Boolean =
+        coordinator.testRunE4RejoinAdmission(sessionId, reachableModuleId)
+
+    internal fun testEvictAndTriggerE4Rejoin(sessionId: String, moduleId: String): Triple<Boolean, Boolean, Long> =
+        coordinator.testEvictAndTriggerE4Rejoin(sessionId, moduleId)
+
     fun configureChannelMembership(channelId: String, moduleIds: List<String>) {
         coordinator.configureChannelMembership(channelId, moduleIds)
     }
@@ -371,6 +398,10 @@ class TalkbackRuntime(
 
     fun reconcileGroupMesh(channelId: String) {
         runCatching { coordinator.reconcileGroupMesh(channelId) }
+    }
+
+    internal fun reconcileGroupMeshSync(channelId: String) {
+        runCatching { coordinator.reconcileGroupMeshSync(channelId) }
     }
 
     internal fun testSimulateGroupRosterMeshGap(sessionId: String, peerModuleId: String) {

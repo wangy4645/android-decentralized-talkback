@@ -148,6 +148,8 @@ import com.talkback.core.session.GroupMediaTopology
 import com.talkback.core.session.GroupIdentityStability
 import com.talkback.core.session.IdentityResolver
 import com.talkback.core.session.GroupMemberReachability
+import com.talkback.core.session.FormerAdmittedPeer
+import com.talkback.core.session.GroupE4RejoinAdmissionSupport
 import com.talkback.core.session.GroupMembershipSupport
 import com.talkback.core.model.AuthorityDigestFreshness
 import com.talkback.core.model.AuthorityDigestObservation
@@ -1026,6 +1028,7 @@ class TalkbackCoordinator(
     private val suppressMeshRepairUntilMsByChannel = ConcurrentHashMap<String, Long>()
     private val lastPlaybackEnabledBySession = ConcurrentHashMap<String, Boolean>()
     private val lastEnsureCanonicalInviteMsByModule = ConcurrentHashMap<String, Long>()
+    private val lastE4RejoinInviteMsByModule = ConcurrentHashMap<String, Long>()
     private val seenNoncesByModule = ConcurrentHashMap<String, MutableMap<String, Long>>()
     private val pendingMeetingStartIntentByChannel =
         ConcurrentHashMap<String, Pair<MeetingMode, Set<EndpointId>>>()
@@ -1618,6 +1621,10 @@ class TalkbackCoordinator(
         reconcileGroupMeshInternal(channelId)
     }
 
+    internal fun reconcileGroupMeshSync(channelId: String) = runOnCoordinatorSync {
+        reconcileGroupMeshInternal(channelId)
+    }
+
     internal fun testSendGroupJoinToPeer(
         targetHost: String,
         targetPort: Int,
@@ -1975,6 +1982,9 @@ class TalkbackCoordinator(
         if (newInvitees.isEmpty()) {
             val reconnect = invitees.filter { invitee ->
                 invitee.moduleId != local.moduleId &&
+                    !isFormerlyAdmittedNotInCanonicalRoster(session, invitee.moduleId.value) &&
+                    invitee.moduleId.value in
+                    GroupMembershipSupport.canonicalMemberModuleIds(session).map { it.value } &&
                     (meshIceState(MediaBearerScope.GROUP, invitee.moduleId.value) != "CONNECTED")
             }
             if (reconnect.isEmpty()) return 0
@@ -2046,6 +2056,9 @@ class TalkbackCoordinator(
         var sent = 0
         reconnect.forEach { remote ->
             val moduleId = remote.moduleId.value
+            if (moduleId !in GroupMembershipSupport.canonicalMemberModuleIds(session).map { it.value }) {
+                return@forEach
+            }
             val ice = meshIceStateForSession(session, moduleId)
             if (!groupMeshReconciler.canReconnect(channelId, moduleId, ice)) {
                 val suppress = groupMeshReconciler.reconnectSuppressReason(channelId, moduleId, ice)
@@ -4115,8 +4128,89 @@ class TalkbackCoordinator(
     }
 
     internal fun testEvictGroupMember(sessionId: String, moduleId: String) = runOnCoordinatorSync {
-        val session = sessions[sessionId] ?: return@runOnCoordinatorSync
+        val session = sessions[sessionId]
+            ?: error("testEvictGroupMember: unknown sessionId=$sessionId active=${sessions.keys}")
         removeGroupMember(session, moduleId)
+    }
+
+    internal fun testGroupMemberModuleIds(sessionId: String): List<String> = runOnCoordinatorSync {
+        sessions[sessionId]?.groupMembers?.map { it.moduleId.value } ?: emptyList()
+    }
+
+    internal fun testEvictGroupMemberAtomic(
+        sessionId: String,
+        moduleId: String
+    ): Triple<Boolean, Boolean, Long> = runOnCoordinatorSync {
+        val session = sessions[sessionId]
+            ?: error("testEvictGroupMember: unknown sessionId=$sessionId active=${sessions.keys}")
+        removeGroupMember(session, moduleId)
+        Triple(
+            session.admittedPeerHistory.containsKey(moduleId),
+            GroupMembershipSupport.canonicalMemberModuleIds(session).any { it.value == moduleId },
+            session.rosterEpoch
+        )
+    }
+
+    internal fun testE4EvaluationDebug(sessionId: String): String = runOnCoordinatorSync {
+        val session = sessions[sessionId] ?: return@runOnCoordinatorSync "no-session"
+        val channelId = session.channelId ?: return@runOnCoordinatorSync "no-channel"
+        val dialableIds = dialableRemoteModuleIds()
+        val snapshot = resolveGroupAuthoritySnapshot(
+            channelId,
+            session,
+            dialableIds,
+            dialableIds + localModuleId
+        )
+        buildString {
+            append("history=").append(session.admittedPeerHistory.keys)
+            append(" canonical=").append(
+                GroupMembershipSupport.canonicalMemberModuleIds(session).map { it.value }
+            )
+            append(" pending=").append(session.pendingInviteeEndpoints.keys)
+            append(" dialable=").append(dialableIds.map { it.value })
+            append(" authority=").append(snapshot.state)
+            append(" mayMaint=").append(groupChannelAuthority.mayPerformMaintenance(snapshot))
+            append(" isAuth=").append(isMembershipAuthority(session))
+        }
+    }
+
+    internal fun testRunE4RejoinAdmission(sessionId: String, reachableModuleId: String): Boolean =
+        runOnCoordinatorSync {
+            val session = sessions[sessionId] ?: return@runOnCoordinatorSync false
+            runE4RejoinAdmissionEvaluation(session, setOf(reachableModuleId))
+            session.pendingInviteeEndpoints.containsKey(reachableModuleId)
+        }
+
+    internal fun testEvictAndTriggerE4Rejoin(
+        sessionId: String,
+        moduleId: String
+    ): Triple<Boolean, Boolean, Long> = runOnCoordinatorSync {
+        val session = sessions[sessionId]
+            ?: error("testEvictAndTriggerE4Rejoin: unknown sessionId=$sessionId active=${sessions.keys}")
+        removeGroupMember(session, moduleId)
+        val hasHistory = session.admittedPeerHistory.containsKey(moduleId)
+        val stillCanonical = GroupMembershipSupport.canonicalMemberModuleIds(session)
+            .any { it.value == moduleId }
+        val epochAfterEvict = session.rosterEpoch
+        runE4RejoinAdmissionEvaluation(session, setOf(moduleId))
+        Triple(hasHistory, stillCanonical, epochAfterEvict)
+    }
+
+    internal fun testRosterEpoch(sessionId: String): Long = runOnCoordinatorSync {
+        sessions[sessionId]?.rosterEpoch ?: -1L
+    }
+
+    internal fun testPendingInviteeModuleIds(sessionId: String): Set<String> = runOnCoordinatorSync {
+        sessions[sessionId]?.pendingInviteeEndpoints?.keys?.toSet() ?: emptySet()
+    }
+
+    internal fun testIsCanonicalGroupMember(sessionId: String, moduleId: String): Boolean = runOnCoordinatorSync {
+        val session = sessions[sessionId] ?: return@runOnCoordinatorSync false
+        GroupMembershipSupport.canonicalMemberModuleIds(session).any { it.value == moduleId }
+    }
+
+    internal fun testHasFormerlyAdmittedPeer(sessionId: String, moduleId: String): Boolean = runOnCoordinatorSync {
+        sessions[sessionId]?.admittedPeerHistory?.containsKey(moduleId) == true
     }
 
     internal fun testInvariantF1BreakCount(): Int = runOnCoordinatorSync { invariantF1BreakCount }
@@ -5990,6 +6084,13 @@ class TalkbackCoordinator(
                 reason = ConferenceAdmissionTransitionReason.INVITE_RECEIVED
             )
         }
+        if (sessionType == SessionType.GROUP && !config.autoAcceptIncoming) {
+            log(
+                "Group invite held (autoAcceptIncoming=false) ch=$channelId " +
+                    "from=${caller.key} session=${signal.sessionId}"
+            )
+            return
+        }
         if (!acceptGroupInvite(signal, fromPeer)) {
             sendGroupBusyReject(
                 fromPeer,
@@ -6548,6 +6649,12 @@ class TalkbackCoordinator(
             return
         }
         if (session.type == SessionType.GROUP) {
+            val peerModuleId = signal.from.moduleId.value
+            if (isMembershipAuthority(session) && isFormerlyAdmittedNotInCanonicalRoster(session, peerModuleId)) {
+                rememberSignalPeer(peerModuleId, fromPeer)
+                runE4RejoinAdmissionEvaluation(session, reachableModuleIds = setOf(peerModuleId))
+                return
+            }
             logGroupJoinIngressDecision(
                 decisionLabel = "ACCEPT",
                 sessionId = signal.sessionId,
@@ -7362,6 +7469,15 @@ class TalkbackCoordinator(
         if (session.type == SessionType.CONFERENCE) {
             ensureConferenceParticipantInRoster(session, signal.from, fromPeer)
         } else if (session.type == SessionType.GROUP && isMembershipAuthority(session)) {
+            if (isFormerlyAdmittedNotInCanonicalRoster(session, moduleId) &&
+                moduleId !in session.pendingInviteeEndpoints
+            ) {
+                log(
+                    "${sessionTag(session)} GROUP_ACCEPT ignored for formerly-admitted peer=$moduleId " +
+                        "reason=awaiting_e4_invite"
+                )
+                return
+            }
             promoteInviteeToCanonicalRoster(session, signal.from)
         }
         val existingIce = meshIceStateForSession(session, moduleId)
@@ -9310,6 +9426,13 @@ class TalkbackCoordinator(
     private fun removeGroupMember(session: TalkbackSession, moduleId: String) {
         if (moduleId == localModuleId.value) return
         releaseFloorIfHolderUnavailable(session, moduleId)
+        session.groupMembers.find { it.moduleId.value == moduleId }?.let { endpoint ->
+            session.admittedPeerHistory[moduleId] = FormerAdmittedPeer(
+                endpoint = endpoint,
+                prunedAtEpoch = session.rosterEpoch
+            )
+        }
+        session.pendingInviteeEndpoints.remove(moduleId)
         session.groupMembers = session.groupMembers.filter { it.moduleId.value != moduleId }
         session.memberModules.remove(ModuleId(moduleId))
         session.membershipStateByModule.remove(moduleId)
@@ -9408,6 +9531,11 @@ class TalkbackCoordinator(
             it.type == SessionType.GROUP && it.accepted && it.channelId == channelId
         } ?: return
         if (!isMembershipAuthority(session)) return
+
+        if (isFormerlyAdmittedNotInCanonicalRoster(session, moduleId)) {
+            runE4RejoinAdmissionEvaluation(session, reachableModuleIds = setOf(moduleId))
+            return
+        }
 
         val canonicalIds = GroupMembershipSupport.canonicalMemberModuleIds(session).map { it.value }
         if (moduleId in canonicalIds) return
@@ -9870,12 +9998,19 @@ class TalkbackCoordinator(
 
     private fun promoteInviteeToCanonicalRoster(session: TalkbackSession, remote: EndpointAddress) {
         val moduleId = remote.moduleId.value
+        val wasFormerlyAdmitted = session.admittedPeerHistory.remove(moduleId) != null
         session.pendingInviteeEndpoints.remove(moduleId)
         if (session.groupMembers.any { it.moduleId.value == moduleId }) return
         session.groupMembers = session.groupMembers + remote
         GroupMembershipSupport.syncMembershipFromGroupMembers(session)
         bumpRosterEpoch(session, "member_joined")
         log("${sessionTag(session)} Canonical roster +$moduleId epoch=${session.rosterEpoch}")
+        if (wasFormerlyAdmitted) {
+            log(
+                "GROUP_E4_REJOIN_ADMISSION_COMMITTED session=${session.id} peer=$moduleId " +
+                    "rosterEpoch=${session.rosterEpoch} channel=${session.channelId}"
+            )
+        }
     }
 
     /** Active roster plus evicted peers still eligible for conference re-invite. */
@@ -11522,6 +11657,7 @@ class TalkbackCoordinator(
     /** Pairwise offerer (local < peer) invites late peers into the live GROUP mesh. */
     private fun tryReinviteGroupPeerPairwise(moduleId: String): Boolean {
         if (moduleId == localModuleId.value) return false
+        if (sessions.values.any { isFormerlyAdmittedNotInCanonicalRoster(it, moduleId) }) return false
         val mesh = sessions.values.firstOrNull {
             it.type == SessionType.GROUP && it.accepted && !it.isForegroundSuspended()
         } ?: return false
@@ -11945,7 +12081,9 @@ class TalkbackCoordinator(
         } else {
             emptyList()
         }
-        val toInvite = (missingPeers + pairwiseReconnect).distinctBy { it.moduleId.value }
+        val toInvite = (missingPeers + pairwiseReconnect)
+            .distinctBy { it.moduleId.value }
+            .filter { !isFormerlyAdmittedNotInCanonicalRoster(session, it.moduleId.value) }
         if (toInvite.isNotEmpty()) {
             sendGroupMeshInvitesInternal(session.id, toInvite)
         }
@@ -11954,6 +12092,77 @@ class TalkbackCoordinator(
         touchConvergenceAnchor(session)
         emitGroupTopologySnapshot(TopologySnapshotReason.PLANNER_SCHEDULED, session)
         onGroupConvergenceBoundary(session)
+    }
+
+    private fun isFormerlyAdmittedNotInCanonicalRoster(session: TalkbackSession, moduleId: String): Boolean =
+        GroupE4RejoinAdmissionSupport.isFormerlyAdmittedNotInCanonicalRoster(session, moduleId)
+
+    private fun runE4RejoinAdmissionEvaluation(
+        session: TalkbackSession,
+        reachableModuleIds: Set<String>?
+    ) {
+        if (session.type != SessionType.GROUP || !session.accepted || session.isForegroundSuspended()) return
+        if (!isMembershipAuthority(session)) return
+        val channelId = session.channelId ?: return
+        val dialableIds = dialableRemoteModuleIds()
+        val dialable = dialableIds.map { it.value }.toSet()
+        val reachable = reachableModuleIds?.let { dialable + it } ?: dialable
+        val authoritySnapshot = resolveGroupAuthoritySnapshot(
+            channelId,
+            session,
+            dialableIds,
+            dialableIds + localModuleId
+        )
+        val authorityAdmissible = groupChannelAuthority.mayPerformMaintenance(authoritySnapshot)
+        val decisions = GroupE4RejoinAdmissionSupport.evaluate(
+            GroupE4RejoinAdmissionSupport.EvaluationInput(
+                admittedPeerHistory = session.admittedPeerHistory,
+                canonicalModuleIds = GroupMembershipSupport.canonicalMemberModuleIds(session)
+                    .map { it.value }
+                    .toSet(),
+                pendingInviteeModuleIds = session.pendingInviteeEndpoints.keys,
+                reachableModuleIds = reachable,
+                authorityAdmissible = authorityAdmissible,
+                isMembershipAuthority = true
+            )
+        )
+        if (decisions.isEmpty()) return
+        log(
+            "GROUP_E4_REJOIN_EVALUATED session=${session.id} channel=$channelId " +
+                "candidates=${session.admittedPeerHistory.keys.size} reachable=${reachable.size}"
+        )
+        decisions.forEach { decision ->
+            when (decision) {
+                GroupE4RejoinAdmissionSupport.E4RejoinAdmissionDecision.NoAction -> Unit
+                is GroupE4RejoinAdmissionSupport.E4RejoinAdmissionDecision.Deferred -> {
+                    log(
+                        "GROUP_E4_REJOIN_DEFERRED session=${session.id} channel=$channelId " +
+                            "reason=${decision.reason}"
+                    )
+                }
+                is GroupE4RejoinAdmissionSupport.E4RejoinAdmissionDecision.IssueInvite -> {
+                    applyE4RejoinInviteDecision(session, decision.moduleId, decision.endpoint)
+                }
+            }
+        }
+    }
+
+    private fun applyE4RejoinInviteDecision(
+        session: TalkbackSession,
+        moduleId: String,
+        endpoint: EndpointAddress
+    ) {
+        if (moduleId in session.pendingInviteeEndpoints) return
+        val now = System.currentTimeMillis()
+        val lastMs = lastE4RejoinInviteMsByModule[moduleId] ?: 0L
+        if (now - lastMs < E4_REJOIN_INVITE_COOLDOWN_MS) return
+        sendGroupMeshInvitesInternal(session.id, listOf(endpoint))
+        if (moduleId !in session.pendingInviteeEndpoints) return
+        lastE4RejoinInviteMsByModule[moduleId] = now
+        log(
+            "GROUP_E4_REJOIN_INVITE_ISSUED session=${session.id} targetPeer=$moduleId " +
+                "rosterEpoch=${session.rosterEpoch} channel=${session.channelId}"
+        )
     }
 
     private fun anchorHealthMap(): Map<String, AnchorHealthSnapshot> {
@@ -13119,6 +13328,7 @@ class TalkbackCoordinator(
         private const val MEMBERSHIP_RESYNC_MIN_BUDGET_MS = 15_000L
         private const val CONFERENCE_INVITE_MIN_INTERVAL_MS = 5_000L
         private const val ENSURE_CANONICAL_INVITE_COOLDOWN_MS = 5_000L
+        private const val E4_REJOIN_INVITE_COOLDOWN_MS = 5_000L
     }
 
     private fun sessionTag(session: TalkbackSession): String =
@@ -13864,26 +14074,28 @@ class TalkbackCoordinator(
     private fun onGroupConvergenceBoundary(session: TalkbackSession) {
         if (session.type != SessionType.GROUP || !session.accepted) return
         val health = GroupRuntimeHealthProjector.project(buildGroupRuntimeHealthInput(session))
-        val sessionId = health.sessionId ?: return
-        val previous = lastGroupTopologyReadinessBySession.put(
-            sessionId,
-            health.groupTopologyReadiness
-        )
-        if (previous != health.groupTopologyReadiness) {
-            log(TopologySnapshotLogger.format(TopologySnapshotReason.READINESS_CHANGED, health))
-            session.channelId?.let { channelId ->
-                observeGroupTransitionReadinessChanged(
-                    channelId = channelId,
-                    meshRecoveryState = health.groupTopologyReadiness.name
-                )
-            }
-            if (health.groupTopologyReadiness == GroupTopologyReadiness.OPERATIONAL) {
+        health.sessionId?.let { sessionId ->
+            val previous = lastGroupTopologyReadinessBySession.put(
+                sessionId,
+                health.groupTopologyReadiness
+            )
+            if (previous != health.groupTopologyReadiness) {
+                log(TopologySnapshotLogger.format(TopologySnapshotReason.READINESS_CHANGED, health))
                 session.channelId?.let { channelId ->
-                    MeetingRecoveryLog.onMeshOperational(channelId)
-                    channelGovernance.maybeCompleteRecovery(channelId, recoveryReady = true)
+                    observeGroupTransitionReadinessChanged(
+                        channelId = channelId,
+                        meshRecoveryState = health.groupTopologyReadiness.name
+                    )
+                }
+                if (health.groupTopologyReadiness == GroupTopologyReadiness.OPERATIONAL) {
+                    session.channelId?.let { channelId ->
+                        MeetingRecoveryLog.onMeshOperational(channelId)
+                        channelGovernance.maybeCompleteRecovery(channelId, recoveryReady = true)
+                    }
                 }
             }
         }
+        runE4RejoinAdmissionEvaluation(session, reachableModuleIds = null)
     }
 
     private fun onGrantAppliedForMetrics(session: TalkbackSession) {

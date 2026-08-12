@@ -22,6 +22,7 @@ internal class TestTalkbackNode(
     cleanupIntervalMs: Long = 5_000L,
     heartbeatIntervalMs: Long = 2_000L,
     autoReDialOnModuleRecovery: Boolean = true,
+    autoAcceptIncoming: Boolean = true,
     conferenceHostIceReconnectGraceMs: Long = 5_000L,
     conferenceInviteRingTimeoutMs: Long = 20_000L,
     meshNegotiationGraceMs: Long = 15_000L,
@@ -38,7 +39,7 @@ internal class TestTalkbackNode(
         config = TalkbackRuntimeConfig(
             localModuleId = moduleId,
             signalingPort = port,
-            autoAcceptIncoming = true,
+            autoAcceptIncoming = autoAcceptIncoming,
             sessionIdleTimeoutMs = sessionIdleTimeoutMs,
             cleanupIntervalMs = cleanupIntervalMs,
             heartbeatIntervalMs = heartbeatIntervalMs,

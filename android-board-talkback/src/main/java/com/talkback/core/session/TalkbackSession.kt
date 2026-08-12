@@ -33,6 +33,8 @@ class TalkbackSession(
     val pendingInviteeEndpoints: MutableMap<String, EndpointAddress> = linkedMapOf()
     /** Soft-leave roster: prior members who may rejoin without a first-time invite. */
     val leftMemberEndpoints: MutableMap<String, EndpointAddress> = linkedMapOf()
+    /** ADR-0053 E4: formerly-admitted peers pruned from canonical roster (evaluator evidence only). */
+    val admittedPeerHistory: MutableMap<String, FormerAdmittedPeer> = linkedMapOf()
     val meshCompletedModules: MutableSet<String> = linkedSetOf()
     var mediaTopology: GroupMediaTopology = GroupMediaTopology.MESH
     var anchorModuleId: ModuleId? = null
