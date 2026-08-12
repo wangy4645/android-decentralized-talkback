@@ -156,6 +156,9 @@ import com.talkback.core.model.GroupResyncRequestPayload
 import com.talkback.core.model.MembershipContextExistenceQueryPayload
 import com.talkback.core.model.MembershipContextExistenceResponsePayload
 import com.talkback.core.model.TopologyDigest
+import com.talkback.core.session.GroupChannelAuthority
+import com.talkback.core.session.GroupAuthorityObservation
+import com.talkback.core.session.GroupAuthorityState
 import com.talkback.core.session.GroupMeshReconciler
 import com.talkback.core.session.GroupMeshPlanner
 import com.talkback.core.session.GroupRoomId
@@ -174,6 +177,7 @@ import com.talkback.core.session.MediaTopology
 import com.talkback.core.session.MemberView
 import com.talkback.core.session.MeshTopology
 import com.talkback.core.session.ParticipantState
+import com.talkback.core.session.PeerBootstrapPostureEvidence
 import com.talkback.core.session.ReachabilitySnapshot
 import com.talkback.core.session.ReachabilityView
 import com.talkback.core.qos.IceConnectivity
@@ -609,6 +613,8 @@ class TalkbackCoordinator(
         )
     }
     private val groupMeshReconciler = GroupMeshReconciler()
+    private val groupChannelAuthority = GroupChannelAuthority()
+    private val activeBootstrapEmissionStartedMsByChannel = ConcurrentHashMap<String, Long>()
     private val lastStuckEvaluationBySession = ConcurrentHashMap<String, Pair<Boolean, String>>()
     private val lastTransmitReadyBySession = ConcurrentHashMap<String, Boolean>()
     private val lastEdgeRecoveryByPeer = ConcurrentHashMap<String, EdgeRecoveryObservation>()
@@ -1608,6 +1614,46 @@ class TalkbackCoordinator(
      */
     fun reconcileGroupMesh(channelId: String) = runOnCoordinator {
         reconcileGroupMeshInternal(channelId)
+    }
+
+    internal fun testSendGroupJoinToPeer(
+        targetHost: String,
+        targetPort: Int,
+        targetModuleId: String,
+        sessionId: String,
+        channelId: String
+    ) = runOnCoordinator {
+        val local = localEndpointAddress() ?: return@runOnCoordinator
+        val remote = EndpointAddress(ModuleId(targetModuleId), EndpointId("E01"))
+        val payload = GroupSessionPayload(
+            sdp = "v=0",
+            channelId = channelId,
+            members = listOf(targetModuleId, localModuleId.value).sorted(),
+            initiatorModuleId = targetModuleId,
+            floorAuthorityModuleId = targetModuleId
+        ).encode()
+        sendSignal(
+            PeerTarget(targetHost, targetPort),
+            buildSignedEnvelope(SignalType.GROUP_JOIN, local, remote, sessionId, payload)
+        )
+    }
+
+    internal fun testSimulateGroupRosterMeshGap(sessionId: String, peerModuleId: String) = runOnCoordinator {
+        val session = sessions[sessionId] ?: return@runOnCoordinator
+        if (session.type != SessionType.GROUP) return@runOnCoordinator
+        session.memberModules.removeAll { it.value == peerModuleId }
+        session.meshCompletedModules.remove(peerModuleId)
+        log("TEST_GROUP_ROSTER_MESH_GAP session=$sessionId peer=$peerModuleId")
+    }
+
+    internal fun testDropLocalGroupSession(sessionId: String) = runOnCoordinator {
+        val session = sessions[sessionId] ?: return@runOnCoordinator
+        if (session.type != SessionType.GROUP) return@runOnCoordinator
+        sessions.remove(sessionId)
+        pendingGroupJoinsBySession.remove(sessionId)
+        pendingIceBySession.remove(sessionId)
+        releaseSessionMedia(session)
+        log("TEST_DROP_LOCAL_GROUP_SESSION session=$sessionId channel=${session.channelId}")
     }
 
     fun conferenceCall(
@@ -11568,47 +11614,214 @@ class TalkbackCoordinator(
         if (dialable.isEmpty()) return
         val allModules = dialable + localModuleId
 
-        val session = sessions.values.firstOrNull {
-            it.channelId == channelId && it.type == SessionType.GROUP
-        }
+        var session = groupSessionOnChannel(channelId)
+        var authoritySnapshot = resolveGroupAuthoritySnapshot(channelId, session, dialable, allModules)
 
-        if (session == null) {
-            val primary = resolveBootstrapPrimary(allModules)
-            if (primary != null && localModuleId != primary) {
-                log("Waiting for primary ${primary.value} to bootstrap GROUP on $channelId")
-                observeGroupTransitionBootstrapAttempt(
-                    channelId = channelId,
-                    resolvedPrimary = primary.value,
-                    waitingForPrimary = true,
-                    meshRecoveryState = "waiting_primary"
+        when (authoritySnapshot.state) {
+            GroupAuthorityState.STALE_PRIMARY -> {
+                commitGroupChannelAuthorityInvalidation(channelId, session)
+                authoritySnapshot = groupChannelAuthority.advanceToBootstrapRequired(
+                    channelId,
+                    buildGroupAuthorityObservation(channelId, null, dialable, allModules)
                 )
+                reconcileGroupBootstrap(channelId, local, dialable, allModules, authoritySnapshot)
                 return
             }
-            val inviteModuleIds = GroupMeshPlanner.inviteTargets(localModuleId, allModules)
-            if (inviteModuleIds.isEmpty()) return
-            val inviteEndpoints = inviteModuleIds.mapNotNull { endpointForDialableModule(it) }
-            if (inviteEndpoints.isEmpty()) return
+            GroupAuthorityState.AUTHORITY_INVALIDATED -> {
+                authoritySnapshot = groupChannelAuthority.advanceToBootstrapRequired(
+                    channelId,
+                    buildGroupAuthorityObservation(channelId, null, dialable, allModules)
+                )
+                reconcileGroupBootstrap(channelId, local, dialable, allModules, authoritySnapshot)
+                return
+            }
+            GroupAuthorityState.BOOTSTRAP_REQUIRED -> {
+                reconcileGroupBootstrap(channelId, local, dialable, allModules, authoritySnapshot)
+                return
+            }
+            GroupAuthorityState.VALID_PRIMARY -> {
+                session = groupSessionOnChannel(channelId) ?: return
+                if (!session.accepted || session.isForegroundSuspended()) return
+                reconcileGroupMeshMaintenance(channelId, session, dialable, allModules)
+            }
+        }
+    }
+
+    private fun groupSessionOnChannel(channelId: String): TalkbackSession? =
+        sessions.values.firstOrNull { it.channelId == channelId && it.type == SessionType.GROUP }
+
+    private fun resolveGroupAuthoritySnapshot(
+        channelId: String,
+        session: TalkbackSession?,
+        dialable: Set<ModuleId>,
+        allModules: Set<ModuleId>
+    ): com.talkback.core.session.GroupAuthoritySnapshot {
+        val current = groupChannelAuthority.snapshot(channelId)
+        if (current.state == GroupAuthorityState.STALE_PRIMARY) {
+            return current
+        }
+        if (current.state == GroupAuthorityState.AUTHORITY_INVALIDATED) {
+            return current
+        }
+        return groupChannelAuthority.evaluate(
+            channelId,
+            buildGroupAuthorityObservation(channelId, session, dialable, allModules)
+        )
+    }
+
+    private fun buildGroupAuthorityObservation(
+        channelId: String,
+        session: TalkbackSession?,
+        dialable: Set<ModuleId>,
+        allModules: Set<ModuleId>
+    ): GroupAuthorityObservation {
+        val candidate = resolveBootstrapPrimary(allModules) ?: localModuleId
+        val claimedRoster = session?.groupMembers?.map { it.moduleId.value }?.toSet().orEmpty()
+        val admittedPeers = session?.memberModules?.map { it.value }?.toSet().orEmpty()
+        val pendingJoinPeers = session?.id?.let { sessionId ->
+            pendingGroupJoinsBySession[sessionId].orEmpty().map { it.signal.from.moduleId.value }
+        }.orEmpty()
+        val rosterMeshGapPeers = claimedRoster.filter { peerId ->
+            peerId != localModuleId.value &&
+                peerId in dialable.map { it.value } &&
+                peerId !in admittedPeers
+        }
+        val peerPosture = buildMap<String, PeerBootstrapPostureEvidence> {
+            pendingJoinPeers
+                .filter { it in claimedRoster }
+                .forEach { put(it, PeerBootstrapPostureEvidence(joinIngressQueuedNoSession = true)) }
+            rosterMeshGapPeers.forEach { peerId ->
+                val existing = get(peerId)
+                put(
+                    peerId,
+                    PeerBootstrapPostureEvidence(
+                        joinIngressQueuedNoSession = existing?.joinIngressQueuedNoSession == true,
+                        waitingForPrimaryObserved = existing?.waitingForPrimaryObserved == true,
+                        rosterMeshIncompatible = true
+                    )
+                )
+            }
+        }
+        return GroupAuthorityObservation(
+            localModuleId = localModuleId,
+            bootstrapCandidate = candidate,
+            dialableRemoteModuleIds = dialable.map { it.value },
+            localSessionId = session?.id,
+            sessionTerminal = session?.let { !it.accepted } == true,
+            sessionIdentityValid = session?.let { isGroupSessionIdentityValid(it) } ?: true,
+            claimedRoster = claimedRoster,
+            peerBootstrapPosture = peerPosture,
+            activeBootstrapEmission = isActiveGroupBootstrapEmission(channelId),
+            joinOrientedMaintenanceActive = session != null,
+            peerCandidateBootstrapEmission = peerCandidateBootstrapEmission(allModules, candidate)
+        )
+    }
+
+    private fun isGroupSessionIdentityValid(session: TalkbackSession): Boolean =
+        session.accepted && !session.isForegroundSuspended()
+
+    private fun peerCandidateBootstrapEmission(
+        allModules: Set<ModuleId>,
+        localCandidate: ModuleId
+    ): ModuleId? {
+        if (!isActiveGroupBootstrapEmissionForPeer(localCandidate)) return null
+        return localCandidate
+    }
+
+    private fun isActiveGroupBootstrapEmission(channelId: String): Boolean {
+        val startedMs = activeBootstrapEmissionStartedMsByChannel[channelId] ?: return false
+        return System.currentTimeMillis() - startedMs <= GROUP_BOOTSTRAP_EMISSION_WINDOW_MS
+    }
+
+    private fun isActiveGroupBootstrapEmissionForPeer(candidate: ModuleId): Boolean =
+        candidate == localModuleId && activeBootstrapEmissionStartedMsByChannel.isNotEmpty()
+
+    private fun markActiveGroupBootstrapEmission(channelId: String) {
+        activeBootstrapEmissionStartedMsByChannel[channelId] = System.currentTimeMillis()
+    }
+
+    private fun clearActiveGroupBootstrapEmission(channelId: String) {
+        activeBootstrapEmissionStartedMsByChannel.remove(channelId)
+    }
+
+    private fun commitGroupChannelAuthorityInvalidation(channelId: String, session: TalkbackSession?) {
+        val result = groupChannelAuthority.commitAuthorityInvalidation(channelId)
+        val toInvalidate = session ?: result.oldSessionId?.let { sessions[it] }
+        if (toInvalidate != null) {
+            logicallyInvalidateGroupSession(toInvalidate)
+        }
+        log(
+            "GROUP_AUTHORITY_INVALIDATED ch=$channelId oldSession=${result.oldSessionId} " +
+                "clearedPending=${result.clearedPendingJoinCount}"
+        )
+    }
+
+    private fun logicallyInvalidateGroupSession(session: TalkbackSession) {
+        sessions.remove(session.id)
+        pendingGroupJoinsBySession.remove(session.id)
+        pendingIceBySession.remove(session.id)
+        releaseSessionMedia(session)
+        log("[${session.traceId}] Logically invalidated stale GROUP authority on ${session.channelId}")
+    }
+
+    private fun reconcileGroupBootstrap(
+        channelId: String,
+        local: EndpointAddress,
+        dialable: Set<ModuleId>,
+        allModules: Set<ModuleId>,
+        authoritySnapshot: com.talkback.core.session.GroupAuthoritySnapshot
+    ) {
+        val primary = resolveBootstrapPrimary(allModules)
+        if (primary != null && localModuleId != primary) {
+            log("Waiting for primary ${primary.value} to bootstrap GROUP on $channelId")
             observeGroupTransitionBootstrapAttempt(
                 channelId = channelId,
-                resolvedPrimary = primary?.value,
-                waitingForPrimary = false,
-                meshRecoveryState = "mesh_create"
+                resolvedPrimary = primary.value,
+                waitingForPrimary = true,
+                meshRecoveryState = "waiting_primary"
             )
-            runCatching {
-                meshCallInternal(
-                    local,
-                    inviteEndpoints,
-                    channelId,
-                    SessionType.GROUP,
-                    MeshSessionMode.GROUP,
-                    config.maxGroupModules
-                )
-            }.onFailure { log("reconcileGroupMesh bootstrap failed on $channelId: ${it.message}") }
             return
         }
+        if (!groupChannelAuthority.mayEmitBootstrap(authoritySnapshot, localModuleId)) {
+            return
+        }
+        val inviteModuleIds = GroupMeshPlanner.inviteTargets(localModuleId, allModules)
+        if (inviteModuleIds.isEmpty()) return
+        val inviteEndpoints = inviteModuleIds.mapNotNull { endpointForDialableModule(it) }
+        if (inviteEndpoints.isEmpty()) return
+        observeGroupTransitionBootstrapAttempt(
+            channelId = channelId,
+            resolvedPrimary = primary?.value,
+            waitingForPrimary = false,
+            meshRecoveryState = "mesh_create"
+        )
+        markActiveGroupBootstrapEmission(channelId)
+        runCatching {
+            meshCallInternal(
+                local,
+                inviteEndpoints,
+                channelId,
+                SessionType.GROUP,
+                MeshSessionMode.GROUP,
+                config.maxGroupModules
+            )
+        }.onSuccess { sessionId ->
+            if (sessionId != null) {
+                groupChannelAuthority.markRecovered(channelId, sessionId, localModuleId)
+                clearActiveGroupBootstrapEmission(channelId)
+            }
+        }.onFailure {
+            clearActiveGroupBootstrapEmission(channelId)
+            log("reconcileGroupMesh bootstrap failed on $channelId: ${it.message}")
+        }
+    }
 
-        if (!session.accepted || session.isForegroundSuspended()) return
-
+    private fun reconcileGroupMeshMaintenance(
+        channelId: String,
+        session: TalkbackSession,
+        dialable: Set<ModuleId>,
+        allModules: Set<ModuleId>
+    ) {
         val primary = resolveBootstrapPrimary(allModules)
         observeGroupTransitionPrimaryResolve(channelId, primary?.value)
         val missingPeers = dialable
@@ -12789,6 +13002,7 @@ class TalkbackCoordinator(
         private val MESH_RETRY_DELAYS_MS = longArrayOf(500L, 1500L, 3000L)
         private const val RESUME_MESH_RETRY_DELAY_MS = 1_500L
         private const val GROUP_MESH_RECONNECT_THROTTLE_MS = 2_000L
+        private const val GROUP_BOOTSTRAP_EMISSION_WINDOW_MS = 5_000L
         private const val BUSY_MESH_REPAIR_SUPPRESS_MS = 5_000L
         private val HOST_REJOIN_BACKOFF_MS = longArrayOf(2_000L, 5_000L, 10_000L)
         private val CONFERENCE_HOST_LINK_KICK_DELAYS_MS = longArrayOf(500L, 2_000L, 5_000L, 10_000L)

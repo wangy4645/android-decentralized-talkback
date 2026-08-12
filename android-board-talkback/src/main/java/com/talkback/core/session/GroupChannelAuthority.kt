@@ -40,13 +40,12 @@ class GroupChannelAuthority {
             return record.toSnapshot(channelId)
         }
 
-        if (observation.localSessionId != null &&
-            observation.sessionIdentityValid &&
-            isAuthorityHolder
-        ) {
+        if (observation.localSessionId != null && observation.sessionIdentityValid) {
             record.state = GroupAuthorityState.VALID_PRIMARY
             record.evidence = null
-            record.hadEstablishedAuthority = true
+            if (isAuthorityHolder) {
+                record.hadEstablishedAuthority = true
+            }
             return record.toSnapshot(channelId)
         }
 
@@ -220,8 +219,10 @@ class GroupChannelAuthority {
         if (!observation.joinOrientedMaintenanceActive) return false
 
         return observation.claimedRoster.any { peerId ->
-            peerId in observation.peerBootstrapPosture &&
-                observation.peerBootstrapPosture[peerId]?.joinIngressQueuedNoSession == true
+            val posture = observation.peerBootstrapPosture[peerId] ?: return@any false
+            posture.joinIngressQueuedNoSession ||
+                posture.waitingForPrimaryObserved ||
+                posture.rosterMeshIncompatible
         }
     }
 
@@ -371,7 +372,9 @@ data class GroupAuthorityObservation(
 
 data class PeerBootstrapPostureEvidence(
     val joinIngressQueuedNoSession: Boolean = false,
-    val waitingForPrimaryObserved: Boolean = false
+    val waitingForPrimaryObserved: Boolean = false,
+    /** Peer is in claimed roster but not admitted to local mesh membership. */
+    val rosterMeshIncompatible: Boolean = false
 )
 
 data class GroupAuthorityInvalidationResult(
