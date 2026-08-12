@@ -157,6 +157,8 @@ import com.talkback.core.model.MembershipContextExistenceQueryPayload
 import com.talkback.core.model.MembershipContextExistenceResponsePayload
 import com.talkback.core.model.TopologyDigest
 import com.talkback.core.session.GroupChannelAuthority
+import com.talkback.core.session.GroupJoinIngressDecision
+import com.talkback.core.session.JoinIngressContext
 import com.talkback.core.session.GroupAuthorityObservation
 import com.talkback.core.session.GroupAuthorityState
 import com.talkback.core.session.GroupMeshReconciler
@@ -1654,6 +1656,10 @@ class TalkbackCoordinator(
         pendingIceBySession.remove(sessionId)
         releaseSessionMedia(session)
         log("TEST_DROP_LOCAL_GROUP_SESSION session=$sessionId channel=${session.channelId}")
+    }
+
+    internal fun testPendingGroupJoinCount(sessionId: String): Int = runOnCoordinatorSync {
+        pendingGroupJoinsBySession[sessionId]?.size ?: 0
     }
 
     fun conferenceCall(
@@ -6468,6 +6474,52 @@ class TalkbackCoordinator(
                 )
             }
             return
+        }
+        if (incomingType == SessionType.GROUP && channelId != null) {
+            val ingressSession = sessions[signal.sessionId]
+            when (
+                evaluateGroupJoinIngress(
+                    channelId = channelId,
+                    sessionId = signal.sessionId,
+                    peerModuleId = signal.from.moduleId.value,
+                    localSession = ingressSession,
+                    queuedNoSession = ingressSession == null
+                )
+            ) {
+                GroupJoinIngressDecision.STALE_AUTHORITY_EVIDENCE_ONLY -> {
+                    log(
+                        "GROUP_JOIN stale_evidence: session=${signal.sessionId} " +
+                            "from=${signal.from.moduleId.value} channel=$channelId"
+                    )
+                    observeRecoveryOfferIngress(
+                        sessionId = signal.sessionId,
+                        remoteModuleId = signal.from.moduleId.value,
+                        remoteEndpointId = signal.from.endpointId.value,
+                        joinIntent = payload?.joinIntent?.name,
+                        decision = MediaRecoveryCausalTrace.OfferIngressDecision.DROP_OWNERSHIP_CONFLICT,
+                        detail = "STALE_AUTHORITY_EVIDENCE_ONLY channel=$channelId",
+                        payload = payload
+                    )
+                    return
+                }
+                GroupJoinIngressDecision.STALE_AUTHORITY_REJECTED -> {
+                    log(
+                        "GROUP_JOIN stale_rejected: session=${signal.sessionId} " +
+                            "from=${signal.from.moduleId.value} channel=$channelId"
+                    )
+                    observeRecoveryOfferIngress(
+                        sessionId = signal.sessionId,
+                        remoteModuleId = signal.from.moduleId.value,
+                        remoteEndpointId = signal.from.endpointId.value,
+                        joinIntent = payload?.joinIntent?.name,
+                        decision = MediaRecoveryCausalTrace.OfferIngressDecision.DROP_GLARE_REJECT_STALE,
+                        detail = "STALE_AUTHORITY_REJECTED channel=$channelId",
+                        payload = payload
+                    )
+                    return
+                }
+                GroupJoinIngressDecision.ACCEPT_OR_QUEUE_NORMAL -> Unit
+            }
         }
         val session = sessions[signal.sessionId]
         if (session == null) {
@@ -11756,6 +11808,38 @@ class TalkbackCoordinator(
         pendingIceBySession.remove(session.id)
         releaseSessionMedia(session)
         log("[${session.traceId}] Logically invalidated stale GROUP authority on ${session.channelId}")
+    }
+
+    private fun evaluateGroupJoinIngress(
+        channelId: String,
+        sessionId: String,
+        peerModuleId: String,
+        localSession: TalkbackSession?,
+        queuedNoSession: Boolean
+    ): GroupJoinIngressDecision {
+        val dialable = dialableRemoteModuleIds()
+        val allModules = dialable + localModuleId
+        val channelSession = groupSessionOnChannel(channelId)
+        val authoritySnapshot = resolveGroupAuthoritySnapshot(
+            channelId,
+            channelSession,
+            dialable,
+            allModules
+        )
+        val context = JoinIngressContext(
+            sessionId = sessionId,
+            authoritySnapshot = authoritySnapshot,
+            isKnownCurrentSession = localSession != null &&
+                localSession.type == SessionType.GROUP &&
+                localSession.channelId == channelId,
+            hasActiveBootstrapEmission = isActiveGroupBootstrapEmission(channelId)
+        )
+        return groupChannelAuthority.onJoinIngress(
+            channelId = channelId,
+            context = context,
+            peerModuleId = peerModuleId,
+            queuedNoSession = queuedNoSession
+        )
     }
 
     private fun reconcileGroupBootstrap(

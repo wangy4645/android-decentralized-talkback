@@ -125,20 +125,31 @@ class GroupChannelAuthority {
     fun mayPerformMaintenance(snapshot: GroupAuthoritySnapshot): Boolean =
         snapshot.state == GroupAuthorityState.VALID_PRIMARY
 
-    fun decideJoinIngress(
-        snapshot: GroupAuthoritySnapshot,
-        joinSessionId: String
-    ): GroupJoinIngressDecision = when (snapshot.state) {
-        GroupAuthorityState.STALE_PRIMARY -> GroupJoinIngressDecision.STALE_AUTHORITY_EVIDENCE_ONLY
-        GroupAuthorityState.AUTHORITY_INVALIDATED -> GroupJoinIngressDecision.STALE_AUTHORITY_REJECTED
-        GroupAuthorityState.BOOTSTRAP_REQUIRED -> {
-            if (snapshot.sessionId == null || joinSessionId != snapshot.sessionId) {
+    fun decideJoinIngress(context: JoinIngressContext): GroupJoinIngressDecision {
+        val snapshot = context.authoritySnapshot
+        val joinSessionId = context.sessionId
+        return when (snapshot.state) {
+            GroupAuthorityState.STALE_PRIMARY ->
+                GroupJoinIngressDecision.STALE_AUTHORITY_EVIDENCE_ONLY
+            GroupAuthorityState.AUTHORITY_INVALIDATED ->
                 GroupJoinIngressDecision.STALE_AUTHORITY_REJECTED
-            } else {
-                GroupJoinIngressDecision.ACCEPT_OR_QUEUE_NORMAL
+            GroupAuthorityState.BOOTSTRAP_REQUIRED -> {
+                if (snapshot.evidence?.invalidationCommitted == true) {
+                    GroupJoinIngressDecision.STALE_AUTHORITY_REJECTED
+                } else if (snapshot.sessionId != null && joinSessionId != snapshot.sessionId) {
+                    GroupJoinIngressDecision.STALE_AUTHORITY_REJECTED
+                } else {
+                    GroupJoinIngressDecision.ACCEPT_OR_QUEUE_NORMAL
+                }
+            }
+            GroupAuthorityState.VALID_PRIMARY -> {
+                if (snapshot.sessionId != null && joinSessionId != snapshot.sessionId) {
+                    GroupJoinIngressDecision.STALE_AUTHORITY_REJECTED
+                } else {
+                    GroupJoinIngressDecision.ACCEPT_OR_QUEUE_NORMAL
+                }
             }
         }
-        GroupAuthorityState.VALID_PRIMARY -> GroupJoinIngressDecision.ACCEPT_OR_QUEUE_NORMAL
     }
 
     /**
@@ -146,20 +157,19 @@ class GroupChannelAuthority {
      */
     fun onJoinIngress(
         channelId: String,
-        sessionId: String,
+        context: JoinIngressContext,
         peerModuleId: String,
         @Suppress("UNUSED_PARAMETER") queuedNoSession: Boolean
     ): GroupJoinIngressDecision {
-        val snapshot = snapshot(channelId)
-        val decision = decideJoinIngress(snapshot, sessionId)
+        val decision = decideJoinIngress(context)
         val record = recordFor(channelId)
         when (decision) {
             GroupJoinIngressDecision.STALE_AUTHORITY_EVIDENCE_ONLY -> {
                 record.peerJoinIngressQueuedNoSession.add(peerModuleId)
             }
             GroupJoinIngressDecision.ACCEPT_OR_QUEUE_NORMAL -> {
-                record.pendingJoinCountBySession[sessionId] =
-                    (record.pendingJoinCountBySession[sessionId] ?: 0) + 1
+                record.pendingJoinCountBySession[context.sessionId] =
+                    (record.pendingJoinCountBySession[context.sessionId] ?: 0) + 1
             }
             GroupJoinIngressDecision.STALE_AUTHORITY_REJECTED -> Unit
         }
@@ -382,6 +392,17 @@ data class GroupAuthorityInvalidationResult(
     val channelId: String,
     val oldSessionId: String?,
     val clearedPendingJoinCount: Int
+)
+
+/**
+ * Authority-aware JOIN ingress inputs (ADR-0053). Same [sessionId] may be accepted or rejected
+ * depending on [authoritySnapshot] — never infer authority from session lookup alone.
+ */
+data class JoinIngressContext(
+    val sessionId: String,
+    val authoritySnapshot: GroupAuthoritySnapshot,
+    val isKnownCurrentSession: Boolean,
+    val hasActiveBootstrapEmission: Boolean
 )
 
 enum class GroupJoinIngressDecision {

@@ -113,7 +113,12 @@ class GroupChannelAuthorityTest {
     fun stale_invalidation_clearsPendingJoins() {
         val auth = GroupChannelAuthority()
         auth.markRecovered(channelId, sessionId, m01)
-        auth.onJoinIngress(channelId, sessionId, "M02", queuedNoSession = false)
+        auth.onJoinIngress(
+            channelId,
+            joinCtx(auth, queuedNoSession = false),
+            "M02",
+            queuedNoSession = false
+        )
         assertEquals(1, auth.pendingJoinCount(channelId, sessionId))
 
         auth.evaluate(channelId, obs(m01, sessionIdentityValid = false))
@@ -123,10 +128,10 @@ class GroupChannelAuthorityTest {
     }
 
     @Test
-    fun stalePeriod_joinDoesNotEnterPending() {
+    fun t3_stalePeriodJoin_doesNotEnterPending() {
         val auth = GroupChannelAuthority()
         auth.markRecovered(channelId, sessionId, m01)
-        auth.evaluate(
+        val stale = auth.evaluate(
             channelId,
             obs(
                 m01,
@@ -135,7 +140,12 @@ class GroupChannelAuthorityTest {
                 joinOrientedMaintenance = true
             )
         )
-        val decision = auth.onJoinIngress(channelId, sessionId, "M02", queuedNoSession = true)
+        val decision = auth.onJoinIngress(
+            channelId,
+            joinCtx(auth, snapshot = stale, queuedNoSession = true),
+            "M02",
+            queuedNoSession = true
+        )
         assertEquals(GroupJoinIngressDecision.STALE_AUTHORITY_EVIDENCE_ONLY, decision)
         assertEquals(0, auth.pendingJoinCount(channelId, sessionId))
     }
@@ -146,9 +156,50 @@ class GroupChannelAuthorityTest {
         auth.markRecovered(channelId, sessionId, m01)
         auth.evaluate(channelId, obs(m01, sessionIdentityValid = false))
         auth.commitAuthorityInvalidation(channelId)
-        val decision = auth.onJoinIngress(channelId, sessionId, "M02", queuedNoSession = true)
+        val invalidated = auth.snapshot(channelId)
+        val decision = auth.onJoinIngress(
+            channelId,
+            joinCtx(auth, snapshot = invalidated, queuedNoSession = true),
+            "M02",
+            queuedNoSession = true
+        )
         assertEquals(GroupJoinIngressDecision.STALE_AUTHORITY_REJECTED, decision)
         assertEquals(0, auth.pendingJoinCount(channelId, sessionId))
+    }
+
+    @Test
+    fun postInvalidationBootstrap_rejectsJoinWithSameSessionId() {
+        val auth = GroupChannelAuthority()
+        auth.markRecovered(channelId, sessionId, m01)
+        auth.evaluate(channelId, obs(m01, sessionIdentityValid = false))
+        auth.commitAuthorityInvalidation(channelId)
+        val bootstrap = auth.advanceToBootstrapRequired(channelId, obs(m01, sessionId = null))
+        assertTrue(bootstrap.evidence?.invalidationCommitted == true)
+
+        val decision = auth.decideJoinIngress(
+            JoinIngressContext(
+                sessionId = sessionId,
+                authoritySnapshot = bootstrap,
+                isKnownCurrentSession = false,
+                hasActiveBootstrapEmission = false
+            )
+        )
+        assertEquals(GroupJoinIngressDecision.STALE_AUTHORITY_REJECTED, decision)
+    }
+
+    @Test
+    fun coldStartBootstrap_allowsJoinQueueWhenSessionAbsent() {
+        val auth = GroupChannelAuthority()
+        val bootstrap = auth.evaluate(channelId, obs(m01, sessionId = null))
+        val decision = auth.decideJoinIngress(
+            JoinIngressContext(
+                sessionId = sessionId,
+                authoritySnapshot = bootstrap,
+                isKnownCurrentSession = false,
+                hasActiveBootstrapEmission = false
+            )
+        )
+        assertEquals(GroupJoinIngressDecision.ACCEPT_OR_QUEUE_NORMAL, decision)
     }
 
     @Test
@@ -204,6 +255,20 @@ class GroupChannelAuthorityTest {
         assertEquals(GroupAuthorityState.BOOTSTRAP_REQUIRED, snap.state)
         assertTrue(auth.mayEmitBootstrap(snap, m01))
     }
+
+    private fun joinCtx(
+        auth: GroupChannelAuthority,
+        sessionId: String = this.sessionId,
+        snapshot: GroupAuthoritySnapshot? = null,
+        isKnownCurrentSession: Boolean = false,
+        hasActiveBootstrapEmission: Boolean = false,
+        @Suppress("UNUSED_PARAMETER") queuedNoSession: Boolean = true
+    ): JoinIngressContext = JoinIngressContext(
+        sessionId = sessionId,
+        authoritySnapshot = snapshot ?: auth.snapshot(channelId),
+        isKnownCurrentSession = isKnownCurrentSession,
+        hasActiveBootstrapEmission = hasActiveBootstrapEmission
+    )
 
     private fun obs(
         local: ModuleId,

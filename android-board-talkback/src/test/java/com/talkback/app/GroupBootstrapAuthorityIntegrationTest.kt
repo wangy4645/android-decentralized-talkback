@@ -209,4 +209,74 @@ class GroupBootstrapAuthorityIntegrationTest {
             isolatedM03.stop()
         }
     }
+
+    @Test
+    fun t10_invalidateRace_oldJoinRejectedNotDrainedToNewSession() {
+        val channelId = "BOOT-AUTH-T10"
+        val sessionId = nodeM01.runtime.groupCall(
+            nodeM01.localEndpoint,
+            listOf(EndpointAddress(m02, EndpointId("E01"))),
+            channelId
+        )
+        assertNotNull(sessionId)
+        assertTrue(nodeM02.waitForLog { it.contains("invite accepted") })
+
+        nodeM02.runtime.testDropLocalGroupSession(sessionId!!)
+        nodeM01.runtime.testSimulateGroupRosterMeshGap(sessionId, "M02")
+
+        nodeM02.runtime.testSendGroupJoinToPeer(
+            targetPort = 50021,
+            sessionId = sessionId,
+            channelId = channelId,
+            targetModuleId = "M01"
+        )
+        Thread.sleep(300L)
+        assertEquals(0, nodeM01.runtime.testPendingGroupJoinCount(sessionId))
+        assertTrue(
+            nodeM01.waitForLog(timeoutMs = 3_000L) {
+                it.contains("GROUP_JOIN stale_evidence")
+            }
+        )
+
+        val invalidateMark = synchronized(nodeM01.logs) { nodeM01.logs.size }
+        nodeM01.runtime.reconcileGroupMesh(channelId)
+        assertTrue(
+            nodeM01.waitForLogSince(invalidateMark, timeoutMs = 3_000L) {
+                it.contains("GROUP_AUTHORITY_INVALIDATED")
+            }
+        )
+        assertEquals(0, nodeM01.runtime.testPendingGroupJoinCount(sessionId))
+
+        nodeM02.runtime.testSendGroupJoinToPeer(
+            targetPort = 50021,
+            sessionId = sessionId,
+            channelId = channelId,
+            targetModuleId = "M01"
+        )
+        Thread.sleep(300L)
+        assertEquals(0, nodeM01.runtime.testPendingGroupJoinCount(sessionId))
+        assertTrue(
+            nodeM01.waitForLog(timeoutMs = 3_000L) {
+                it.contains("GROUP_JOIN stale_rejected")
+            }
+        )
+
+        val deadline = System.currentTimeMillis() + 8_000L
+        var recovered = false
+        while (System.currentTimeMillis() < deadline) {
+            if (nodeM01.runtime.sessionSnapshotForChannel(channelId) != null) {
+                recovered = true
+                break
+            }
+            nodeM01.runtime.reconcileGroupMesh(channelId)
+            Thread.sleep(50L)
+        }
+        assertTrue("GROUP session should recover via bootstrap INVITE path", recovered)
+        assertEquals(0, nodeM01.runtime.testPendingGroupJoinCount(sessionId))
+        assertTrue(
+            nodeM02.waitForLog(timeoutMs = 8_000L) {
+                it.contains("invite accepted") || it.contains("Group invite")
+            }
+        )
+    }
 }

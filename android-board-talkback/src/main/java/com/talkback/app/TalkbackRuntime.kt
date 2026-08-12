@@ -381,6 +381,9 @@ class TalkbackRuntime(
         runCatching { coordinator.testDropLocalGroupSession(sessionId) }
     }
 
+    internal fun testPendingGroupJoinCount(sessionId: String): Int =
+        runCatching { coordinator.testPendingGroupJoinCount(sessionId) }.getOrDefault(0)
+
     internal fun testSendGroupJoinToPeer(
         targetPort: Int,
         sessionId: String,
