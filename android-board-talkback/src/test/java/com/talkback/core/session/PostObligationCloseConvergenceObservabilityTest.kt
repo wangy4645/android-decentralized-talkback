@@ -224,17 +224,17 @@ class PostObligationCloseConvergenceObservabilityTest {
         assertTrue(
             "G-175-OBS-4: post-close ICE CONNECTED must emit RECOVERY_REEVALUATE",
             decisionLogs.any {
-                it.contains("RECOVERY_REEVALUATE") && it.contains("edge=M02")
+                it.contains("RECOVERY_REEVALUATE") &&
+                    it.contains("edge=M02") &&
+                    it.contains("trigger=ICE_CONNECTED")
             }
         )
         assertTrue(
-            "G-175-OBS-4: material transition must emit admission decision",
+            "G-175-OBS-4: material transition must emit admission decision with ICE_CONNECTED trigger",
             decisionLogs.any {
                 it.contains("RECOVERY_POST_CLOSE_ADMISSION_DECISION") &&
                     it.contains("edge=M02") &&
-                    (it.contains("decision=RESIDENCY_CLEAR_ADMITTED") ||
-                        it.contains("decision=ADMIT_SUCCESSOR") ||
-                        it.contains("decision=NO_ADMISSION"))
+                    it.contains("trigger=ICE_CONNECTED")
             }
         )
     }

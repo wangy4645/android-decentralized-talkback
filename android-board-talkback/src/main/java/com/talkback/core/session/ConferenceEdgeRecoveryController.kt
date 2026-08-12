@@ -2297,6 +2297,19 @@ class ConferenceEdgeRecoveryController internal constructor(
         )
     }
 
+  private fun runPostCloseMaterialReevaluation(record: EdgeRecoveryRecord) {
+        val key = record.key
+        onLog(
+            "RECOVERY_REEVALUATE session=${key.sessionId} edge=${key.remoteModuleId} " +
+                "attempt=${record.recoveryAttemptId} obligationGen=${record.obligationGeneration} " +
+                "trigger=${PostObligationCloseMaterialTransition.ICE_CONNECTED_TRIGGER}"
+        )
+        runPostObligationCloseConvergenceEval(
+            record = record,
+            trigger = PostObligationCloseMaterialTransition.ICE_CONNECTED_TRIGGER
+        )
+    }
+
     private fun runPostObligationCloseConvergenceEval(
         record: EdgeRecoveryRecord,
         trigger: String
@@ -3465,7 +3478,17 @@ class ConferenceEdgeRecoveryController internal constructor(
         // which MUST go through ADR-0045 ClearPolicy (ICE alone must not clear).
         if (!record.edgeObligationOpen()) {
             if (record.phase == EdgeRecoveryPhase.FAILED_MEDIA_RECOVERY) {
-                tryAdmitResidencyClear(record)
+                if (
+                    PostObligationCloseMaterialTransition.isIceConnectedMaterialForPostClose(
+                        record = record,
+                        iceConnected = isIceConnected(sessionId, remoteModuleId)
+                    )
+                ) {
+                    // #175 OBS-4: material ICE CONNECTED reopens post-close decision surface.
+                    runPostCloseMaterialReevaluation(record)
+                } else {
+                    tryAdmitResidencyClear(record)
+                }
                 return
             }
             record.phase = EdgeRecoveryPhase.CONNECTED
