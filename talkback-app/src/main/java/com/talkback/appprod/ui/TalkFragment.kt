@@ -170,6 +170,7 @@ class TalkFragment : Fragment() {
             bindActionTiles(view, state.conferenceMode)
         }
         if (state.conferenceMode) {
+            bindMeetingActionTileState(view, state)
             view.findViewById<TextView>(R.id.txtActionBroadcast).text =
                 if (state.conferenceMuted) {
                     getString(R.string.call_control_unmute)
@@ -447,13 +448,6 @@ class TalkFragment : Fragment() {
             broadcast.setOnClickListener {
                 lifecycleScope.launch {
                     when (viewModel.toggleMeetingMute()) {
-                        is PttDownResult.NoPeers, is PttDownResult.NoTeammates -> {
-                            Toast.makeText(
-                                requireContext(),
-                                R.string.meeting_tap_to_join,
-                                Toast.LENGTH_SHORT
-                            ).show()
-                        }
                         is PttDownResult.ServiceStopped -> {
                             Toast.makeText(
                                 requireContext(),
@@ -466,7 +460,7 @@ class TalkFragment : Fragment() {
                 }
             }
             monitor.setOnClickListener {
-                CallAudioRouteHelper.apply(requireContext(), CallAudioRoute.SPEAKER)
+                toggleMeetingSpeakerRoute(monitor)
             }
             emergency.setOnClickListener {
                 viewModel.requestMeetingScreen(MeetingNavigation.MEMBERS)
@@ -474,7 +468,14 @@ class TalkFragment : Fragment() {
             record.setOnClickListener {
                 viewModel.requestMeetingScreen(MeetingNavigation.OPTIONS)
             }
+            bindSpeakerTileAppearance(monitor)
         } else {
+            val broadcastTile = view.findViewById<View>(R.id.btnBroadcast)
+            broadcastTile.isEnabled = true
+            broadcastTile.alpha = 1f
+            monitor.isEnabled = true
+            monitor.alpha = 1f
+            monitor.setBackgroundResource(R.drawable.bg_action_tile)
             view.findViewById<TextView>(R.id.txtActionBroadcast).text =
                 getString(R.string.action_broadcast)
             txtMonitor.text = getString(R.string.action_monitor)
@@ -484,6 +485,42 @@ class TalkFragment : Fragment() {
             monitor.setOnClickListener { FeaturePlaceholderBottomSheet.showMonitor(this) }
             emergency.setOnClickListener { showEmergencyPlaceholder() }
             record.setOnClickListener { FeaturePlaceholderBottomSheet.showRecord(this) }
+        }
+    }
+
+    private fun bindMeetingActionTileState(view: View, state: TalkUiState) {
+        val broadcast = view.findViewById<View>(R.id.btnBroadcast)
+        val monitor = view.findViewById<View>(R.id.btnMonitor)
+        val muteEnabled = state.conferenceActive && !state.conferenceDisplay.mediaConnecting
+        broadcast.isEnabled = muteEnabled
+        broadcast.alpha = if (muteEnabled) 1f else 0.4f
+        bindSpeakerTileAppearance(monitor)
+    }
+
+    private fun toggleMeetingSpeakerRoute(monitor: View) {
+        val nextRoute = when (CallAudioRouteHelper.current()) {
+            CallAudioRoute.SPEAKER -> CallAudioRoute.EARPIECE
+            else -> CallAudioRoute.SPEAKER
+        }
+        CallAudioRouteHelper.apply(requireContext(), nextRoute)
+        bindSpeakerTileAppearance(monitor)
+        val messageRes = when (nextRoute) {
+            CallAudioRoute.SPEAKER -> R.string.meeting_audio_route_speaker_on
+            else -> R.string.meeting_audio_route_earpiece_on
+        }
+        Toast.makeText(requireContext(), messageRes, Toast.LENGTH_SHORT).show()
+    }
+
+    private fun bindSpeakerTileAppearance(monitor: View) {
+        val route = CallAudioRouteHelper.current()
+        val speakerSelected = route == CallAudioRoute.SPEAKER
+        monitor.setBackgroundResource(
+            if (speakerSelected) R.drawable.bg_action_tile_active else R.drawable.bg_action_tile
+        )
+        monitor.findViewById<TextView>(R.id.txtActionMonitor).text = if (speakerSelected) {
+            getString(R.string.call_audio_route_speaker)
+        } else {
+            getString(R.string.call_audio_route_earpiece)
         }
     }
 
