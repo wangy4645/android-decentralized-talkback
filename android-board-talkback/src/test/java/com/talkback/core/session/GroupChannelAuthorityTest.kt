@@ -180,6 +180,18 @@ class GroupChannelAuthorityTest {
     }
 
     @Test
+    fun advanceAfterInvalidation_doesNotReenterStaleOnNullSession() {
+        val auth = GroupChannelAuthority()
+        auth.markRecovered(channelId, sessionId, m01)
+        auth.evaluate(channelId, obs(m01, sessionIdentityValid = false))
+        auth.commitAuthorityInvalidation(channelId)
+        auth.advanceToBootstrapRequired(channelId, obs(m01, sessionId = null))
+        val snap = auth.evaluate(channelId, obs(m01, sessionId = null))
+        assertEquals(GroupAuthorityState.BOOTSTRAP_REQUIRED, snap.state)
+        assertFalse(snap.isStale)
+    }
+
+    @Test
     fun advanceToBootstrapRequired_allowsCandidateEmission() {
         val auth = GroupChannelAuthority()
         auth.markRecovered(channelId, sessionId, m01)

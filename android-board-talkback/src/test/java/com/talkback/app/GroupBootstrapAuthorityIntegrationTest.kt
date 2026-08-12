@@ -10,6 +10,7 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -49,6 +50,52 @@ class GroupBootstrapAuthorityIntegrationTest {
         nodeM01.stop()
         nodeM02.stop()
         nodeM03.stop()
+    }
+
+    @Test
+    fun t4a_staleReconcileTick_invalidatesWithoutBootstrapEmission() {
+        val channelId = "BOOT-AUTH-T4A"
+        val sessionId = nodeM01.runtime.groupCall(
+            nodeM01.localEndpoint,
+            listOf(EndpointAddress(m02, EndpointId("E01"))),
+            channelId
+        )
+        assertNotNull(sessionId)
+        assertTrue(nodeM02.waitForLog { it.contains("invite accepted") })
+
+        nodeM02.runtime.testDropLocalGroupSession(sessionId!!)
+        nodeM01.runtime.testSimulateGroupRosterMeshGap(sessionId, "M02")
+
+        val m01LogMark = synchronized(nodeM01.logs) { nodeM01.logs.size }
+        val m02LogMark = synchronized(nodeM02.logs) { nodeM02.logs.size }
+        nodeM01.runtime.reconcileGroupMesh(channelId)
+
+        assertTrue(
+            nodeM01.waitForLogSince(m01LogMark, timeoutMs = 3_000L) {
+                it.contains("GROUP_AUTHORITY_INVALIDATED")
+            }
+        )
+        assertNull(
+            "STALE tick must not re-establish GROUP session",
+            nodeM01.runtime.sessionSnapshotForChannel(channelId)
+        )
+        assertFalse(
+            nodeM02.waitForLogSince(m02LogMark, timeoutMs = 500L) {
+                it.contains("Group invite")
+            }
+        )
+
+        val deadline = System.currentTimeMillis() + 8_000L
+        var bootstrapped = false
+        while (System.currentTimeMillis() < deadline) {
+            nodeM01.runtime.reconcileGroupMesh(channelId)
+            if (nodeM01.runtime.sessionSnapshotForChannel(channelId) != null) {
+                bootstrapped = true
+                break
+            }
+            Thread.sleep(50L)
+        }
+        assertTrue("subsequent reconcile ticks should bootstrap GROUP session", bootstrapped)
     }
 
     @Test

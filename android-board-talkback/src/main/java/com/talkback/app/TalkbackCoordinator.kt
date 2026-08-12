@@ -11620,19 +11620,13 @@ class TalkbackCoordinator(
         when (authoritySnapshot.state) {
             GroupAuthorityState.STALE_PRIMARY -> {
                 commitGroupChannelAuthorityInvalidation(channelId, session)
-                authoritySnapshot = groupChannelAuthority.advanceToBootstrapRequired(
-                    channelId,
-                    buildGroupAuthorityObservation(channelId, null, dialable, allModules)
-                )
-                reconcileGroupBootstrap(channelId, local, dialable, allModules, authoritySnapshot)
                 return
             }
             GroupAuthorityState.AUTHORITY_INVALIDATED -> {
-                authoritySnapshot = groupChannelAuthority.advanceToBootstrapRequired(
+                groupChannelAuthority.advanceToBootstrapRequired(
                     channelId,
                     buildGroupAuthorityObservation(channelId, null, dialable, allModules)
                 )
-                reconcileGroupBootstrap(channelId, local, dialable, allModules, authoritySnapshot)
                 return
             }
             GroupAuthorityState.BOOTSTRAP_REQUIRED -> {

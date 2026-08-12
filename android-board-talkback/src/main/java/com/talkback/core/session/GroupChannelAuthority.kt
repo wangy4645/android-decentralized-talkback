@@ -66,6 +66,7 @@ class GroupChannelAuthority {
         val clearedPending = oldSessionId?.let { record.pendingJoinCountBySession.remove(it) } ?: 0
         record.sessionId = null
         record.state = GroupAuthorityState.AUTHORITY_INVALIDATED
+        record.hadEstablishedAuthority = false
         record.evidence = record.evidence?.copy(invalidationCommitted = true)
         return GroupAuthorityInvalidationResult(
             channelId = channelId,
