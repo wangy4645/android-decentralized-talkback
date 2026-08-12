@@ -300,8 +300,15 @@ class TalkbackRuntime(
     fun onlineModuleCount(): Int = runCatching { coordinator.onlineModuleCount() }.getOrElse { 0 }
     fun qosSummary(): String = runCatching { coordinator.qosSummary() }.getOrElse { "" }
 
+    fun qosSnapshotForModule(
+        scope: MediaBearerScope,
+        moduleId: String
+    ): com.talkback.core.qos.QosSnapshot? =
+        runCatching { coordinator.qosSnapshotForModule(scope, moduleId) }.getOrNull()
+
+    // TODO(ADR-0052): unscoped overload implies module->single qos; migrate callers to scope param.
     fun qosSnapshotForModule(moduleId: String): com.talkback.core.qos.QosSnapshot? =
-        runCatching { coordinator.qosSnapshotForModule(moduleId) }.getOrNull()
+        qosSnapshotForModule(MediaBearerScope.GROUP, moduleId)
 
     fun isCurrentSpeakerReachable(channelId: String): Boolean =
         runCatching { coordinator.isCurrentSpeakerReachable(channelId) }.getOrElse { false }
@@ -389,7 +396,15 @@ class TalkbackRuntime(
     fun onlineEndpoints() = endpointRegistry.allOnline()
 
     internal fun simulateRemoteIceState(remoteModuleId: String, state: String) {
-        coordinator.onIceStateChanged(remoteModuleId, state)
+        coordinator.onIceStateChanged(MediaBearerScope.GROUP, remoteModuleId, state)
+    }
+
+    internal fun simulateMeshIceState(
+        scope: MediaBearerScope,
+        remoteModuleId: String,
+        state: String
+    ) {
+        coordinator.onIceStateChanged(scope, remoteModuleId, state)
     }
 
     internal fun simulateUnicastIceState(sessionId: String, state: String) {

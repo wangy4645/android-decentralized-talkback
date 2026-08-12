@@ -20,7 +20,7 @@ class SessionMediaRegistryTest {
         val registry = SessionMediaRegistry(
             context,
             useStub = true,
-            onMeshIce = { _, _ -> },
+            onMeshIce = { _, _, _ -> },
             onUnicastIce = { _, _ -> }
         )
 
@@ -45,7 +45,7 @@ class SessionMediaRegistryTest {
         val registry = SessionMediaRegistry(
             context,
             useStub = true,
-            onMeshIce = { _, _ -> },
+            onMeshIce = { _, _, _ -> },
             onUnicastIce = { _, _ -> }
         )
 
@@ -65,7 +65,7 @@ class SessionMediaRegistryTest {
         val registry = SessionMediaRegistry(
             context,
             useStub = true,
-            onMeshIce = { _, _ -> },
+            onMeshIce = { _, _, _ -> },
             onUnicastIce = { _, _ -> }
         )
         registry.groupEngine("M02")
