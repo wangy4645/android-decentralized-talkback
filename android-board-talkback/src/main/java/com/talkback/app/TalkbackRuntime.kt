@@ -373,6 +373,34 @@ class TalkbackRuntime(
         runCatching { coordinator.reconcileGroupMesh(channelId) }
     }
 
+    internal fun testSimulateGroupRosterMeshGap(sessionId: String, peerModuleId: String) {
+        runCatching { coordinator.testSimulateGroupRosterMeshGap(sessionId, peerModuleId) }
+    }
+
+    internal fun testDropLocalGroupSession(sessionId: String) {
+        runCatching { coordinator.testDropLocalGroupSession(sessionId) }
+    }
+
+    internal fun testPendingGroupJoinCount(sessionId: String): Int =
+        runCatching { coordinator.testPendingGroupJoinCount(sessionId) }.getOrDefault(0)
+
+    internal fun testSendGroupJoinToPeer(
+        targetPort: Int,
+        sessionId: String,
+        channelId: String,
+        targetModuleId: String = "M01"
+    ) {
+        runCatching {
+            coordinator.testSendGroupJoinToPeer(
+                targetHost = "127.0.0.1",
+                targetPort = targetPort,
+                targetModuleId = targetModuleId,
+                sessionId = sessionId,
+                channelId = channelId
+            )
+        }
+    }
+
     fun refreshStaleConferenceSession(channelId: String) {
         runCatching { coordinator.refreshStaleConferenceSession(channelId) }
     }

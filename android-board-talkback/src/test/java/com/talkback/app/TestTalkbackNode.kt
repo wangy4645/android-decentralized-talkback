@@ -27,11 +27,12 @@ internal class TestTalkbackNode(
     meshNegotiationGraceMs: Long = 15_000L,
     edgeRecoveryAttemptBudgetMs: Long = 15_000L,
     edgeRecoveryObservationWindowMs: Long = 30_000L,
-    acquireReleaseTimeoutMs: Long = 500L
+    acquireReleaseTimeoutMs: Long = 500L,
+    discoveryService: FixedDiscoveryService? = null
 ) {
     val logs = mutableListOf<String>()
     val channel = InMemorySignalingChannel(hub, TEST_HOST, port)
-    private val discovery = FixedDiscoveryService(moduleId, allPeers)
+    private val discovery: FixedDiscoveryService = discoveryService ?: FixedDiscoveryService(moduleId, allPeers)
     val runtime: TalkbackRuntime = TalkbackRuntimeFactory.create(
         context = context,
         config = TalkbackRuntimeConfig(
