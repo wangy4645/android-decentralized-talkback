@@ -27,6 +27,10 @@ internal object RecoveryCompletionPolicy {
             reason: ObligationCloseReason,
             closeEvidence: String?
         )
+        fun onObligationEpisodeClosed(
+            record: EdgeRecoveryRecord,
+            reason: ObligationCloseReason
+        ) {}
     }
 
     fun evaluate(
@@ -152,6 +156,7 @@ internal object RecoveryCompletionPolicy {
             "RECOVERY_OBLIGATION_CLOSED session=${record.key.sessionId} " +
                 "remote=${record.key.remoteModuleId} reason=$reason"
         )
+        host.onObligationEpisodeClosed(record, reason)
     }
 
   private fun canClose(

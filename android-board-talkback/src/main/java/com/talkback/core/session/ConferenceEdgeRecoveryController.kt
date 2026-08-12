@@ -238,6 +238,10 @@ class ConferenceEdgeRecoveryController internal constructor(
             reason: ObligationCloseReason,
             closeEvidence: String?
         ) = this@ConferenceEdgeRecoveryController.logObligationCloseRequested(record, reason, closeEvidence)
+        override fun onObligationEpisodeClosed(
+            record: EdgeRecoveryRecord,
+            reason: ObligationCloseReason
+        ) = this@ConferenceEdgeRecoveryController.onObligationEpisodeClosed(record, reason)
     }
 
     init {
@@ -2268,8 +2272,6 @@ class ConferenceEdgeRecoveryController internal constructor(
                 "OBLIGATION_DEADLINE"
             )
             notifyChanged(key.sessionId)
-            // ADR-0045: post-close lifecycle response — evaluation trigger only (not inside closeObligation).
-            tryAdmitResidencyClear(current)
         }, delayMs, TimeUnit.MILLISECONDS)
         deadlineTimers[key] = future
     }
@@ -2277,6 +2279,62 @@ class ConferenceEdgeRecoveryController internal constructor(
     private fun cancelDeadline(key: ConferenceEdgeKey) {
         deadlineTimers.remove(key)?.cancel(false)
     }
+
+    /**
+     * #175: mandatory post-close convergence evaluation on active edge lifecycle.
+     * Fresh snapshot read → eval marker → admission decision → ADR-0045 clear (orthogonal).
+     */
+    private fun onObligationEpisodeClosed(
+        record: EdgeRecoveryRecord,
+        @Suppress("UNUSED_PARAMETER") reason: ObligationCloseReason
+    ) {
+        if (record.obligationClosedAtMs == null) return
+        val key = record.key
+        if (edges[key] == null) return
+        runPostObligationCloseConvergenceEval(
+            record = record,
+            trigger = "POST_OBLIGATION_CLOSE"
+        )
+    }
+
+    private fun runPostObligationCloseConvergenceEval(
+        record: EdgeRecoveryRecord,
+        trigger: String
+    ) {
+        val snapshot = readPostObligationCloseEdgeSnapshot(record)
+        PostObligationCloseConvergence.logPostObligationCloseEval(onLog, snapshot)
+        val (decision, reason) = PostObligationCloseAdmissionPolicy.evaluate(snapshot)
+        if (decision != PostObligationCloseAdmissionOutcome.NONE && reason != null) {
+            PostObligationCloseConvergence.logPostCloseAdmissionDecision(
+                log = onLog,
+                snapshot = snapshot,
+                decision = decision,
+                reason = reason,
+                trigger = trigger
+            )
+        }
+        // ADR-0045: residency clear evaluation after convergence eval + admission decision.
+        tryAdmitResidencyClear(record)
+    }
+
+    private fun readPostObligationCloseEdgeSnapshot(record: EdgeRecoveryRecord): PostObligationCloseEdgeSnapshot {
+        val key = record.key
+        return PostObligationCloseConvergence.readEdgeSnapshot(
+            record = record,
+            lifecycleActive = edges.containsKey(key),
+            iceConnected = isIceConnected(key.sessionId, key.remoteModuleId),
+            receivePathLive = isReceivePathLive(key.sessionId, key.remoteModuleId),
+            mediaUnavailable = isMediaUnavailable(key.sessionId, key.remoteModuleId),
+            membership = resolvePostCloseMembershipLabel(record)
+        )
+    }
+
+    private fun resolvePostCloseMembershipLabel(record: EdgeRecoveryRecord): String =
+        when {
+            record.phase == EdgeRecoveryPhase.CANCELLED -> "LEFT"
+            edges[record.key] == null -> "LEFT"
+            else -> "JOINED"
+        }
 
     /**
      * ADR-0045: assemble snapshot GATE/E4 facts and invoke [RecoveryResidencyClearPolicy].
