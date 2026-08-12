@@ -13,6 +13,7 @@ import java.util.concurrent.ConcurrentHashMap
  */
 class MediaSessionManager(
     private val factory: ModuleMediaEngineFactory,
+    private val onScopedMeshIce: ((MediaBearerScope, String, String) -> Unit)? = null,
     private val closedWaitTimeoutMs: Long = 3_000L,
     private val pollIntervalMs: Long = 10L,
     private val sleeper: (Long) -> Unit = { ms -> if (ms > 0) Thread.sleep(ms) },
@@ -116,6 +117,7 @@ class MediaSessionManager(
             pendingClosed.remove(moduleId)
         }
         logLifecycle(entry)
+        onScopedMeshIce?.invoke(entry.scope, moduleId, iceState)
     }
 
     fun mediaSessionReuseCount(): Int = reuseViolations

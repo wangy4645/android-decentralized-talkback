@@ -204,7 +204,9 @@ object TalkbackRuntimeFactory {
         val mediaRegistry = SessionMediaRegistry(
             context,
             mode == AudioEngineMode.STUB,
-            onMeshIce = { moduleId, state -> coordinator.onIceStateChanged(moduleId, state) },
+            onMeshIce = { scope, moduleId, state ->
+                coordinator.onIceStateChanged(scope, moduleId, state)
+            },
             onUnicastIce = { sessionId, state ->
                 coordinator.onIceStateChanged(MediaBearerScope.UNICAST, sessionId, state)
             }

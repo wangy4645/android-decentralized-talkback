@@ -13,7 +13,7 @@ import java.util.concurrent.ConcurrentHashMap
 class SessionMediaRegistry(
     context: Context,
     private val useStub: Boolean = false,
-    onMeshIce: (String, String) -> Unit,
+    onMeshIce: (MediaBearerScope, String, String) -> Unit,
     private val onUnicastIce: (String, String) -> Unit
 ) {
     private val appContext = context.applicationContext
@@ -24,9 +24,11 @@ class SessionMediaRegistry(
         lateinit var manager: MediaSessionManager
         val factory = ModuleMediaEngineFactory(appContext, useStub) { moduleId, state ->
             manager.onIceStateChanged(moduleId, state)
-            onMeshIce(moduleId, state)
         }
-        manager = MediaSessionManager(factory)
+        manager = MediaSessionManager(
+            factory = factory,
+            onScopedMeshIce = onMeshIce
+        )
         sessionManager = manager
     }
 
