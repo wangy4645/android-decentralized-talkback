@@ -150,6 +150,8 @@ import com.talkback.core.session.IdentityResolver
 import com.talkback.core.session.GroupMemberReachability
 import com.talkback.core.session.FormerAdmittedPeer
 import com.talkback.core.session.GroupE4RejoinAdmissionSupport
+import com.talkback.core.session.GroupBootstrapAdmissionSupport
+import com.talkback.core.session.BootstrapAdmissionIntent
 import com.talkback.core.session.GroupMembershipSupport
 import com.talkback.core.model.AuthorityDigestFreshness
 import com.talkback.core.model.AuthorityDigestObservation
@@ -205,6 +207,7 @@ import com.talkback.core.util.RecoveryNegotiationAuthority
 import com.talkback.core.util.RecoveryNegotiationObservation
 import com.talkback.core.util.RecoveryDeliveryFact
 import com.talkback.core.util.FloorTrace
+import com.talkback.core.util.GroupBootstrapAdmissionLog
 import com.talkback.core.util.GroupTransitionReadinessLog
 import com.talkback.core.util.MeetingRecoveryLog
 import com.talkback.core.util.D1IngressMissDebugInjection
@@ -966,6 +969,8 @@ class TalkbackCoordinator(
     private val staticPeers = CopyOnWriteArrayList<StaticPeerEntry>()
     private val reDialByRemoteModule = ConcurrentHashMap<String, ReDialRecord>()
     private val pendingGroupJoinsBySession = ConcurrentHashMap<String, MutableList<PendingGroupJoin>>()
+    /** #179 bootstrap admission intents (producer obligation; not membership). */
+    private val bootstrapAdmissionIntentsByKey = ConcurrentHashMap<String, BootstrapAdmissionIntent>()
     private val pendingConferenceInvitesByChannel = ConcurrentHashMap<String, PendingConferenceInvite>()
     /** Participant-side memory after voluntary conference leave (stable room rejoin). */
     private val lastRejoinableConferenceByChannel = ConcurrentHashMap<String, RejoinableConferenceRecord>()
@@ -1994,6 +1999,11 @@ class TalkbackCoordinator(
         newInvitees.forEach { remote ->
             session.memberModules.add(remote.moduleId)
             session.pendingInviteeEndpoints[remote.moduleId.value] = remote
+            registerBootstrapAdmissionIntentIfNew(
+                channelId = channelId,
+                moduleId = remote.moduleId.value,
+                reason = "DISCOVERED_NO_SESSION"
+            )
         }
         applyGroupTopology(session, session.groupMembers.size)
         val payloadBase = groupPayloadBase(session)
@@ -12097,6 +12107,61 @@ class TalkbackCoordinator(
     private fun isFormerlyAdmittedNotInCanonicalRoster(session: TalkbackSession, moduleId: String): Boolean =
         GroupE4RejoinAdmissionSupport.isFormerlyAdmittedNotInCanonicalRoster(session, moduleId)
 
+    private fun registerBootstrapAdmissionIntentIfNew(
+        channelId: String,
+        moduleId: String,
+        reason: String
+    ) {
+        val storageKey = GroupBootstrapAdmissionSupport.key(channelId, moduleId).storageKey()
+        val created = bootstrapAdmissionIntentsByKey.putIfAbsent(
+            storageKey,
+            GroupBootstrapAdmissionSupport.create(channelId, moduleId, reason)
+        )
+        if (created == null) {
+            GroupBootstrapAdmissionLog.intentCreated(channelId, moduleId, reason)
+        }
+    }
+
+    private fun observeBootstrapAdmissionInviteBlocked(envelope: SignalEnvelope) {
+        if (envelope.type != SignalType.GROUP_INVITE) return
+        val session = sessions[envelope.sessionId] ?: return
+        if (session.type != SessionType.GROUP) return
+        val channelId = session.channelId ?: return
+        val moduleId = envelope.to?.moduleId?.value ?: return
+        if (!GroupBootstrapAdmissionSupport.isBootstrapAdmissionPeer(session, moduleId)) return
+        val reason = bootstrapAdmissionWaitingReason(moduleId)
+        registerBootstrapAdmissionIntentIfNew(channelId, moduleId, "DISCOVERED_NO_SESSION")
+        bootstrapAdmissionIntentsByKey.compute(storageKey(channelId, moduleId)) { _, existing ->
+            val base = existing
+                ?: GroupBootstrapAdmissionSupport.create(channelId, moduleId, "DISCOVERED_NO_SESSION")
+            GroupBootstrapAdmissionSupport.markWaiting(base, reason)
+        }
+        GroupBootstrapAdmissionLog.intentWaiting(channelId, moduleId, reason)
+    }
+
+    private fun observeBootstrapAdmissionInviteIssued(envelope: SignalEnvelope) {
+        if (envelope.type != SignalType.GROUP_INVITE) return
+        val session = sessions[envelope.sessionId] ?: return
+        if (session.type != SessionType.GROUP) return
+        val channelId = session.channelId ?: return
+        val moduleId = envelope.to?.moduleId?.value ?: return
+        if (!GroupBootstrapAdmissionSupport.isBootstrapAdmissionPeer(session, moduleId)) return
+        bootstrapAdmissionIntentsByKey.compute(storageKey(channelId, moduleId)) { _, existing ->
+            val base = existing
+                ?: GroupBootstrapAdmissionSupport.create(channelId, moduleId, "DISCOVERED_NO_SESSION")
+            GroupBootstrapAdmissionSupport.markInviteSent(base, envelope.sessionId)
+        }
+        GroupBootstrapAdmissionLog.inviteIssued(channelId, moduleId, envelope.sessionId)
+    }
+
+    private fun storageKey(channelId: String, moduleId: String): String =
+        GroupBootstrapAdmissionSupport.key(channelId, moduleId).storageKey()
+
+    private fun bootstrapAdmissionWaitingReason(moduleId: String): String {
+        val edgeDetail = peerEdgeSignalingReadiness?.snapshot(moduleId)?.reason?.name
+        return if (edgeDetail != null) "WAITING_EDGE_NOT_READY:$edgeDetail" else "WAITING_EDGE_NOT_READY"
+    }
+
     private fun runE4RejoinAdmissionEvaluation(
         session: TalkbackSession,
         reachableModuleIds: Set<String>?
@@ -13575,13 +13640,18 @@ class TalkbackCoordinator(
                 "PEER_EDGE_CONTROL_BLOCKED type=${envelope.type} peer=$peerModuleId " +
                     "reason=${peerEdgeSignalingReadiness?.snapshot(peerModuleId)?.reason}"
             )
+            observeBootstrapAdmissionInviteBlocked(envelope)
             return false
         }
-        return runCatching {
+        val sent = runCatching {
             signalingChannel.send(target, envelope)
         }.onFailure {
             log("Signal send failed type=${envelope.type} err=${it.message}")
         }.isSuccess
+        if (sent && envelope.type == SignalType.GROUP_INVITE) {
+            observeBootstrapAdmissionInviteIssued(envelope)
+        }
+        return sent
     }
 
     /** INV-SIG-006: emit PeerInboundObserved only after authenticated accept + stamped generation. */
