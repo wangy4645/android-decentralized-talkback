@@ -55,6 +55,41 @@ class GroupBootstrapAdmissionSupportTest {
     }
 
     @Test
+    fun shouldSuppressGroupJoinFallback_whenIntentWaiting() {
+        val session = TalkbackSession(
+            id = "grp:CH-01",
+            local = EndpointAddress(ModuleId("M01"), EndpointId("E01")),
+            type = SessionType.GROUP,
+            channelId = "CH-01"
+        )
+        val waiting = GroupBootstrapAdmissionSupport.markWaiting(
+            GroupBootstrapAdmissionSupport.create("CH-01", "M02", "DISCOVERED_NO_SESSION"),
+            "WAITING_EDGE_NOT_READY:LOCAL_NOT_BIDIRECTIONAL"
+        )
+        assertTrue(
+            GroupBootstrapAdmissionSupport.shouldSuppressGroupJoinFallback(waiting, session, "M02")
+        )
+    }
+
+    @Test
+    fun shouldSuppressGroupJoinFallback_falseAfterAccepted() {
+        val session = TalkbackSession(
+            id = "grp:CH-01",
+            local = EndpointAddress(ModuleId("M01"), EndpointId("E01")),
+            type = SessionType.GROUP,
+            channelId = "CH-01"
+        ).apply {
+            groupMembers = listOf(EndpointAddress(ModuleId("M02"), EndpointId("E02")))
+        }
+        val accepted = GroupBootstrapAdmissionSupport.markAccepted(
+            GroupBootstrapAdmissionSupport.create("CH-01", "M02", "DISCOVERED_NO_SESSION")
+        )
+        assertFalse(
+            GroupBootstrapAdmissionSupport.shouldSuppressGroupJoinFallback(accepted, session, "M02")
+        )
+    }
+
+    @Test
     fun isBootstrapAdmissionPeer_falseWhenCanonical() {
         val m02 = EndpointAddress(ModuleId("M02"), EndpointId("E02"))
         val session = TalkbackSession(

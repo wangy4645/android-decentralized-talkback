@@ -53,6 +53,25 @@ object GroupBootstrapAdmissionSupport {
         updatedAtMs = nowMs
     )
 
+    private val unresolvedBootstrapStates = setOf(
+        BootstrapAdmissionIntentState.PENDING,
+        BootstrapAdmissionIntentState.WAITING_EDGE_READY,
+        BootstrapAdmissionIntentState.INVITE_SENT
+    )
+
+    /** Producer-side: unresolved bootstrap intent must not fall back to GROUP_JOIN. */
+    fun hasUnresolvedBootstrapAdmissionIntent(intent: BootstrapAdmissionIntent?): Boolean =
+        intent != null && intent.state in unresolvedBootstrapStates
+
+    fun shouldSuppressGroupJoinFallback(
+        intent: BootstrapAdmissionIntent?,
+        session: TalkbackSession,
+        moduleId: String
+    ): Boolean {
+        if (hasUnresolvedBootstrapAdmissionIntent(intent)) return true
+        return isBootstrapAdmissionPeer(session, moduleId)
+    }
+
     /** Bootstrap admission = pending invitee not yet in canonical roster. */
     fun isBootstrapAdmissionPeer(session: TalkbackSession, moduleId: String): Boolean =
         moduleId in session.pendingInviteeEndpoints &&

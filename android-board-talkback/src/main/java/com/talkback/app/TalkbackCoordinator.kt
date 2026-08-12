@@ -971,6 +971,8 @@ class TalkbackCoordinator(
     private val pendingGroupJoinsBySession = ConcurrentHashMap<String, MutableList<PendingGroupJoin>>()
     /** #179 bootstrap admission intents (producer obligation; not membership). */
     private val bootstrapAdmissionIntentsByKey = ConcurrentHashMap<String, BootstrapAdmissionIntent>()
+    /** Test-only: force peer-scoped control signaling blocked (GROUP_INVITE gate). */
+    private val testPeerControlSignalingBlocked = ConcurrentHashMap.newKeySet<String>()
     private val pendingConferenceInvitesByChannel = ConcurrentHashMap<String, PendingConferenceInvite>()
     /** Participant-side memory after voluntary conference leave (stable room rejoin). */
     private val lastRejoinableConferenceByChannel = ConcurrentHashMap<String, RejoinableConferenceRecord>()
@@ -1988,6 +1990,11 @@ class TalkbackCoordinator(
             val reconnect = invitees.filter { invitee ->
                 invitee.moduleId != local.moduleId &&
                     !isFormerlyAdmittedNotInCanonicalRoster(session, invitee.moduleId.value) &&
+                    !shouldSuppressBootstrapGroupJoinFallback(
+                        channelId,
+                        invitee.moduleId.value,
+                        session
+                    ) &&
                     invitee.moduleId.value in
                     GroupMembershipSupport.canonicalMemberModuleIds(session).map { it.value } &&
                     (meshIceState(MediaBearerScope.GROUP, invitee.moduleId.value) != "CONNECTED")
@@ -2031,7 +2038,7 @@ class TalkbackCoordinator(
             wireIceCallback(session, moduleId, engine)
             val offer = engine.createOffer()
             drainPendingIce(session.id, moduleId, engine)
-            sendSignal(
+            val invited = sendSignalHandoff(
                 peer,
                 buildSignedEnvelope(
                     SignalType.GROUP_INVITE,
@@ -2041,6 +2048,9 @@ class TalkbackCoordinator(
                     payloadBase.copy(sdp = offer).encode()
                 )
             )
+            if (!invited) {
+                return@forEach
+            }
             reDialByRemoteModule[moduleId] =
                 ReDialRecord(local, remote, channelId, session.groupMembers, SessionType.GROUP)
             sent++
@@ -2066,6 +2076,10 @@ class TalkbackCoordinator(
         var sent = 0
         reconnect.forEach { remote ->
             val moduleId = remote.moduleId.value
+            if (shouldSuppressBootstrapGroupJoinFallback(channelId, moduleId, session)) {
+                logBootstrapFallbackSuppressed(channelId, moduleId, "REMOTE_NO_SESSION")
+                return@forEach
+            }
             if (moduleId !in GroupMembershipSupport.canonicalMemberModuleIds(session).map { it.value }) {
                 return@forEach
             }
@@ -2358,12 +2372,19 @@ class TalkbackCoordinator(
 
         val payloadBase = groupPayloadBase(session)
         inviteTargets.forEach { remote ->
+            if (sessionType == SessionType.GROUP) {
+                registerBootstrapAdmissionIntentIfNew(
+                    channelId = channelId,
+                    moduleId = remote.moduleId.value,
+                    reason = "DISCOVERED_NO_SESSION"
+                )
+            }
             val peer = session.remotePeersByModule[remote.moduleId.value]!!
             val engine = acquireMeshEngine(session, remote.moduleId.value, forReconnect = false)
             wireIceCallback(session, remote.moduleId.value, engine)
             val offer = engine.createOffer()
             drainPendingIce(session.id, remote.moduleId.value, engine)
-            sendSignal(
+            sendSignalHandoff(
                 peer,
                 buildSignedEnvelope(
                     SignalType.GROUP_INVITE,
@@ -7490,6 +7511,9 @@ class TalkbackCoordinator(
             }
             promoteInviteeToCanonicalRoster(session, signal.from)
         }
+        session.channelId?.let { channelId ->
+            completeBootstrapAdmissionIntentIfPresent(channelId, moduleId)
+        }
         val existingIce = meshIceStateForSession(session, moduleId)
         if (IceConnectivity.isConnected(existingIce)) {
             session.remotePeersByModule.putIfAbsent(moduleId, fromPeer)
@@ -12118,8 +12142,24 @@ class TalkbackCoordinator(
             GroupBootstrapAdmissionSupport.create(channelId, moduleId, reason)
         )
         if (created == null) {
-            GroupBootstrapAdmissionLog.intentCreated(channelId, moduleId, reason)
+            logBootstrapIntentCreated(channelId, moduleId, reason)
         }
+    }
+
+    private fun logBootstrapIntentCreated(channelId: String, peerModuleId: String, reason: String) {
+        log(GroupBootstrapAdmissionLog.intentCreatedMessage(channelId, peerModuleId, reason))
+    }
+
+    private fun logBootstrapIntentWaiting(channelId: String, peerModuleId: String, reason: String) {
+        log(GroupBootstrapAdmissionLog.intentWaitingMessage(channelId, peerModuleId, reason))
+    }
+
+    private fun logBootstrapInviteIssued(channelId: String, peerModuleId: String, sessionId: String) {
+        log(GroupBootstrapAdmissionLog.inviteIssuedMessage(channelId, peerModuleId, sessionId))
+    }
+
+    private fun logBootstrapFallbackSuppressed(channelId: String, peerModuleId: String, reason: String) {
+        log(GroupBootstrapAdmissionLog.fallbackSuppressedMessage(channelId, peerModuleId, reason))
     }
 
     private fun observeBootstrapAdmissionInviteBlocked(envelope: SignalEnvelope) {
@@ -12128,7 +12168,7 @@ class TalkbackCoordinator(
         if (session.type != SessionType.GROUP) return
         val channelId = session.channelId ?: return
         val moduleId = envelope.to?.moduleId?.value ?: return
-        if (!GroupBootstrapAdmissionSupport.isBootstrapAdmissionPeer(session, moduleId)) return
+        if (!isBootstrapAdmissionObligation(channelId, moduleId, session)) return
         val reason = bootstrapAdmissionWaitingReason(moduleId)
         registerBootstrapAdmissionIntentIfNew(channelId, moduleId, "DISCOVERED_NO_SESSION")
         bootstrapAdmissionIntentsByKey.compute(storageKey(channelId, moduleId)) { _, existing ->
@@ -12136,7 +12176,7 @@ class TalkbackCoordinator(
                 ?: GroupBootstrapAdmissionSupport.create(channelId, moduleId, "DISCOVERED_NO_SESSION")
             GroupBootstrapAdmissionSupport.markWaiting(base, reason)
         }
-        GroupBootstrapAdmissionLog.intentWaiting(channelId, moduleId, reason)
+        logBootstrapIntentWaiting(channelId, moduleId, reason)
     }
 
     private fun observeBootstrapAdmissionInviteIssued(envelope: SignalEnvelope) {
@@ -12145,13 +12185,13 @@ class TalkbackCoordinator(
         if (session.type != SessionType.GROUP) return
         val channelId = session.channelId ?: return
         val moduleId = envelope.to?.moduleId?.value ?: return
-        if (!GroupBootstrapAdmissionSupport.isBootstrapAdmissionPeer(session, moduleId)) return
+        if (!isBootstrapAdmissionObligation(channelId, moduleId, session)) return
         bootstrapAdmissionIntentsByKey.compute(storageKey(channelId, moduleId)) { _, existing ->
             val base = existing
                 ?: GroupBootstrapAdmissionSupport.create(channelId, moduleId, "DISCOVERED_NO_SESSION")
             GroupBootstrapAdmissionSupport.markInviteSent(base, envelope.sessionId)
         }
-        GroupBootstrapAdmissionLog.inviteIssued(channelId, moduleId, envelope.sessionId)
+        logBootstrapInviteIssued(channelId, moduleId, envelope.sessionId)
     }
 
     private fun storageKey(channelId: String, moduleId: String): String =
@@ -12160,6 +12200,47 @@ class TalkbackCoordinator(
     private fun bootstrapAdmissionWaitingReason(moduleId: String): String {
         val edgeDetail = peerEdgeSignalingReadiness?.snapshot(moduleId)?.reason?.name
         return if (edgeDetail != null) "WAITING_EDGE_NOT_READY:$edgeDetail" else "WAITING_EDGE_NOT_READY"
+    }
+
+    private fun bootstrapAdmissionIntent(channelId: String, moduleId: String): BootstrapAdmissionIntent? =
+        bootstrapAdmissionIntentsByKey[storageKey(channelId, moduleId)]
+
+    private fun isBootstrapAdmissionObligation(
+        channelId: String,
+        moduleId: String,
+        session: TalkbackSession
+    ): Boolean =
+        bootstrapAdmissionIntent(channelId, moduleId) != null ||
+            GroupBootstrapAdmissionSupport.isBootstrapAdmissionPeer(session, moduleId)
+
+    private fun shouldSuppressBootstrapGroupJoinFallback(
+        channelId: String,
+        moduleId: String,
+        session: TalkbackSession
+    ): Boolean = GroupBootstrapAdmissionSupport.shouldSuppressGroupJoinFallback(
+        bootstrapAdmissionIntent(channelId, moduleId),
+        session,
+        moduleId
+    )
+
+    private fun completeBootstrapAdmissionIntentIfPresent(channelId: String, moduleId: String) {
+        bootstrapAdmissionIntentsByKey.compute(storageKey(channelId, moduleId)) { _, existing ->
+            existing?.let { GroupBootstrapAdmissionSupport.markAccepted(it) }
+        }
+    }
+
+    internal fun testBlockPeerControlSignaling(moduleId: String, blocked: Boolean = true) = runOnCoordinator {
+        if (blocked) {
+            testPeerControlSignalingBlocked.add(moduleId)
+        } else {
+            testPeerControlSignalingBlocked.remove(moduleId)
+        }
+    }
+
+    internal fun testTriggerGroupMeshReconnect(sessionId: String, moduleId: String): Int = runOnCoordinatorSync {
+        val session = sessions[sessionId] ?: return@runOnCoordinatorSync 0
+        val remote = session.groupMembers.find { it.moduleId.value == moduleId } ?: return@runOnCoordinatorSync 0
+        reconnectExistingGroupMeshPeers(session, listOf(remote))
     }
 
     private fun runE4RejoinAdmissionEvaluation(
@@ -13630,6 +13711,13 @@ class TalkbackCoordinator(
      */
     private fun sendSignalHandoff(target: PeerTarget, envelope: SignalEnvelope): Boolean {
         val peerModuleId = envelope.to?.moduleId?.value
+        if (peerModuleId != null && peerModuleId in testPeerControlSignalingBlocked &&
+            PeerControlSignalingAdmission.isHardGatedControl(envelope.type)
+        ) {
+            log("PEER_EDGE_CONTROL_BLOCKED type=${envelope.type} peer=$peerModuleId reason=TEST_BLOCKED")
+            observeBootstrapAdmissionInviteBlocked(envelope)
+            return false
+        }
         if (peerModuleId != null &&
             !PeerControlSignalingAdmission.maySendNewControl(
                 type = envelope.type,

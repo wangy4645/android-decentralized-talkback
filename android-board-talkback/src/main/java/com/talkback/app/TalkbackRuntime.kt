@@ -415,6 +415,13 @@ class TalkbackRuntime(
     internal fun testPendingGroupJoinCount(sessionId: String): Int =
         runCatching { coordinator.testPendingGroupJoinCount(sessionId) }.getOrDefault(0)
 
+    internal fun testBlockPeerControlSignaling(moduleId: String, blocked: Boolean = true) {
+        runCatching { coordinator.testBlockPeerControlSignaling(moduleId, blocked) }
+    }
+
+    internal fun testTriggerGroupMeshReconnect(sessionId: String, moduleId: String): Int =
+        runCatching { coordinator.testTriggerGroupMeshReconnect(sessionId, moduleId) }.getOrDefault(0)
+
     internal fun testSendGroupJoinToPeer(
         targetPort: Int,
         sessionId: String,
