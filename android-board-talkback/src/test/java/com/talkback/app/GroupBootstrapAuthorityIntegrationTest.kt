@@ -234,7 +234,7 @@ class GroupBootstrapAuthorityIntegrationTest {
         assertEquals(0, nodeM01.runtime.testPendingGroupJoinCount(sessionId))
         assertTrue(
             nodeM01.waitForLog(timeoutMs = 3_000L) {
-                it.contains("GROUP_JOIN stale_evidence")
+                it.contains("joinIngressDecision=STALE_AUTHORITY_EVIDENCE_ONLY")
             }
         )
 
@@ -257,7 +257,7 @@ class GroupBootstrapAuthorityIntegrationTest {
         assertEquals(0, nodeM01.runtime.testPendingGroupJoinCount(sessionId))
         assertTrue(
             nodeM01.waitForLog(timeoutMs = 3_000L) {
-                it.contains("GROUP_JOIN stale_rejected")
+                it.contains("joinIngressDecision=STALE_AUTHORITY_REJECTED")
             }
         )
 

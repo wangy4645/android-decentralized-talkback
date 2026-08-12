@@ -6487,9 +6487,11 @@ class TalkbackCoordinator(
                 )
             ) {
                 GroupJoinIngressDecision.STALE_AUTHORITY_EVIDENCE_ONLY -> {
-                    log(
-                        "GROUP_JOIN stale_evidence: session=${signal.sessionId} " +
-                            "from=${signal.from.moduleId.value} channel=$channelId"
+                    logGroupJoinIngressDecision(
+                        decision = GroupJoinIngressDecision.STALE_AUTHORITY_EVIDENCE_ONLY,
+                        sessionId = signal.sessionId,
+                        fromModuleId = signal.from.moduleId.value,
+                        channelId = channelId
                     )
                     observeRecoveryOfferIngress(
                         sessionId = signal.sessionId,
@@ -6503,9 +6505,11 @@ class TalkbackCoordinator(
                     return
                 }
                 GroupJoinIngressDecision.STALE_AUTHORITY_REJECTED -> {
-                    log(
-                        "GROUP_JOIN stale_rejected: session=${signal.sessionId} " +
-                            "from=${signal.from.moduleId.value} channel=$channelId"
+                    logGroupJoinIngressDecision(
+                        decision = GroupJoinIngressDecision.STALE_AUTHORITY_REJECTED,
+                        sessionId = signal.sessionId,
+                        fromModuleId = signal.from.moduleId.value,
+                        channelId = channelId
                     )
                     observeRecoveryOfferIngress(
                         sessionId = signal.sessionId,
@@ -6526,7 +6530,12 @@ class TalkbackCoordinator(
             pendingGroupJoinsBySession
                 .getOrPut(signal.sessionId) { mutableListOf() }
                 .add(PendingGroupJoin(signal, fromPeer))
-            log("GROUP_JOIN queued: session=${signal.sessionId} from=${signal.from.moduleId.value}")
+            logGroupJoinIngressDecision(
+                decisionLabel = "QUEUED_NO_SESSION",
+                sessionId = signal.sessionId,
+                fromModuleId = signal.from.moduleId.value,
+                channelId = payload?.channelId
+            )
             observeRecoveryOfferIngress(
                 sessionId = signal.sessionId,
                 remoteModuleId = signal.from.moduleId.value,
@@ -6538,7 +6547,29 @@ class TalkbackCoordinator(
             )
             return
         }
+        if (session.type == SessionType.GROUP) {
+            logGroupJoinIngressDecision(
+                decisionLabel = "ACCEPT",
+                sessionId = signal.sessionId,
+                fromModuleId = signal.from.moduleId.value,
+                channelId = session.channelId
+            )
+        }
         acceptGroupJoin(session, signal, fromPeer)
+    }
+
+    private fun logGroupJoinIngressDecision(
+        sessionId: String,
+        fromModuleId: String,
+        channelId: String?,
+        decision: GroupJoinIngressDecision? = null,
+        decisionLabel: String? = null
+    ) {
+        val label = decisionLabel ?: decision?.name ?: "UNKNOWN"
+        log(
+            "GROUP_JOIN joinIngressDecision=$label session=$sessionId from=$fromModuleId" +
+                (channelId?.let { " channel=$it" }.orEmpty())
+        )
     }
 
     /** 4.3-D-1: observation only — never gates accept/drop. */
