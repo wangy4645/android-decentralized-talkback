@@ -117,19 +117,35 @@ class MeetingFragment : Fragment() {
             .commit()
     }
 
+    fun clearSubPagesBeforeDismiss() {
+        while (childFragmentManager.backStackEntryCount > 0) {
+            childFragmentManager.popBackStackImmediate()
+        }
+        view?.findViewById<FrameLayout>(R.id.meetingSubContainer)?.isVisible = false
+    }
+
     fun hideSubPage() {
         val container = view?.findViewById<FrameLayout>(R.id.meetingSubContainer) ?: return
         if (childFragmentManager.backStackEntryCount > 0) {
             childFragmentManager.popBackStack()
         }
         container.post {
-            container.isVisible = childFragmentManager.backStackEntryCount > 0
+            val hasSubPage = childFragmentManager.backStackEntryCount > 0
+            container.isVisible = hasSubPage
+            if (!hasSubPage && isNavigationOnlyOverlay(viewModel.uiState.value)) {
+                minimizeMeeting()
+            }
         }
     }
 
+    private fun isNavigationOnlyOverlay(state: TalkUiState): Boolean =
+        !state.conferenceActive &&
+            pendingNavigation != MeetingNavigation.MAIN &&
+            state.incomingMeetingInvite == null
+
     private fun maybeHandlePendingNavigation(state: TalkUiState) {
         if (navigationHandled || pendingNavigation == MeetingNavigation.MAIN) return
-        if (!state.conferenceDisplay.live) return
+        if (!isNavigationOnlyOverlay(state) && !state.conferenceDisplay.live) return
         navigationHandled = true
         when (pendingNavigation) {
             MeetingNavigation.MEMBERS -> showSubPage(MeetingMembersFragment())
@@ -141,6 +157,10 @@ class MeetingFragment : Fragment() {
 
     fun handleMeetingBack() {
         val state = viewModel.uiState.value
+        if (isNavigationOnlyOverlay(state)) {
+            minimizeMeeting()
+            return
+        }
         val display = state.conferenceDisplay
         if (display.mediaConnecting && !viewModel.isConferenceHost() && state.conferenceActive) {
             leaveMeeting()
@@ -197,10 +217,14 @@ class MeetingFragment : Fragment() {
             getString(R.string.meeting_channel_title, state.channelTitle)
         view.findViewById<TextView>(R.id.txtMeetingSubtitle).text = state.channelSubtitle
         val display = state.conferenceDisplay
+        val navigationOnly = isNavigationOnlyOverlay(state)
         val live = display.live
-        val connecting = display.showConnectingPanel
-        val recovering = display.recovering
+        val connecting = !navigationOnly && display.showConnectingPanel
+        val recovering = !navigationOnly && display.recovering
         val muted = state.conferenceMuted
+
+        view.findViewById<TextView>(R.id.txtMeetingStatusPill).isVisible = !navigationOnly
+        view.findViewById<TextView>(R.id.txtMeetingTimer).isVisible = !navigationOnly
 
         view.findViewById<View>(R.id.panelMeetingConnecting).isVisible = connecting
         view.findViewById<View>(R.id.panelMeetingLive).isVisible = live

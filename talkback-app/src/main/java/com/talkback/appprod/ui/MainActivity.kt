@@ -448,7 +448,9 @@ class MainActivity : AppCompatActivity() {
 
     fun dismissMeetingOverlay() {
         val fm = supportFragmentManager
-        val existing = fm.findFragmentByTag(MeetingFragment.TAG_MEETING) ?: run {
+        val existing = fm.findFragmentByTag(MeetingFragment.TAG_MEETING) as? MeetingFragment
+        existing?.clearSubPagesBeforeDismiss()
+        val meeting = fm.findFragmentByTag(MeetingFragment.TAG_MEETING) ?: run {
             findViewById<View>(R.id.meetingOverlayContainer).isVisible = false
             findViewById<View>(R.id.bottomNav).isVisible = true
             talkViewModel.resetTalkTabToPtt()
@@ -456,7 +458,7 @@ class MainActivity : AppCompatActivity() {
         }
         fm.commit {
             setReorderingAllowed(true)
-            remove(existing)
+            remove(meeting)
         }
         findViewById<View>(R.id.meetingOverlayContainer).isVisible = false
         findViewById<View>(R.id.bottomNav).isVisible = true

@@ -5,7 +5,7 @@ import com.talkback.core.session.ChannelMode
 /**
  * Issue: Conference runtime resurrected after termination — caller / mode authority diagnostics.
  *
- * Grep: `JOIN_MEETING_TRACE` | `CHANNEL_MODE`
+ * Grep: `JOIN_MEETING_TRACE` | `OPEN_MEETING_OPTIONS` | `ADMISSION_INTENT_RECEIVED` | `CHANNEL_MODE`
  */
 object ChannelObservabilityLog {
     private const val STACK_SKIP = 4
@@ -26,8 +26,51 @@ object ChannelObservabilityLog {
         }
     }
 
+    fun admissionIntentReceived(
+        intent: String,
+        channelId: String,
+        conferenceSessionActive: Boolean,
+        localModuleId: String? = null
+    ) {
+        log(
+            buildString {
+                append("ADMISSION_INTENT_RECEIVED")
+                append(" intent=").append(intent)
+                append(" ch=").append(channelId)
+                append(" conferenceSessionActive=").append(conferenceSessionActive)
+                localModuleId?.let { append(" localModuleId=").append(it) }
+                append(" caller=").append(callerFrame())
+            }
+        )
+    }
+
+    fun meetingNavigationTrace(
+        target: String,
+        channelId: String,
+        conferenceSessionActive: Boolean,
+        localModuleId: String? = null
+    ) {
+        val event = when (target) {
+            "OPTIONS" -> "OPEN_MEETING_OPTIONS"
+            "MEMBERS" -> "OPEN_MEETING_MEMBERS"
+            "MAIN" -> "OPEN_MEETING_MAIN"
+            "INVITE" -> "OPEN_MEETING_INVITE"
+            else -> "NAVIGATE_MEETING_$target"
+        }
+        log(
+            buildString {
+                append(event)
+                append(" target=").append(target)
+                append(" ch=").append(channelId)
+                append(" conferenceSessionActive=").append(conferenceSessionActive)
+                localModuleId?.let { append(" localModuleId=").append(it) }
+                append(" caller=").append(callerFrame())
+            }
+        )
+    }
+
     fun joinMeetingTrace(
-        reason: String,
+        intent: String,
         channelId: String,
         talkTabMode: String,
         meetingPreferred: Boolean?,
@@ -47,7 +90,7 @@ object ChannelObservabilityLog {
             buildString {
                 append("JOIN_MEETING_TRACE")
                 append(" phase=").append(phase)
-                append(" reason=").append(reason)
+                append(" intent=").append(intent)
                 append(" ch=").append(channelId)
                 append(" userAction=").append(userAction)
                 localModuleId?.let { append(" localModuleId=").append(it) }

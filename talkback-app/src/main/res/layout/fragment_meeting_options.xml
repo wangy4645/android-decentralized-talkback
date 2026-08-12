@@ -9,109 +9,59 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical"
-        android:paddingHorizontal="16dp"
-        android:paddingTop="8dp"
-        android:paddingBottom="12dp">
+        android:padding="@dimen/settings_subpage_padding">
 
-        <include
-            android:id="@+id/toolbarOptions"
-            layout="@layout/include_settings_toolbar" />
+        <include layout="@layout/include_settings_toolbar" />
 
         <TextView
             style="@style/SettingsSectionLabel"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:text="MEETING CONTROL" />
+            android:text="@string/meeting_control_section"
+            android:textColor="@color/tb_text_muted" />
 
-        <TextView
-            android:id="@+id/rowMuteAll"
-            style="@style/SettingsRowTitle"
+        <LinearLayout
+            android:id="@+id/groupMeetingControl"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:background="@drawable/bg_card"
-            android:padding="14dp"
-            android:text="@string/meeting_mute_all" />
-
-        <com.google.android.material.switchmaterial.SwitchMaterial
-            android:id="@+id/switchLockMeeting"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:background="@drawable/bg_card"
-            android:padding="14dp"
-            android:text="@string/meeting_lock" />
-
-        <TextView
-            android:id="@+id/rowEndForAll"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:background="@drawable/bg_card"
-            android:padding="14dp"
-            android:text="@string/meeting_end_for_all"
-            android:textColor="@color/tb_danger"
-            android:textSize="14sp" />
+            android:orientation="vertical" />
 
         <TextView
             style="@style/SettingsSectionLabel"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:text="@string/meeting_audio_settings" />
+            android:layout_marginTop="14dp"
+            android:text="@string/meeting_audio_settings"
+            android:textColor="@color/tb_text_muted" />
 
-        <com.google.android.material.switchmaterial.SwitchMaterial
-            android:id="@+id/switchAutoGain"
+        <LinearLayout
+            android:id="@+id/groupAudio"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:background="@drawable/bg_card"
-            android:padding="14dp"
-            android:text="@string/meeting_auto_gain" />
-
-        <com.google.android.material.switchmaterial.SwitchMaterial
-            android:id="@+id/switchNoiseSuppression"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:background="@drawable/bg_card"
-            android:padding="14dp"
-            android:text="@string/meeting_noise_suppression" />
-
-        <TextView
-            android:id="@+id/rowMeetingInfo"
-            style="@style/SettingsRowTitle"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:background="@drawable/bg_card"
-            android:padding="14dp"
-            android:text="@string/meeting_info_title" />
+            android:orientation="vertical" />
 
         <TextView
             style="@style/SettingsSectionLabel"
+            android:layout_marginTop="14dp"
+            android:text="@string/meeting_info_title"
+            android:textColor="@color/tb_text_muted" />
+
+        <LinearLayout
+            android:id="@+id/groupInfo"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:text="@string/meeting_participants_section" />
+            android:background="@drawable/bg_card"
+            android:orientation="vertical" />
 
         <TextView
-            android:id="@+id/rowMeetingMembers"
-            style="@style/SettingsRowTitle"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:background="@drawable/bg_card"
-            android:padding="14dp"
-            android:text="@string/meeting_members_title" />
+            style="@style/SettingsSectionLabel"
+            android:layout_marginTop="14dp"
+            android:text="@string/meeting_participants_section"
+            android:textColor="@color/tb_text_muted" />
 
-        <TextView
-            android:id="@+id/rowInviteMembers"
-            style="@style/SettingsRowTitle"
+        <LinearLayout
+            android:id="@+id/groupParticipants"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
             android:background="@drawable/bg_card"
-            android:padding="14dp"
-            android:text="@string/meeting_invite_members" />
+            android:orientation="vertical" />
     </LinearLayout>
 </ScrollView>

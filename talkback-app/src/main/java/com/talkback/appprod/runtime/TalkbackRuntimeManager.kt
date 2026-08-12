@@ -599,7 +599,17 @@ class TalkbackRuntimeManager(private val appContext: Context) {
 
     fun endMeetingForAll(config: AppConfig) {
         val session = activeChannelSession(config) ?: return
-        hangupCall(session.sessionId)
+        if (session.type == SessionType.CONFERENCE) {
+            runCatching {
+                runtime?.leaveConference(
+                    session.sessionId,
+                    "HOST_END_FOR_ALL",
+                    "TalkbackRuntimeManager.endMeetingForAll"
+                )
+            }
+        } else {
+            hangupCall(session.sessionId)
+        }
     }
 
     fun setCallMuted(sessionId: String, muted: Boolean, reason: String = "unspecified") {

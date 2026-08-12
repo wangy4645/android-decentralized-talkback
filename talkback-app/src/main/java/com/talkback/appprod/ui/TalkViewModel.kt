@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.talkback.app.TalkbackSessionSnapshot
 import com.talkback.appprod.R
+import com.talkback.appprod.conference.JoinMeetingIntent
 import com.talkback.appprod.TalkbackApp
 import com.talkback.appprod.data.AppConfig
 import com.talkback.appprod.data.AppConfigStore
@@ -432,14 +433,33 @@ class TalkViewModel(
     }
 
     fun requestMeetingScreen(target: MeetingNavigation = MeetingNavigation.MAIN) {
+        val config = configStore.load()
+        val conferenceSessionActive =
+            manager.activeChannelSession(config)?.type == SessionType.CONFERENCE
+        ChannelObservabilityLog.meetingNavigationTrace(
+            target = target.name,
+            channelId = config.defaultChannelId,
+            conferenceSessionActive = conferenceSessionActive,
+            localModuleId = config.moduleId.trim().uppercase()
+        )
         viewModelScope.launch {
             _openMeetingEvents.emit(target)
         }
     }
 
-    private fun traceJoinMeetingIntent(config: AppConfig, reason: String, conferenceSessionActive: Boolean) {
+    private fun traceJoinMeetingIntent(
+        config: AppConfig,
+        intent: JoinMeetingIntent,
+        conferenceSessionActive: Boolean
+    ) {
+        ChannelObservabilityLog.admissionIntentReceived(
+            intent = intent.traceName,
+            channelId = config.defaultChannelId,
+            conferenceSessionActive = conferenceSessionActive,
+            localModuleId = config.moduleId.trim().uppercase()
+        )
         ChannelObservabilityLog.joinMeetingTrace(
-            reason = reason,
+            intent = intent.traceName,
             channelId = config.defaultChannelId,
             talkTabMode = userSelectedTab.name,
             meetingPreferred = lastSyncedMeetingPreferred,
@@ -455,13 +475,13 @@ class TalkViewModel(
 
     private fun traceJoinMeetingOutcome(
         config: AppConfig,
-        reason: String,
+        intent: JoinMeetingIntent,
         chosenPath: String,
         pathReason: String,
         conferenceSessionActive: Boolean = manager.activeChannelSession(config)?.type == SessionType.CONFERENCE
     ) {
         ChannelObservabilityLog.joinMeetingTrace(
-            reason = reason,
+            intent = intent.traceName,
             channelId = config.defaultChannelId,
             talkTabMode = userSelectedTab.name,
             meetingPreferred = lastSyncedMeetingPreferred,
@@ -477,13 +497,13 @@ class TalkViewModel(
         )
     }
 
-    suspend fun joinMeeting(reason: String = "unspecified"): PttDownResult = pttMutex.withLock {
+    suspend fun joinMeeting(intent: JoinMeetingIntent): PttDownResult = pttMutex.withLock {
         syncServiceState()
         val config = configStore.load()
         val activeBefore = manager.activeChannelSession(config)
-        traceJoinMeetingIntent(config, reason, activeBefore?.type == SessionType.CONFERENCE)
+        traceJoinMeetingIntent(config, intent, activeBefore?.type == SessionType.CONFERENCE)
         if (!serviceRunning || manager.getRuntime() == null) {
-            traceJoinMeetingOutcome(config, reason, "WAIT", "SERVICE_STOPPED", conferenceSessionActive = false)
+            traceJoinMeetingOutcome(config, intent, "WAIT", "SERVICE_STOPPED", conferenceSessionActive = false)
             return PttDownResult.ServiceStopped
         }
         val meetingConfig = meetingSessionConfig(config)
@@ -505,7 +525,7 @@ class TalkViewModel(
                 TalkbackLog.i(
                     "joinMeeting: reuse conference ready=true visible=${existing.visibleParticipantCount}"
                 )
-                traceJoinMeetingOutcome(config, reason, "REUSE_EXISTING", "CONFERENCE_ALREADY_READY")
+                traceJoinMeetingOutcome(config, intent, "REUSE_EXISTING", "CONFERENCE_ALREADY_READY")
                 return PttDownResult.Ok
             }
             TalkbackLog.i(
@@ -514,7 +534,7 @@ class TalkViewModel(
             val resumePath = when {
                 manager.pendingConferenceInvite(meetingConfig.defaultChannelId) != null -> {
                     if (!acceptPendingOrRejoinConference(meetingConfig)) {
-                        traceJoinMeetingOutcome(config, reason, "ACCEPT_PENDING", "ACCEPT_FAILED")
+                        traceJoinMeetingOutcome(config, intent, "ACCEPT_PENDING", "ACCEPT_FAILED")
                         return PttDownResult.NoPeers
                     }
                     "ACCEPT_PENDING"
@@ -542,7 +562,7 @@ class TalkViewModel(
             TalkbackLog.i("joinMeeting: resume conference ready=$ready visible=$visible")
             traceJoinMeetingOutcome(
                 config,
-                reason,
+                intent,
                 resumePath,
                 if (ready) "RESUME_READY" else "RESUME_CONNECTING"
             )
@@ -555,7 +575,7 @@ class TalkViewModel(
         val newPath = when {
             manager.pendingConferenceInvite(meetingConfig.defaultChannelId) != null -> {
                 if (!acceptPendingOrRejoinConference(meetingConfig)) {
-                    traceJoinMeetingOutcome(config, reason, "ACCEPT_PENDING", "ACCEPT_FAILED")
+                    traceJoinMeetingOutcome(config, intent, "ACCEPT_PENDING", "ACCEPT_FAILED")
                     return PttDownResult.NoPeers
                 }
                 "ACCEPT_PENDING"
@@ -579,10 +599,10 @@ class TalkViewModel(
         if (joined?.type != SessionType.CONFERENCE) {
             if (manager.isConferenceRejoinInProgress(meetingConfig)) {
                 TalkbackLog.i("joinMeeting: rejoin in progress, waiting for host pull-in")
-                traceJoinMeetingOutcome(config, reason, "WAIT", "REJOIN_IN_PROGRESS")
+                traceJoinMeetingOutcome(config, intent, "WAIT", "REJOIN_IN_PROGRESS")
                 return PttDownResult.Connecting
             }
-            traceJoinMeetingOutcome(config, reason, newPath, "NO_CONFERENCE_SESSION")
+            traceJoinMeetingOutcome(config, intent, newPath, "NO_CONFERENCE_SESSION")
             return PttDownResult.NoPeers
         }
         val ready = manager.isChannelMediaReady(configStore.load())
@@ -590,7 +610,7 @@ class TalkViewModel(
         TalkbackLog.i("joinMeeting: new conference ready=$ready visible=$joinedRemotes")
         traceJoinMeetingOutcome(
             config,
-            reason,
+            intent,
             newPath,
             if (ready) "NEW_CONFERENCE_READY" else "NEW_CONFERENCE_CONNECTING"
         )
@@ -669,7 +689,11 @@ class TalkViewModel(
         conferenceEndReason = ConferenceEndReason.USER_LEFT
         viewModelScope.launch(Dispatchers.Default) {
             val config = configStore.load()
-            manager.endMeetingForAll(config)
+            manager.leaveChannelSession(
+                config,
+                reason = "HOST_END_FOR_ALL",
+                caller = "TalkViewModel.endMeetingForAll"
+            )
             manager.clearConferencePttCooldown(config.defaultChannelId)
             lastSyncedMeetingPreferred = false
             manager.setMeetingPreferred(false, config.defaultChannelId)

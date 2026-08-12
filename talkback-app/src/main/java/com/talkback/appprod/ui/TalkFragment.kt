@@ -21,6 +21,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.talkback.appprod.R
+import com.talkback.appprod.conference.JoinMeetingIntent
 import com.talkback.core.model.EndpointPriority
 import com.talkback.core.session.ChannelReadiness
 import kotlinx.coroutines.launch
@@ -86,8 +87,10 @@ class TalkFragment : Fragment() {
         view.findViewById<View>(R.id.channelOnlineArea).setOnClickListener {
             lifecycleScope.launch {
                 when (viewModel.uiState.value.primaryInteractionAction) {
-                    PrimaryInteractionAction.OPEN_MEETING_CONTROL -> openMeetingScreen()
-                    PrimaryInteractionAction.JOIN_MEETING -> openMeetingScreen()
+                    PrimaryInteractionAction.OPEN_MEETING_CONTROL ->
+                        viewModel.requestMeetingScreen(MeetingNavigation.MAIN)
+                    PrimaryInteractionAction.JOIN_MEETING ->
+                        startMeeting(JoinMeetingIntent.TapToJoin, MeetingNavigation.MAIN)
                     PrimaryInteractionAction.PTT_HOLD -> {
                         viewModel.initiateGroupCall()
                         viewModel.refresh()
@@ -399,7 +402,9 @@ class TalkFragment : Fragment() {
         if (meetingMode) {
             btnPttRef.isEnabled = true
             btnPttRef.setOnTouchListener(null)
-            btnPttRef.setOnClickListener { openMeetingScreen() }
+            btnPttRef.setOnClickListener {
+                startMeeting(JoinMeetingIntent.PttMeeting, MeetingNavigation.MAIN)
+            }
         } else {
             btnPttRef.isEnabled = true
             btnPttRef.setOnClickListener(null)
@@ -463,8 +468,12 @@ class TalkFragment : Fragment() {
             monitor.setOnClickListener {
                 CallAudioRouteHelper.apply(requireContext(), CallAudioRoute.SPEAKER)
             }
-            emergency.setOnClickListener { openMeetingScreen(MeetingNavigation.MEMBERS) }
-            record.setOnClickListener { openMeetingScreen(MeetingNavigation.OPTIONS) }
+            emergency.setOnClickListener {
+                viewModel.requestMeetingScreen(MeetingNavigation.MEMBERS)
+            }
+            record.setOnClickListener {
+                viewModel.requestMeetingScreen(MeetingNavigation.OPTIONS)
+            }
         } else {
             view.findViewById<TextView>(R.id.txtActionBroadcast).text =
                 getString(R.string.action_broadcast)
@@ -487,15 +496,9 @@ class TalkFragment : Fragment() {
         )
     }
 
-    private fun openMeetingScreen(target: MeetingNavigation = MeetingNavigation.MAIN) {
+    private fun startMeeting(intent: JoinMeetingIntent, target: MeetingNavigation = MeetingNavigation.MAIN) {
         lifecycleScope.launch {
-            val state = viewModel.uiState.value
-            val result = if (state.conferenceActive || state.channelConnecting) {
-                if (state.channelConnecting) PttDownResult.Connecting else PttDownResult.Ok
-            } else {
-                viewModel.joinMeeting(reason = "ui.openMeetingScreen")
-            }
-            when (result) {
+            when (val result = viewModel.joinMeeting(intent)) {
                 is PttDownResult.Ok, is PttDownResult.Connecting -> {
                     (activity as? MainActivity)?.showMeetingScreen(target)
                 }
