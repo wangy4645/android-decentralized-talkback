@@ -4840,6 +4840,24 @@ class TalkbackCoordinator(
             }
         }
 
+    internal fun testObserveBlockedGroupInviteAdmission(sessionId: String, peerModuleId: String): String =
+        runOnCoordinatorSync {
+            val session = sessions[sessionId] ?: return@runOnCoordinatorSync "MISSING_SESSION"
+            val channelId = session.channelId ?: return@runOnCoordinatorSync "MISSING_CHANNEL"
+            val remote = EndpointAddress(ModuleId(peerModuleId), EndpointId("E03"))
+            val envelope = buildSignedEnvelope(
+                SignalType.GROUP_INVITE,
+                session.local,
+                remote,
+                sessionId,
+                groupPayloadBase(session).copy(sdp = "v=0").encode()
+            )
+            observeBootstrapAdmissionInviteBlocked(envelope)
+            classifyAdmissionForPeer(session, ModuleId(peerModuleId)).let {
+                "${it.domain.name}:${it.reason}"
+            }
+        }
+
     internal fun testPairwiseMeshObligationForPeer(
         sessionId: String,
         peerModuleId: String
@@ -12650,23 +12668,39 @@ class TalkbackCoordinator(
             )
         )
 
+    /** #181-B/C — classify then apply domain-specific admission writers (no domain internals). */
+    private fun applyClassifiedAdmissionForPeer(
+        session: TalkbackSession,
+        channelId: String,
+        peerModuleId: ModuleId,
+        coldAdmissionRequired: Boolean = false
+    ): GroupAdmissionDomain {
+        return when (
+            classifyAdmissionForPeer(session, peerModuleId, coldAdmissionRequired).domain
+        ) {
+            GroupAdmissionDomain.BOOTSTRAP -> {
+                registerBootstrapAdmissionIntentIfNew(
+                    channelId = channelId,
+                    moduleId = peerModuleId.value,
+                    reason = "DISCOVERED_NO_SESSION"
+                )
+                GroupAdmissionDomain.BOOTSTRAP
+            }
+            GroupAdmissionDomain.PAIRWISE_MESH -> {
+                PairwiseMeshAdmissionSupport.reconcile(session)
+                GroupAdmissionDomain.PAIRWISE_MESH
+            }
+            GroupAdmissionDomain.NONE -> GroupAdmissionDomain.NONE
+        }
+    }
+
     /** #181-B — P1 newInvitee admission domain dispatch (classifier owns domain selection). */
     private fun dispatchNewInviteeAdmission(
         session: TalkbackSession,
         channelId: String,
         remote: EndpointAddress
     ) {
-        when (classifyAdmissionForPeer(session, remote.moduleId).domain) {
-            GroupAdmissionDomain.BOOTSTRAP ->
-                registerBootstrapAdmissionIntentIfNew(
-                    channelId = channelId,
-                    moduleId = remote.moduleId.value,
-                    reason = "DISCOVERED_NO_SESSION"
-                )
-            GroupAdmissionDomain.PAIRWISE_MESH ->
-                PairwiseMeshAdmissionSupport.reconcile(session)
-            GroupAdmissionDomain.NONE -> Unit
-        }
+        applyClassifiedAdmissionForPeer(session, channelId, remote.moduleId)
     }
 
     private fun registerBootstrapAdmissionIntentIfNew(
@@ -12706,9 +12740,23 @@ class TalkbackCoordinator(
         if (session.type != SessionType.GROUP) return
         val channelId = session.channelId ?: return
         val moduleId = envelope.to?.moduleId?.value ?: return
-        if (!isBootstrapAdmissionObligation(channelId, moduleId, session)) return
+        val peerId = ModuleId(moduleId)
+        val existing = bootstrapAdmissionIntent(channelId, moduleId)
+        if (existing != null &&
+            GroupBootstrapAdmissionSupport.hasUnresolvedBootstrapAdmissionIntent(existing)
+        ) {
+            markBootstrapAdmissionWaiting(channelId, moduleId)
+            return
+        }
+        when (applyClassifiedAdmissionForPeer(session, channelId, peerId)) {
+            GroupAdmissionDomain.BOOTSTRAP -> markBootstrapAdmissionWaiting(channelId, moduleId)
+            GroupAdmissionDomain.PAIRWISE_MESH,
+            GroupAdmissionDomain.NONE -> Unit
+        }
+    }
+
+    private fun markBootstrapAdmissionWaiting(channelId: String, moduleId: String) {
         val reason = bootstrapAdmissionWaitingReason(moduleId)
-        registerBootstrapAdmissionIntentIfNew(channelId, moduleId, "DISCOVERED_NO_SESSION")
         bootstrapAdmissionIntentsByKey.compute(storageKey(channelId, moduleId)) { _, existing ->
             val base = existing
                 ?: GroupBootstrapAdmissionSupport.create(channelId, moduleId, "DISCOVERED_NO_SESSION")
@@ -12723,9 +12771,18 @@ class TalkbackCoordinator(
         if (session.type != SessionType.GROUP) return
         val channelId = session.channelId ?: return
         val moduleId = envelope.to?.moduleId?.value ?: return
-        if (!isBootstrapAdmissionObligation(channelId, moduleId, session)) return
-        bootstrapAdmissionIntentsByKey.compute(storageKey(channelId, moduleId)) { _, existing ->
-            val base = existing
+        val existing = bootstrapAdmissionIntent(channelId, moduleId)
+        val domain = classifyAdmissionForPeer(session, ModuleId(moduleId)).domain
+        val trackBootstrap = domain == GroupAdmissionDomain.BOOTSTRAP ||
+            (
+                existing != null &&
+                    GroupBootstrapAdmissionSupport.hasUnresolvedBootstrapAdmissionIntent(existing)
+                )
+        if (!trackBootstrap) {
+            return
+        }
+        bootstrapAdmissionIntentsByKey.compute(storageKey(channelId, moduleId)) { _, prior ->
+            val base = prior
                 ?: GroupBootstrapAdmissionSupport.create(channelId, moduleId, "DISCOVERED_NO_SESSION")
             GroupBootstrapAdmissionSupport.markInviteSent(base, envelope.sessionId)
         }

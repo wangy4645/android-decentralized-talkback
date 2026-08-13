@@ -603,6 +603,9 @@ class TalkbackRuntime(
     internal fun testDispatchNewInviteeAdmission(sessionId: String, peerModuleId: String): String =
         coordinator.testDispatchNewInviteeAdmission(sessionId, peerModuleId)
 
+    internal fun testObserveBlockedGroupInviteAdmission(sessionId: String, peerModuleId: String): String =
+        coordinator.testObserveBlockedGroupInviteAdmission(sessionId, peerModuleId)
+
     internal fun testPrepareGroupSessionForPairwiseMeshAdmission(
         channelId: String,
         sessionId: String,
