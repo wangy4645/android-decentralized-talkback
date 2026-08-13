@@ -144,6 +144,8 @@ class ConferenceEdgeRecoveryController internal constructor(
     private val negotiationIntentTimers = ConcurrentHashMap<ConferenceEdgeKey, ScheduledFuture<*>>()
     /** ADR-0050 R2a: bounded negotiation-ingress wait timers. */
     private val negotiationIngressTimers = ConcurrentHashMap<ConferenceEdgeKey, ScheduledFuture<*>>()
+    /** #187: bounded coordination-wait budget (Q6-B); reuses attempt ICE restart window. */
+    private val coordinationWaitTimers = ConcurrentHashMap<ConferenceEdgeKey, ScheduledFuture<*>>()
     /** ADR-0042 INV-T3-SCHEDULE: obligation-scoped bounded progress window timers. */
     private val progressWindowTimers = ConcurrentHashMap<ConferenceEdgeKey, ScheduledFuture<*>>()
     /**
@@ -384,6 +386,24 @@ class ConferenceEdgeRecoveryController internal constructor(
         val record = edges[ConferenceEdgeKey(sessionId, remoteModuleId)] ?: return null
         if (!isPostTerminalDispatchEligible(sessionId, remoteModuleId)) return null
         return "${record.obligationGeneration}:${record.recoveryAttemptId}"
+    }
+
+    /** #187: peer RECOVERY_REATTACH coordination fact while obligation is open. */
+    fun isPeerCoordinationEligible(sessionId: String, remoteModuleId: String): Boolean {
+        val record = edges[ConferenceEdgeKey(sessionId, remoteModuleId)] ?: return false
+        return isPeerRecoveryCoordinationFact(record.edgeObligationOpen())
+    }
+
+    fun peerCoordinationLatchToken(
+        sessionId: String,
+        remoteModuleId: String,
+        senderAttemptId: Long,
+        senderObligationGeneration: Long
+    ): String? {
+        val record = edges[ConferenceEdgeKey(sessionId, remoteModuleId)] ?: return null
+        if (!isPeerCoordinationEligible(sessionId, remoteModuleId)) return null
+        if (record.obligationGeneration != senderObligationGeneration) return null
+        return "${senderObligationGeneration}:${senderAttemptId}"
     }
 
     fun hasDeferredWakeupForTrigger(
@@ -761,6 +781,7 @@ class ConferenceEdgeRecoveryController internal constructor(
                     "reason=$verdict senderAttempt=$senderAttemptId senderObligationGen=$senderObligationGeneration " +
                     "nonce=$nonce"
             )
+            clearCoordinationWaitForPeerTerminal(sessionId, remoteModuleId, "PEER_ATTEMPT_TERMINAL:$verdict")
             return verdict
         }
         val key = ConferenceEdgeKey(sessionId, remoteModuleId)
@@ -2397,7 +2418,8 @@ class ConferenceEdgeRecoveryController internal constructor(
         signature: RecoveryCapabilitySignature,
         capabilityBefore: RecoveryCapabilitySignature?,
         trigger: RecoveryReevaluateTrigger,
-        resurrectionEvidence: RecoveryResurrectionEvidence? = null
+        resurrectionEvidence: RecoveryResurrectionEvidence? = null,
+        peerRecoverySenderAttemptId: Long? = null
     ) {
         val key = ConferenceEdgeKey(sessionId, remoteModuleId)
         val record = edges[key] ?: return
@@ -2415,6 +2437,10 @@ class ConferenceEdgeRecoveryController internal constructor(
         if (record.edgeObligationOpen()) {
             if (trigger == RecoveryReevaluateTrigger.POST_TERMINAL_DISPATCH_CAPABLE) {
                 handlePostTerminalDispatchCapable(record, snapshot, signature)
+                return
+            }
+            if (trigger == RecoveryReevaluateTrigger.PEER_RECOVERY_COORDINATION) {
+                handlePeerRecoveryCoordination(record, snapshot, signature, peerRecoverySenderAttemptId)
                 return
             }
             reevaluateOpenObligation(
@@ -2607,6 +2633,15 @@ class ConferenceEdgeRecoveryController internal constructor(
             return
         }
         if (signature.permittedActions.isNotEmpty()) {
+            if (record.coordinationWaitActive) {
+                onLog(
+                    "RECOVERY_DECISION session=$sessionId edge=$remoteModuleId " +
+                        "attempt=${record.recoveryAttemptId} trigger=$trigger " +
+                        "decision=IGNORE approved=true rejectReason=coordination_wait_blocks_supersede"
+                )
+                notifyChanged(sessionId)
+                return
+            }
             val priorAttempt = record.recoveryAttemptId
             supersedeFailedResidencyAndAdmit(record, trigger, snapshot, signature)
             onLog(
@@ -2640,6 +2675,148 @@ class ConferenceEdgeRecoveryController internal constructor(
         )
         notifyChanged(sessionId)
     }
+
+    /**
+     * #187: peer RECOVERY_REATTACH + open obligation → coordination wait; autonomous SUPERSEDE forbidden
+     * until peer attempt terminal or bounded wait budget expires (Q6).
+     */
+    private fun handlePeerRecoveryCoordination(
+        record: EdgeRecoveryRecord,
+        snapshot: EdgeReachabilitySnapshot,
+        signature: RecoveryCapabilitySignature,
+        peerRecoverySenderAttemptId: Long?
+    ) {
+        val trigger = RecoveryReevaluateTrigger.PEER_RECOVERY_COORDINATION
+        val sessionId = record.key.sessionId
+        val remoteModuleId = record.key.remoteModuleId
+        onLog(
+            "RECOVERY_REEVALUATE session=$sessionId edge=$remoteModuleId " +
+                "attempt=${record.recoveryAttemptId} trigger=$trigger " +
+                "capabilityBefore=NONE " +
+                "capabilityAfter=${signature.formatCapabilityLabel()} " +
+                "peerSenderAttempt=${peerRecoverySenderAttemptId ?: "NONE"} " +
+                "controlPlaneStarted=${record.controlPlaneStarted()}"
+        )
+        if (!isPeerRecoveryCoordinationFact(record.edgeObligationOpen())) {
+            onLog(
+                "RECOVERY_DECISION session=$sessionId edge=$remoteModuleId " +
+                    "attempt=${record.recoveryAttemptId} trigger=$trigger " +
+                    "decision=IGNORE approved=true rejectReason=obligation_not_open"
+            )
+            notifyChanged(sessionId)
+            return
+        }
+        if (!admitTerminalReevaluate(record, trigger)) {
+            onLog(
+                "RECOVERY_DECISION session=$sessionId edge=$remoteModuleId " +
+                    "attempt=${record.recoveryAttemptId} trigger=$trigger " +
+                    "decision=IGNORE approved=true rejectReason=duplicate_peer_coordination_fact"
+            )
+            notifyChanged(sessionId)
+            return
+        }
+        enterCoordinationWait(record, peerRecoverySenderAttemptId, trigger)
+        onLog(
+            "RECOVERY_DECISION session=$sessionId edge=$remoteModuleId " +
+                "attempt=${record.recoveryAttemptId} trigger=$trigger " +
+                "decision=WAIT_FOR_INBOUND approved=true"
+        )
+        notifyChanged(sessionId)
+    }
+
+    private fun enterCoordinationWait(
+        record: EdgeRecoveryRecord,
+        peerRecoverySenderAttemptId: Long?,
+        trigger: RecoveryReevaluateTrigger
+    ) {
+        val sessionId = record.key.sessionId
+        val remoteModuleId = record.key.remoteModuleId
+        record.coordinationWaitActive = true
+        record.peerCoordinationSenderAttemptId = peerRecoverySenderAttemptId
+        record.coordinationWaitDeadlineAtMs = clock() + iceRestartTimeoutMs
+        scheduleCoordinationWaitTimer(record)
+        if (!hasDeferredMediaAction(record)) {
+            recordMediaActionDeferred(
+                record = record,
+                owner = if (record.initiatesReattach) {
+                    MediaActionOwner.PARTICIPANT_REATTACH
+                } else {
+                    MediaActionOwner.HOST_RESTART
+                },
+                reason = DeferredReason.MEDIA_NOT_READY,
+                wakeupBinding = WakeupBinding(
+                    sourceType = WakeupSourceType.ROUTE_CONVERGED,
+                    sourceKey = edgeWakeupKey(sessionId, remoteModuleId)
+                ),
+                trigger = trigger.name
+            )
+        }
+        onLog(
+            "RECOVERY_COORDINATION_WAIT_ARMED session=$sessionId edge=$remoteModuleId " +
+                "attempt=${record.recoveryAttemptId} peerSenderAttempt=${peerRecoverySenderAttemptId ?: "NONE"} " +
+                "budgetMs=$iceRestartTimeoutMs"
+        )
+    }
+
+    private fun scheduleCoordinationWaitTimer(record: EdgeRecoveryRecord) {
+        val key = record.key
+        val attemptId = record.recoveryAttemptId
+        val obligationGen = record.obligationGeneration
+        cancelCoordinationWaitTimer(key)
+        val future = scheduler.schedule({
+            val current = edges[key] ?: return@schedule
+            if (current.recoveryAttemptId != attemptId) return@schedule
+            if (current.obligationGeneration != obligationGen) return@schedule
+            if (!current.coordinationWaitActive) return@schedule
+            onLog(
+                "RECOVERY_COORDINATION_WAIT_EXPIRED session=${key.sessionId} edge=${key.remoteModuleId} " +
+                    "attempt=${current.recoveryAttemptId} obligationGen=${current.obligationGeneration}"
+            )
+            clearCoordinationWait(current, "COORDINATION_WAIT_EXPIRED")
+            notifyChanged(key.sessionId)
+        }, iceRestartTimeoutMs, TimeUnit.MILLISECONDS)
+        coordinationWaitTimers[key] = future
+    }
+
+    private fun cancelCoordinationWaitTimer(key: ConferenceEdgeKey) {
+        coordinationWaitTimers.remove(key)?.cancel(false)
+    }
+
+    private fun clearCoordinationWait(record: EdgeRecoveryRecord, reason: String) {
+        cancelCoordinationWaitTimer(record.key)
+        record.coordinationWaitActive = false
+        record.coordinationWaitDeadlineAtMs = null
+        record.peerCoordinationSenderAttemptId = null
+        onLog(
+            "RECOVERY_COORDINATION_WAIT_CLEARED session=${record.key.sessionId} " +
+                "edge=${record.key.remoteModuleId} attempt=${record.recoveryAttemptId} reason=$reason"
+        )
+    }
+
+    private fun clearCoordinationWaitForPeerTerminal(
+        sessionId: String,
+        remoteModuleId: String,
+        reason: String
+    ) {
+        val record = edges[ConferenceEdgeKey(sessionId, remoteModuleId)] ?: return
+        if (!record.coordinationWaitActive) return
+        clearCoordinationWait(record, reason)
+        notifyChanged(sessionId)
+    }
+
+    private fun mayAutonomousSupersede(record: EdgeRecoveryRecord, trigger: String): Boolean {
+        if (!record.coordinationWaitActive) return true
+        if (isCoordinationSupersedeException(trigger)) return true
+        onLog(
+            "RECOVERY_DECISION session=${record.key.sessionId} edge=${record.key.remoteModuleId} " +
+                "attempt=${record.recoveryAttemptId} trigger=$trigger " +
+                "decision=IGNORE approved=true rejectReason=coordination_wait_blocks_supersede"
+        )
+        return false
+    }
+
+    private fun isCoordinationSupersedeException(trigger: String): Boolean =
+        trigger == "COORDINATION_WAIT_EXPIRED" || trigger.startsWith("PEER_ATTEMPT_TERMINAL")
 
     private fun reevaluateOpenObligation(
         record: EdgeRecoveryRecord,
@@ -3324,8 +3501,14 @@ class ConferenceEdgeRecoveryController internal constructor(
         // ADR-0048: post-RECOVERED / closed obligation opens a fresh convergence ownership episode.
         if (existing != null) {
             val priorAttempt = existing.recoveryAttemptId
-            logHandoffToReattach(existing, remoteModuleId, priorAttempt)
-            record = if (needsNewObligationEpisode(existing)) {
+            if (existing.coordinationWaitActive) {
+                onLog(
+                    "RECOVERY_DECISION session=$sessionId edge=$remoteModuleId " +
+                        "attempt=$priorAttempt trigger=${RecoveryDecisionTrigger.REATTACH_ACCEPTED} " +
+                        "decision=IGNORE approved=true rejectReason=coordination_wait_blocks_reattach_supersede"
+                )
+                record = existing
+            } else if (needsNewObligationEpisode(existing)) {
                 onLog(
                     "RECOVERY_DECISION session=$sessionId edge=$remoteModuleId " +
                         "attempt=$priorAttempt priorAttempt=$priorAttempt " +
@@ -3339,20 +3522,21 @@ class ConferenceEdgeRecoveryController internal constructor(
                     phase = EdgeRecoveryPhase.REATTACH_ACCEPTED,
                     initiatesReattach = false,
                     trigger = "POST_RECOVERED_INBOUND_REATTACH"
-                )
+                ).also { record = it }
             } else {
+                logHandoffToReattach(existing, remoteModuleId, priorAttempt)
                 supersedeAttempt(
-                    record,
+                    existing,
                     trigger = "REATTACH_INBOUND",
                     scheduleNewWatchdog = false
                 )
                 onLog(
                     "RECOVERY_DECISION session=$sessionId edge=$remoteModuleId " +
-                        "attempt=${record.recoveryAttemptId} priorAttempt=$priorAttempt " +
+                        "attempt=${existing.recoveryAttemptId} priorAttempt=$priorAttempt " +
                         "trigger=${RecoveryDecisionTrigger.REATTACH_ACCEPTED} " +
                         "decision=SUPERSEDED approved=true"
                 )
-                record
+                record = existing
             }
         }
         record.phase = EdgeRecoveryPhase.REATTACH_ACCEPTED
@@ -3378,6 +3562,14 @@ class ConferenceEdgeRecoveryController internal constructor(
                 "attempt=${record.recoveryAttemptId} recoveryReason=$recoveryReason source=$source " +
                 "disposition=$disposition"
         )
+        if (record.coordinationWaitActive) {
+            onLog(
+                "RECOVERY_PEER_COORDINATION_HANDOFF session=$sessionId remote=$remoteModuleId " +
+                    "attempt=${record.recoveryAttemptId} deferring_local_outbound=true"
+            )
+            notifyChanged(sessionId)
+            return
+        }
         issueBoundedIceRestart(record, recoveryReason)
         // Soak gap (#83): ICE may already be CONNECTED with no fresh CONNECTED event.
         // Record the media fact for evaluation, but INV-NEG-016 / Q14: do not stamp
@@ -3814,6 +4006,8 @@ class ConferenceEdgeRecoveryController internal constructor(
         negotiationIntentTimers.clear()
         negotiationIngressTimers.values.forEach { it.cancel(false) }
         negotiationIngressTimers.clear()
+        coordinationWaitTimers.values.forEach { it.cancel(false) }
+        coordinationWaitTimers.clear()
         progressWindowTimers.values.forEach { it.cancel(false) }
         progressWindowTimers.clear()
         reattachDeliveryProgress.clearAll()
@@ -5218,6 +5412,12 @@ class ConferenceEdgeRecoveryController internal constructor(
         trigger: String,
         scheduleNewWatchdog: Boolean = true
     ) {
+        if (!mayAutonomousSupersede(record, trigger)) {
+            return
+        }
+        if (isCoordinationSupersedeException(trigger)) {
+            clearCoordinationWait(record, trigger)
+        }
         val previousAttempt = record.recoveryAttemptId
         val previousPhase = record.phase
         val previousObligationOpen = record.obligationClosedAtMs == null &&

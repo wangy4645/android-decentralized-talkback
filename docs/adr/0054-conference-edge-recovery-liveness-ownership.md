@@ -2,9 +2,11 @@
 
 ## Status
 
-**PROPOSED** (2026-08-13) · **Grill Q1–Q9 CLOSED** · **Implementation NOT AUTHORIZED**
+**ACCEPTED / IMPLEMENTED** (2026-08-13) · **Grill Q1–Q9 CLOSED** · **Field VERIFIED**
 
-**Issue:** [#175](https://github.com/wangy4645/android-decentralized-talkback/issues/175) — conference cross-edge recovery / observer-edge failure (remaining after #186)
+**Issue:** [#175](https://github.com/wangy4645/android-decentralized-talkback/issues/175) — **CLOSED** (liveness contract verified)
+
+**Implementation:** `8fc6e77` — `POST_TERMINAL_DISPATCH_CAPABLE` fact + named Controller decision
 
 **Relation:**
 
@@ -17,12 +19,15 @@
 
 ```text
 ADR-0054
-Decision:              PROPOSED (ownership grill Q1–Q9 CLOSED)
+Decision:              ACCEPTED / IMPLEMENTED (ownership grill Q1–Q9 CLOSED)
 Model:                 Conference edge recovery liveness ownership
 Primary evidence:      talkback/logs/175-offerer-admission-stepb-20260813-202014
                        session 532709ad-6123-4f95-88c6-e1b7f077aec8
                        build main @ #186 merge (67408bd)
-Implementation:        NOT AUTHORIZED (no impl plan in this ADR)
+Field verification:    talkback/logs/175-adr0054-liveness-20260813-204703
+                       session fea5544e-bc0d-403c-a98e-f0ddd4b8bea2
+                       build 8fc6e77
+Implementation:        8fc6e77 (Coordinator fact latch + Controller named decision)
 Does NOT reopen:       ADR-0052 admission regression · UVCP · completion predicate · RNA · membership
 Does NOT authorize:    HELLO stale tuning · signaling-must-drop · observer-only patch · always SUPERSEDE
 ```
@@ -391,8 +396,12 @@ M01 attempt=2 != proof M03 must retry
 
 ## References
 
-- Field log: `talkback/logs/175-offerer-admission-stepb-20260813-202014`
+- Field log (primary): `talkback/logs/175-offerer-admission-stepb-20260813-202014`
+- Field log (verification): `talkback/logs/175-adr0054-liveness-20260813-204703`
+- Implementation: `8fc6e77`
 - Issue comment (evidence split): [#175#issuecomment-5280376608](https://github.com/wangy4645/android-decentralized-talkback/issues/175#issuecomment-5280376608)
+- Issue close (liveness PASS): [#175#issuecomment-5280671912](https://github.com/wangy4645/android-decentralized-talkback/issues/175#issuecomment-5280671912)
+- Follow-on observed surface (not this ADR): [#187](https://github.com/wangy4645/android-decentralized-talkback/issues/187)
 - PR #186 merge: `9a93338`
 - `ConferenceEdgeRecoveryController.kt`, `PostObligationCloseConvergence.kt`
 - Issue #175 tracker comment (2026-08-13)

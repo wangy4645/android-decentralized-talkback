@@ -569,7 +569,11 @@ internal data class EdgeRecoveryRecord(
     var reattachDeliveryProgressState: ReattachDeliveryProgressState =
         ReattachDeliveryProgressState.NONE,
     var reattachDeliveryProgressStartedAtMs: Long? = null,
-    var reattachDeliveryProgressDeadlineAtMs: Long? = null
+    var reattachDeliveryProgressDeadlineAtMs: Long? = null,
+    /** #187: outbound supersede forbidden until peer terminal or wait budget expires. */
+    var coordinationWaitActive: Boolean = false,
+    var coordinationWaitDeadlineAtMs: Long? = null,
+    var peerCoordinationSenderAttemptId: Long? = null
 ) {
     /** True while this record owns an active recovery attempt (ADR-0022 P0.5). */
     fun hasActiveAttempt(): Boolean = phase.isActivelyRecovering()

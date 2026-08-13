@@ -175,8 +175,16 @@ enum class RecoveryReevaluateTrigger {
      * and [EdgeReachabilitySnapshot.canDispatchRecoverySignal] is true.
      * Ordinary HELLO MUST NOT use this trigger.
      */
-    POST_TERMINAL_DISPATCH_CAPABLE
+    POST_TERMINAL_DISPATCH_CAPABLE,
+    /**
+     * #187: peer inbound RECOVERY_REATTACH while local obligation is open.
+     * Coordinator emits once per (obligationGen, senderAttemptId); Controller enters coordination wait.
+     */
+    PEER_RECOVERY_COORDINATION
 }
+
+/** #187: coordination signal — peer recovery intent with local obligation still open. */
+fun isPeerRecoveryCoordinationFact(obligationOpen: Boolean): Boolean = obligationOpen
 
 /** ADR-0054 Q7 gate. Ordinary HELLO is not sufficient by itself. */
 fun isPostTerminalDispatchCapableFact(

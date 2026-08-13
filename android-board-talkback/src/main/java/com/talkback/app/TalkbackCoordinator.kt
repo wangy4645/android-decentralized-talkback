@@ -663,6 +663,8 @@ class TalkbackCoordinator(
     private val lastRecoveryCapabilityByEdge = ConcurrentHashMap<ConferenceEdgeKey, RecoveryCapabilitySignature>()
     /** ADR-0054: one POST_TERMINAL_DISPATCH_CAPABLE fact per (edge, obligationGen, attemptId). */
     private val postTerminalDispatchLatch = ConcurrentHashMap<ConferenceEdgeKey, String>()
+    /** #187: one PEER_RECOVERY_COORDINATION fact per (edge, obligationGen, senderAttemptId). */
+    private val peerRecoveryCoordinationLatch = ConcurrentHashMap<ConferenceEdgeKey, String>()
     /** Dedup key for [CONFERENCE_RUNTIME_DECISION] (Issue2 probe). */
     private val lastConferenceRuntimeDecisionBySession = ConcurrentHashMap<String, String>()
     /** Dedup key for [CONFERENCE_RUNTIME_MISSING] (Gate-R1-B). */
@@ -3550,6 +3552,46 @@ class TalkbackCoordinator(
     }
 
     /**
+     * #187: peer RECOVERY_REATTACH + open obligation → coordination fact (once per sender attempt).
+     */
+    private fun maybeNotifyPeerRecoveryCoordination(
+        session: TalkbackSession,
+        remoteModuleId: String,
+        senderAttemptId: Long,
+        senderObligationGeneration: Long
+    ) {
+        if (!isConferenceSession(session) || !session.accepted) return
+        if (remoteModuleId !in conferenceRecoveryRemoteModuleIds(session)) return
+        if (
+            !conferenceEdgeRecoveryController.isPeerCoordinationEligible(
+                session.id,
+                remoteModuleId
+            )
+        ) {
+            return
+        }
+        val edgeKey = ConferenceEdgeKey(session.id, remoteModuleId)
+        val token = conferenceEdgeRecoveryController.peerCoordinationLatchToken(
+            session.id,
+            remoteModuleId,
+            senderAttemptId,
+            senderObligationGeneration
+        ) ?: return
+        if (peerRecoveryCoordinationLatch[edgeKey] == token) return
+        log(
+            "RECOVERY_PEER_COORDINATION_FACT session=${session.id} " +
+                "edge=$remoteModuleId token=$token senderAttempt=$senderAttemptId"
+        )
+        maybeNotifyRecoveryReachabilityChanged(
+            session,
+            remoteModuleId,
+            RecoveryReevaluateTrigger.PEER_RECOVERY_COORDINATION,
+            peerRecoverySenderAttemptId = senderAttemptId
+        )
+        peerRecoveryCoordinationLatch[edgeKey] = token
+    }
+
+    /**
      * Coordinator-owned materiality comparator (ADR-0022 R28-G).
      * Notifies recovery controller only when [RecoveryCapabilitySignature] changes.
      *
@@ -3560,7 +3602,8 @@ class TalkbackCoordinator(
     private fun maybeNotifyRecoveryReachabilityChanged(
         session: TalkbackSession,
         remoteModuleId: String,
-        trigger: RecoveryReevaluateTrigger
+        trigger: RecoveryReevaluateTrigger,
+        peerRecoverySenderAttemptId: Long? = null
     ) {
         val channelId = session.channelId ?: return
         val initiatesReattach = !isConferenceHostSession(session) &&
@@ -3617,12 +3660,25 @@ class TalkbackCoordinator(
         ) {
             return
         }
+        val peerCoordinationEligible =
+            trigger == RecoveryReevaluateTrigger.PEER_RECOVERY_COORDINATION &&
+                conferenceEdgeRecoveryController.isPeerCoordinationEligible(
+                    session.id,
+                    remoteModuleId
+                )
+        if (
+            trigger == RecoveryReevaluateTrigger.PEER_RECOVERY_COORDINATION &&
+            !peerCoordinationEligible
+        ) {
+            return
+        }
         if (
             !signature.isMaterialChangeFrom(before) &&
             !failedResidencyReevaluate &&
             !deferredWakeupMatch &&
             !successorAdmissionCandidate &&
-            !postTerminalEligible
+            !postTerminalEligible &&
+            !peerCoordinationEligible
         ) {
             return
         }
@@ -3641,7 +3697,8 @@ class TalkbackCoordinator(
             signature = signature,
             capabilityBefore = before,
             trigger = trigger,
-            resurrectionEvidence = resurrectionEvidence
+            resurrectionEvidence = resurrectionEvidence,
+            peerRecoverySenderAttemptId = peerRecoverySenderAttemptId
         )
     }
 
@@ -6643,6 +6700,13 @@ class TalkbackCoordinator(
             return
         }
 
+        maybeNotifyPeerRecoveryCoordination(
+            session = hostConference,
+            remoteModuleId = rejoinerId,
+            senderAttemptId = payload.recoveryAttemptId,
+            senderObligationGeneration = payload.obligationGeneration
+        )
+
         validateRecoveryReattachLineage(payload, signal, hostConference)?.let { lineageReason ->
             log(
                 "[${hostConference.traceId}] RECOVERY_REATTACH denied: $rejoinerId reason=$lineageReason " +
@@ -7982,6 +8046,17 @@ class TalkbackCoordinator(
         }
         if (session.type == SessionType.CONFERENCE) {
             ensureConferenceParticipantInRoster(session, caller, fromPeer)
+        }
+        if (
+            session.type == SessionType.CONFERENCE &&
+            payload.joinIntent == ConferenceJoinIntent.RECOVERY_REATTACH
+        ) {
+            maybeNotifyPeerRecoveryCoordination(
+                session = session,
+                remoteModuleId = caller.moduleId.value,
+                senderAttemptId = payload.restartAttemptId ?: 0L,
+                senderObligationGeneration = payload.obligationGeneration ?: 0L
+            )
         }
         if (session.meshCompletedModules.contains(caller.moduleId.value)) {
             val peerId = caller.moduleId.value

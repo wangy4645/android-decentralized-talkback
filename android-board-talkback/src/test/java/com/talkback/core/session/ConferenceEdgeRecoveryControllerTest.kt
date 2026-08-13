@@ -49,6 +49,7 @@ class ConferenceEdgeRecoveryControllerTest {
         observationWindowMs: Long = 10_000L,
         attemptBudgetMs: Long = 500L,
         debounceMs: Long = 50L,
+        iceRestartTimeoutMs: Long = 200L,
         onRequestReattach: (String, String, String) -> ReattachDispatchOutcome = { _, _, _ ->
             reattachCalls++
             ReattachDispatchOutcome.SENT
@@ -65,7 +66,7 @@ class ConferenceEdgeRecoveryControllerTest {
         membershipEpochProbe: MembershipEpochConvergenceProbe = DefaultOpenMembershipAuthoritySentinel
     ) = ConferenceEdgeRecoveryController(
         debounceMs = debounceMs,
-        iceRestartTimeoutMs = 200L,
+        iceRestartTimeoutMs = iceRestartTimeoutMs,
         attemptBudgetMs = attemptBudgetMs,
         observationWindowMs = observationWindowMs,
         clock = { nowMs },
@@ -3031,5 +3032,162 @@ class ConferenceEdgeRecoveryControllerTest {
                 RecoveryReevaluateTrigger.REMOTE_MODULE_RECOVERED
             )
         )
+    }
+
+    @Test
+    fun issue187_peerCoordination_entersWait_blocksReattachSupersede() {
+        controller.onIceStateChanged(
+            sessionId = "sess-187a",
+            channelId = "CH-1",
+            remoteModuleId = "M02",
+            iceState = "FAILED",
+            eligibility = eligible(),
+            initiatesReattach = true
+        )
+        Thread.sleep(350)
+        val snapshot = EdgeReachabilitySnapshot(
+            linkReady = true,
+            peerDiscovered = true,
+            peerSignalingReachable = true,
+            mediaRouteConnected = false,
+            authorityReachable = true
+        )
+        val signature = projectRecoveryCapabilitySignature(
+            snapshot,
+            initiatesReattach = true,
+            controlPlaneStarted = false
+        )
+        controller.onRecoveryReachabilityChanged(
+            sessionId = "sess-187a",
+            channelId = "CH-1",
+            remoteModuleId = "M02",
+            snapshot = snapshot,
+            signature = signature,
+            capabilityBefore = signature,
+            trigger = RecoveryReevaluateTrigger.PEER_RECOVERY_COORDINATION,
+            peerRecoverySenderAttemptId = 2L
+        )
+        assertTrue(
+            decisionLogs.any {
+                it.contains("trigger=PEER_RECOVERY_COORDINATION") &&
+                    it.contains("decision=WAIT_FOR_INBOUND")
+            }
+        )
+        assertTrue(decisionLogs.any { it.contains("RECOVERY_COORDINATION_WAIT_ARMED") })
+        decisionLogs.clear()
+        controller.onRecoveryReattachAccepted(
+            sessionId = "sess-187a",
+            remoteModuleId = "M02",
+            recoveryReason = RecoveryReason.NETWORK_RECOVERY,
+            source = RecoverySource.ICE_MONITOR
+        )
+        assertTrue(
+            decisionLogs.any {
+                it.contains("coordination_wait_blocks_reattach_supersede")
+            }
+        )
+        assertFalse(
+            decisionLogs.any {
+                it.contains("decision=SUPERSEDED") && it.contains("REATTACH_INBOUND")
+            }
+        )
+    }
+
+    @Test
+    fun issue187_coordinationWait_blocksPostTerminalSupersede() {
+        controller = buildController(iceRestartTimeoutMs = 5_000L)
+        controller.onIceStateChanged(
+            sessionId = "sess-187b",
+            channelId = "CH-1",
+            remoteModuleId = "M02",
+            iceState = "FAILED",
+            eligibility = eligible(),
+            initiatesReattach = true
+        )
+        Thread.sleep(350)
+        val snapshot = EdgeReachabilitySnapshot(
+            linkReady = true,
+            peerDiscovered = true,
+            peerSignalingReachable = true,
+            mediaRouteConnected = false,
+            authorityReachable = true
+        )
+        val signature = projectRecoveryCapabilitySignature(
+            snapshot,
+            initiatesReattach = true,
+            controlPlaneStarted = true
+        )
+        controller.onRecoveryReachabilityChanged(
+            sessionId = "sess-187b",
+            channelId = "CH-1",
+            remoteModuleId = "M02",
+            snapshot = snapshot,
+            signature = signature,
+            capabilityBefore = signature,
+            trigger = RecoveryReevaluateTrigger.PEER_RECOVERY_COORDINATION,
+            peerRecoverySenderAttemptId = 1L
+        )
+        Thread.sleep(600)
+        decisionLogs.clear()
+        controller.onRecoveryReachabilityChanged(
+            sessionId = "sess-187b",
+            channelId = "CH-1",
+            remoteModuleId = "M02",
+            snapshot = snapshot,
+            signature = signature,
+            capabilityBefore = signature,
+            trigger = RecoveryReevaluateTrigger.POST_TERMINAL_DISPATCH_CAPABLE
+        )
+        assertFalse(
+            decisionLogs.any {
+                it.contains("trigger=POST_TERMINAL_DISPATCH_CAPABLE") &&
+                    it.contains("decision=SUPERSEDED")
+            }
+        )
+        assertTrue(
+            decisionLogs.any {
+                it.contains("trigger=POST_TERMINAL_DISPATCH_CAPABLE") &&
+                    (it.contains("coordination_wait_blocks_supersede") ||
+                        it.contains("decision=WAIT_FOR_INBOUND") ||
+                        it.contains("decision=IGNORE"))
+            }
+        )
+    }
+
+    @Test
+    fun issue187_coordinationWaitExpired_clearsWait() {
+        controller.onIceStateChanged(
+            sessionId = "sess-187c",
+            channelId = "CH-1",
+            remoteModuleId = "M02",
+            iceState = "FAILED",
+            eligibility = eligible(),
+            initiatesReattach = true
+        )
+        Thread.sleep(350)
+        val snapshot = EdgeReachabilitySnapshot(
+            linkReady = true,
+            peerDiscovered = true,
+            peerSignalingReachable = true,
+            mediaRouteConnected = false,
+            authorityReachable = true
+        )
+        val signature = projectRecoveryCapabilitySignature(
+            snapshot,
+            initiatesReattach = true,
+            controlPlaneStarted = true
+        )
+        controller.onRecoveryReachabilityChanged(
+            sessionId = "sess-187c",
+            channelId = "CH-1",
+            remoteModuleId = "M02",
+            snapshot = snapshot,
+            signature = signature,
+            capabilityBefore = signature,
+            trigger = RecoveryReevaluateTrigger.PEER_RECOVERY_COORDINATION,
+            peerRecoverySenderAttemptId = 1L
+        )
+        Thread.sleep(250)
+        assertTrue(decisionLogs.any { it.contains("RECOVERY_COORDINATION_WAIT_EXPIRED") })
     }
 }
