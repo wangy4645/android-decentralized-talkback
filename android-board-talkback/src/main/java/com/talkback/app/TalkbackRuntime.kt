@@ -647,6 +647,24 @@ class TalkbackRuntime(
         remoteModuleId: String
     ): String = coordinator.testPreviewPairwiseMeshAdmissionActivation(sessionId, remoteModuleId)
 
+    internal fun testParticipantInviteState(sessionId: String, remoteModuleId: String): String? =
+        coordinator.testParticipantInviteState(sessionId, remoteModuleId)
+
+    internal fun testForceParticipantInviting(sessionId: String, remoteModuleId: String) {
+        coordinator.testForceParticipantInviting(sessionId, remoteModuleId)
+    }
+
+    internal fun testRemoteSignalingInFlight(sessionId: String, remoteModuleId: String): Boolean =
+        coordinator.testRemoteSignalingInFlight(sessionId, remoteModuleId)
+
+    internal fun testMeshSignalingState(sessionId: String, remoteModuleId: String): String? =
+        coordinator.testMeshSignalingState(sessionId, remoteModuleId)
+
+    internal fun testLastOutboundGroupInvitePayload(
+        sessionId: String,
+        remoteModuleId: String
+    ) = coordinator.testLastOutboundGroupInvitePayload(sessionId, remoteModuleId)
+
     internal fun testSendMembershipSnapshotInvite(sessionId: String, remoteModuleId: String): Boolean =
         coordinator.testSendMembershipSnapshotInvite(sessionId, remoteModuleId)
 
