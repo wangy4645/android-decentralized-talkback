@@ -114,27 +114,30 @@ class Adr0048PostRecoveredInboundReattachContractTest {
         )
     }
 
-    /** C1 — CONVERGING admission creates ownership after post-RECOVERED inbound accept. */
+    /** C1 — #188 Track P: stable post-RECOVERED inbound reattach must not reopen obligation. */
     @Test
-    fun c1_convergingAdmission_createsOwnershipEpisode() {
+    fun c1_stablePostRecoveredInboundReattach_doesNotReopenObligation() {
         driveEdgeToRecovered()
         val genBefore = controller.obligationGeneration("sess-1", "M01")!!
         decisionLogs.clear()
 
         postRecoveredInboundReattach(disposition = ReattachDisposition.CONVERGING)
 
-        assertTrue(controller.edgeObligationOpen("sess-1", "M01"))
-        assertTrue(controller.isEdgeRecovering("sess-1", "M01"))
-        assertEquals(EdgeRecoveryPhase.REATTACH_ACCEPTED, controller.attemptLineageObservation("sess-1", "M01")!!.phase)
-        val genAfter = controller.obligationGeneration("sess-1", "M01")!!
-        assertTrue(genAfter > genBefore)
+        assertFalse(controller.edgeObligationOpen("sess-1", "M01"))
+        assertFalse(controller.isEdgeRecovering("sess-1", "M01"))
+        assertEquals(EdgeRecoveryPhase.RECOVERED, controller.attemptLineageObservation("sess-1", "M01")!!.phase)
+        assertEquals(genBefore, controller.obligationGeneration("sess-1", "M01"))
         assertTrue(
             decisionLogs.any {
-                it.contains("POST_RECOVERED_INBOUND_REATTACH") ||
-                    it.contains("trigger=POST_RECOVERED_INBOUND_REATTACH")
+                it.contains("rejectReason=post_recovered_stable_inbound_reattach")
             }
         )
-        assertTrue(decisionLogs.any { it.contains("RECOVERY_OBLIGATION_OPENED") })
+        assertFalse(decisionLogs.any { it.contains("RECOVERY_OBLIGATION_OPENED") })
+        assertFalse(
+            decisionLogs.any {
+                it.contains("POST_RECOVERED_INBOUND_REATTACH")
+            }
+        )
     }
 
     /** C2 — NON_CONVERGING does not create ownership; stays non-actively-recovering. */
@@ -154,53 +157,51 @@ class Adr0048PostRecoveredInboundReattachContractTest {
         assertFalse(decisionLogs.any { it.contains("RECOVERY_OBLIGATION_OPENED") })
     }
 
-    /** C3 — ICE already live must not shortcut-clear ownership (W5 seam class). */
+    /** C3 — stable post-RECOVERED inbound reattach stays ignored even when ICE is already live. */
     @Test
-    fun c3_iceAlreadyLive_ownershipRemainsOpenUntilControlReconciliation() {
+    fun c3_iceAlreadyLive_stableInboundReattachDoesNotReopenObligation() {
         driveEdgeToRecovered()
         iceConnected = true
         decisionLogs.clear()
 
         postRecoveredInboundReattach(disposition = ReattachDisposition.CONVERGING)
 
-        assertTrue(controller.edgeObligationOpen("sess-1", "M01"))
-        assertTrue(controller.isEdgeRecovering("sess-1", "M01"))
-        assertFalse(decisionLogs.any { it.contains("RECOVERY_EDGE_RECOVERED") })
+        assertFalse(controller.edgeObligationOpen("sess-1", "M01"))
+        assertFalse(controller.isEdgeRecovering("sess-1", "M01"))
+        assertEquals(EdgeRecoveryPhase.RECOVERED, controller.attemptLineageObservation("sess-1", "M01")!!.phase)
+        assertTrue(
+            decisionLogs.any {
+                it.contains("rejectReason=post_recovered_stable_inbound_reattach")
+            }
+        )
     }
 
-    /** C4 — transport + membership/control reconciliation clears ownership. */
+    /** C4 — material failure after ER reopens recovery; control reconciliation clears ownership. */
     @Test
     fun c4_controlReconciliation_clearsOwnership() {
         controller = buildController(membershipEpochProbe = membershipConvergedProbe())
         driveEdgeToRecovered()
-        postRecoveredInboundReattach(disposition = ReattachDisposition.CONVERGING)
-        assertTrue(controller.edgeObligationOpen("sess-1", "M01"))
-        iceConnected = true
-        decisionLogs.clear()
-
-        val snapshot = EdgeReachabilitySnapshot(
-            linkReady = true,
-            peerDiscovered = true,
-            peerSignalingReachable = true,
-            mediaRouteConnected = true,
-            authorityReachable = true
-        )
-        val signature = projectRecoveryCapabilitySignature(
-            snapshot,
-            initiatesReattach = false,
-            controlPlaneStarted = true
-        )
-        controller.onRecoveryReachabilityChanged(
+        controller.onIceStateChanged(
             sessionId = "sess-1",
             channelId = "CH-1",
             remoteModuleId = "M01",
-            snapshot = snapshot,
-            signature = signature,
-            capabilityBefore = signature,
-            trigger = RecoveryReevaluateTrigger.ROUTE_CONVERGED
+            iceState = "FAILED",
+            eligibility = eligible(),
+            initiatesReattach = false
         )
+        assertTrue(controller.edgeObligationOpen("sess-1", "M01"))
+        controller.onRecoveryReattachAccepted(
+            sessionId = "sess-1",
+            remoteModuleId = "M01",
+            recoveryReason = RecoveryReason.NETWORK_RECOVERY,
+            source = RecoverySource.ICE_MONITOR,
+            disposition = ReattachDisposition.CONVERGING
+        )
+        iceConnected = true
+        controller.onIceConnected("sess-1", "M01")
+        nowMs += 50L
+        controller.applyMarkRecoveredForTest("sess-1", "M01")
 
-        assertTrue(decisionLogs.any { it.contains("RECOVERY_EDGE_RECOVERED") })
         assertFalse(controller.edgeObligationOpen("sess-1", "M01"))
         assertFalse(controller.isEdgeRecovering("sess-1", "M01"))
         assertEquals(ObligationCloseReason.RECOVERED, controller.obligationCloseReason("sess-1", "M01"))

@@ -1019,6 +1019,15 @@ class ConferenceEdgeRecoveryController internal constructor(
     }
 
     /**
+     * #188 Track P: inbound reattach on a stably recovered edge must not reopen recovery.
+     * ICE-failure paths still use [needsNewObligationEpisode] via connectivity upsert.
+     */
+    private fun shouldRejectStablePostRecoveredInboundReattach(record: EdgeRecoveryRecord): Boolean =
+        record.phase == EdgeRecoveryPhase.RECOVERED &&
+            !record.edgeObligationOpen() &&
+            record.obligationCloseReason == ObligationCloseReason.RECOVERED
+
+    /**
      * Opens a new recovery obligation episode after a healthy edge failure (P1).
      * Does not reuse closed recovery identity or prior attempt context.
      */
@@ -3509,6 +3518,17 @@ class ConferenceEdgeRecoveryController internal constructor(
                 )
                 record = existing
             } else if (needsNewObligationEpisode(existing)) {
+                if (shouldRejectStablePostRecoveredInboundReattach(existing)) {
+                    onLog(
+                        "RECOVERY_DECISION session=$sessionId edge=$remoteModuleId " +
+                            "attempt=$priorAttempt " +
+                            "trigger=${RecoveryDecisionTrigger.REATTACH_ACCEPTED} " +
+                            "decision=IGNORE approved=true " +
+                            "rejectReason=post_recovered_stable_inbound_reattach"
+                    )
+                    notifyChanged(sessionId)
+                    return
+                }
                 onLog(
                     "RECOVERY_DECISION session=$sessionId edge=$remoteModuleId " +
                         "attempt=$priorAttempt priorAttempt=$priorAttempt " +
