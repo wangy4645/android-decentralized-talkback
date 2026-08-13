@@ -5,6 +5,14 @@ package com.talkback.core.session
  */
 object OutboundGroupInviteAttemptSupport {
 
+    /**
+     * An attempt whose peer never answered must not gate admission forever: MESH_LINK_COMPLETED
+     * is not reachable when the remote GROUP_ACCEPT was lost.
+     */
+    const val ATTEMPT_STALE_TIMEOUT_MS = 10_000L
+
+    const val TERMINAL_REASON_TIMEOUT = "ATTEMPT_TIMEOUT"
+
     fun isAdmissionRelevantSemantic(semantic: GroupInvitePayloadSemantic): Boolean =
         semantic == GroupInvitePayloadSemantic.BOOTSTRAP_SDP_INVITE ||
             semantic == GroupInvitePayloadSemantic.PAIRWISE_MESH_SDP_INVITE
@@ -44,6 +52,28 @@ object OutboundGroupInviteAttemptSupport {
                 handoffSucceeded = true,
                 terminalReason = null
             )
+    }
+
+    fun isStale(
+        attempt: OutboundGroupInviteAttempt?,
+        nowMs: Long,
+        timeoutMs: Long = ATTEMPT_STALE_TIMEOUT_MS
+    ): Boolean {
+        val active = attempt?.takeIf { isActive(it) } ?: return false
+        return nowMs - active.issuedAtMs >= timeoutMs
+    }
+
+    /** Returns the age of the expired attempt, or null when nothing was expired. */
+    fun expireStaleAttempt(
+        session: TalkbackSession,
+        remoteModuleId: String,
+        nowMs: Long,
+        timeoutMs: Long = ATTEMPT_STALE_TIMEOUT_MS
+    ): Long? {
+        val attempt = session.outboundGroupInviteAttemptsByRemoteModule[remoteModuleId]
+        if (!isStale(attempt, nowMs, timeoutMs)) return null
+        markTerminal(session, remoteModuleId, TERMINAL_REASON_TIMEOUT)
+        return nowMs - (attempt?.issuedAtMs ?: nowMs)
     }
 
     fun markTerminal(session: TalkbackSession, remoteModuleId: String, reason: String) {

@@ -2051,8 +2051,88 @@ class TalkbackCoordinator(
         }
     }
 
-    private fun remoteSignalingInFlight(session: TalkbackSession, moduleId: String): Boolean =
-        OutboundGroupInviteAttemptSupport.isRemoteSignalingInFlight(session, moduleId)
+    /**
+     * A GROUP_ACCEPT rejected by the peer-edge gate leaves the answerer settled locally while the
+     * offerer keeps waiting: without a re-send the mesh edge can never converge.
+     */
+    private data class BlockedGroupAccept(
+        val target: PeerTarget,
+        val envelope: SignalEnvelope,
+        val sessionId: String,
+        val remoteModuleId: String,
+        val blockedAtMs: Long
+    )
+
+    private val blockedGroupAcceptByPeer = ConcurrentHashMap<String, BlockedGroupAccept>()
+
+    private fun recordBlockedGroupAcceptForEdgeRetry(
+        target: PeerTarget,
+        envelope: SignalEnvelope,
+        peerModuleId: String,
+        reason: String
+    ) {
+        if (envelope.type != SignalType.GROUP_ACCEPT) return
+        blockedGroupAcceptByPeer[peerModuleId] = BlockedGroupAccept(
+            target = target,
+            envelope = envelope,
+            sessionId = envelope.sessionId,
+            remoteModuleId = peerModuleId,
+            blockedAtMs = System.currentTimeMillis()
+        )
+        log(
+            "GROUP_ACCEPT_RETRY_PENDING session=${envelope.sessionId} remote=$peerModuleId reason=$reason"
+        )
+    }
+
+    private fun retryBlockedGroupAccept(remoteModuleId: String) {
+        val pending = blockedGroupAcceptByPeer.remove(remoteModuleId) ?: return
+        val ageMs = System.currentTimeMillis() - pending.blockedAtMs
+        if (ageMs >= BLOCKED_GROUP_ACCEPT_RETRY_BUDGET_MS) {
+            log(
+                "GROUP_ACCEPT_RETRY session=${pending.sessionId} remote=$remoteModuleId " +
+                    "result=ABANDONED ageMs=$ageMs"
+            )
+            return
+        }
+        val session = sessions[pending.sessionId]
+        if (session == null || !session.accepted) {
+            log(
+                "GROUP_ACCEPT_RETRY session=${pending.sessionId} remote=$remoteModuleId " +
+                    "result=SESSION_GONE ageMs=$ageMs"
+            )
+            return
+        }
+        val sent = sendSignalHandoff(pending.target, pending.envelope)
+        log(
+            "GROUP_ACCEPT_RETRY session=${pending.sessionId} remote=$remoteModuleId " +
+                "result=${if (sent) "SUCCESS" else "FAIL"} ageMs=$ageMs"
+        )
+        if (!sent) return
+        meshEngineForSession(session, remoteModuleId)?.let { engine ->
+            commitAnswererTransactionAndDrain(session, remoteModuleId, engine, path = "EDGE_READY_RETRY")
+        }
+    }
+
+    private fun remoteSignalingInFlight(session: TalkbackSession, moduleId: String): Boolean {
+        expireStaleOutboundGroupInviteAttempt(session, moduleId)
+        return OutboundGroupInviteAttemptSupport.isRemoteSignalingInFlight(session, moduleId)
+    }
+
+    /**
+     * #180 F2 attempts only terminate on MESH_LINK_COMPLETED, which is unreachable when the
+     * remote GROUP_ACCEPT never arrives. Expire them so the pairwise planner may re-invite.
+     */
+    private fun expireStaleOutboundGroupInviteAttempt(session: TalkbackSession, moduleId: String) {
+        val ageMs = OutboundGroupInviteAttemptSupport.expireStaleAttempt(
+            session,
+            moduleId,
+            System.currentTimeMillis()
+        ) ?: return
+        log(
+            "OUTBOUND_GROUP_INVITE_ATTEMPT_TERMINAL session=${session.id} peer=$moduleId " +
+                "reason=${OutboundGroupInviteAttemptSupport.TERMINAL_REASON_TIMEOUT} ageMs=$ageMs"
+        )
+    }
 
     /** Add peers to an existing GROUP mesh (host pull-in / counter-invite). */
     private fun sendGroupMeshInvitesInternal(sessionId: String, invitees: List<EndpointAddress>): Int {
@@ -3607,6 +3687,7 @@ class TalkbackCoordinator(
                         isRetry = true
                     )
                 }
+            retryBlockedGroupAccept(remoteModuleId)
             evaluateBootstrapAdmissionOnEdgeReady(remoteModuleId)
             evaluatePairwiseMeshAdmissionOnEdgeReady(remoteModuleId)
         }
@@ -3627,6 +3708,20 @@ class TalkbackCoordinator(
                 bootstrapAdmissionIntentsByKey[key] = GroupBootstrapAdmissionSupport.markWaiting(
                     intent,
                     "EDGE_LOST:${event.reason}"
+                )
+            }
+            sessions.values.forEach { session ->
+                if (!OutboundGroupInviteAttemptSupport.isRemoteSignalingInFlight(session, remoteModuleId)) {
+                    return@forEach
+                }
+                OutboundGroupInviteAttemptSupport.markTerminal(
+                    session,
+                    remoteModuleId,
+                    "EDGE_LOST:${event.reason}"
+                )
+                log(
+                    "OUTBOUND_GROUP_INVITE_ATTEMPT_TERMINAL session=${session.id} peer=$remoteModuleId " +
+                        "reason=EDGE_LOST:${event.reason}"
                 )
             }
         }
@@ -10841,11 +10936,18 @@ class TalkbackCoordinator(
         val ice = meshIceStateForSession(session, peerId)
         val meshPeer = session.meshCompletedModules.contains(peerId)
         if (meshPeer && IceConnectivity.isConnected(ice)) return
-        val invitePending = meshParticipant(session,peerId).invite == InviteState.INVITING &&
-            !meshPeer
+        val participant = meshParticipant(session, peerId)
+        val invitePending = participant.invite == InviteState.INVITING && !meshPeer
         if (invitePending) {
-            log("${sessionTag(session)} Mesh join deferred: $peerId invite still pending")
-            return
+            // INVITING only clears on ICE connect, which this defer itself prevents when the
+            // remote GROUP_ACCEPT was lost. Expire it so a fresh join offer may be issued.
+            val pendingAgeMs = System.currentTimeMillis() - participant.invitedAtMs
+            if (pendingAgeMs < GROUP_MESH_INVITE_PENDING_TIMEOUT_MS) {
+                log("${sessionTag(session)} Mesh join deferred: $peerId invite still pending")
+                return
+            }
+            participant.invite = InviteState.EXPIRED
+            log("${sessionTag(session)} Mesh join invite expired: $peerId ageMs=$pendingAgeMs")
         }
         if (meshPeer) {
             if (!groupMeshReconciler.canReconnect(channelId, peerId, ice)) return
@@ -14275,6 +14377,8 @@ class TalkbackCoordinator(
         private const val E4_REJOIN_INVITE_COOLDOWN_MS = 5_000L
         private const val BOOTSTRAP_ADMISSION_EDGE_RETRY_COOLDOWN_MS = 5_000L
         private const val PAIRWISE_MESH_ADMISSION_ACTIVATION_COOLDOWN_MS = 5_000L
+        private const val GROUP_MESH_INVITE_PENDING_TIMEOUT_MS = 10_000L
+        private const val BLOCKED_GROUP_ACCEPT_RETRY_BUDGET_MS = 60_000L
     }
 
     private fun sessionTag(session: TalkbackSession): String =
@@ -14516,6 +14620,7 @@ class TalkbackCoordinator(
         ) {
             log("PEER_EDGE_CONTROL_BLOCKED type=${envelope.type} peer=$peerModuleId reason=TEST_BLOCKED")
             observeBootstrapAdmissionInviteBlocked(envelope)
+            recordBlockedGroupAcceptForEdgeRetry(target, envelope, peerModuleId, "TEST_BLOCKED")
             return false
         }
         if (peerModuleId != null &&
@@ -14529,6 +14634,12 @@ class TalkbackCoordinator(
                     "reason=${peerEdgeSignalingReadiness?.snapshot(peerModuleId)?.reason}"
             )
             observeBootstrapAdmissionInviteBlocked(envelope)
+            recordBlockedGroupAcceptForEdgeRetry(
+                target,
+                envelope,
+                peerModuleId,
+                peerEdgeSignalingReadiness?.snapshot(peerModuleId)?.reason?.name ?: "UNKNOWN"
+            )
             return false
         }
         val sent = runCatching {
