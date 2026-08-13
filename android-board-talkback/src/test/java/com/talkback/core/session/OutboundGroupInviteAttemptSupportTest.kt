@@ -95,6 +95,46 @@ class OutboundGroupInviteAttemptSupportTest {
     }
 
     @Test
+    fun staleAttempt_expires_soPlannerMayReinvite() {
+        val session = session()
+        OutboundGroupInviteAttemptSupport.recordSuccessfulHandoff(
+            session = session,
+            remoteModuleId = "M03",
+            sessionId = session.id,
+            semantic = GroupInvitePayloadSemantic.BOOTSTRAP_SDP_INVITE,
+            offerLineageId = "GM1",
+            deliveryAttemptId = 1L,
+            issuedAtMs = 1000L
+        )
+        val staleNowMs = 1000L + OutboundGroupInviteAttemptSupport.ATTEMPT_STALE_TIMEOUT_MS
+        assertEquals(
+            OutboundGroupInviteAttemptSupport.ATTEMPT_STALE_TIMEOUT_MS,
+            OutboundGroupInviteAttemptSupport.expireStaleAttempt(session, "M03", staleNowMs)
+        )
+        assertFalse(OutboundGroupInviteAttemptSupport.isRemoteSignalingInFlight(session, "M03"))
+        assertEquals(
+            OutboundGroupInviteAttemptSupport.TERMINAL_REASON_TIMEOUT,
+            session.outboundGroupInviteAttemptsByRemoteModule["M03"]?.terminalReason
+        )
+    }
+
+    @Test
+    fun freshAttempt_doesNotExpire() {
+        val session = session()
+        OutboundGroupInviteAttemptSupport.recordSuccessfulHandoff(
+            session = session,
+            remoteModuleId = "M03",
+            sessionId = session.id,
+            semantic = GroupInvitePayloadSemantic.PAIRWISE_MESH_SDP_INVITE,
+            offerLineageId = "GM2",
+            deliveryAttemptId = 1L,
+            issuedAtMs = 1000L
+        )
+        assertNull(OutboundGroupInviteAttemptSupport.expireStaleAttempt(session, "M03", 1500L))
+        assertTrue(OutboundGroupInviteAttemptSupport.isRemoteSignalingInFlight(session, "M03"))
+    }
+
+    @Test
     fun localOfferAlone_doesNotAffectSupportEvaluation() {
         val session = session()
         assertFalse(OutboundGroupInviteAttemptSupport.isRemoteSignalingInFlight(session, "M03"))
