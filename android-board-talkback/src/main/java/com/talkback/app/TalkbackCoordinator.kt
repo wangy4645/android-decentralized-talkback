@@ -8316,6 +8316,7 @@ class TalkbackCoordinator(
                     "remoteDesc=${snap?.remoteDescriptionType ?: "NONE"}"
             )
             if (session.type == SessionType.CONFERENCE) {
+                conferenceAdmissionTracker.markReadyIfAbsent(conferenceAdmissionKey(session.id, moduleId))
                 completeGroupMesh(session)
                 drainPendingGroupJoins(session.id)
                 scheduleGroupMeshRetries(session.id)
@@ -8334,6 +8335,9 @@ class TalkbackCoordinator(
         wireIceCallback(session, moduleId, engine)
         engine.applyRemoteAnswer(signal.payload, politeForMeshPair(moduleId))
         drainPendingIce(session.id, moduleId, engine)
+        if (session.type == SessionType.CONFERENCE) {
+            conferenceAdmissionTracker.markReadyIfAbsent(conferenceAdmissionKey(session.id, moduleId))
+        }
         // P2 (INV-NEG-013): applyRemoteAnswer success may flip probe.executable false→true.
         recomputeNegotiationCapability(
             session = session,

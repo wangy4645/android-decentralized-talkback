@@ -59,4 +59,29 @@ class ConferenceAdmissionTrackerTest {
         assertTrue(tracker.allowsRecovery(key))
         assertFalse(tracker.allowsRecovery(otherSession))
     }
+
+    /** Offerer GROUP_ACCEPT path: applyRemoteAnswer success seam → READY → recovery eligible. */
+    @Test
+    fun offererGroupAcceptPath_markReadyIfAbsent_allowsRecovery() {
+        assertFalse(tracker.allowsRecovery(key))
+
+        tracker.markReadyIfAbsent(key)
+
+        assertEquals(ConferenceAdmissionPhase.READY, tracker.phase(key))
+        assertTrue(tracker.allowsRecovery(key))
+        assertTrue(logs.any { it.contains("phase=READY reason=ANSWER_COMMITTED") })
+    }
+
+    /** Duplicate GROUP_ACCEPT when mesh already connected must not corrupt READY. */
+    @Test
+    fun offererDuplicateGroupAccept_markReadyIfAbsent_isIdempotent() {
+        tracker.markReadyIfAbsent(key)
+        val readyLogsAfterFirst = logs.count { it.contains("phase=READY") }
+
+        tracker.markReadyIfAbsent(key)
+
+        assertEquals(ConferenceAdmissionPhase.READY, tracker.phase(key))
+        assertTrue(tracker.allowsRecovery(key))
+        assertEquals(readyLogsAfterFirst, logs.count { it.contains("phase=READY") })
+    }
 }
