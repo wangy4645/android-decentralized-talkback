@@ -401,7 +401,8 @@ M01 attempt=2 != proof M03 must retry
 - Implementation: `8fc6e77`
 - Issue comment (evidence split): [#175#issuecomment-5280376608](https://github.com/wangy4645/android-decentralized-talkback/issues/175#issuecomment-5280376608)
 - Issue close (liveness PASS): [#175#issuecomment-5280671912](https://github.com/wangy4645/android-decentralized-talkback/issues/175#issuecomment-5280671912)
-- [#187](https://github.com/wangy4645/android-decentralized-talkback/issues/187) — peer recovery coordination contract **CLOSED** (`8f590c8`; field `talkback/logs/187-coordination-field-20260813-211638`; Q9 contract PASS). Post-wait non-convergence and observer `DEGRADED` **not** part of #187 closure; see [#175#issuecomment-5281072008](https://github.com/wangy4645/android-decentralized-talkback/issues/175#issuecomment-5281072008)
+- [#187](https://github.com/wangy4645/android-decentralized-talkback/issues/187) — peer recovery coordination contract **CLOSED** (`8f590c8`)
+- [ADR-0055](./0055-conference-recovery-outcome-convergence.md) — outcome convergence **ACCEPTED** ([#188](https://github.com/wangy4645/android-decentralized-talkback/issues/188); Track P/O grill CLOSED; implementation NOT AUTHORIZED)
 - PR #186 merge: `9a93338`
 - `ConferenceEdgeRecoveryController.kt`, `PostObligationCloseConvergence.kt`
 - Issue #175 tracker comment (2026-08-13)
