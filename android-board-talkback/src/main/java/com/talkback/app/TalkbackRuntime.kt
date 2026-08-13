@@ -647,6 +647,15 @@ class TalkbackRuntime(
         remoteModuleId: String
     ): String = coordinator.testPreviewPairwiseMeshAdmissionActivation(sessionId, remoteModuleId)
 
+    internal fun testSendMembershipSnapshotInvite(sessionId: String, remoteModuleId: String): Boolean =
+        coordinator.testSendMembershipSnapshotInvite(sessionId, remoteModuleId)
+
+    internal fun testBootstrapAdmissionIntentState(channelId: String, moduleId: String): String? =
+        coordinator.testBootstrapAdmissionIntentState(channelId, moduleId)
+
+    internal fun testPreviewBootstrapEdgeReadyRetry(channelId: String, moduleId: String): String =
+        coordinator.testPreviewBootstrapEdgeReadyRetry(channelId, moduleId)
+
     internal fun testRunPairwiseMeshAdmissionActivation(
         sessionId: String,
         remoteModuleId: String
