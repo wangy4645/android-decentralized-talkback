@@ -367,6 +367,25 @@ class ConferenceEdgeRecoveryController internal constructor(
      * Appendix C-3.2 (C-12): deferred attempt with [WakeupBinding] matching [trigger].
      * Used by coordinator materiality gate to force RECOVERY_REEVALUATE.
      */
+    /**
+     * ADR-0054: Coordinator may emit [RecoveryReevaluateTrigger.POST_TERMINAL_DISPATCH_CAPABLE]
+     * only while this edge is FAILED_MEDIA with an open obligation.
+     */
+    fun isPostTerminalDispatchEligible(sessionId: String, remoteModuleId: String): Boolean {
+        val record = edges[ConferenceEdgeKey(sessionId, remoteModuleId)] ?: return false
+        return isPostTerminalDispatchCapableFact(
+            obligationOpen = record.edgeObligationOpen(),
+            failedMediaTerminal = record.phase.isFailedMediaRecovery(),
+            canDispatchRecoverySignal = true
+        )
+    }
+
+    fun postTerminalDispatchLatchToken(sessionId: String, remoteModuleId: String): String? {
+        val record = edges[ConferenceEdgeKey(sessionId, remoteModuleId)] ?: return null
+        if (!isPostTerminalDispatchEligible(sessionId, remoteModuleId)) return null
+        return "${record.obligationGeneration}:${record.recoveryAttemptId}"
+    }
+
     fun hasDeferredWakeupForTrigger(
         sessionId: String,
         remoteModuleId: String,
@@ -2394,6 +2413,10 @@ class ConferenceEdgeRecoveryController internal constructor(
             return
         }
         if (record.edgeObligationOpen()) {
+            if (trigger == RecoveryReevaluateTrigger.POST_TERMINAL_DISPATCH_CAPABLE) {
+                handlePostTerminalDispatchCapable(record, snapshot, signature)
+                return
+            }
             reevaluateOpenObligation(
                 record = record,
                 snapshot = snapshot,
@@ -2539,6 +2562,82 @@ class ConferenceEdgeRecoveryController internal constructor(
             )
             emitCompletionObservations(record, snapshot, RecoveryReevaluateTrigger.DIGEST_REFRESH)
         }
+        notifyChanged(sessionId)
+    }
+
+    /**
+     * ADR-0054: named liveness decision after a post-terminal dispatch-capable fact.
+     * Silent FAILED_MEDIA stall until obligation deadline is forbidden.
+     */
+    private fun handlePostTerminalDispatchCapable(
+        record: EdgeRecoveryRecord,
+        snapshot: EdgeReachabilitySnapshot,
+        signature: RecoveryCapabilitySignature
+    ) {
+        val trigger = RecoveryReevaluateTrigger.POST_TERMINAL_DISPATCH_CAPABLE
+        val sessionId = record.key.sessionId
+        val remoteModuleId = record.key.remoteModuleId
+        onLog(
+            "RECOVERY_REEVALUATE session=$sessionId edge=$remoteModuleId " +
+                "attempt=${record.recoveryAttemptId} trigger=$trigger " +
+                "capabilityBefore=NONE " +
+                "capabilityAfter=${signature.formatCapabilityLabel()} " +
+                "controlPlaneStarted=${record.controlPlaneStarted()}"
+        )
+        if (
+            !record.edgeObligationOpen() ||
+            !record.phase.isFailedMediaRecovery() ||
+            !snapshot.canDispatchRecoverySignal()
+        ) {
+            onLog(
+                "RECOVERY_DECISION session=$sessionId edge=$remoteModuleId " +
+                    "attempt=${record.recoveryAttemptId} trigger=$trigger " +
+                    "decision=IGNORE approved=true rejectReason=not_post_terminal_dispatch_capable"
+            )
+            notifyChanged(sessionId)
+            return
+        }
+        if (!admitTerminalReevaluate(record, trigger)) {
+            onLog(
+                "RECOVERY_DECISION session=$sessionId edge=$remoteModuleId " +
+                    "attempt=${record.recoveryAttemptId} trigger=$trigger " +
+                    "decision=IGNORE approved=true rejectReason=duplicate_post_terminal_fact"
+            )
+            notifyChanged(sessionId)
+            return
+        }
+        if (signature.permittedActions.isNotEmpty()) {
+            val priorAttempt = record.recoveryAttemptId
+            supersedeFailedResidencyAndAdmit(record, trigger, snapshot, signature)
+            onLog(
+                "RECOVERY_DECISION session=$sessionId edge=$remoteModuleId " +
+                    "attempt=${record.recoveryAttemptId} priorAttempt=$priorAttempt " +
+                    "trigger=$trigger decision=SUPERSEDED approved=true"
+            )
+            notifyChanged(sessionId)
+            return
+        }
+        val wakeupBinding = WakeupBinding(
+            sourceType = WakeupSourceType.ROUTE_CONVERGED,
+            sourceKey = edgeWakeupKey(sessionId, remoteModuleId)
+        )
+        recordMediaActionDeferred(
+            record = record,
+            owner = if (record.initiatesReattach) {
+                MediaActionOwner.PARTICIPANT_REATTACH
+            } else {
+                MediaActionOwner.HOST_RESTART
+            },
+            reason = DeferredReason.MEDIA_NOT_READY,
+            wakeupBinding = wakeupBinding,
+            trigger = trigger.name
+        )
+        record.lastWakeupTrigger = trigger.name
+        onLog(
+            "RECOVERY_DECISION session=$sessionId edge=$remoteModuleId " +
+                "attempt=${record.recoveryAttemptId} trigger=$trigger " +
+                "decision=WAIT_FOR_INBOUND approved=true"
+        )
         notifyChanged(sessionId)
     }
 

@@ -168,8 +168,22 @@ enum class RecoveryReevaluateTrigger {
      * Not RETRY_REQUIRED — evaluation may open a **new** delivery attempt only when
      * path/dispatch evidence allows (delivery opportunity reacquisition).
      */
-    DELIVERY_OPPORTUNITY_REACQUIRED
+    DELIVERY_OPPORTUNITY_REACQUIRED,
+    /**
+     * ADR-0054: first post-terminal observation that this edge can still dispatch.
+     * Coordinator emits only when obligation is open, attempt is FAILED_MEDIA terminal,
+     * and [EdgeReachabilitySnapshot.canDispatchRecoverySignal] is true.
+     * Ordinary HELLO MUST NOT use this trigger.
+     */
+    POST_TERMINAL_DISPATCH_CAPABLE
 }
+
+/** ADR-0054 Q7 gate. Ordinary HELLO is not sufficient by itself. */
+fun isPostTerminalDispatchCapableFact(
+    obligationOpen: Boolean,
+    failedMediaTerminal: Boolean,
+    canDispatchRecoverySignal: Boolean
+): Boolean = obligationOpen && failedMediaTerminal && canDispatchRecoverySignal
 
 /**
  * Resurrection admission evidence riding the R28-G notify seam (ADR-0022 §13.2.4 C2).

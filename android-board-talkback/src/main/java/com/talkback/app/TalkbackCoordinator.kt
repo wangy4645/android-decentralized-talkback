@@ -661,6 +661,8 @@ class TalkbackCoordinator(
     private val lastAuthorityReachableBySession = ConcurrentHashMap<String, Boolean>()
     /** Per-edge last [RecoveryCapabilitySignature] for materiality detection (ADR-0022 R28-G). */
     private val lastRecoveryCapabilityByEdge = ConcurrentHashMap<ConferenceEdgeKey, RecoveryCapabilitySignature>()
+    /** ADR-0054: one POST_TERMINAL_DISPATCH_CAPABLE fact per (edge, obligationGen, attemptId). */
+    private val postTerminalDispatchLatch = ConcurrentHashMap<ConferenceEdgeKey, String>()
     /** Dedup key for [CONFERENCE_RUNTIME_DECISION] (Issue2 probe). */
     private val lastConferenceRuntimeDecisionBySession = ConcurrentHashMap<String, String>()
     /** Dedup key for [CONFERENCE_RUNTIME_MISSING] (Gate-R1-B). */
@@ -3506,6 +3508,48 @@ class TalkbackCoordinator(
     }
 
     /**
+     * ADR-0054: HELLO is only a carrier. Emit at most one fact per terminal attempt when
+     * obligation is open, FAILED_MEDIA, and this edge can still dispatch.
+     */
+    private fun maybeNotifyPostTerminalDispatchCapable(remoteModuleId: String) {
+        sessions.values
+            .filter {
+                isConferenceSession(it) &&
+                    it.accepted &&
+                    remoteModuleId in conferenceRecoveryRemoteModuleIds(it)
+            }
+            .forEach { session ->
+                val channelId = session.channelId ?: return@forEach
+                val snapshot = buildRecoveryEdgeReachabilitySnapshot(channelId, session, remoteModuleId)
+                if (!snapshot.canDispatchRecoverySignal()) return@forEach
+                if (
+                    !conferenceEdgeRecoveryController.isPostTerminalDispatchEligible(
+                        session.id,
+                        remoteModuleId
+                    )
+                ) {
+                    return@forEach
+                }
+                val edgeKey = ConferenceEdgeKey(session.id, remoteModuleId)
+                val token = conferenceEdgeRecoveryController.postTerminalDispatchLatchToken(
+                    session.id,
+                    remoteModuleId
+                ) ?: return@forEach
+                if (postTerminalDispatchLatch[edgeKey] == token) return@forEach
+                log(
+                    "RECOVERY_POST_TERMINAL_DISPATCH_CAPABLE session=${session.id} " +
+                        "edge=$remoteModuleId token=$token"
+                )
+                maybeNotifyRecoveryReachabilityChanged(
+                    session,
+                    remoteModuleId,
+                    RecoveryReevaluateTrigger.POST_TERMINAL_DISPATCH_CAPABLE
+                )
+                postTerminalDispatchLatch[edgeKey] = token
+            }
+    }
+
+    /**
      * Coordinator-owned materiality comparator (ADR-0022 R28-G).
      * Notifies recovery controller only when [RecoveryCapabilitySignature] changes.
      *
@@ -3560,11 +3604,25 @@ class TalkbackCoordinator(
         val successorAdmissionCandidate =
             resurrectionEvidence != null &&
                 conferenceEdgeRecoveryController.edgeObligationClosed(session.id, remoteModuleId)
+        val postTerminalEligible =
+            trigger == RecoveryReevaluateTrigger.POST_TERMINAL_DISPATCH_CAPABLE &&
+                snapshot.canDispatchRecoverySignal() &&
+                conferenceEdgeRecoveryController.isPostTerminalDispatchEligible(
+                    session.id,
+                    remoteModuleId
+                )
+        if (
+            trigger == RecoveryReevaluateTrigger.POST_TERMINAL_DISPATCH_CAPABLE &&
+            !postTerminalEligible
+        ) {
+            return
+        }
         if (
             !signature.isMaterialChangeFrom(before) &&
             !failedResidencyReevaluate &&
             !deferredWakeupMatch &&
-            !successorAdmissionCandidate
+            !successorAdmissionCandidate &&
+            !postTerminalEligible
         ) {
             return
         }
@@ -5788,6 +5846,7 @@ class TalkbackCoordinator(
         if (wasStale) {
             onRemoteModuleRecovered(payload.moduleId)
         }
+        maybeNotifyPostTerminalDispatchCapable(payload.moduleId)
     }
 
     private fun applyAuthorityFloorSnapshotFromHello(payload: HelloPayload) {

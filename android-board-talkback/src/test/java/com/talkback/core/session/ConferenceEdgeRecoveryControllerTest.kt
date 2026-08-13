@@ -2869,4 +2869,167 @@ class ConferenceEdgeRecoveryControllerTest {
         )
         assertTrue(decisionLogs.any { it.contains("RECOVERY_CONTROL_ADMISSION_REJECTED") })
     }
+
+    @Test
+    fun adr0054_postTerminalDispatch_firstHelloReevaluates_secondSuppressed() {
+        controller.onIceStateChanged(
+            sessionId = "sess-54",
+            channelId = "CH-1",
+            remoteModuleId = "M02",
+            iceState = "FAILED",
+            eligibility = eligible(),
+            initiatesReattach = true
+        )
+        Thread.sleep(350)
+        assertTrue(controller.isPostTerminalDispatchEligible("sess-54", "M02"))
+        val snapshot = EdgeReachabilitySnapshot(
+            linkReady = true,
+            peerDiscovered = true,
+            peerSignalingReachable = true,
+            mediaRouteConnected = false,
+            authorityReachable = true
+        )
+        val signature = projectRecoveryCapabilitySignature(
+            snapshot,
+            initiatesReattach = true,
+            controlPlaneStarted = true
+        )
+        controller.onRecoveryReachabilityChanged(
+            sessionId = "sess-54",
+            channelId = "CH-1",
+            remoteModuleId = "M02",
+            snapshot = snapshot,
+            signature = signature,
+            capabilityBefore = signature,
+            trigger = RecoveryReevaluateTrigger.POST_TERMINAL_DISPATCH_CAPABLE
+        )
+        assertTrue(
+            decisionLogs.any {
+                it.contains("RECOVERY_REEVALUATE") &&
+                    it.contains("trigger=POST_TERMINAL_DISPATCH_CAPABLE") &&
+                    it.contains("edge=M02")
+            }
+        )
+        val supersedeCount = decisionLogs.count {
+            it.contains("decision=SUPERSEDED") && it.contains("trigger=POST_TERMINAL_DISPATCH_CAPABLE")
+        }
+        assertEquals(1, supersedeCount)
+        decisionLogs.clear()
+        controller.onRecoveryReachabilityChanged(
+            sessionId = "sess-54",
+            channelId = "CH-1",
+            remoteModuleId = "M02",
+            snapshot = snapshot,
+            signature = signature,
+            capabilityBefore = signature,
+            trigger = RecoveryReevaluateTrigger.POST_TERMINAL_DISPATCH_CAPABLE
+        )
+        assertTrue(
+            decisionLogs.any {
+                it.contains("decision=IGNORE") &&
+                    it.contains("trigger=POST_TERMINAL_DISPATCH_CAPABLE")
+            }
+        )
+        assertFalse(decisionLogs.any { it.contains("decision=SUPERSEDED") })
+    }
+
+    @Test
+    fun adr0054_postTerminalDispatch_producesNamedDecision() {
+        controller.onIceStateChanged(
+            sessionId = "sess-54b",
+            channelId = "CH-1",
+            remoteModuleId = "M02",
+            iceState = "FAILED",
+            eligibility = eligible(),
+            initiatesReattach = true
+        )
+        Thread.sleep(350)
+        val snapshot = EdgeReachabilitySnapshot(
+            linkReady = true,
+            peerDiscovered = true,
+            peerSignalingReachable = true,
+            mediaRouteConnected = false,
+            authorityReachable = true
+        )
+        val signature = projectRecoveryCapabilitySignature(
+            snapshot,
+            initiatesReattach = true,
+            controlPlaneStarted = true
+        )
+        controller.onRecoveryReachabilityChanged(
+            sessionId = "sess-54b",
+            channelId = "CH-1",
+            remoteModuleId = "M02",
+            snapshot = snapshot,
+            signature = signature,
+            capabilityBefore = signature,
+            trigger = RecoveryReevaluateTrigger.POST_TERMINAL_DISPATCH_CAPABLE
+        )
+        assertTrue(
+            decisionLogs.any {
+                it.contains("trigger=POST_TERMINAL_DISPATCH_CAPABLE") &&
+                    (it.contains("decision=SUPERSEDED") || it.contains("decision=WAIT_FOR_INBOUND"))
+            }
+        )
+        assertFalse(
+            decisionLogs.any {
+                it.contains("trigger=POST_TERMINAL_DISPATCH_CAPABLE") &&
+                    it.contains("decision=NO_ACTION")
+            }
+        )
+    }
+
+    @Test
+    fun adr0054_waitForInbound_wakeupBindingIsEdgeLocal() {
+        controller.onIceStateChanged(
+            sessionId = "sess-54c",
+            channelId = "CH-1",
+            remoteModuleId = "M02",
+            iceState = "FAILED",
+            eligibility = eligible(),
+            initiatesReattach = false
+        )
+        Thread.sleep(350)
+        val snapshot = EdgeReachabilitySnapshot(
+            linkReady = true,
+            peerDiscovered = true,
+            peerSignalingReachable = true,
+            mediaRouteConnected = false,
+            authorityReachable = true
+        )
+        val waitSignature = RecoveryCapabilitySignature(
+            permittedActions = emptySet(),
+            waitingReason = RecoveryWaitingReason.WAITING_FOR_INBOUND
+        )
+        controller.onRecoveryReachabilityChanged(
+            sessionId = "sess-54c",
+            channelId = "CH-1",
+            remoteModuleId = "M02",
+            snapshot = snapshot,
+            signature = waitSignature,
+            capabilityBefore = waitSignature,
+            trigger = RecoveryReevaluateTrigger.POST_TERMINAL_DISPATCH_CAPABLE
+        )
+        assertTrue(
+            decisionLogs.any {
+                it.contains("decision=WAIT_FOR_INBOUND") &&
+                    it.contains("trigger=POST_TERMINAL_DISPATCH_CAPABLE") &&
+                    it.contains("edge=M02")
+            }
+        )
+        assertTrue(
+            controller.hasDeferredWakeupForTrigger(
+                "sess-54c",
+                "M02",
+                RecoveryReevaluateTrigger.REMOTE_MODULE_RECOVERED
+            )
+        )
+        assertFalse(
+            controller.hasDeferredWakeupForTrigger(
+                "sess-54c",
+                "M01",
+                RecoveryReevaluateTrigger.REMOTE_MODULE_RECOVERED
+            )
+        )
+    }
 }
