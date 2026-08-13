@@ -16,6 +16,18 @@ class ConferenceAdmissionTracker(
     fun allowsRecovery(key: ConferenceAdmissionKey): Boolean =
         phases[key] == ConferenceAdmissionPhase.READY
 
+    /**
+     * ADR-0052: symmetric offerer/Answerer initial-admission READY commit.
+     * Idempotent — does not emit a duplicate transition when already READY.
+     */
+    fun markReadyIfAbsent(
+        key: ConferenceAdmissionKey,
+        reason: ConferenceAdmissionTransitionReason = ConferenceAdmissionTransitionReason.ANSWER_COMMITTED
+    ) {
+        if (phases[key] == ConferenceAdmissionPhase.READY) return
+        transition(key, ConferenceAdmissionPhase.READY, reason)
+    }
+
     fun transition(
         key: ConferenceAdmissionKey,
         phase: ConferenceAdmissionPhase,
