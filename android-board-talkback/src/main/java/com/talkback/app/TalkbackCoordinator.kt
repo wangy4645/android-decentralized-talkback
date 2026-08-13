@@ -1042,6 +1042,9 @@ class TalkbackCoordinator(
     private val lastIceTopologySnapshotMsByPeer = ConcurrentHashMap<String, Long>()
     private val groupAppStartSnapshotEmitted = ConcurrentHashMap.newKeySet<String>()
     private val suppressMeshRepairUntilMsByChannel = ConcurrentHashMap<String, Long>()
+    /** #180 field harness — suppress GroupMeshPlanner invites while proving pairwise admission activation. */
+    private val debugP180HarnessMeshPlannerSuppressUntilMs = java.util.concurrent.atomic.AtomicLong(0L)
+    private val debugP180HarnessPairwiseActivationSuppressUntilMs = java.util.concurrent.atomic.AtomicLong(0L)
     private val lastPlaybackEnabledBySession = ConcurrentHashMap<String, Boolean>()
     private val lastEnsureCanonicalInviteMsByModule = ConcurrentHashMap<String, Long>()
     private val lastE4RejoinInviteMsByModule = ConcurrentHashMap<String, Long>()
@@ -1987,6 +1990,14 @@ class TalkbackCoordinator(
 
     /** Add peers to an existing GROUP mesh (host pull-in / counter-invite). */
     private fun sendGroupMeshInvitesInternal(sessionId: String, invitees: List<EndpointAddress>): Int {
+        if (System.currentTimeMillis() < debugP180HarnessMeshPlannerSuppressUntilMs.get()) {
+            val peerIds = invitees.map { it.moduleId.value }.distinct().sorted().joinToString(",")
+            log(
+                "ADMISSION_HARNESS_PLANNER_SUPPRESSED path=sendGroupMeshInvitesInternal " +
+                    "session=$sessionId peers=$peerIds"
+            )
+            return 0
+        }
         val session = sessions[sessionId] ?: return 0
         if (session.type != SessionType.GROUP) return 0
         if (invitees.isEmpty()) return 0
@@ -2090,6 +2101,14 @@ class TalkbackCoordinator(
         session: TalkbackSession,
         reconnect: List<EndpointAddress>
     ): Int {
+        if (System.currentTimeMillis() < debugP180HarnessMeshPlannerSuppressUntilMs.get()) {
+            val peerIds = reconnect.map { it.moduleId.value }.distinct().sorted().joinToString(",")
+            log(
+                "ADMISSION_HARNESS_PLANNER_SUPPRESSED path=reconnectExistingGroupMeshPeers " +
+                    "session=${session.id} peers=$peerIds"
+            )
+            return 0
+        }
         if (session.type != SessionType.GROUP) return 0
         val channelId = session.channelId ?: return 0
         if (isMeshRepairSuppressed(channelId)) return 0
@@ -3670,6 +3689,13 @@ class TalkbackCoordinator(
         remoteModuleId: String
     ) {
         val channelId = session.channelId ?: return
+        if (System.currentTimeMillis() < debugP180HarnessPairwiseActivationSuppressUntilMs.get()) {
+            log(
+                "ADMISSION_HARNESS_ACTIVATION_SUPPRESSED ch=$channelId peer=$remoteModuleId " +
+                    "reason=roster_align_window"
+            )
+            return
+        }
         val obligation = PairwiseMeshAdmissionSupport.obligationForRemotePeer(
             session,
             ModuleId(remoteModuleId)
@@ -15310,6 +15336,279 @@ class TalkbackCoordinator(
             log(
                 "DEBUG_DISPATCH_SKIPPED action=SUPPRESS_SUCCESSOR_ATTEMPT_CLEAR " +
                     "remote=$remoteModuleId reason=no_host_session_or_timeout"
+            )
+        }
+        return ok
+    }
+
+    /**
+     * #180 membership-first field harness — local canonical roster only.
+     * Does not bump roster epoch or broadcast membership snapshots (avoids planner competition).
+     */
+    private fun harnessApplyCanonicalRosterLocal(
+        session: TalkbackSession,
+        memberModuleIds: List<String>,
+        unsatisfiedPeerModuleIds: Set<String> = emptySet(),
+        reconcileObligations: Boolean = true
+    ) {
+        val endpoints = memberModuleIds.map { id ->
+            val moduleId = ModuleId(id)
+            when {
+                moduleId == session.local.moduleId -> session.local
+                else ->
+                    endpointForDialableModule(moduleId)
+                        ?: session.pendingInviteeEndpoints[id]
+                        ?: EndpointAddress(moduleId, EndpointId("E0${id.takeLast(1)}"))
+            }
+        }.distinctBy { it.moduleId.value }.sortedBy { it.moduleId.value }
+        session.groupMembers = endpoints
+        session.memberModules.clear()
+        endpoints.forEach { session.memberModules.add(it.moduleId) }
+        GroupMembershipSupport.syncMembershipFromGroupMembers(session)
+        unsatisfiedPeerModuleIds.forEach { peerModuleId ->
+            session.meshCompletedModules.remove(peerModuleId)
+            if (peerModuleId !in session.pendingInviteeEndpoints) {
+                val peerId = ModuleId(peerModuleId)
+                session.pendingInviteeEndpoints[peerModuleId] =
+                    endpointForDialableModule(peerId)
+                        ?: EndpointAddress(peerId, EndpointId("E0${peerModuleId.takeLast(1)}"))
+            }
+        }
+        if (reconcileObligations) {
+            PairwiseMeshAdmissionSupport.reconcile(session)
+        }
+    }
+
+    private fun harnessInjectCanonicalMembershipLocal(
+        session: TalkbackSession,
+        peerModuleId: String,
+        peerEndpoint: EndpointAddress,
+        rosterOnly: Boolean = false
+    ) {
+        val memberIds = GroupMembershipSupport.canonicalMemberModuleIds(session)
+            .map { it.value }
+            .toMutableSet()
+        memberIds.add(session.local.moduleId.value)
+        memberIds.add(peerModuleId)
+        harnessApplyCanonicalRosterLocal(
+            session,
+            memberIds.sorted(),
+            unsatisfiedPeerModuleIds = setOf(peerModuleId),
+            reconcileObligations = !rosterOnly
+        )
+        session.pendingInviteeEndpoints[peerModuleId] = peerEndpoint
+    }
+
+    private fun armDebugP180HarnessMeshPlannerSuppress(ttlMs: Long = 300_000L) {
+        val until = System.currentTimeMillis() + ttlMs
+        debugP180HarnessMeshPlannerSuppressUntilMs.set(until)
+        log("ADMISSION_HARNESS_PLANNER_SUPPRESS armed=true untilMs=$until ttlMs=$ttlMs")
+    }
+
+    fun debugReleaseP180HarnessMeshPlannerSuppress(): Boolean {
+        debugP180HarnessMeshPlannerSuppressUntilMs.set(0L)
+        debugP180HarnessPairwiseActivationSuppressUntilMs.set(0L)
+        log("ADMISSION_HARNESS_PLANNER_SUPPRESS armed=false")
+        log("ADMISSION_HARNESS_ACTIVATION_SUPPRESS armed=false")
+        return true
+    }
+
+    private fun armDebugP180HarnessPairwiseActivationSuppress(ttlMs: Long = 300_000L) {
+        val until = System.currentTimeMillis() + ttlMs
+        debugP180HarnessPairwiseActivationSuppressUntilMs.set(until)
+        log("ADMISSION_HARNESS_ACTIVATION_SUPPRESS armed=true untilMs=$until ttlMs=$ttlMs")
+    }
+
+    private fun releaseDebugP180HarnessPairwiseActivationSuppress() {
+        debugP180HarnessPairwiseActivationSuppressUntilMs.set(0L)
+        log("ADMISSION_HARNESS_ACTIVATION_SUPPRESS armed=false")
+    }
+
+    fun debugArmP180HarnessMeshPlannerSuppress(ttlMs: Long = 300_000L): Boolean {
+        armDebugP180HarnessMeshPlannerSuppress(ttlMs)
+        return true
+    }
+
+    /**
+     * #180 membership-first field harness — inject canonical late peer + unsatisfied edge,
+     * classify (#181), reconcile obligation, optionally trigger activation (#180-C).
+     * DEBUG builds only; does not bypass membership boundary.
+     */
+    fun debugMembershipFirstPairwiseHarness(
+        channelId: String,
+        peerModuleId: String,
+        triggerActivation: Boolean = true,
+        rosterOnly: Boolean = false
+    ): Boolean {
+        val ok = runOnCoordinatorSyncTimed("P180_MEMBERSHIP_FIRST", default = false) {
+            val session = sessions.values.firstOrNull {
+                it.channelId == channelId && it.type == SessionType.GROUP && it.accepted
+            } ?: run {
+                log("ADMISSION_HARNESS_SKIPPED ch=$channelId reason=no_active_group_session")
+                return@runOnCoordinatorSyncTimed false
+            }
+            armDebugP180HarnessMeshPlannerSuppress()
+            val peerId = ModuleId(peerModuleId)
+            val peerEndpoint = endpointForDialableModule(peerId)
+                ?: session.pendingInviteeEndpoints[peerModuleId]
+                ?: EndpointAddress(peerId, EndpointId("E03"))
+            harnessInjectCanonicalMembershipLocal(session, peerModuleId, peerEndpoint, rosterOnly)
+            val canonical = GroupMembershipSupport.canonicalMemberModuleIds(session)
+                .map { it.value }
+                .sorted()
+                .joinToString(",")
+            log(
+                "ADMISSION_HARNESS_MEMBERSHIP_INJECT ch=$channelId peer=$peerModuleId " +
+                    "members=$canonical rosterEpoch=${session.rosterEpoch} mode=LOCAL_NO_PLANNER " +
+                    "rosterOnly=$rosterOnly"
+            )
+            if (rosterOnly) {
+                armDebugP180HarnessPairwiseActivationSuppress()
+                return@runOnCoordinatorSyncTimed true
+            }
+            val classification = classifyAdmissionForPeer(session, peerId)
+            log(
+                "ADMISSION_HARNESS_CLASSIFICATION ch=$channelId peer=$peerModuleId " +
+                    "domain=${classification.domain.name} reason=${classification.reason}"
+            )
+            applyClassifiedAdmissionForPeer(session, channelId, peerId)
+            val obligation = PairwiseMeshAdmissionSupport.obligationForRemotePeer(session, peerId)
+            if (obligation == null) {
+                log("ADMISSION_HARNESS_OBLIGATION ch=$channelId peer=$peerModuleId missing")
+                return@runOnCoordinatorSyncTimed false
+            }
+            log(
+                "ADMISSION_HARNESS_OBLIGATION ch=$channelId edge=${obligation.edge.storageKey()} " +
+                    "offerer=${obligation.offerer.value} answerer=${obligation.answerer.value} " +
+                    "signalingSatisfied=${obligation.signalingSatisfied}"
+            )
+            if (triggerActivation) {
+                onPeerEdgeSignalingReady(peerModuleId)
+                evaluatePairwiseMeshAdmissionActivation(session, peerModuleId)
+            }
+            true
+        }
+        if (ok) {
+            log(
+                "DEBUG_DISPATCH_COMPLETED action=P180_MEMBERSHIP_FIRST " +
+                    "ch=$channelId remote=$peerModuleId trigger=$triggerActivation"
+            )
+        } else {
+            log(
+                "DEBUG_DISPATCH_SKIPPED action=P180_MEMBERSHIP_FIRST " +
+                    "ch=$channelId remote=$peerModuleId reason=harness_failed_or_timeout"
+            )
+        }
+        return ok
+    }
+
+    /**
+     * #180 field harness — align local membership view with authority roster (answerer side).
+     * Does not bump roster epoch or start planner/bootstrap producers.
+     */
+    fun debugHarnessSyncMembershipView(
+        channelId: String,
+        memberModuleIdsCsv: String,
+        unsatisfiedPeerModuleId: String? = null
+    ): Boolean {
+        val ok = runOnCoordinatorSyncTimed("P180_SYNC_MEMBERSHIP_VIEW", default = false) {
+            val session = sessions.values.firstOrNull {
+                it.channelId == channelId && it.type == SessionType.GROUP && it.accepted
+            } ?: run {
+                log("ADMISSION_HARNESS_SKIPPED ch=$channelId reason=no_active_group_session")
+                return@runOnCoordinatorSyncTimed false
+            }
+            armDebugP180HarnessMeshPlannerSuppress()
+            val memberIds = memberModuleIdsCsv.split(",")
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+                .distinct()
+                .sorted()
+            if (memberIds.isEmpty()) {
+                log("ADMISSION_HARNESS_SKIPPED ch=$channelId reason=empty_member_list")
+                return@runOnCoordinatorSyncTimed false
+            }
+            val unsatisfied = unsatisfiedPeerModuleId
+                ?.takeIf { it.isNotBlank() }
+                ?.let { setOf(it) }
+                ?: emptySet()
+            harnessApplyCanonicalRosterLocal(session, memberIds, unsatisfied, reconcileObligations = false)
+            val digest = TopologyDigest.fromSession(session)
+            log(
+                "ADMISSION_HARNESS_MEMBERSHIP_SYNC ch=$channelId members=${memberIds.joinToString(",")} " +
+                    "rosterEpoch=${session.rosterEpoch} memberHash=${digest.memberHash} " +
+                    "unsatisfied=${unsatisfied.joinToString(",")} mode=LOCAL_NO_PLANNER"
+            )
+            true
+        }
+        if (ok) {
+            log(
+                "DEBUG_DISPATCH_COMPLETED action=P180_SYNC_MEMBERSHIP_VIEW " +
+                    "ch=$channelId members=$memberModuleIdsCsv"
+            )
+        } else {
+            log(
+                "DEBUG_DISPATCH_SKIPPED action=P180_SYNC_MEMBERSHIP_VIEW " +
+                    "ch=$channelId reason=sync_failed_or_timeout"
+            )
+        }
+        return ok
+    }
+
+    /** #180 field harness — log pairwise obligation signaling state for field adjudication. */
+    fun debugProbePairwiseMeshObligation(channelId: String, peerModuleId: String): Boolean {
+        val ok = runOnCoordinatorSyncTimed("P180_PROBE_OBLIGATION", default = false) {
+            val session = sessions.values.firstOrNull {
+                it.channelId == channelId && it.type == SessionType.GROUP && it.accepted
+            } ?: run {
+                log("ADMISSION_HARNESS_SKIPPED ch=$channelId reason=no_active_group_session")
+                return@runOnCoordinatorSyncTimed false
+            }
+            val obligation = PairwiseMeshAdmissionSupport.obligationForRemotePeer(
+                session,
+                ModuleId(peerModuleId)
+            )
+            if (obligation == null) {
+                log("ADMISSION_HARNESS_OBLIGATION_PROBE ch=$channelId peer=$peerModuleId missing=true")
+                return@runOnCoordinatorSyncTimed false
+            }
+            log(
+                "ADMISSION_HARNESS_OBLIGATION_PROBE ch=$channelId edge=${obligation.edge.storageKey()} " +
+                    "offerer=${obligation.offerer.value} answerer=${obligation.answerer.value} " +
+                    "signalingSatisfied=${obligation.signalingSatisfied}"
+            )
+            true
+        }
+        return ok
+    }
+
+    /** #180 field harness — re-evaluate pairwise activation after peer edge becomes ready. */
+    fun debugPairwiseMeshAdmissionActivate(channelId: String, peerModuleId: String): Boolean {
+        val ok = runOnCoordinatorSyncTimed("P180_PAIRWISE_ACTIVATE", default = false) {
+            val session = sessions.values.firstOrNull {
+                it.channelId == channelId && it.type == SessionType.GROUP && it.accepted
+            } ?: run {
+                log("ADMISSION_HARNESS_SKIPPED ch=$channelId reason=no_active_group_session")
+                return@runOnCoordinatorSyncTimed false
+            }
+            if (System.currentTimeMillis() >= debugP180HarnessMeshPlannerSuppressUntilMs.get()) {
+                armDebugP180HarnessMeshPlannerSuppress()
+            }
+            releaseDebugP180HarnessPairwiseActivationSuppress()
+            log("ADMISSION_HARNESS_ACTIVATE ch=$channelId peer=$peerModuleId")
+            onPeerEdgeSignalingReady(peerModuleId)
+            evaluatePairwiseMeshAdmissionActivation(session, peerModuleId)
+            true
+        }
+        if (ok) {
+            log(
+                "DEBUG_DISPATCH_COMPLETED action=P180_PAIRWISE_ACTIVATE " +
+                    "ch=$channelId remote=$peerModuleId"
+            )
+        } else {
+            log(
+                "DEBUG_DISPATCH_SKIPPED action=P180_PAIRWISE_ACTIVATE " +
+                    "ch=$channelId remote=$peerModuleId reason=activate_failed_or_timeout"
             )
         }
         return ok

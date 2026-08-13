@@ -39,12 +39,17 @@ class TalkbackForegroundService : Service() {
             if (!BuildConfig.DEBUG || intent == null) return
             val action = intent.action ?: return
             val remote = intent.getStringExtra(EXTRA_DEBUG_REMOTE) ?: "M03"
+            val channel = intent.getStringExtra(EXTRA_DEBUG_CHANNEL) ?: "CH-01"
+            val triggerActivation = intent.getBooleanExtra(EXTRA_DEBUG_TRIGGER, true)
+            val rosterOnly = intent.getBooleanExtra(EXTRA_DEBUG_ROSTER_ONLY, false)
+            val members = intent.getStringExtra(EXTRA_DEBUG_MEMBERS) ?: "M01,M02,M03"
+            val unsatisfiedPeer = intent.getStringExtra(EXTRA_DEBUG_UNSATISFIED_PEER)
             val ttlMs = intent.getLongExtra(
                 EXTRA_DEBUG_TTL_MS,
                 180_000L
             )
             // Delivered marker on receive path (before async work) for harness integrity.
-            android.util.Log.i(DEBUG_LOG_TAG, "DEBUG_DISPATCH_DELIVERED action=$action remote=$remote")
+            android.util.Log.i(DEBUG_LOG_TAG, "DEBUG_DISPATCH_DELIVERED action=$action remote=$remote channel=$channel")
             val pending = goAsync()
             DebugHarnessBroadcastDispatcher.schedule(
                 executor = debugBroadcastExecutor,
@@ -79,6 +84,29 @@ class TalkbackForegroundService : Service() {
                             runtime.debugSuppressSuccessorAttemptArm(remote, ttlMs)
                         ACTION_DEBUG_SUPPRESS_SUCCESSOR_CLEAR ->
                             runtime.debugSuppressSuccessorAttemptClear(remote)
+                        ACTION_DEBUG_P180_MEMBERSHIP_FIRST ->
+                            runtime.debugMembershipFirstPairwiseHarness(
+                                channel,
+                                remote,
+                                triggerActivation = triggerActivation,
+                                rosterOnly = rosterOnly
+                            )
+                        ACTION_DEBUG_P180_PAIRWISE_ACTIVATE ->
+                            runtime.debugPairwiseMeshAdmissionActivate(channel, remote)
+                        ACTION_DEBUG_P180_HARNESS_RELEASE ->
+                            runtime.debugReleaseP180HarnessMeshPlannerSuppress()
+                        ACTION_DEBUG_P180_ARM_PLANNER_SUPPRESS ->
+                            runtime.debugArmP180HarnessMeshPlannerSuppress(
+                                intent.getLongExtra(EXTRA_DEBUG_TTL_MS, 300_000L)
+                            )
+                        ACTION_DEBUG_P180_SYNC_MEMBERSHIP_VIEW ->
+                            runtime.debugHarnessSyncMembershipView(
+                                channel,
+                                members,
+                                unsatisfiedPeer
+                            )
+                        ACTION_DEBUG_P180_PROBE_OBLIGATION ->
+                            runtime.debugProbePairwiseMeshObligation(channel, remote)
                         else -> false
                     }
                     if (ok) {
@@ -109,6 +137,12 @@ class TalkbackForegroundService : Service() {
                 addAction(ACTION_DEBUG_D1_CLEAR_INGRESS_MISS)
                 addAction(ACTION_DEBUG_SUPPRESS_SUCCESSOR_ARM)
                 addAction(ACTION_DEBUG_SUPPRESS_SUCCESSOR_CLEAR)
+                addAction(ACTION_DEBUG_P180_MEMBERSHIP_FIRST)
+                addAction(ACTION_DEBUG_P180_PAIRWISE_ACTIVATE)
+                addAction(ACTION_DEBUG_P180_HARNESS_RELEASE)
+                addAction(ACTION_DEBUG_P180_ARM_PLANNER_SUPPRESS)
+                addAction(ACTION_DEBUG_P180_SYNC_MEMBERSHIP_VIEW)
+                addAction(ACTION_DEBUG_P180_PROBE_OBLIGATION)
             }
             // DEBUG only: exported so adb shell (uid 2000) can trigger field injection.
             ContextCompat.registerReceiver(
@@ -248,6 +282,11 @@ class TalkbackForegroundService : Service() {
         const val STATE_ERROR = "ERROR"
 
         const val EXTRA_DEBUG_REMOTE = "remote"
+        const val EXTRA_DEBUG_CHANNEL = "channel"
+        const val EXTRA_DEBUG_TRIGGER = "trigger"
+        const val EXTRA_DEBUG_ROSTER_ONLY = "rosterOnly"
+        const val EXTRA_DEBUG_MEMBERS = "members"
+        const val EXTRA_DEBUG_UNSATISFIED_PEER = "unsatisfiedPeer"
         const val EXTRA_DEBUG_TTL_MS = "ttlMs"
         const val ACTION_DEBUG_PR52C_CREATE = "com.talkback.appprod.debug.PR52C_CREATE"
         const val ACTION_DEBUG_PR52C_BLOCK_DISPATCH = "com.talkback.appprod.debug.PR52C_BLOCK_DISPATCH"
@@ -263,5 +302,19 @@ class TalkbackForegroundService : Service() {
             "com.talkback.appprod.debug.SUPPRESS_SUCCESSOR_ATTEMPT_ARM"
         const val ACTION_DEBUG_SUPPRESS_SUCCESSOR_CLEAR =
             "com.talkback.appprod.debug.SUPPRESS_SUCCESSOR_ATTEMPT_CLEAR"
+        /** #180 membership-first field harness: canonical late peer + pairwise activation on M01. */
+        const val ACTION_DEBUG_P180_MEMBERSHIP_FIRST =
+            "com.talkback.appprod.debug.P180_MEMBERSHIP_FIRST"
+        const val ACTION_DEBUG_P180_PAIRWISE_ACTIVATE =
+            "com.talkback.appprod.debug.P180_PAIRWISE_ACTIVATE"
+        const val ACTION_DEBUG_P180_HARNESS_RELEASE =
+            "com.talkback.appprod.debug.P180_HARNESS_RELEASE"
+        const val ACTION_DEBUG_P180_ARM_PLANNER_SUPPRESS =
+            "com.talkback.appprod.debug.P180_ARM_PLANNER_SUPPRESS"
+        /** #180 field harness: align answerer membership view before pairwise invite accept. */
+        const val ACTION_DEBUG_P180_SYNC_MEMBERSHIP_VIEW =
+            "com.talkback.appprod.debug.P180_SYNC_MEMBERSHIP_VIEW"
+        const val ACTION_DEBUG_P180_PROBE_OBLIGATION =
+            "com.talkback.appprod.debug.P180_PROBE_OBLIGATION"
     }
 }

@@ -726,4 +726,38 @@ class TalkbackRuntime(
 
     fun debugSuppressSuccessorAttemptClear(remoteModuleId: String): Boolean =
         coordinator.debugSuppressSuccessorAttemptClear(remoteModuleId)
+
+    fun debugMembershipFirstPairwiseHarness(
+        channelId: String,
+        peerModuleId: String,
+        triggerActivation: Boolean = true,
+        rosterOnly: Boolean = false
+    ): Boolean = coordinator.debugMembershipFirstPairwiseHarness(
+        channelId,
+        peerModuleId,
+        triggerActivation,
+        rosterOnly
+    )
+
+    fun debugPairwiseMeshAdmissionActivate(channelId: String, peerModuleId: String): Boolean =
+        coordinator.debugPairwiseMeshAdmissionActivate(channelId, peerModuleId)
+
+    fun debugReleaseP180HarnessMeshPlannerSuppress(): Boolean =
+        coordinator.debugReleaseP180HarnessMeshPlannerSuppress()
+
+    fun debugArmP180HarnessMeshPlannerSuppress(ttlMs: Long = 300_000L): Boolean =
+        coordinator.debugArmP180HarnessMeshPlannerSuppress(ttlMs)
+
+    fun debugHarnessSyncMembershipView(
+        channelId: String,
+        memberModuleIdsCsv: String,
+        unsatisfiedPeerModuleId: String? = null
+    ): Boolean = coordinator.debugHarnessSyncMembershipView(
+        channelId,
+        memberModuleIdsCsv,
+        unsatisfiedPeerModuleId
+    )
+
+    fun debugProbePairwiseMeshObligation(channelId: String, peerModuleId: String): Boolean =
+        coordinator.debugProbePairwiseMeshObligation(channelId, peerModuleId)
 }
