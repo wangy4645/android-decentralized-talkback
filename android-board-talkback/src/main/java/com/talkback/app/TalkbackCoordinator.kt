@@ -153,6 +153,8 @@ import com.talkback.core.session.GroupE4RejoinAdmissionSupport
 import com.talkback.core.session.AdmissionClassificationSupport
 import com.talkback.core.session.GroupAdmissionDomain
 import com.talkback.core.session.GroupBootstrapAdmissionSupport
+import com.talkback.core.session.BootstrapAdmissionEvent
+import com.talkback.core.session.GroupInviteSemanticSupport
 import com.talkback.core.session.BootstrapAdmissionIntent
 import com.talkback.core.session.BootstrapAdmissionIntentState
 import com.talkback.core.session.GroupMembershipSupport
@@ -5013,6 +5015,64 @@ class TalkbackCoordinator(
         val session = sessions[sessionId] ?: return@runOnCoordinatorSync
         evaluatePairwiseMeshAdmissionActivation(session, remoteModuleId)
     }
+
+  /** Test seam — membership-only GROUP_INVITE (sdp="") accounting path. */
+    internal fun testSendMembershipSnapshotInvite(sessionId: String, remoteModuleId: String): Boolean =
+        runOnCoordinatorSync {
+            val session = sessions[sessionId] ?: return@runOnCoordinatorSync false
+            val remote = endpointForDialableModule(ModuleId(remoteModuleId))
+                ?: EndpointAddress(ModuleId(remoteModuleId), EndpointId("E03"))
+            sendMembershipSnapshotInvite(session, remote)
+        }
+
+    internal fun testBootstrapAdmissionIntentState(channelId: String, moduleId: String): String? =
+        runOnCoordinatorSync {
+            bootstrapAdmissionIntent(channelId, moduleId)?.state?.name
+        }
+
+    internal fun testPreviewBootstrapEdgeReadyRetry(channelId: String, moduleId: String): String =
+        runOnCoordinatorSync {
+            val intent = bootstrapAdmissionIntent(channelId, moduleId)
+                ?: return@runOnCoordinatorSync "NO_INTENT"
+            val session = sessions.values.firstOrNull {
+                it.channelId == channelId &&
+                    it.type == SessionType.GROUP &&
+                    it.accepted &&
+                    !it.isForegroundSuspended()
+            } ?: return@runOnCoordinatorSync "NO_SESSION"
+            val dialableIds = dialableRemoteModuleIds()
+            val authoritySnapshot = resolveGroupAuthoritySnapshot(
+                channelId,
+                session,
+                dialableIds,
+                dialableIds + localModuleId
+            )
+            val endpoint = endpointForDialableModule(ModuleId(moduleId))
+                ?: session.pendingInviteeEndpoints[moduleId]
+            val now = System.currentTimeMillis()
+            val retryKey = storageKey(channelId, moduleId)
+            val lastRetryMs = lastBootstrapAdmissionEdgeRetryMsByKey[retryKey] ?: 0L
+            when (
+                val decision = GroupBootstrapAdmissionSupport.evaluateEdgeReadyRetry(
+                    GroupBootstrapAdmissionSupport.EdgeReadyEvaluationInput(
+                        intent = intent,
+                        endpoint = endpoint,
+                        peerEdgeReady = peerEdgeSignalingReadiness?.isReady(moduleId) ?: true,
+                        authorityAdmissible = groupChannelAuthority.mayPerformMaintenance(authoritySnapshot),
+                        isInviteProducer = isMembershipAuthority(session),
+                        admissionIncomplete = GroupBootstrapAdmissionSupport.peerAdmissionIncomplete(
+                            session,
+                            moduleId
+                        ),
+                        cooldownElapsed = now - lastRetryMs >= BOOTSTRAP_ADMISSION_EDGE_RETRY_COOLDOWN_MS
+                    )
+                )
+            ) {
+                GroupBootstrapAdmissionSupport.EdgeReadyDecision.NoAction -> "NO_ACTION"
+                is GroupBootstrapAdmissionSupport.EdgeReadyDecision.Deferred -> "DEFERRED:${decision.reason}"
+                is GroupBootstrapAdmissionSupport.EdgeReadyDecision.IssueInvite -> "ISSUE_INVITE"
+            }
+        }
 
     internal fun testRunConferenceHealthCleanup(channelId: String) = runOnCoordinatorSync {
         sessions.values
@@ -12791,28 +12851,54 @@ class TalkbackCoordinator(
         logBootstrapIntentWaiting(channelId, moduleId, reason)
     }
 
-    private fun observeBootstrapAdmissionInviteIssued(envelope: SignalEnvelope) {
-        if (envelope.type != SignalType.GROUP_INVITE) return
-        val session = sessions[envelope.sessionId] ?: return
-        if (session.type != SessionType.GROUP) return
-        val channelId = session.channelId ?: return
-        val moduleId = envelope.to?.moduleId?.value ?: return
-        val existing = bootstrapAdmissionIntent(channelId, moduleId)
-        val domain = classifyAdmissionForPeer(session, ModuleId(moduleId)).domain
-        val trackBootstrap = domain == GroupAdmissionDomain.BOOTSTRAP ||
-            (
-                existing != null &&
-                    GroupBootstrapAdmissionSupport.hasUnresolvedBootstrapAdmissionIntent(existing)
-                )
-        if (!trackBootstrap) {
+    private fun dispatchBootstrapAdmissionAfterSuccessfulGroupInvite(envelope: SignalEnvelope) {
+        val payload = GroupSessionPayload.decode(envelope.payload) ?: return
+        val semantic = GroupInviteSemanticSupport.classify(payload)
+        if (!GroupInviteSemanticSupport.triggersBootstrapAdmissionAccounting(semantic)) {
             return
         }
-        bootstrapAdmissionIntentsByKey.compute(storageKey(channelId, moduleId)) { _, prior ->
-            val base = prior
-                ?: GroupBootstrapAdmissionSupport.create(channelId, moduleId, "DISCOVERED_NO_SESSION")
-            GroupBootstrapAdmissionSupport.markInviteSent(base, envelope.sessionId)
+        val moduleId = envelope.to?.moduleId?.value ?: return
+        handleBootstrapAdmissionEvent(
+            BootstrapAdmissionEvent.BootstrapInviteIssued(
+                peerModuleId = moduleId,
+                sessionId = envelope.sessionId,
+                attemptRef = BootstrapAdmissionEvent.BootstrapInviteAttemptRef(
+                    offerLineageId = payload.offerLineageId,
+                    deliveryAttemptId = payload.deliveryAttemptId
+                )
+            )
+        )
+    }
+
+    private fun handleBootstrapAdmissionEvent(event: BootstrapAdmissionEvent) {
+        when (event) {
+            is BootstrapAdmissionEvent.BootstrapInviteIssued -> {
+                val session = sessions[event.sessionId] ?: return
+                if (session.type != SessionType.GROUP) return
+                val channelId = session.channelId ?: return
+                val moduleId = event.peerModuleId
+                val existing = bootstrapAdmissionIntent(channelId, moduleId)
+                val domain = classifyAdmissionForPeer(session, ModuleId(moduleId)).domain
+                val trackBootstrap = domain == GroupAdmissionDomain.BOOTSTRAP ||
+                    (
+                        existing != null &&
+                            GroupBootstrapAdmissionSupport.hasUnresolvedBootstrapAdmissionIntent(existing)
+                        )
+                if (!trackBootstrap) {
+                    return
+                }
+                bootstrapAdmissionIntentsByKey.compute(storageKey(channelId, moduleId)) { _, prior ->
+                    val base = prior
+                        ?: GroupBootstrapAdmissionSupport.create(
+                            channelId,
+                            moduleId,
+                            "DISCOVERED_NO_SESSION"
+                        )
+                    GroupBootstrapAdmissionSupport.markInviteSent(base, event.sessionId)
+                }
+                logBootstrapInviteIssued(channelId, moduleId, event.sessionId)
+            }
         }
-        logBootstrapInviteIssued(channelId, moduleId, envelope.sessionId)
     }
 
     private fun storageKey(channelId: String, moduleId: String): String =
@@ -14364,7 +14450,7 @@ class TalkbackCoordinator(
             log("Signal send failed type=${envelope.type} err=${it.message}")
         }.isSuccess
         if (sent && envelope.type == SignalType.GROUP_INVITE) {
-            observeBootstrapAdmissionInviteIssued(envelope)
+            dispatchBootstrapAdmissionAfterSuccessfulGroupInvite(envelope)
         }
         return sent
     }

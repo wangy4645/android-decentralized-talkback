@@ -151,6 +151,37 @@ class GroupBootstrapAdmissionSupportTest {
     }
 
     @Test
+    fun inviteSentWhileAdmissionIncomplete_blocksEdgeReadySdpRetry() {
+        val session = TalkbackSession(
+            id = "grp:CH-01",
+            local = EndpointAddress(ModuleId("M01"), EndpointId("E01")),
+            type = SessionType.GROUP,
+            channelId = "CH-01"
+        ).apply {
+            groupMembers = listOf(EndpointAddress(ModuleId("M02"), EndpointId("E02")))
+            pendingInviteeEndpoints["M02"] = EndpointAddress(ModuleId("M02"), EndpointId("E02"))
+        }
+        val intent = GroupBootstrapAdmissionSupport.markInviteSent(
+            GroupBootstrapAdmissionSupport.create("CH-01", "M02", "DISCOVERED_NO_SESSION"),
+            "grp:CH-01"
+        )
+        assertTrue(GroupBootstrapAdmissionSupport.peerAdmissionIncomplete(session, "M02"))
+        assertFalse(GroupBootstrapAdmissionSupport.eligibleForEdgeReadyRetry(intent))
+        val decision = GroupBootstrapAdmissionSupport.evaluateEdgeReadyRetry(
+            GroupBootstrapAdmissionSupport.EdgeReadyEvaluationInput(
+                intent = intent,
+                endpoint = EndpointAddress(ModuleId("M02"), EndpointId("E02")),
+                peerEdgeReady = true,
+                authorityAdmissible = true,
+                isInviteProducer = true,
+                admissionIncomplete = true,
+                cooldownElapsed = true
+            )
+        )
+        assertEquals(GroupBootstrapAdmissionSupport.EdgeReadyDecision.NoAction, decision)
+    }
+
+    @Test
     fun isBootstrapAdmissionPeer_falseWhenCanonical() {
         val m02 = EndpointAddress(ModuleId("M02"), EndpointId("E02"))
         val session = TalkbackSession(
