@@ -54,6 +54,8 @@ class TalkbackSession(
     val suspectSinceMsByModule: MutableMap<String, Long> = linkedMapOf()
     /** Per-member invite + media state for mesh sessions (conference roster accuracy). */
     val participants: MutableMap<String, ParticipantState> = linkedMapOf()
+    /** #180 F2: outbound GROUP_INVITE delivery evidence keyed by remote module id. */
+    val outboundGroupInviteAttemptsByRemoteModule: MutableMap<String, OutboundGroupInviteAttempt> = linkedMapOf()
 
     var lastActiveMs: Long = System.currentTimeMillis()
     var accepted: Boolean = false
