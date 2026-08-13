@@ -123,6 +123,7 @@ object GroupMembershipSupport {
         session.memberModules.clear()
         members.map { it.moduleId }.forEach { session.memberModules.add(it) }
         syncMembershipFromGroupMembers(session)
+        PairwiseMeshAdmissionSupport.reconcile(session)
     }
 
     /**

@@ -150,10 +150,15 @@ import com.talkback.core.session.IdentityResolver
 import com.talkback.core.session.GroupMemberReachability
 import com.talkback.core.session.FormerAdmittedPeer
 import com.talkback.core.session.GroupE4RejoinAdmissionSupport
+import com.talkback.core.session.AdmissionClassificationSupport
+import com.talkback.core.session.GroupAdmissionDomain
 import com.talkback.core.session.GroupBootstrapAdmissionSupport
 import com.talkback.core.session.BootstrapAdmissionIntent
 import com.talkback.core.session.BootstrapAdmissionIntentState
 import com.talkback.core.session.GroupMembershipSupport
+import com.talkback.core.session.PairwiseMeshAdmissionActivationSupport
+import com.talkback.core.session.PairwiseMeshAdmissionSupport
+import com.talkback.core.util.PairwiseMeshAdmissionLog
 import com.talkback.core.model.AuthorityDigestFreshness
 import com.talkback.core.model.AuthorityDigestObservation
 import com.talkback.core.model.AuthorityDigestSource
@@ -730,6 +735,9 @@ class TalkbackCoordinator(
 
     private fun markMeshLinkCompleted(session: TalkbackSession, moduleId: String) {
         session.meshCompletedModules.add(moduleId)
+        if (session.type == SessionType.GROUP) {
+            PairwiseMeshAdmissionSupport.reconcile(session)
+        }
         // everConnected + media CONNECTED are owned by ICE CONNECTED (ADR-0025 R30-H).
     }
 
@@ -1038,6 +1046,7 @@ class TalkbackCoordinator(
     private val lastEnsureCanonicalInviteMsByModule = ConcurrentHashMap<String, Long>()
     private val lastE4RejoinInviteMsByModule = ConcurrentHashMap<String, Long>()
     private val lastBootstrapAdmissionEdgeRetryMsByKey = ConcurrentHashMap<String, Long>()
+    private val lastPairwiseMeshAdmissionActivationMsByKey = ConcurrentHashMap<String, Long>()
     private val seenNoncesByModule = ConcurrentHashMap<String, MutableMap<String, Long>>()
     private val pendingMeetingStartIntentByChannel =
         ConcurrentHashMap<String, Pair<MeetingMode, Set<EndpointId>>>()
@@ -2001,6 +2010,14 @@ class TalkbackCoordinator(
                         invitee.moduleId.value,
                         session
                     ) &&
+                    !PairwiseMeshAdmissionActivationSupport.shouldUsePairwiseAdmissionInvite(
+                        session,
+                        invitee.moduleId
+                    ) &&
+                    !PairwiseMeshAdmissionActivationSupport.isAnswererAwaitingPairwiseOffer(
+                        session,
+                        invitee.moduleId
+                    ) &&
                     invitee.moduleId.value in
                     GroupMembershipSupport.canonicalMemberModuleIds(session).map { it.value } &&
                     (meshIceState(MediaBearerScope.GROUP, invitee.moduleId.value) != "CONNECTED")
@@ -2012,11 +2029,7 @@ class TalkbackCoordinator(
         newInvitees.forEach { remote ->
             session.memberModules.add(remote.moduleId)
             session.pendingInviteeEndpoints[remote.moduleId.value] = remote
-            registerBootstrapAdmissionIntentIfNew(
-                channelId = channelId,
-                moduleId = remote.moduleId.value,
-                reason = "DISCOVERED_NO_SESSION"
-            )
+            dispatchNewInviteeAdmission(session, channelId, remote)
         }
         applyGroupTopology(session, session.groupMembers.size)
         val payloadBase = groupPayloadBase(session)
@@ -2083,6 +2096,20 @@ class TalkbackCoordinator(
         var sent = 0
         reconnect.forEach { remote ->
             val moduleId = remote.moduleId.value
+            if (PairwiseMeshAdmissionActivationSupport.shouldUsePairwiseAdmissionInvite(
+                    session,
+                    remote.moduleId
+                )
+            ) {
+                return@forEach
+            }
+            if (PairwiseMeshAdmissionActivationSupport.isAnswererAwaitingPairwiseOffer(
+                    session,
+                    remote.moduleId
+                )
+            ) {
+                return@forEach
+            }
             if (shouldSuppressBootstrapGroupJoinFallback(channelId, moduleId, session)) {
                 logBootstrapFallbackSuppressed(channelId, moduleId, "REMOTE_NO_SESSION")
                 return@forEach
@@ -3497,6 +3524,7 @@ class TalkbackCoordinator(
                     )
                 }
             evaluateBootstrapAdmissionOnEdgeReady(remoteModuleId)
+            evaluatePairwiseMeshAdmissionOnEdgeReady(remoteModuleId)
         }
     }
 
@@ -3622,6 +3650,159 @@ class TalkbackCoordinator(
             "GROUP_BOOTSTRAP_EDGE_READY_INVITE_ISSUED session=${session.id} ch=${session.channelId} " +
                 "peer=$moduleId rosterEpoch=${session.rosterEpoch}"
         )
+    }
+
+    private fun evaluatePairwiseMeshAdmissionOnEdgeReady(remoteModuleId: String) {
+        sessions.values
+            .filter { it.type == SessionType.GROUP && it.accepted && !it.isForegroundSuspended() }
+            .forEach { session ->
+                evaluatePairwiseMeshAdmissionActivation(session, remoteModuleId)
+            }
+    }
+
+    private fun evaluateAllPairwiseMeshAdmissionActivations(session: TalkbackSession) {
+        PairwiseMeshAdmissionActivationSupport.unsatisfiedOffererPeerIds(session)
+            .forEach { peerId -> evaluatePairwiseMeshAdmissionActivation(session, peerId) }
+    }
+
+    private fun evaluatePairwiseMeshAdmissionActivation(
+        session: TalkbackSession,
+        remoteModuleId: String
+    ) {
+        val channelId = session.channelId ?: return
+        val obligation = PairwiseMeshAdmissionSupport.obligationForRemotePeer(
+            session,
+            ModuleId(remoteModuleId)
+        )
+        val now = System.currentTimeMillis()
+        val retryKey = storageKey(channelId, remoteModuleId)
+        val lastRetryMs = lastPairwiseMeshAdmissionActivationMsByKey[retryKey] ?: 0L
+        val ice = meshIceStateForSession(session, remoteModuleId)
+        val decision = PairwiseMeshAdmissionActivationSupport.evaluate(
+            PairwiseMeshAdmissionActivationSupport.ActivationEvaluationInput(
+                localModuleId = session.local.moduleId,
+                obligation = obligation,
+                peerEdgeReady = peerEdgeSignalingReadiness?.isReady(remoteModuleId) ?: true,
+                sessionValid = session.accepted && !session.isForegroundSuspended(),
+                signalingInFlight = isPairwiseMeshSignalingInFlight(session, remoteModuleId),
+                iceConnected = IceConnectivity.isConnected(ice),
+                remoteDiscovered = resolvePeerForModule(remoteModuleId) != null,
+                cooldownElapsed = now - lastRetryMs >= PAIRWISE_MESH_ADMISSION_ACTIVATION_COOLDOWN_MS
+            )
+        )
+        when (decision) {
+            PairwiseMeshAdmissionActivationSupport.ActivationDecision.NoAction -> Unit
+            is PairwiseMeshAdmissionActivationSupport.ActivationDecision.Deferred -> {
+                log(
+                    PairwiseMeshAdmissionLog.activationDeferredMessage(
+                        channelId,
+                        remoteModuleId,
+                        decision.reason
+                    )
+                )
+                log(
+                    PairwiseMeshAdmissionLog.activationEvaluatedMessage(
+                        channelId,
+                        remoteModuleId,
+                        "DEFERRED:${decision.reason}"
+                    )
+                )
+            }
+            is PairwiseMeshAdmissionActivationSupport.ActivationDecision.IssueInvite -> {
+                log(
+                    PairwiseMeshAdmissionLog.activationEvaluatedMessage(
+                        channelId,
+                        remoteModuleId,
+                        "ISSUE_INVITE"
+                    )
+                )
+                applyPairwiseMeshAdmissionInvite(session, decision.remoteModuleId, retryKey, now)
+            }
+        }
+    }
+
+    private fun isPairwiseMeshSignalingInFlight(session: TalkbackSession, moduleId: String): Boolean {
+        val participant = meshParticipant(session, moduleId)
+        if (participant.invite == InviteState.INVITING || participant.invite == InviteState.RINGING) {
+            return true
+        }
+        val signalingState = meshEngineForSession(session, moduleId)?.negotiationSnapshot()?.signalingState
+        return signalingState.equals("HAVE_LOCAL_OFFER", ignoreCase = true)
+    }
+
+    private fun applyPairwiseMeshAdmissionInvite(
+        session: TalkbackSession,
+        moduleId: String,
+        retryKey: String,
+        nowMs: Long
+    ) {
+        val channelId = session.channelId ?: return
+        val remote = session.groupMembers.find { it.moduleId.value == moduleId }
+            ?: endpointForDialableModule(ModuleId(moduleId))
+            ?: return
+        if (issuePairwiseMeshAdmissionInvite(session, remote) <= 0) return
+        lastPairwiseMeshAdmissionActivationMsByKey[retryKey] = nowMs
+        log(
+            PairwiseMeshAdmissionLog.inviteIssuedMessage(channelId, moduleId, session.id)
+        )
+    }
+
+    /** #180-C — SDP GROUP_INVITE for canonical peer with unsatisfied pairwise obligation (offerer only). */
+    private fun issuePairwiseMeshAdmissionInvite(
+        session: TalkbackSession,
+        remote: EndpointAddress
+    ): Int {
+        if (session.type != SessionType.GROUP) return 0
+        val moduleId = remote.moduleId.value
+        if (!PairwiseMeshAdmissionActivationSupport.shouldUsePairwiseAdmissionInvite(
+                session,
+                remote.moduleId
+            )
+        ) {
+            return 0
+        }
+        val peer = resolvePeerForModule(moduleId)
+        if (peer == null) {
+            log("${sessionTag(session)} Pairwise mesh invite skipped: $moduleId not discovered")
+            return 0
+        }
+        if (isPairwiseMeshSignalingInFlight(session, moduleId)) {
+            return 0
+        }
+        session.remotePeersByModule[moduleId] = peer
+        meshParticipant(session, moduleId).apply {
+            invite = InviteState.INVITING
+            invitedAtMs = System.currentTimeMillis()
+            media = if (session.meshCompletedModules.contains(moduleId)) {
+                MediaState.RECONNECTING
+            } else {
+                MediaState.CONNECTING
+            }
+        }
+        val engine = acquireMeshEngine(session, moduleId, forReconnect = false)
+        wireIceCallback(session, moduleId, engine)
+        val iceRestart = session.meshCompletedModules.contains(moduleId)
+        val offer = engine.createOffer(iceRestart = iceRestart)
+        drainPendingIce(session.id, moduleId, engine)
+        val payloadBase = groupPayloadBase(session)
+        val invited = sendSignalHandoff(
+            peer,
+            buildSignedEnvelope(
+                SignalType.GROUP_INVITE,
+                session.local,
+                remote,
+                session.id,
+                payloadBase.copy(sdp = offer, rejoin = true).encode()
+            )
+        )
+        if (!invited) {
+            return 0
+        }
+        reDialByRemoteModule[moduleId] =
+            ReDialRecord(session.local, remote, session.channelId!!, session.groupMembers, SessionType.GROUP)
+        log("[${session.traceId}] Group invite sent -> ${remote.key}")
+        emitGroupTopologySnapshot(TopologySnapshotReason.MESH_OFFERED, session)
+        return 1
     }
 
     private fun isBootstrapAdmissionInviteRetry(
@@ -4615,6 +4796,178 @@ class TalkbackCoordinator(
         )
         handleGroupInvite(signal, fromPeer)
         true
+    }
+
+    internal data class TestPairwiseMeshObligationSnapshot(
+        val edgeKey: String,
+        val offerer: String,
+        val answerer: String,
+        val signalingSatisfied: Boolean
+    )
+
+    internal fun testSendGroupMeshInvites(
+        sessionId: String,
+        invitees: List<EndpointAddress>
+    ): Int = runOnCoordinatorSync {
+        sendGroupMeshInvitesInternal(sessionId, invitees)
+    }
+
+    internal fun testClassifyAdmissionForPeer(
+        sessionId: String,
+        peerModuleId: String,
+        coldAdmissionRequired: Boolean = false
+    ): String = runOnCoordinatorSync {
+        val session = sessions[sessionId] ?: return@runOnCoordinatorSync "MISSING_SESSION"
+        val result = classifyAdmissionForPeer(
+            session = session,
+            peerModuleId = ModuleId(peerModuleId),
+            coldAdmissionRequired = coldAdmissionRequired
+        )
+        "${result.domain.name}:${result.reason}"
+    }
+
+    internal fun testDispatchNewInviteeAdmission(sessionId: String, peerModuleId: String): String =
+        runOnCoordinatorSync {
+            val session = sessions[sessionId] ?: return@runOnCoordinatorSync "MISSING_SESSION"
+            val channelId = session.channelId ?: return@runOnCoordinatorSync "MISSING_CHANNEL"
+            val remote = endpointForDialableModule(ModuleId(peerModuleId))
+                ?: EndpointAddress(ModuleId(peerModuleId), EndpointId("E03"))
+            session.memberModules.add(remote.moduleId)
+            session.pendingInviteeEndpoints[remote.moduleId.value] = remote
+            dispatchNewInviteeAdmission(session, channelId, remote)
+            classifyAdmissionForPeer(session, ModuleId(peerModuleId)).let {
+                "${it.domain.name}:${it.reason}"
+            }
+        }
+
+    internal fun testPairwiseMeshObligationForPeer(
+        sessionId: String,
+        peerModuleId: String
+    ): TestPairwiseMeshObligationSnapshot? = runOnCoordinatorSync {
+        val session = sessions[sessionId] ?: return@runOnCoordinatorSync null
+        PairwiseMeshAdmissionSupport.obligationForRemotePeer(session, ModuleId(peerModuleId))?.let { ob ->
+            TestPairwiseMeshObligationSnapshot(
+                edgeKey = ob.edge.storageKey(),
+                offerer = ob.offerer.value,
+                answerer = ob.answerer.value,
+                signalingSatisfied = ob.signalingSatisfied
+            )
+        }
+    }
+
+    internal fun testPrepareGroupSessionForPairwiseMeshAdmission(
+        channelId: String,
+        sessionId: String,
+        initiatorModuleId: String,
+        memberModuleIds: List<String>,
+        meshCompletedPeerIds: Set<String> = emptySet(),
+        rosterEpoch: Long = 1L
+    ) = runOnCoordinatorSync {
+        val local = localEndpointAddress() ?: return@runOnCoordinatorSync
+        val members = memberModuleIds.map { EndpointAddress(ModuleId(it), EndpointId("E01")) }
+        channelManager.replaceMembers(channelId, members.map { it.moduleId })
+        val session = TalkbackSession(sessionId, SessionType.GROUP, local, channelId)
+        freezeChannelMemberSnapshot(session)
+        session.localInitiated = memberModuleIds.contains(local.moduleId.value)
+        session.initiatorModuleId = ModuleId(initiatorModuleId)
+        session.floorAuthorityModuleId = ModuleId(initiatorModuleId)
+        session.accepted = true
+        session.rosterEpoch = rosterEpoch
+        GroupMembershipSupport.applyGroupMembersList(session, members)
+        meshCompletedPeerIds.forEach { session.meshCompletedModules.add(it) }
+        PairwiseMeshAdmissionSupport.reconcile(session)
+        members.filter { it.moduleId != local.moduleId }.forEach { remote ->
+            discoveredByModule[remote.moduleId.value]?.let { peer ->
+                session.remotePeersByModule[remote.moduleId.value] = peer
+            }
+        }
+        sessions[sessionId] = session
+        enterChannelMode(channelId, ChannelMode.GROUP_PTT, initiatorModuleId)
+        log(
+            "${sessionTag(session)} Test pairwise mesh session seeded ch=$channelId " +
+                "members=$memberModuleIds meshCompleted=$meshCompletedPeerIds"
+        )
+    }
+
+    internal fun testInjectMembershipSnapshotInvite(
+        callerModuleId: String,
+        channelId: String,
+        sessionId: String,
+        fromPeer: PeerTarget,
+        memberModuleIds: List<String>,
+        rosterEpoch: Long,
+        anchorEpoch: Long = 0L
+    ): Boolean = runOnCoordinatorSync {
+        val local = localEndpointAddress() ?: return@runOnCoordinatorSync false
+        val caller = EndpointAddress(ModuleId(callerModuleId), EndpointId("E01"))
+        if (caller.moduleId == local.moduleId) return@runOnCoordinatorSync false
+        rememberSignalPeer(callerModuleId, fromPeer)
+        val members = memberModuleIds.map { EndpointAddress(ModuleId(it), EndpointId("E01")).key }
+        val snapshot = MembershipSnapshot(
+            rosterEpoch = rosterEpoch,
+            anchorEpoch = anchorEpoch,
+            members = members
+        )
+        val payload = GroupSessionPayload(
+            sdp = "",
+            channelId = channelId,
+            members = members,
+            initiatorModuleId = callerModuleId,
+            floorAuthorityModuleId = callerModuleId,
+            rosterEpoch = rosterEpoch,
+            rejoin = true,
+            membershipSnapshot = snapshot
+        ).encode()
+        val signal = buildSignedEnvelope(
+            SignalType.GROUP_INVITE,
+            caller,
+            local,
+            sessionId,
+            payload
+        )
+        handleGroupInvite(signal, fromPeer)
+        true
+    }
+
+    internal fun testPreviewPairwiseMeshAdmissionActivation(
+        sessionId: String,
+        remoteModuleId: String
+    ): String = runOnCoordinatorSync {
+        val session = sessions[sessionId] ?: return@runOnCoordinatorSync "NO_SESSION"
+        val obligation = PairwiseMeshAdmissionSupport.obligationForRemotePeer(
+            session,
+            ModuleId(remoteModuleId)
+        )
+        val ice = meshIceStateForSession(session, remoteModuleId)
+        val now = System.currentTimeMillis()
+        val retryKey = storageKey(session.channelId ?: return@runOnCoordinatorSync "NO_CHANNEL", remoteModuleId)
+        val lastRetryMs = lastPairwiseMeshAdmissionActivationMsByKey[retryKey] ?: 0L
+        when (
+            val decision = PairwiseMeshAdmissionActivationSupport.evaluate(
+                PairwiseMeshAdmissionActivationSupport.ActivationEvaluationInput(
+                    localModuleId = session.local.moduleId,
+                    obligation = obligation,
+                    peerEdgeReady = peerEdgeSignalingReadiness?.isReady(remoteModuleId) ?: true,
+                    sessionValid = session.accepted && !session.isForegroundSuspended(),
+                    signalingInFlight = isPairwiseMeshSignalingInFlight(session, remoteModuleId),
+                    iceConnected = IceConnectivity.isConnected(ice),
+                    remoteDiscovered = resolvePeerForModule(remoteModuleId) != null,
+                    cooldownElapsed = now - lastRetryMs >= PAIRWISE_MESH_ADMISSION_ACTIVATION_COOLDOWN_MS
+                )
+            )
+        ) {
+            PairwiseMeshAdmissionActivationSupport.ActivationDecision.NoAction -> "NO_ACTION"
+            is PairwiseMeshAdmissionActivationSupport.ActivationDecision.Deferred -> "DEFERRED:${decision.reason}"
+            is PairwiseMeshAdmissionActivationSupport.ActivationDecision.IssueInvite -> "ISSUE_INVITE"
+        }
+    }
+
+    internal fun testRunPairwiseMeshAdmissionActivation(
+        sessionId: String,
+        remoteModuleId: String
+    ) = runOnCoordinatorSync {
+        val session = sessions[sessionId] ?: return@runOnCoordinatorSync
+        evaluatePairwiseMeshAdmissionActivation(session, remoteModuleId)
     }
 
     internal fun testRunConferenceHealthCleanup(channelId: String) = runOnCoordinatorSync {
@@ -10005,7 +10358,16 @@ class TalkbackCoordinator(
                 )
                 if (groupSession != null) {
                     touchConvergenceAnchor(groupSession)
-                    completeGroupMesh(groupSession)
+                    val deferMeshCompletion = PairwiseMeshAdmissionSupport
+                        .shouldDeferMeshCompletionAfterSnapshot(groupSession, caller.moduleId)
+                    if (deferMeshCompletion) {
+                        log(
+                            "${sessionTag(groupSession)} PAIRWISE_MESH_ADMISSION_DEFERRED " +
+                                "peer=${caller.moduleId.value} reason=SNAPSHOT_SIGNALLING_UNSATISFIED"
+                        )
+                    } else {
+                        completeGroupMesh(groupSession)
+                    }
                     updateSessionReceivePlayback(groupSession)
                     tryFlushPendingTransmit(groupSession)
                     emitGroupTopologySnapshot(TopologySnapshotReason.MEMBERSHIP_CHANGED, groupSession)
@@ -12261,6 +12623,7 @@ class TalkbackCoordinator(
         val toInvite = (missingPeers + pairwiseReconnect)
             .distinctBy { it.moduleId.value }
             .filter { !isFormerlyAdmittedNotInCanonicalRoster(session, it.moduleId.value) }
+        evaluateAllPairwiseMeshAdmissionActivations(session)
         if (toInvite.isNotEmpty()) {
             sendGroupMeshInvitesInternal(session.id, toInvite)
         }
@@ -12273,6 +12636,38 @@ class TalkbackCoordinator(
 
     private fun isFormerlyAdmittedNotInCanonicalRoster(session: TalkbackSession, moduleId: String): Boolean =
         GroupE4RejoinAdmissionSupport.isFormerlyAdmittedNotInCanonicalRoster(session, moduleId)
+
+    private fun classifyAdmissionForPeer(
+        session: TalkbackSession,
+        peerModuleId: ModuleId,
+        coldAdmissionRequired: Boolean = false
+    ): AdmissionClassificationSupport.AdmissionClassificationResult =
+        AdmissionClassificationSupport.classify(
+            AdmissionClassificationSupport.contextForPeer(
+                session = session,
+                peerModuleId = peerModuleId,
+                coldAdmissionRequired = coldAdmissionRequired
+            )
+        )
+
+    /** #181-B — P1 newInvitee admission domain dispatch (classifier owns domain selection). */
+    private fun dispatchNewInviteeAdmission(
+        session: TalkbackSession,
+        channelId: String,
+        remote: EndpointAddress
+    ) {
+        when (classifyAdmissionForPeer(session, remote.moduleId).domain) {
+            GroupAdmissionDomain.BOOTSTRAP ->
+                registerBootstrapAdmissionIntentIfNew(
+                    channelId = channelId,
+                    moduleId = remote.moduleId.value,
+                    reason = "DISCOVERED_NO_SESSION"
+                )
+            GroupAdmissionDomain.PAIRWISE_MESH ->
+                PairwiseMeshAdmissionSupport.reconcile(session)
+            GroupAdmissionDomain.NONE -> Unit
+        }
+    }
 
     private fun registerBootstrapAdmissionIntentIfNew(
         channelId: String,
@@ -13623,6 +14018,7 @@ class TalkbackCoordinator(
         private const val ENSURE_CANONICAL_INVITE_COOLDOWN_MS = 5_000L
         private const val E4_REJOIN_INVITE_COOLDOWN_MS = 5_000L
         private const val BOOTSTRAP_ADMISSION_EDGE_RETRY_COOLDOWN_MS = 5_000L
+        private const val PAIRWISE_MESH_ADMISSION_ACTIVATION_COOLDOWN_MS = 5_000L
     }
 
     private fun sessionTag(session: TalkbackSession): String =

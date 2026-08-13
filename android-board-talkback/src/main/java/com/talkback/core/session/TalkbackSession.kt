@@ -36,6 +36,8 @@ class TalkbackSession(
     /** ADR-0053 E4: formerly-admitted peers pruned from canonical roster (evaluator evidence only). */
     val admittedPeerHistory: MutableMap<String, FormerAdmittedPeer> = linkedMapOf()
     val meshCompletedModules: MutableSet<String> = linkedSetOf()
+    /** #180: session-scoped pairwise mesh admission obligations (local-involved edges only). */
+    val pairwiseMeshAdmissionObligations: MutableMap<String, PairwiseMeshAdmissionObligation> = linkedMapOf()
     var mediaTopology: GroupMediaTopology = GroupMediaTopology.MESH
     var anchorModuleId: ModuleId? = null
     var backupAnchorModuleId: ModuleId? = null

@@ -583,6 +583,74 @@ class TalkbackRuntime(
         sdp
     )
 
+    internal fun testPairwiseMeshObligationForPeer(
+        sessionId: String,
+        peerModuleId: String
+    ): TalkbackCoordinator.TestPairwiseMeshObligationSnapshot? =
+        coordinator.testPairwiseMeshObligationForPeer(sessionId, peerModuleId)
+
+    internal fun testSendGroupMeshInvites(
+        sessionId: String,
+        invitees: List<com.talkback.core.model.EndpointAddress>
+    ): Int = coordinator.testSendGroupMeshInvites(sessionId, invitees)
+
+    internal fun testClassifyAdmissionForPeer(
+        sessionId: String,
+        peerModuleId: String,
+        coldAdmissionRequired: Boolean = false
+    ): String = coordinator.testClassifyAdmissionForPeer(sessionId, peerModuleId, coldAdmissionRequired)
+
+    internal fun testDispatchNewInviteeAdmission(sessionId: String, peerModuleId: String): String =
+        coordinator.testDispatchNewInviteeAdmission(sessionId, peerModuleId)
+
+    internal fun testPrepareGroupSessionForPairwiseMeshAdmission(
+        channelId: String,
+        sessionId: String,
+        initiatorModuleId: String,
+        memberModuleIds: List<String>,
+        meshCompletedPeerIds: Set<String> = emptySet(),
+        rosterEpoch: Long = 1L
+    ) {
+        coordinator.testPrepareGroupSessionForPairwiseMeshAdmission(
+            channelId,
+            sessionId,
+            initiatorModuleId,
+            memberModuleIds,
+            meshCompletedPeerIds,
+            rosterEpoch
+        )
+    }
+
+    internal fun testInjectMembershipSnapshotInvite(
+        callerModuleId: String,
+        channelId: String,
+        sessionId: String,
+        fromPeer: com.talkback.core.signaling.PeerTarget,
+        memberModuleIds: List<String>,
+        rosterEpoch: Long,
+        anchorEpoch: Long = 0L
+    ): Boolean = coordinator.testInjectMembershipSnapshotInvite(
+        callerModuleId,
+        channelId,
+        sessionId,
+        fromPeer,
+        memberModuleIds,
+        rosterEpoch,
+        anchorEpoch
+    )
+
+    internal fun testPreviewPairwiseMeshAdmissionActivation(
+        sessionId: String,
+        remoteModuleId: String
+    ): String = coordinator.testPreviewPairwiseMeshAdmissionActivation(sessionId, remoteModuleId)
+
+    internal fun testRunPairwiseMeshAdmissionActivation(
+        sessionId: String,
+        remoteModuleId: String
+    ) {
+        coordinator.testRunPairwiseMeshAdmissionActivation(sessionId, remoteModuleId)
+    }
+
     internal fun testRunConferenceHealthCleanup(channelId: String) {
         coordinator.testRunConferenceHealthCleanup(channelId)
     }
