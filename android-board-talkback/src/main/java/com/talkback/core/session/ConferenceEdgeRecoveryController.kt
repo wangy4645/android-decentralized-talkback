@@ -2024,6 +2024,13 @@ class ConferenceEdgeRecoveryController internal constructor(
     }
 
     /**
+     * ADR-0055 Track P: once the attempt watchdog budget has elapsed, `MEDIA_NOT_READY`
+     * must not re-defer the attempt — emit terminal disposition instead.
+     */
+    private fun shouldTerminalWatchdogTimeoutForMediaNotReady(record: EdgeRecoveryRecord): Boolean =
+        hasDeferredMediaAction(record) && record.deferredReason == DeferredReason.MEDIA_NOT_READY
+
+    /**
      * Appendix C-2: recovery authority claims media action when no participant handoff owns it.
      * Invoked after EDGE_STARTED and on material re-evaluate when still PENDING or DEFERRED.
      */
@@ -2530,6 +2537,21 @@ class ConferenceEdgeRecoveryController internal constructor(
     internal fun refreshControlReconciliationForTest(record: EdgeRecoveryRecord) {
         edges[record.key] = record
         refreshControlReconciliationFact(record)
+    }
+
+    /** Test seam: arm MEDIA_NOT_READY defer on an attempt with a live watchdog (ADR-0055 Track P). */
+    internal fun applyMediaNotReadyDeferForTest(sessionId: String, remoteModuleId: String) {
+        val record = edges[ConferenceEdgeKey(sessionId, remoteModuleId)] ?: return
+        recordMediaActionDeferred(
+            record = record,
+            owner = MediaActionOwner.HOST_RESTART,
+            reason = DeferredReason.MEDIA_NOT_READY,
+            wakeupBinding = WakeupBinding(
+                sourceType = WakeupSourceType.ROUTE_CONVERGED,
+                sourceKey = edgeWakeupKey(sessionId, remoteModuleId)
+            ),
+            trigger = "TEST_MEDIA_NOT_READY"
+        )
     }
 
     /**
@@ -4499,7 +4521,10 @@ class ConferenceEdgeRecoveryController internal constructor(
             if (still.recoveryAttemptId != attemptId) return@schedule
             if (still.obligationGeneration != obligationGen) return@schedule
             if (!still.phase.isActivelyRecovering()) return@schedule
-            if (isCapabilityBlockingAttemptClock(still)) {
+            if (
+                isCapabilityBlockingAttemptClock(still) &&
+                !shouldTerminalWatchdogTimeoutForMediaNotReady(still)
+            ) {
                 markCapabilityDeferral(still, "CAPABILITY_UNAVAILABLE_AT_FIRE")
                 onLog(
                     "RECOVERY_WATCHDOG_DEFERRED session=${key.sessionId} edge=${key.remoteModuleId} " +
