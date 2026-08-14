@@ -650,6 +650,9 @@ class TalkbackRuntime(
     internal fun testParticipantInviteState(sessionId: String, remoteModuleId: String): String? =
         coordinator.testParticipantInviteState(sessionId, remoteModuleId)
 
+    internal fun testIsSessionAccepted(sessionId: String): Boolean =
+        coordinator.testIsSessionAccepted(sessionId)
+
     internal fun testForceParticipantInviting(sessionId: String, remoteModuleId: String) {
         coordinator.testForceParticipantInviting(sessionId, remoteModuleId)
     }
