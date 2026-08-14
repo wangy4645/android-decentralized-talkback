@@ -2,11 +2,11 @@
 
 ## Status
 
-**ACCEPTED v2** (2026-08-14) · **Implementation NOT AUTHORIZED**
+**ACCEPTED v2** (2026-08-14) · **Phase 0.5 CONTRACT PASS** · **Implementation NOT AUTHORIZED** (restricted **1a-1 / 1a-2** only)
 
-**Parent:** [ADR-0056](../adr/0056-conference-topology-first.md) (v2) · **Issue:** [#197](https://github.com/wangy4645/android-decentralized-talkback/issues/197) Finding A
+**Parent:** [ADR-0056](../adr/0056-conference-topology-first.md) (v2.1) · **Mapping:** [Phase 0.5](../analysis/0056-phase-05-contract-mapping.md) · **Issue:** [#197](https://github.com/wangy4645/android-decentralized-talkback/issues/197) Finding A
 
-**Prerequisite:** Phase 0.5 contract freeze checklist items ⑨⑩ complete.
+**Prerequisite:** Phase 0.5 closed.
 
 **Scope:** Conference `ANCHOR` topology audio relay on the elected anchor device. GROUP `ProgramAudioBus` is **reference only**.
 
@@ -14,7 +14,31 @@
 
 ---
 
-## Problem statement
+## Restricted implementation authorization (Phase 1a-1 / 1a-2)
+
+After Phase 0.5 **CONTRACT PASS**, only these sub-phases are authorized:
+
+| Sub-phase | Scope |
+|-----------|--------|
+| **1a-1** | `AudioMixer` — unit / deterministic tests; explicit test fixtures only |
+| **1a-2** | `PcmInjectionPort` — contract / failure tests |
+
+**Forbidden during 1a-1 / 1a-2:**
+
+```text
+❌ import ConferenceEdgeRecoveryController
+❌ modify TalkbackCoordinator topology path
+❌ modify roster / anchor / digest
+❌ modify recovery semantics
+❌ lower Phase 1a spec gates to pass tests
+❌ use production ConferenceTopologySnapshot as mixer test fixture
+```
+
+**Phase 1a-3+** (ParticipantMediaMode, Bus integration, field T1–T10): requires 1a-1/1a-2 PASS.
+
+**Contract discipline:** implementation conflicts with ADR → **ADR amendment first**, not spec relaxation.
+
+---
 
 Current `ConferenceAudioBus` fans N−1 inbound PCM sources into **one program track per target** without mixing:
 
@@ -296,7 +320,8 @@ Phase 1a **COMPLETE** when:
 
 ## References
 
-- [ADR-0056 v2](../adr/0056-conference-topology-first.md)
+- [ADR-0056 v2.1](../adr/0056-conference-topology-first.md)
+- [Phase 0.5 mapping](./0056-phase-05-contract-mapping.md)
 - [#197](https://github.com/wangy4645/android-decentralized-talkback/issues/197)
 - Gap: `ConferenceAudioBus.kt`
 - PTT reference: `ProgramAudioBus.kt` (anchor-as-floor-holder mic branch only)

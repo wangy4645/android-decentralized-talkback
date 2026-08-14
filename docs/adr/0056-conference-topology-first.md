@@ -2,11 +2,13 @@
 
 ## Status
 
-**ACCEPTED** (2026-08-14) · **Amended v2** (2026-08-14: contract freeze, unidirectional flow, Provider contract, gate telemetry, phase reorder) · **Implementation NOT AUTHORIZED**
+**ACCEPTED** (2026-08-14) · **Amended v2.1** (2026-08-14: Phase 0.5 mapping — `AdmittedRecoveryTarget`, `meshGeneration`, Q6-B) · **Phase 0.5 CONTRACT PASS** · **Implementation NOT AUTHORIZED** (restricted 1a-1/1a-2 only)
 
-**Branch:** `adr/0056-conference-topology-first` (documentation only)
+**Branch:** `adr/0056-conference-topology-first`
 
-**Issue:** [#197](https://github.com/wangy4645/android-decentralized-talkback/issues/197) — pre-implementation gaps A / B / C
+**Issue:** [#197](https://github.com/wangy4645/android-decentralized-talkback/issues/197)
+
+**Phase 0.5 artifact:** [0056-phase-05-contract-mapping.md](../analysis/0056-phase-05-contract-mapping.md)
 
 **Relation:**
 
@@ -22,7 +24,7 @@
 ADR-0056
 Decision:              ACCEPTED (architecture contract freeze)
 Model:                 Conference topology-first, epoch-versioned Anchor SFU-lite (4–10)
-Primary invariant:     RecoveryEdge valid iff current-generation media edge OR epoch-authorized transition
+Primary invariant:     AdmittedRecoveryTarget valid iff admitted MediaEdge in current meshGeneration OR epoch-authorized transition
 Implementation:        NOT AUTHORIZED (phased; see Implementation Phases)
 Does NOT reopen:       WiFi recovery · RNA · completion predicate · ADR-0055 implementation
 Does NOT authorize:    full-mesh Conference at 8–10 · roster-derived recovery edges · UI-as-health authority
@@ -94,7 +96,8 @@ Conference media topology and recovery obligations MUST be derived in this order
 Roster
   → Topology Authority
   → ActualMediaEdgeSet
-  → RecoveryMediaEdgeSet
+  → AdmittedRecoveryTarget (via RecoveryEdgeProvider)
+  → ADR-0022 Recovery Edge
   → ConferenceHealth
   → UI
 ```
@@ -102,7 +105,7 @@ Roster
 **Forbidden:**
 
 ```text
-Roster → RecoveryMediaEdgeSet → WebRTC → UI
+Roster → AdmittedRecoveryTarget → WebRTC → UI   // without topology authority — forbidden
 ```
 
 Roster membership MAY inform topology election and control-plane coordination. Roster membership MUST NOT directly determine which edges carry media recovery obligations.
@@ -116,21 +119,21 @@ Under `ConferenceMembership`, three edge sets are **normatively distinct**:
 | Set | Meaning | Recovery obligation? |
 |-----|---------|-------------------|
 | **ControlEdgeSet** | Membership, election, negotiation, HELLO, and other control-plane relationships | **No** |
-| **ActualMediaEdgeSet** | Media edges **formally admitted** under the current topology generation (contract layer) | — |
-| **EstablishedMediaEdge** | Runtime: PeerConnection / transport actually established for an admitted edge | — (execution / health input; **not** topology truth) |
-| **RecoveryMediaEdgeSet** | Media recovery obligations | **Yes; MUST be ⊆ admitted ActualMediaEdgeSet** |
+| **ActualMediaEdgeSet** | Media edges **formally admitted** under current `meshGeneration` (contract layer) | — |
+| **EstablishedMediaEdge** | Runtime: PeerConnection / transport established for an admitted edge | — (observation; **not** topology truth) |
+| **AdmittedRecoveryTarget** | Provider projection referencing admitted `MediaEdge` | Maps to ADR-0022 Recovery Edge at execution bind time |
 
-`ActualMediaEdgeSet` in `ConferenceTopologySnapshot` is **admitted** edges only — what TopologyAuthority formally acknowledges. A legacy PeerConnection object surviving from generation N−1 does **not** re-admit that edge into generation N. PC CONNECTED state MUST NOT write back into the snapshot.
+`ActualMediaEdgeSet` in `ConferenceTopologySnapshot` is **admitted** edges only. A legacy PeerConnection surviving from generation N−1 does **not** re-admit that edge.
 
 **Steady-state Anchor Conference:**
 
 ```text
-RecoveryMediaEdgeSet == ActualMediaEdgeSet
+|AdmittedRecoveryTarget| == |ActualMediaEdgeSet|
 ```
 
 (star topology: each participant ↔ elected Anchor)
 
-A control edge (e.g. M01 ↔ M02 for election or negotiation) MUST NOT implicitly create a recovery obligation. Presence of a roster pair is **neither necessary nor sufficient** for a recovery edge.
+A control edge MUST NOT implicitly create recovery eligibility. **ADR-0022 Recovery Edge** (execution obligation) MUST NOT be created without an `AdmittedRecoveryTarget` from topology projection (Phase 2).
 
 ---
 
@@ -144,7 +147,7 @@ Each Conference is versioned by `(conferenceId, anchorEpoch)`.
 4. Within the **same** epoch, divergent Anchor primaries MUST converge via **deterministic arbitration** to a single primary. Last-writer-wins or indefinite dual-primary operation is a **contract violation**.
 5. `same epoch / different primary` is **split-brain conflict**, not normal merge. System MUST emit auditable `ANCHOR_EPOCH_CONFLICT`; silent LWW is forbidden.
 6. Deterministic winner rule (frozen contract): higher `anchorEpoch` wins; same epoch → deterministic primary rank wins; same rank → stable endpoint tie-break. **Same input set + same epoch → all nodes MUST converge to the same anchor.**
-7. `ActualMediaEdgeSet` and `RecoveryMediaEdgeSet` entries MUST be bound to the topology generation (epoch) that authorized them.
+7. `ActualMediaEdgeSet` and `AdmittedRecoveryTarget` entries MUST be bound to the `meshGeneration` / `anchorEpoch` that authorized them.
 
 **AuthorizedTransition** (see Invariants) is the only exception to strict current-generation membership during anchor handoff.
 
@@ -218,17 +221,18 @@ ConferenceTopologyAuthority
 
 ```text
 Input:  ConferenceTopologySnapshot
-Output: RecoveryEdgeSnapshot
-          topologyGeneration, anchorEpoch
-          edges: Set<RecoveryEdge>
+Output: RecoveryTargetSnapshot
+          rosterEpoch, anchorEpoch, meshGeneration
+          targets: Set<AdmittedRecoveryTarget>
           authorizedTransitions: Set<AuthorizedTransition>
-          diff: RecoveryTopologyDiff (added / removed / retained / transitioned)
+          diff: RecoveryTargetDiff (added / removed / retained / transitioned)
 ```
 
 **RecoveryEdgeProvider MUST:**
 
-- Emit recovery edges only for `mediaEdge ∈ actualMediaEdges` OR `∈ authorizedTransition.affectedEdges`
-- Produce `RecoveryTopologyDiff` on generation change; controller MUST NOT re-derive
+- Emit `AdmittedRecoveryTarget` only when `mediaEdge ∈ actualMediaEdges` OR `mediaEdge ∈ authorizedTransition.affectedEdges`
+- Emit explicit **removal** in diff when `MediaEdge` drops from snapshot (Q6-B)
+- Produce `RecoveryTargetDiff` on `meshGeneration` change; controller MUST NOT re-derive
 
 **RecoveryEdgeProvider MUST NOT:**
 
@@ -253,8 +257,8 @@ Roster → ConferenceEdgeKey → RecoveryController (direct)
 ## Invariants
 
 ```text
-INV-056-1  ControlEdgeSet MUST NOT imply RecoveryMediaEdgeSet membership
-INV-056-2  RecoveryMediaEdgeSet ⊆ ActualMediaEdgeSet (steady-state Anchor: equality)
+INV-056-1  ControlEdgeSet MUST NOT imply AdmittedRecoveryTarget
+INV-056-2  AdmittedRecoveryTarget MUST reference admitted MediaEdge (steady-state Anchor: |targets| == |ActualMediaEdgeSet|)
 INV-056-3  Prior-generation edges MUST NOT survive epoch increment
 INV-056-4  Same-epoch dual-primary MUST NOT persist; deterministic arbitration required
 INV-056-5  AuthorizedTransition MUST be epoch-authorized; pure time windows are forbidden
@@ -267,16 +271,30 @@ INV-056-11 Topology snapshots MUST publish atomically (no Frankenstein generatio
 INV-056-12 PeerConnection object survival MUST NOT re-admit old-generation edges into current snapshot
 INV-056-13 Anchor failover MUST NOT create O(N²) recovery obligations (Anchor steady state ≈ N−1 edges)
 INV-056-14 MEDIA_USABLE requires topology admission valid; background recovery alone MUST NOT block ONLINE
+INV-056-15 MediaEdge removal invalidates future recovery admission (Q6-B); explicit topology-invalidated close path
+INV-056-16 Topology-invalidated close MUST NOT mutate membership (R29)
 ```
 
-**Core invariant (recovery edge validity):**
+**Terminology (ADR-0056 vs ADR-0022 — frozen):**
+
+| ADR-0056 | ADR-0022 |
+|----------|----------|
+| `AdmittedRecoveryTarget` | **Recovery Edge** (obligation on `ConferenceEdgeKey`) |
+| `MediaEdge` | Not the same as Recovery Edge key |
+| `meshGeneration` | Not `obligationGeneration` |
+| `membershipEpochConverged` | **Fact/probe** — not an epoch axis |
+| `rosterEpoch` | Membership authority version (`TopologyDigest`) |
+
+**Core invariant (admission validity):**
 
 ```text
-RecoveryEdge valid iff
-  edge ∈ ActualMediaEdgeSet(currentGeneration)
+AdmittedRecoveryTarget valid iff
+  mediaEdge ∈ ActualMediaEdgeSet(current meshGeneration)
   OR
-  edge ∈ AuthorizedTransition(fromGeneration → currentGeneration)
+  mediaEdge ∈ AuthorizedTransition.affectedEdges
 ```
+
+ADR-0022 Recovery Edge execution lifecycle is **unchanged**; Phase 2 changes **which targets** may bind to obligations.
 
 - `AuthorizedTransition` covers handoff when old PeerConnections tear down and new ones establish under a new epoch. Legitimacy MUST be derived from **topology generation / epoch authority**, not ad-hoc timers.
 - **Forbidden:** wall-clock duration, retry count, or watchdog timeout as the **architectural** reason an edge exists in transition. Timers MAY bound **wait**; they MUST NOT **authorize** topology membership.
@@ -293,161 +311,43 @@ RecoveryEdge valid iff
 - Define retry counts, obligation deadlines, ICE algorithms, or concrete class APIs.
 - Change GROUP `CHANNEL_ANCHOR_THRESHOLD` (deferred to independent PR / run card; PTT Anchor architecture is **not** a gap).
 - Accumulate Q11 / #196 roster-pair recovery exceptions.
-- Add recovery controller branches during field runs before Phase 0.5 contract verification completes.
+- Add recovery controller branches during field runs before Phase 0.5 contract verification completes — **Phase 0.5 CLOSED**; escape hatch applies.
 
 ---
 
-## Phase 0.5 — Contract freeze (NOT AUTHORIZED)
+## Phase 0.5 — Contract freeze (**CONTRACT PASS**)
 
-Phase 0.5 is a **Contract Freeze**, not "add a few data classes." No production controller migration. Freeze read models, authority boundaries, identity rules, and contract tests before Phase 1a code.
+Phase 0.5 maps ADR-0056 onto existing `TopologyDigest` / ADR-0022 / R29. **Authoritative artifact:** [0056-phase-05-contract-mapping.md](../analysis/0056-phase-05-contract-mapping.md).
 
-### Normative pipeline
-
-```text
-Membership
-  ↓
-ConferenceTopologyAuthority          ← sole topology truth source
-  ↓
-ConferenceTopologySnapshot           ← atomic publish only
-  ↓
-ActualMediaEdgeSet (admitted)
-  ↓
-RecoveryEdgeProvider                 ← contract defined in 0.5; wired in Phase 2
-  ↓
-ConferenceEdgeRecoveryController
-  ↓
-Recovery execution
-```
+### Four epoch axes (frozen)
 
 ```text
-Recovery consumes topology.
-Recovery MUST NOT define topology.
+rosterEpoch           membership authority version
+anchorEpoch           anchor authority version
+meshGeneration        media topology generation (wire field — activated by ADR-0056)
+obligationGeneration  recovery execution lineage (ADR-0022 — unchanged)
 ```
 
-### ConferenceTopologyAuthority (sole truth source)
+**Do not introduce `topologyGeneration`.** `membershipEpochConverged` is a **fact/probe**, not a fifth axis.
 
-**Owns:** membership input, anchor, `anchorEpoch`, `topologyGeneration`, `topologyMode`, admitted `actualMediaEdges`.
+**Conference `meshGeneration` bump rules** and **GROUP boundary** — see mapping doc. `meshGeneration ≠ anchorEpoch`.
 
-**MUST NOT be fragmented across:** separate membership / anchor / recovery / WebRTC subsystems each maintaining partial topology.
+### Key v2.1 contracts (summary)
 
-**Publishes:** `ConferenceTopologySnapshot` atomically. Consumers see snapshot N **or** snapshot N+1 — never a mixed tuple (e.g. `generation=19, epoch=9, anchor=M01, edges=new`).
+- **`ConferenceTopologyAuthority`** — new facade; v1 MAY be `TalkbackCoordinator.publishConferenceTopologySnapshot(...)`
+- **`AdmittedRecoveryTarget`** — replaces ADR-0056 `RecoveryEdge` name; does not replace ADR-0022 Recovery Edge
+- **Q6-B** — topology edge removal → `EDGE_REMOVED_BY_TOPOLOGY`; explicit Controller invalidation
+- **Provider** — stateless `f(Snapshot)`; forbidden to merge transport + recovery admission predicates
 
-### ConferenceTopologySnapshot (normative fields)
+### Phase 0.5 status
 
 ```text
-ConferenceTopologySnapshot
-  conferenceId
-  topologyGeneration              // monotonic; see semantics below
-  anchorEpoch
-  anchorId                        // exactly one primary per (conferenceId, anchorEpoch)
-  topologyMode                    // MESH | ANCHOR
-  members                         // roster membership (input only)
-  actualMediaEdges                // admitted ActualMediaEdgeSet only
-  generatedAt
+CONTRACT PASS · IMPLEMENTATION READY (restricted Phase 1a-1 / 1a-2 only)
 ```
 
-`actualMediaEdges` = edges **formally admitted** in this generation — not theoretical roster pairs, not "PC object still alive."
+### Architecture escape hatch (frozen)
 
-Anchor example (`anchor=M01, generation=17, epoch=9`):
-
-```text
-M01↔M02, M01↔M03, M01↔M04, M01↔M05   ✅ admitted
-M02↔M03, M02↔M04                     ❌ MUST NOT appear (roster ≠ media)
-```
-
-### MediaEdge (first-class object)
-
-```text
-MediaEdge
-  conferenceId
-  edgeId                          // stable logical identity (see below)
-  local: EndpointId
-  remote: EndpointId
-  topologyGeneration              // validity context — identity boundary
-  anchorEpoch                     // validity context — identity boundary
-  role                            // e.g. ANCHOR_RELAY | MESH_DIRECT
-  bearerScope                     // CONFERENCE
-```
-
-**Edge identity (frozen):**
-
-```text
-MediaEdgeId = conference + ordered endpoint pair   // stable across generations
-topologyGeneration / anchorEpoch = validity context // NOT part of edgeId
-```
-
-Old edge `(M01↔M03, generation=16, epoch=8)` is **invalid** in generation 17 even if WebRTC object persists.
-
-### RecoveryEdge (references MediaEdge — does not redefine endpoints)
-
-```text
-RecoveryEdge
-  mediaEdge                       // required reference — cannot exist without MediaEdge
-  obligationGeneration
-  reason: RecoveryReason
-  transitionAuthorization?        // present only under AuthorizedTransition
-```
-
-```text
-RecoveryEdge contains MediaEdge — NOT parallel local/remote identity
-```
-
-### AuthorizedTransition
-
-```text
-AuthorizedTransition
-  fromGeneration, toGeneration
-  fromAnchorEpoch, toAnchorEpoch
-  affectedEdges: Set<MediaEdgeId>
-  authority: TransitionAuthority
-  reason: TransitionReason
-```
-
-Example: anchor failover `G17/E9 → G18/E10`. Old `M01→M03` may exist **only** while listed in `affectedEdges` under this transition — not because "it happened 3 seconds ago."
-
-### topologyGeneration semantics (frozen before code)
-
-**Increments on:** anchor change, admitted `actualMediaEdges` set change, `topologyMode` change.
-
-**Does NOT increment on:** ICE restart, candidate refresh, transient signaling, per-edge retry.
-
-### anchorEpoch semantics (frozen before code)
-
-Define normatively: epoch bump, same-epoch conflict (`ANCHOR_EPOCH_CONFLICT`), demotion, failover — before Phase 1c implementation.
-
-### Phase 0.5 implementation checklist (all MUST freeze before Phase 1a code)
-
-| # | Item |
-|---|------|
-| ① | Topology authority — single publisher of `ConferenceTopologySnapshot` |
-| ② | Generation semantics — what increments `topologyGeneration` |
-| ③ | Anchor epoch semantics — bump, conflict, demotion, failover |
-| ④ | Edge identity — `MediaEdgeId` vs validity context |
-| ⑤ | ActualMediaEdgeSet authority — who admits / removes edges (admitted layer) |
-| ⑥ | Transition authorization — when old edges may temporarily survive |
-| ⑦ | RecoveryEdgeProvider contract — input, output, invariants, forbidden ops |
-| ⑧ | ConferenceHealth model — `MediaUsable`, `AnchorHealthy`, `MembershipConverged`, `RecoveryBackground`; `RecoveryBackground ≠ MediaUnavailable` |
-| ⑨ | AudioMixer canonical format — see [Phase 1a spec](../analysis/0056-phase-1a-conference-audio-mcu-lite-spec.md) |
-| ⑩ | Observability schema — `conferenceId`, `generation`, `anchorEpoch`, `anchorId`, `edgeId`, `mediaState`, `recoveryState`, `health` on one causal chain |
-
-### Phase 0.5 exit criteria
-
-1. `ConferenceTopologyAuthority` contract + atomic snapshot publish specified.
-2. `MediaEdge` / `RecoveryEdge` / `AuthorizedTransition` identity rules frozen.
-3. Admitted vs established media edge separation documented and testable.
-4. `RecoveryEdgeProvider` interface + forbidden-ops list frozen (implementation deferred to Phase 2).
-5. Phase 1a spec ACCEPTED.
-6. Contract tests drafted (generation mismatch → invalid; no roster-derived recovery in target design).
-
-### Architecture escape hatch (process rule — frozen)
-
-Before any PR touching recovery, answer:
-
-```text
-Does this change modify: topology? media admission? recovery? health?
-```
-
-If change is **recovery-only** but root cause is **edge does not exist** → **FORBIDDEN** to add recovery exception. Fix truth at `TopologyAuthority → ActualMediaEdgeSet`.
+Recovery-only fix when edge does not exist → **FORBIDDEN**. Fix `TopologyAuthority → ActualMediaEdgeSet`.
 
 ---
 
@@ -459,7 +359,7 @@ Pre-implementation architecture review identified three gaps that MUST be resolv
 |----|-----|
 | **A** | ConferenceAudioBus correctness — **Phase 1a spec ACCEPTED** ([spec](../analysis/0056-phase-1a-conference-audio-mcu-lite-spec.md)) |
 | **B** | anchorEpoch not bound to media admission; same-epoch dual-primary possible; stale-generation edges not invalidated in recovery |
-| **C** | RecoveryMediaEdgeSet derived from roster instead of ActualMediaEdgeSet |
+| **C** | Recovery targets derived from roster instead of `ActualMediaEdgeSet` — Phase 2 via `AdmittedRecoveryTarget` |
 
 ---
 
@@ -467,8 +367,11 @@ Pre-implementation architecture review identified three gaps that MUST be resolv
 
 ```text
 Phase 0     ADR ACCEPTED; freeze new roster-derived recovery exceptions
-Phase 0.5   Contract freeze (Authority + Snapshot + Edge identity + Provider contract)
-Phase 1a    ConferenceAudioBus MCU-lite productization (spec linked)
+Phase 0.5   Contract mapping — **CLOSED** (see mapping artifact)
+Phase 1a-1  AudioMixer unit tests only (**restricted authorization**)
+Phase 1a-2  PcmInjectionPort contract tests only (**restricted authorization**)
+Phase 1a-3  ParticipantMediaMode + ConferenceAudioBus integration (after 1a-1/1a-2 PASS)
+Phase 1a    Full Phase 1a field gate (T1–T10)
 Phase 1b    Conference 4+ Anchor; admitted ActualMediaEdgeSet == participant↔anchor
 Phase 1c    Deterministic epoch arbitration; epoch → media admission; failover containment
             Gate 1 (4p) → Gate 2 (6p) → Gate 3 (8p)  [media + admission + failover proven]
@@ -481,8 +384,8 @@ Each phase requires separate implementation authorization and field run card.
 
 **Ordering constraints (v2 — conservative):**
 
-- Phase 0.5 MUST complete before Phase 1a code.
-- Phase 1a MUST precede Phase 1b.
+- Phase 0.5 **CLOSED** — restricted **1a-1/1a-2** authorized; see mapping doc forbidden list.
+- Phase 1a-3+ MUST NOT begin until 1a-1/1a-2 PASS.
 - Phase 1c MUST precede Gate 2 (failover is industrial gate).
 - **Phase 2 MUST NOT begin until Gate 3 (8 participants) PASS** — media admission, epoch cutover, and admitted edge set MUST be proven before Controller changes input source.
 - Phase 3 follows Phase 2.
@@ -502,7 +405,7 @@ Topology · Media · Recovery · Health · Resource
 
 | Gate | N | Purpose |
 |------|---|---------|
-| **Gate 1** | 4 | Anchor topology takes over; `admitted ActualMediaEdgeSet == anchor↔participant`; `RecoveryEdge ⊆ ActualMediaEdgeSet` |
+| **Gate 1** | 4 | Anchor cutover; `ActualMediaEdgeSet == anchor↔participant`; `AdmittedRecoveryTarget ⊆ ActualMediaEdgeSet` |
 | **Gate 2** | 6 | Not a "4-person special path"; join/leave/anchor-leave; obligation count ≈ **N−1**, not **N×(N−1)** |
 | **Gate 3** | 8 | Product capacity; CPU/memory/temp/latency curve **1→4→6→8**; 1-node + 2-node flap; join/leave during recovery |
 | **Gate 4** | 10 | Architecture limit — stability only; Tests A–F (see below) |
@@ -523,7 +426,7 @@ Gate N MUST PASS before Gate N+1 authorization.
 ### Telemetry invariants (auto-adjudication — field PASS authority)
 
 ```text
-TEL-1  RecoveryMediaEdgeSet ⊆ ActualMediaEdgeSet(currentGeneration)
+TEL-1  AdmittedRecoveryTarget ⊆ ActualMediaEdgeSet(current meshGeneration)
 TEL-2  No recovery obligation for nonexistent admitted media edge
 TEL-3  No old-generation recovery after generation cutover (except AuthorizedTransition)
 TEL-4  same (conferenceId, anchorEpoch) → exactly one valid anchor
@@ -536,7 +439,7 @@ TEL-6  media CONNECTED + receivePathLive + topology admission valid → MEDIA_US
 
 ```text
 Architecture:  Membership → Authority → Snapshot → AdmittedMediaEdge → RecoveryProvider → Health → UI
-Invariants:    RecoveryEdge ⊆ AdmittedMediaEdge; generation mismatch → invalid
+Invariants:    AdmittedRecoveryTarget ⊆ Admitted MediaEdge; meshGeneration mismatch → invalid
 Media:         4–10 Anchor MCU-lite; no PCM corruption; anchor speaks
 Recovery:      bounded, terminal, no unbounded churn; no roster-derived edges
 UX:            MediaUsable → ONLINE; RecoveryBackground ≠ room SYNCING
@@ -557,7 +460,9 @@ Scale:         Gates 1–4 PASS; resource curve 1→4→6→8→10 on target har
 ## References
 
 - Issue: [#197](https://github.com/wangy4645/android-decentralized-talkback/issues/197)
+- Phase 0.5 mapping: [0056-phase-05-contract-mapping.md](../analysis/0056-phase-05-contract-mapping.md)
 - Phase 1a spec: [0056-phase-1a-conference-audio-mcu-lite-spec.md](../analysis/0056-phase-1a-conference-audio-mcu-lite-spec.md)
+- [ADR-0022](./0022-recovery-completion-ownership.md) — Recovery Edge / Attempt (unchanged)
 - Prior architecture review: agent transcript `b6e09de2-9914-4cb6-b003-d2a819c6f476`
 - [ADR-0055](./0055-conference-recovery-outcome-convergence.md)
 - [ADR-0054](./0054-conference-edge-recovery-liveness-ownership.md)
