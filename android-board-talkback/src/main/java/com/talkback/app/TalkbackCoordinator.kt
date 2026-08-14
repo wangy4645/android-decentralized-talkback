@@ -2099,7 +2099,7 @@ class TalkbackCoordinator(
             return
         }
         val session = sessions[pending.sessionId]
-        if (session == null || !session.accepted) {
+        if (session == null) {
             log(
                 "GROUP_ACCEPT_RETRY session=${pending.sessionId} remote=$remoteModuleId " +
                     "result=SESSION_GONE ageMs=$ageMs"
@@ -2112,6 +2112,11 @@ class TalkbackCoordinator(
                 "result=${if (sent) "SUCCESS" else "FAIL"} ageMs=$ageMs"
         )
         if (!sent) return
+        session.accepted = true
+        markMeshLinkCompleted(session, remoteModuleId)
+        if (session.type != SessionType.CONFERENCE) {
+            meshParticipant(session, remoteModuleId).invite = InviteState.ACCEPTED
+        }
         meshEngineForSession(session, remoteModuleId)?.let { engine ->
             commitAnswererTransactionAndDrain(session, remoteModuleId, engine, path = "EDGE_READY_RETRY")
         }
@@ -5276,6 +5281,10 @@ class TalkbackCoordinator(
             sessions[sessionId]?.participant(remoteModuleId)?.invite?.name
         }
 
+    internal fun testIsSessionAccepted(sessionId: String): Boolean = runOnCoordinatorSync {
+        sessions[sessionId]?.accepted == true
+    }
+
     /** Test seam — simulate a legacy pre-handoff INVITING writer (e.g. meshCallInternal). */
     internal fun testForceParticipantInviting(sessionId: String, remoteModuleId: String) =
         runOnCoordinatorSync {
@@ -7119,7 +7128,7 @@ class TalkbackCoordinator(
             conferenceParticipantManager.onInviteAccepted(session.id, caller.moduleId.value)
         } else {
             meshParticipant(session, caller.moduleId.value).apply {
-                invite = InviteState.ACCEPTED
+                invite = InviteState.RINGING
                 media = MediaState.CONNECTING
                 lastMediaChangeMs = System.currentTimeMillis()
             }
@@ -7141,8 +7150,6 @@ class TalkbackCoordinator(
                 )
                 val answer = engine.applyRemoteOffer(payload.sdp, politeForInviteAnswer())
                 drainPendingIce(session.id, caller.moduleId.value, engine)
-                session.accepted = true
-                markMeshLinkCompleted(session, caller.moduleId.value)
                 val handoffOk = sendSignalHandoff(
                     fromPeer,
                     buildSignedEnvelope(SignalType.GROUP_ACCEPT, callee, caller, signal.sessionId, answer)
@@ -7159,6 +7166,8 @@ class TalkbackCoordinator(
                         reason = ConferenceAdmissionTransitionReason.ACCEPT_FAILED
                     )
                 } else {
+                    session.accepted = true
+                    markMeshLinkCompleted(session, caller.moduleId.value)
                     log(
                         "GROUP_ACCEPT_HANDOFF session=${session.id} remote=${caller.moduleId.value} " +
                             "path=INVITE result=SUCCESS commit=PENDING settled=${engine.justSettledAsAnswerer()}"
@@ -7174,8 +7183,6 @@ class TalkbackCoordinator(
         } else {
             val answer = engine.applyRemoteOffer(payload.sdp, politeForInviteAnswer())
             drainPendingIce(session.id, caller.moduleId.value, engine)
-            session.accepted = true
-            markMeshLinkCompleted(session, caller.moduleId.value)
             val handoffOk = sendSignalHandoff(
                 fromPeer,
                 buildSignedEnvelope(SignalType.GROUP_ACCEPT, callee, caller, signal.sessionId, answer)
@@ -7186,6 +7193,9 @@ class TalkbackCoordinator(
                         "path=INVITE result=FAIL commit=SKIPPED settled=${engine.justSettledAsAnswerer()}"
                 )
             } else {
+                session.accepted = true
+                markMeshLinkCompleted(session, caller.moduleId.value)
+                meshParticipant(session, caller.moduleId.value).invite = InviteState.ACCEPTED
                 log(
                     "GROUP_ACCEPT_HANDOFF session=${session.id} remote=${caller.moduleId.value} " +
                         "path=INVITE result=SUCCESS commit=PENDING settled=${engine.justSettledAsAnswerer()}"
@@ -7277,8 +7287,6 @@ class TalkbackCoordinator(
         wireIceCallback(session, peerId, engine)
         val answer = engine.applyRemoteOffer(payload.sdp, politeForInviteAnswer())
         drainPendingIce(session.id, caller.moduleId.value, engine)
-        session.accepted = true
-        markMeshLinkCompleted(session,caller.moduleId.value)
         val handoffOk = sendSignalHandoff(
             fromPeer,
             buildSignedEnvelope(SignalType.GROUP_ACCEPT, callee, caller, signal.sessionId, answer)
@@ -7290,6 +7298,11 @@ class TalkbackCoordinator(
                     "path=RECONNECT result=FAIL commit=SKIPPED settled=${engine.justSettledAsAnswerer()}"
             )
         } else {
+            session.accepted = true
+            markMeshLinkCompleted(session, caller.moduleId.value)
+            if (session.type != SessionType.CONFERENCE) {
+                meshParticipant(session, caller.moduleId.value).invite = InviteState.ACCEPTED
+            }
             log(
                 "GROUP_ACCEPT_HANDOFF session=${session.id} remote=${caller.moduleId.value} " +
                     "path=RECONNECT result=SUCCESS commit=PENDING settled=${engine.justSettledAsAnswerer()}"
@@ -14753,11 +14766,11 @@ class TalkbackCoordinator(
      */
     private fun sendSignalHandoff(target: PeerTarget, envelope: SignalEnvelope): Boolean {
         val peerModuleId = envelope.to?.moduleId?.value
-        if (peerModuleId != null && peerModuleId in testPeerControlSignalingBlocked &&
-            PeerControlSignalingAdmission.isHardGatedControl(envelope.type)
-        ) {
+        if (peerModuleId != null && peerModuleId in testPeerControlSignalingBlocked) {
             log("PEER_EDGE_CONTROL_BLOCKED type=${envelope.type} peer=$peerModuleId reason=TEST_BLOCKED")
-            observeBootstrapAdmissionInviteBlocked(envelope)
+            if (PeerControlSignalingAdmission.isRequestAdmissionGated(envelope.type)) {
+                observeBootstrapAdmissionInviteBlocked(envelope)
+            }
             recordBlockedGroupAcceptForEdgeRetry(target, envelope, peerModuleId, "TEST_BLOCKED")
             return false
         }
