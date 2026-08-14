@@ -35,6 +35,9 @@ class AudioMixer(
 
     val currentStats: Stats get() = stats
 
+    fun configuredSourceCount(): Int =
+        sources.count { it.value.state != SourceState.REMOVED }
+
     fun addSource(sourceId: String, config: MixerSourceConfig = MixerSourceConfig()) {
         sources[sourceId] = SourceSlot(SourceState.ADDING, rampStep = 0, config = config)
     }

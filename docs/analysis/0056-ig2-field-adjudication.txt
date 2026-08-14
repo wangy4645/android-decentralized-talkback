@@ -1,0 +1,96 @@
+ADR-0056 IG-2 v2 — Field Adjudication (frozen)
+Log dir: ig2-anchor-audio-v2-20260814-201528 (local; gitignored under talkback/logs/)
+Field evidence archive: talkback/logs/ig2-anchor-audio-v2-20260814-201528/
+Precheck reference: talkback/logs/ig2-precheck-3p-mesh-smoke-20260814-194620/
+Date: 2026-08-14
+Devices: M01/M02/M03/M04 on CH-01, SSID=happy
+
+=== VERDICT ===
+
+IG-2  PASS (CONDITIONAL)
+
+Scope:
+    4p cold-start Anchor LOCAL_AND_REMOTE audio path
+
+Condition:
+    Observability evidence incomplete (OBS-056-01 open)
+
+Audio correctness:  PASS (not reversible)
+Evidence completeness: INCOMPLETE until OBS-056-01 exit criteria met
+
+=== GATE STATUS (frozen) ===
+
+Phase 1a        CLOSED
+IG-1            PASS
+IG-2            PASS (CONDITIONAL)
+Phase 1b        NOT AUTHORIZED (implementation)
+
+=== Primary session ===
+
+conferenceId: 43e09059-2d54-47ba-b8fc-c9ec06103eef
+Corroboration: 9ae3ddf4-413a-453a-8c24-9783cb7142ec
+
+=== Admission / topology (M01 authority) — PASS ===
+
+topologyMode: ANCHOR
+anchorModuleId: M01
+participantCount: 4
+T0 steady: 20:21:31 joined=4 connected=4
+Bus: MCU-lite relay 3 targets mode=LOCAL_AND_REMOTE
+
+=== Field cases (operator) ===
+
+Case A Anchor outbound:     PASS
+Case B Remote inbound:      PASS
+Case C LOCAL_AND_REMOTE:    PASS
+Case D Mute/Unmute:         PASS (hearing + capture OFF/ON; Bus clear storm NOT observed)
+Case E Injection failure:   E_SKIP
+
+Case D log note:
+    CALL_MUTE_CHANGED + capture OFF/ON corroborates WebRTC mute layer.
+    localMicActive Bus semantics: NOT in field log (OBS-056-01 exit item).
+
+=== IG-2 CONDITIONAL exit criteria (OBS-056-01) ===
+
+One 4p field run on M01 MUST show in logcat:
+
+    CONFERENCE_AUDIO_PATH conferenceId=... topologyMode=ANCHOR
+        participantMediaMode=LOCAL_AND_REMOTE localMicActive=true|false
+        mixerSourceCount>=1 injectionPortState=OPEN
+
+Mute/unmute cycle MUST show localMicActive true -> false -> true grepable.
+
+Optional: CONFERENCE_AUDIO_PATH_FAILURE on natural injection failure.
+
+Does NOT require UI projection fix to exit CONDITIONAL.
+
+=== Open debt (out of IG-2 / Phase 1b scope) ===
+
+OBS-056-01
+    CONFERENCE_AUDIO_PATH production evidence
+    Type: integration verification (code existed; field emitted zero lines)
+    Fix: coordinator publish on receive-path sync (anchor only) + re-smoke
+
+UI-ANCHOR-CONN
+    Participant connectivity projection under ANCHOR defer-full-mesh
+    Symptom: peer joining forever when no direct receive path
+    Non-goals: ICE fix, admission change, Bus change, recovery
+
+UI-ANCHOR-ROSTER
+    Participant list count / membership projection mismatch on M03/M04
+    Symptom: roster shows fewer than 4 while M01 authoritative joined=4
+    Non-goals: merge into audio gate or Phase 1b impl
+
+=== Explicit non-actions ===
+
+    Do NOT reopen IG-2 for UI joining
+    Do NOT downgrade IG-2 for missing CONFERENCE_AUDIO_PATH in this run
+    Do NOT attach UI debt to ADR-0056 Phase 1b implementation
+
+=== Next sequence ===
+
+    1. commit Phase 1a + IG-2 evidence docs (separate from OBS fix)
+    2. OBS-056-01 integration + unit tests
+    3. short 4p re-smoke (log exit only)
+    4. open UI-ANCHOR-* issues
+    5. Phase 1b contract review (design only)

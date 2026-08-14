@@ -1,8 +1,10 @@
 package com.talkback.core.webrtc
 
 import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
+import com.talkback.core.webrtc.conferenceaudio.ConferencePcmFormat
 
 /**
  * Development stub for LAN talkback bring-up.
@@ -21,6 +23,10 @@ class StubWebRtcAudioEngine : WebRtcAudioEngine {
     private var negotiationSettlingState = NegotiationSettling.NONE
     @Volatile
     private var inboundPcmSink: InboundPcmSink? = null
+    @Volatile
+    var programRelayMode: ProgramRelayMode = ProgramRelayMode.MICROPHONE
+        private set
+    val injectedProgramFrames = mutableListOf<ByteArray>()
     override var playbackDiagnosticTag: String? = null
     override var remoteTrackDiagnosticLogger: ((Boolean) -> Unit)? = null
 
@@ -72,14 +78,33 @@ class StubWebRtcAudioEngine : WebRtcAudioEngine {
     }
 
     fun simulateInboundPcm(
-        frames: Int = 160,
-        sampleRate: Int = 48_000,
-        channels: Int = 1,
-        bitsPerSample: Int = 16
+        frames: Int = ConferencePcmFormat.CANONICAL.samplesPerFrame,
+        sampleRate: Int = ConferencePcmFormat.CANONICAL.sampleRateHz,
+        channels: Int = ConferencePcmFormat.CANONICAL.channels,
+        bitsPerSample: Int = ConferencePcmFormat.CANONICAL.bitsPerSample,
+        fill: Short = 1_000
     ) {
         val bytesPerFrame = bitsPerSample / 8 * channels
-        val buffer = ByteBuffer.allocate(bytesPerFrame * frames)
+        val buffer = ByteBuffer.allocate(bytesPerFrame * frames).order(ByteOrder.LITTLE_ENDIAN)
+        repeat(frames) { buffer.putShort(fill) }
+        buffer.flip()
         inboundPcmSink?.onPcm(buffer, bitsPerSample, sampleRate, channels, frames)
+    }
+
+    override fun setProgramRelayMode(mode: ProgramRelayMode) {
+        programRelayMode = mode
+    }
+
+    override fun feedProgramPcm(
+        audioData: ByteBuffer,
+        bitsPerSample: Int,
+        sampleRate: Int,
+        numberOfChannels: Int,
+        numberOfFrames: Int
+    ) {
+        val bytes = ByteArray(audioData.remaining())
+        audioData.duplicate().get(bytes)
+        injectedProgramFrames.add(bytes)
     }
 
     override fun release() {

@@ -248,7 +248,11 @@ import com.talkback.governance.transition.TransitionRecord
 import com.talkback.governance.transition.TransitionTerminalState
 import com.talkback.governance.transition.TransitionTrigger
 import com.talkback.core.webrtc.ConferenceAudioBus
+import com.talkback.core.webrtc.ProcessLocalMicFrameSource
 import com.talkback.core.webrtc.ReceivePathLivenessObserver
+import com.talkback.core.webrtc.conferenceaudio.ConferenceAudioPathObservability
+import com.talkback.core.webrtc.conferenceaudio.ConferenceLocalMicFeed
+import com.talkback.core.webrtc.conferenceaudio.PcmInjectionFailure
 import com.talkback.core.webrtc.MediaBearerScope
 import com.talkback.core.webrtc.SessionMediaRegistry
 import com.talkback.core.webrtc.ProgramAudioBus
@@ -407,12 +411,29 @@ class TalkbackCoordinator(
 
     private val receivePathLivenessObserver = ReceivePathLivenessObserver()
     private val programAudioBus = ProgramAudioBus(mediaRegistry::getGroup)
+    private val conferenceAudioPathObservability = ConferenceAudioPathObservability()
     private val conferenceAudioBus = ConferenceAudioBus(
-        mediaRegistry::getGroup,
+        mediaRegistry::getConference,
         onInboundPcm = { sessionId, sourceModuleId ->
             receivePathLivenessObserver.onInboundPcm(sessionId, sourceModuleId)
+        },
+        onInjectionFailure = { sessionId, targetModuleId, failure ->
+            runOnCoordinator {
+                val session = sessions[sessionId] ?: return@runOnCoordinator
+                conferenceLocalMicFeed.publishInjectionFailure(session, targetModuleId, failure)
+            }
         }
     )
+    private val conferenceLocalMicFeed: ConferenceLocalMicFeed by lazy {
+        ConferenceLocalMicFeed(
+            frameSource = ProcessLocalMicFrameSource,
+            pushFrame = { sessionId, frame ->
+                conferenceAudioBus.pushLocalMicrophoneFrame(sessionId, frame)
+            },
+            busDiagnostics = { sessionId -> conferenceAudioBus.diagnostics(sessionId) },
+            observability = conferenceAudioPathObservability
+        )
+    }
     private val conferenceRecoveryController: ConferenceRecoveryController by lazy {
         ConferenceRecoveryController(
             sessionManager = mediaRegistry.sessionManager,
@@ -2796,6 +2817,7 @@ class TalkbackCoordinator(
                 } else {
                     ensureConferenceDuplex(session)
                 }
+                syncConferenceLocalMicFeed(session)
             }
         }
 
@@ -9689,6 +9711,7 @@ class TalkbackCoordinator(
         stopSessionCapture(session)
         programAudioBus.clear(session.id)
         conferenceAudioBus.clear(session.id)
+        conferenceLocalMicFeed.clearSession(session.id)
         receivePathLivenessObserver.clearSession(session.id)
         if (isConferenceSession(session)) {
             val recoveryModules = linkedSetOf<String>()
@@ -11071,6 +11094,15 @@ class TalkbackCoordinator(
         )
     }
 
+    private fun syncConferenceLocalMicFeed(session: TalkbackSession) {
+        if (session.type != SessionType.CONFERENCE) return
+        conferenceLocalMicFeed.syncSession(
+            session,
+            localModuleId,
+            busActive = conferenceAudioBus.isRelayActive(session.id)
+        )
+    }
+
     private fun syncConferenceRelay(session: TalkbackSession, reason: String) {
         if (session.type != SessionType.CONFERENCE) return
         log(
@@ -11078,6 +11110,7 @@ class TalkbackCoordinator(
                 "topology=${session.mediaTopology.name} accepted=${session.accepted}"
         )
         conferenceAudioBus.updateParticipants(session, localModuleId)
+        syncConferenceLocalMicFeed(session)
         receivePathLivenessObserver.syncMeshSession(session, localModuleId) { remoteModuleId ->
             meshEngineForSession(session, remoteModuleId)
         }
@@ -12540,6 +12573,7 @@ class TalkbackCoordinator(
         session.backupAnchorModuleId = electAnchorRoles(remainingForBackup)?.primary
         programAudioBus.clear(session.id)
         conferenceAudioBus.clear(session.id)
+        conferenceLocalMicFeed.clearSession(session.id)
         receivePathLivenessObserver.clearSession(session.id)
         if (session.floor.owner()?.moduleId == current) {
             session.floor.owner()?.let { session.floor.release(it) }
@@ -13557,6 +13591,7 @@ class TalkbackCoordinator(
         if (session.anchorModuleId == localModuleId) {
             programAudioBus.clear(session.id)
             conferenceAudioBus.clear(session.id)
+        conferenceLocalMicFeed.clearSession(session.id)
             receivePathLivenessObserver.clearSession(session.id)
         }
         session.anchorModuleId = winnerPrimary
