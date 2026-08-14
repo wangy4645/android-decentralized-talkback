@@ -250,8 +250,10 @@ import com.talkback.governance.transition.TransitionTrigger
 import com.talkback.core.webrtc.ConferenceAudioBus
 import com.talkback.core.webrtc.ProcessLocalMicFrameSource
 import com.talkback.core.webrtc.ReceivePathLivenessObserver
+import com.talkback.core.webrtc.conferenceaudio.ConferenceAudioPathFact
 import com.talkback.core.webrtc.conferenceaudio.ConferenceAudioPathObservability
 import com.talkback.core.webrtc.conferenceaudio.ConferenceLocalMicFeed
+import com.talkback.core.webrtc.conferenceaudio.ParticipantMediaModePolicy
 import com.talkback.core.webrtc.conferenceaudio.PcmInjectionFailure
 import com.talkback.core.webrtc.MediaBearerScope
 import com.talkback.core.webrtc.SessionMediaRegistry
@@ -11103,6 +11105,32 @@ class TalkbackCoordinator(
         )
     }
 
+    /** OBS-056-01: anchor-only structured path evidence on every receive-path sync. */
+    private fun publishConferenceAudioPathObservability(session: TalkbackSession) {
+        if (session.type != SessionType.CONFERENCE) return
+        val anchor = session.anchorModuleId ?: return
+        if (anchor != localModuleId) return
+        val diagnostics = conferenceAudioBus.diagnostics(session.id)
+        val busActive = conferenceAudioBus.isRelayActive(session.id)
+        val feeding = conferenceLocalMicFeed.isFeeding(session.id)
+        val localId = localModuleId.value
+        conferenceAudioPathObservability.publish(
+            ConferenceAudioPathFact(
+                conferenceId = session.id,
+                endpointId = session.local.endpointId.value,
+                participantMediaMode = ParticipantMediaModePolicy.resolve(localId, anchor.value, localId),
+                localMicActive = feeding && busActive && !session.muted,
+                muted = session.muted,
+                mixerSourceCount = diagnostics?.mixerSourceCount ?: 0,
+                injectionPortOpen = diagnostics?.injectionPortOpen ?: false,
+                injectionFailure = false,
+                failureReason = null,
+                topologyMode = session.mediaTopology.name,
+                anchorModuleId = anchor.value
+            )
+        )
+    }
+
     private fun syncConferenceRelay(session: TalkbackSession, reason: String) {
         if (session.type != SessionType.CONFERENCE) return
         log(
@@ -11111,6 +11139,7 @@ class TalkbackCoordinator(
         )
         conferenceAudioBus.updateParticipants(session, localModuleId)
         syncConferenceLocalMicFeed(session)
+        publishConferenceAudioPathObservability(session)
         receivePathLivenessObserver.syncMeshSession(session, localModuleId) { remoteModuleId ->
             meshEngineForSession(session, remoteModuleId)
         }

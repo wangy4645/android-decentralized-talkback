@@ -15,6 +15,13 @@ object ConferenceAudioPathLog {
 
     fun emit(fact: ConferenceAudioPathFact) {
         val line = format(fact)
+        write(line)
+        if (fact.injectionFailure && fact.failureReason != null) {
+            write(formatFailure(fact))
+        }
+    }
+
+    private fun write(line: String) {
         val sink = testSink
         if (sink != null) {
             sink(line)
@@ -35,6 +42,15 @@ object ConferenceAudioPathLog {
         parts += "mixerSourceCount=${fact.mixerSourceCount}"
         parts += "injectionPortState=${if (fact.injectionPortOpen) "OPEN" else "CLOSED"}"
         fact.failureReason?.let { parts += "failureReason=$it" }
+        return parts.joinToString(" ")
+    }
+
+    internal fun formatFailure(fact: ConferenceAudioPathFact): String {
+        val parts = mutableListOf("CONFERENCE_AUDIO_PATH_FAILURE")
+        parts += "conferenceId=${fact.conferenceId}"
+        parts += "endpointId=${fact.endpointId}"
+        fact.targetModuleId?.let { parts += "targetModuleId=$it" }
+        fact.failureReason?.let { parts += "reason=$it" }
         return parts.joinToString(" ")
     }
 }
