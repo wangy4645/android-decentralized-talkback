@@ -77,6 +77,7 @@ import com.talkback.core.session.ConferenceEdgeRecoveryController
 import com.talkback.core.session.ConferenceBootstrapDeferral
 import com.talkback.core.session.ConferenceSameSessionRejoinAcceptance
 import com.talkback.core.session.DefaultMembershipAuthorityResolver
+import com.talkback.core.session.MembershipDigestSupport
 import com.talkback.core.session.MembershipAuthorityResolveTrace
 import com.talkback.core.session.MembershipResyncKey
 import com.talkback.core.session.MembershipResyncLifecycle
@@ -608,11 +609,13 @@ class TalkbackCoordinator(
                 resolveContext = { channelId, conferenceSessionId ->
                     val session = sessions[conferenceSessionId] ?: return@WiredMembershipEpochProbe null
                     if (session.channelId != channelId) return@WiredMembershipEpochProbe null
+                    val localMembershipSessionId = membershipDigestSourceSessionId(session)
                     RecoveryMembershipContext(
                         channelId = channelId,
                         conferenceSessionId = conferenceSessionId,
-                        localMembershipView = TopologyDigest.fromSession(session),
-                        isLocalMembershipAuthority = isMembershipAuthority(session)
+                        localMembershipView = membershipDigestForConvergence(session),
+                        isLocalMembershipAuthority = isMembershipAuthority(session),
+                        localMembershipSessionId = localMembershipSessionId
                     )
                 },
                 resolveAuthorityId = { context ->
@@ -3750,15 +3753,17 @@ class TalkbackCoordinator(
         if (!isTransportRecovered()) return
         val channelId = conferenceSession.channelId ?: return
         val episodeId = recoveryEpisodeIdForConference(conferenceSession) ?: return
+        val localMembershipSessionId = membershipDigestSourceSessionId(conferenceSession)
         val context = RecoveryMembershipContext(
             channelId = channelId,
             conferenceSessionId = conferenceSession.id,
-            localMembershipView = TopologyDigest.fromSession(conferenceSession),
-            isLocalMembershipAuthority = isMembershipAuthorityForChannel(channelId)
+            localMembershipView = membershipDigestForConvergence(conferenceSession),
+            isLocalMembershipAuthority = isMembershipAuthorityForChannel(channelId),
+            localMembershipSessionId = localMembershipSessionId
         )
         val outcome = membershipAuthorityResolver.evaluateMembershipConvergence(
             context,
-            conferenceSession.id
+            localMembershipSessionId
         )
         MembershipAuthorityResolveTrace.emit(::log, outcome)
         if (outcome.converged) return
@@ -4431,6 +4436,32 @@ class TalkbackCoordinator(
 
     private fun authorityDigestForChannel(channelId: String): TopologyDigest? =
         lastSeenAuthorityDigestByChannel[channelId]?.digest
+
+    /**
+     * #190: shared digest materialization for HELLO publication and recovery convergence.
+     */
+    private fun membershipDigestForSession(session: TalkbackSession): TopologyDigest =
+        if (session.type == SessionType.GROUP) {
+            MembershipDigestSupport.digestFromGroupSession(session)
+        } else {
+            MembershipDigestSupport.digestFromConferenceRoster(
+                session,
+                meshRoster(session).map { it.moduleId.value }
+            )
+        }
+
+    private fun membershipDigestForConvergence(conferenceSession: TalkbackSession): TopologyDigest {
+        if (conferenceSession.channelId == null) {
+            return TopologyDigest.fromSession(conferenceSession)
+        }
+        return MembershipDigestSupport.convergenceLocalDigest(
+            conferenceSession = conferenceSession,
+            conferenceRosterModuleIds = meshRoster(conferenceSession).map { it.moduleId.value }
+        )
+    }
+
+    private fun membershipDigestSourceSessionId(conferenceSession: TalkbackSession): String =
+        MembershipDigestSupport.convergenceLocalSessionId(conferenceSession)
 
     private fun authorityDigestEpoch(channelId: String): Long? =
         authorityDigestForChannel(channelId)?.rosterEpoch
@@ -11271,23 +11302,25 @@ class TalkbackCoordinator(
                 it.channelId != null &&
                 it.mediaTopology == GroupMediaTopology.ANCHOR
         }
-        val groupSession = sessions.values.firstOrNull {
-            it.type == SessionType.GROUP && it.accepted && it.channelId != null
-        } ?: anchorSession
-        val digest = groupSession?.let { TopologyDigest.fromSession(it) }
-        if (groupSession != null && digest != null) {
-            val floorDigest = groupSession.takeIf {
+        val digestSession = MembershipDigestSupport.selectHelloDigestSession(sessions.values)
+        val digest = digestSession?.let { membershipDigestForSession(it) }
+        val groupSessionForFloor = digestSession?.channelId?.let { channelId ->
+            MembershipDigestSupport.selectGroupSessionOnChannel(sessions.values, channelId)
+        }
+        if (digestSession != null && digest != null) {
+            val floorDigest = groupSessionForFloor?.takeIf {
                 GroupFloorController.canPublishFloorSnapshot(it, localModuleId.value)
             }?.floor?.let { floor ->
                 FloorSnapshotDigest(
                     epoch = floor.epoch(),
                     version = floor.version(),
-                    ownerKey = GroupFloorController.canonicalFloorOwnerKey(groupSession),
+                    ownerKey = GroupFloorController.canonicalFloorOwnerKey(groupSessionForFloor),
                     ownerPriority = floor.ownerPriority()
                 )
             }
             log(
-                "GROUP_DIGEST sessionId=${groupSession.id} channelId=${groupSession.channelId} " +
+                "GROUP_DIGEST sessionId=${digestSession.id} sessionType=${digestSession.type.name} " +
+                    "channelId=${digestSession.channelId} " +
                     "anchorEpoch=${digest.anchorEpoch} rosterEpoch=${digest.rosterEpoch} " +
                     "memberHash=${digest.memberHash}" +
                     (floorDigest?.let {
@@ -11296,7 +11329,7 @@ class TalkbackCoordinator(
                     } ?: "")
             )
         }
-        val floorSnapshot = groupSession?.takeIf {
+        val floorSnapshot = groupSessionForFloor?.takeIf {
             GroupFloorController.canPublishFloorSnapshot(it, localModuleId.value)
         }?.let { session ->
             FloorSnapshotDigest(
@@ -11315,7 +11348,7 @@ class TalkbackCoordinator(
             anchorEpoch = anchorSession?.anchorEpoch ?: 0L,
             primaryModuleId = anchorSession?.anchorModuleId?.value,
             backupModuleId = anchorSession?.backupAnchorModuleId?.value,
-            channelId = groupSession?.channelId,
+            channelId = digestSession?.channelId,
             rosterEpoch = digest?.rosterEpoch ?: 0L,
             meshGeneration = digest?.meshGeneration ?: 0L,
             memberHash = digest?.memberHash ?: 0,

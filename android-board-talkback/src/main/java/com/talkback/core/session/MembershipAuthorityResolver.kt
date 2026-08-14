@@ -7,7 +7,11 @@ data class RecoveryMembershipContext(
     val channelId: String,
     val conferenceSessionId: String?,
     val localMembershipView: TopologyDigest,
-    val isLocalMembershipAuthority: Boolean = false
+    val isLocalMembershipAuthority: Boolean = false,
+    /**
+     * #190: session id whose roster materialized [localMembershipView] (GROUP session or conference mesh roster).
+     */
+    val localMembershipSessionId: String? = null
 )
 
 /**
@@ -73,7 +77,7 @@ class DefaultMembershipAuthorityResolver(
             conferenceSessionId = context.conferenceSessionId,
             resolverImpl = resolverImpl,
             authorityDigestSource = MembershipAuthorityResolveTrace.SOURCE_LAST_SEEN_AUTHORITY_DIGEST,
-            localGroupSessionId = localGroupSessionId,
+            localGroupSessionId = context.localMembershipSessionId ?: localGroupSessionId,
             localDigest = local,
             authorityDigest = authorityDigest,
             converged = converged,
