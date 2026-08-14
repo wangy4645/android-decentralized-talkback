@@ -2024,11 +2024,12 @@ class ConferenceEdgeRecoveryController internal constructor(
     }
 
     /**
-     * ADR-0055 Track P: once the attempt watchdog budget has elapsed, `MEDIA_NOT_READY`
-     * must not re-defer the attempt — emit terminal disposition instead.
+     * ADR-0055 Track P / Track O: once the attempt watchdog budget has elapsed, capability
+     * blocks (including MEDIA_NOT_READY and dispatch_gate) must not re-defer — terminal
+     * disposition instead.
      */
-    private fun shouldTerminalWatchdogTimeoutForMediaNotReady(record: EdgeRecoveryRecord): Boolean =
-        hasDeferredMediaAction(record) && record.deferredReason == DeferredReason.MEDIA_NOT_READY
+    private fun shouldTerminalWatchdogTimeoutAtFire(record: EdgeRecoveryRecord): Boolean =
+        isCapabilityBlockingAttemptClock(record)
 
     /**
      * Appendix C-2: recovery authority claims media action when no participant handoff owns it.
@@ -2541,16 +2542,25 @@ class ConferenceEdgeRecoveryController internal constructor(
 
     /** Test seam: arm MEDIA_NOT_READY defer on an attempt with a live watchdog (ADR-0055 Track P). */
     internal fun applyMediaNotReadyDeferForTest(sessionId: String, remoteModuleId: String) {
+        applyCapabilityDeferForTest(sessionId, remoteModuleId, DeferredReason.MEDIA_NOT_READY)
+    }
+
+    /** Test seam: arm a capability defer on an attempt with a live watchdog (ADR-0055 Track O). */
+    internal fun applyCapabilityDeferForTest(
+        sessionId: String,
+        remoteModuleId: String,
+        reason: DeferredReason
+    ) {
         val record = edges[ConferenceEdgeKey(sessionId, remoteModuleId)] ?: return
         recordMediaActionDeferred(
             record = record,
             owner = MediaActionOwner.HOST_RESTART,
-            reason = DeferredReason.MEDIA_NOT_READY,
+            reason = reason,
             wakeupBinding = WakeupBinding(
                 sourceType = WakeupSourceType.ROUTE_CONVERGED,
                 sourceKey = edgeWakeupKey(sessionId, remoteModuleId)
             ),
-            trigger = "TEST_MEDIA_NOT_READY"
+            trigger = "TEST_$reason"
         )
     }
 
@@ -4523,7 +4533,7 @@ class ConferenceEdgeRecoveryController internal constructor(
             if (!still.phase.isActivelyRecovering()) return@schedule
             if (
                 isCapabilityBlockingAttemptClock(still) &&
-                !shouldTerminalWatchdogTimeoutForMediaNotReady(still)
+                !shouldTerminalWatchdogTimeoutAtFire(still)
             ) {
                 markCapabilityDeferral(still, "CAPABILITY_UNAVAILABLE_AT_FIRE")
                 onLog(
