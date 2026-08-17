@@ -17,6 +17,7 @@ import com.talkback.core.ptt.PttState
 import com.talkback.core.registry.EndpointRegistry
 import com.talkback.core.webrtc.MediaBearerScope
 import com.talkback.core.session.ChannelReadiness
+import com.talkback.core.model.SignalEnvelope
 import com.talkback.core.signaling.PeerTarget
 import com.talkback.core.sync.RemoteModuleState
 
@@ -425,6 +426,20 @@ class TalkbackRuntime(
     internal fun testNotifyPeerEdgeSignalingReady(moduleId: String) {
         runCatching { coordinator.testNotifyPeerEdgeSignalingReady(moduleId) }
     }
+
+    internal fun testDeliverHello(signal: SignalEnvelope, fromPeer: PeerTarget) {
+        runCatching { coordinator.testDeliverHello(signal, fromPeer) }
+    }
+
+    internal fun testResetLatePeerAdmissionMetrics() {
+        runCatching { coordinator.testResetLatePeerAdmissionMetrics() }
+    }
+
+    internal fun testLatePeerAdmitInvokeCount(): Int =
+        runCatching { coordinator.testLatePeerAdmitInvokeCount() }.getOrDefault(0)
+
+    internal fun testReconcileGroupMeshInternalInvocationCount(): Int =
+        runCatching { coordinator.testReconcileGroupMeshInternalInvocationCount() }.getOrDefault(0)
 
     internal fun testSendGroupJoinToPeer(
         targetPort: Int,
