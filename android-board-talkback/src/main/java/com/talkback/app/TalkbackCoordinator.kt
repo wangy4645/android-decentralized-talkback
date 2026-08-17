@@ -160,6 +160,8 @@ import com.talkback.core.session.GroupInvitePayloadSemantic
 import com.talkback.core.session.OutboundGroupInviteAttemptSupport
 import com.talkback.core.session.BootstrapAdmissionIntent
 import com.talkback.core.session.BootstrapAdmissionIntentState
+import com.talkback.core.session.GroupLatePeerChannelResolutionSupport
+import com.talkback.core.session.GroupLatePeerAdmissionSupport
 import com.talkback.core.session.GroupMembershipSupport
 import com.talkback.core.session.PairwiseMeshAdmissionActivationSupport
 import com.talkback.core.session.PairwiseMeshAdmissionSupport
@@ -219,6 +221,7 @@ import com.talkback.core.util.RecoveryNegotiationObservation
 import com.talkback.core.util.RecoveryDeliveryFact
 import com.talkback.core.util.FloorTrace
 import com.talkback.core.util.GroupBootstrapAdmissionLog
+import com.talkback.core.util.GroupLatePeerAdmissionLog
 import com.talkback.core.util.GroupTransitionReadinessLog
 import com.talkback.core.util.MeetingRecoveryLog
 import com.talkback.core.util.D1IngressMissDebugInjection
@@ -1061,6 +1064,10 @@ class TalkbackCoordinator(
     /** #180 field harness — suppress GroupMeshPlanner invites while proving pairwise admission activation. */
     private val debugP180HarnessMeshPlannerSuppressUntilMs = java.util.concurrent.atomic.AtomicLong(0L)
     private val debugP180HarnessPairwiseActivationSuppressUntilMs = java.util.concurrent.atomic.AtomicLong(0L)
+    @Volatile
+    internal var testLatePeerAdmitInvokeCount: Int = 0
+    @Volatile
+    internal var testReconcileGroupMeshInternalInvocationCount: Int = 0
     private val lastPlaybackEnabledBySession = ConcurrentHashMap<String, Boolean>()
     private val lastEnsureCanonicalInviteMsByModule = ConcurrentHashMap<String, Long>()
     private val lastE4RejoinInviteMsByModule = ConcurrentHashMap<String, Long>()
@@ -1634,6 +1641,20 @@ class TalkbackCoordinator(
         )
         handleSignal(envelope, fromPeer)
     }
+
+    internal fun testDeliverHello(signal: SignalEnvelope, fromPeer: PeerTarget) = runOnCoordinatorSync {
+        handleHello(signal, fromPeer)
+    }
+
+    internal fun testResetLatePeerAdmissionMetrics() = runOnCoordinator {
+        testLatePeerAdmitInvokeCount = 0
+        testReconcileGroupMeshInternalInvocationCount = 0
+    }
+
+    internal fun testLatePeerAdmitInvokeCount(): Int = runOnCoordinatorSync { testLatePeerAdmitInvokeCount }
+
+    internal fun testReconcileGroupMeshInternalInvocationCount(): Int =
+        runOnCoordinatorSync { testReconcileGroupMeshInternalInvocationCount }
 
     fun groupCall(
         local: EndpointAddress,
@@ -5930,6 +5951,7 @@ class TalkbackCoordinator(
         recordAuthorityFloorSnapshotFromHello(payload)
         maybeRequestGroupResyncFromHello(payload)
         ensureCanonicalMemberPresent(payload, fromPeer)
+        maybeAdmitLatePeerFromHello(payload)
         applyAuthorityFloorSnapshotFromHello(payload)
         if (wasStale) {
             onRemoteModuleRecovered(payload.moduleId)
@@ -12657,6 +12679,114 @@ class TalkbackCoordinator(
             }
     }
 
+  /**
+   * HELLO-triggered late-peer admission: presence only; delegates to [tryReinviteGroupPeerPairwise].
+   * Does not mutate roster or invoke whole-group mesh reconciliation.
+   */
+    private fun maybeAdmitLatePeerFromHello(payload: HelloPayload) {
+        val peerModuleId = payload.moduleId
+        val acceptedSessions = sessions.values.filter {
+            it.type == SessionType.GROUP && it.accepted && !it.isForegroundSuspended()
+        }
+        when (
+            val resolution = GroupLatePeerChannelResolutionSupport.resolve(
+                helloChannelId = payload.channelId,
+                sessions = acceptedSessions.map { session ->
+                    GroupLatePeerChannelResolutionSupport.SessionInput(
+                        sessionId = session.id,
+                        channelId = session.channelId.orEmpty(),
+                        peerHasAssociation = peerHasLatePeerSessionAssociation(session, peerModuleId)
+                    )
+                }
+            )
+        ) {
+            GroupLatePeerChannelResolutionSupport.Result.Absent -> {
+                if (payload.channelId.isNullOrBlank()) {
+                    log(
+                        GroupLatePeerAdmissionLog.skippedMessage(
+                            peerModuleId,
+                            "none",
+                            GroupLatePeerAdmissionSupport.SkipReason.HELLO_CHANNEL_ABSENT,
+                            null
+                        )
+                    )
+                }
+                return
+            }
+            is GroupLatePeerChannelResolutionSupport.Result.Resolved -> {
+                val channelId = resolution.channelId
+                val session = acceptedSessions.firstOrNull {
+                    it.id == resolution.sessionId && it.channelId == channelId
+                } ?: return
+
+                val peerInCanonical = GroupMembershipSupport.canonicalMemberModuleIds(session)
+                    .any { it.value == peerModuleId }
+                val topologyReadiness = GroupRuntimeHealthProjector.project(
+                    buildGroupRuntimeHealthInput(session)
+                ).groupTopologyReadiness.name
+
+                when (
+                    val decision = GroupLatePeerAdmissionSupport.evaluate(
+                        GroupLatePeerAdmissionSupport.CandidateInput(
+                            peerModuleId = peerModuleId,
+                            helloChannelId = channelId,
+                            sessionChannelId = session.channelId,
+                            hasAcceptedGroupSession = true,
+                            peerInCanonicalRoster = peerInCanonical,
+                            isAdmissionOwner = isLatePeerAdmissionOwner(session, peerModuleId),
+                            topologyReadiness = topologyReadiness,
+                            peerIsLocal = peerModuleId == localModuleId.value
+                        )
+                    )
+                ) {
+                    is GroupLatePeerAdmissionSupport.Decision.Skip -> {
+                        log(
+                            GroupLatePeerAdmissionLog.skippedMessage(
+                                peerModuleId,
+                                channelId,
+                                decision.reason,
+                                session.id
+                            )
+                        )
+                    }
+                    is GroupLatePeerAdmissionSupport.Decision.Admit -> {
+                        log(
+                            GroupLatePeerAdmissionLog.discoveredMessage(
+                                peerModuleId,
+                                localModuleId.value,
+                                channelId,
+                                session.id,
+                                resolution.channelSource.name
+                            )
+                        )
+                        testLatePeerAdmitInvokeCount++
+                        tryReinviteGroupPeerPairwise(peerModuleId)
+                    }
+                }
+            }
+        }
+    }
+
+    private fun peerHasLatePeerSessionAssociation(session: TalkbackSession, peerModuleId: String): Boolean {
+        if (peerModuleId in session.pendingInviteeEndpoints) return true
+        if (session.admittedPeerHistory.containsKey(peerModuleId)) return true
+        if (peerModuleId in session.memberModules.map { it.value }) return true
+        if (peerModuleId in session.groupMembers.map { it.moduleId.value }) return true
+        val channelId = session.channelId ?: return false
+        return peerModuleId in channelManager.members(channelId).map { it.value }
+    }
+
+    /** Matches [tryReinviteGroupPeerPairwise] topology gates plus membership authority. */
+    private fun isLatePeerAdmissionOwner(session: TalkbackSession, peerModuleId: String): Boolean {
+        if (!isMembershipAuthority(session)) return false
+        if (peerModuleId == localModuleId.value) return false
+        val anchor = resolveAnchorModuleId(session)
+        if (session.mediaTopology == GroupMediaTopology.ANCHOR) {
+            return localModuleId == anchor
+        }
+        return localModuleId.value < peerModuleId
+    }
+
     /** Pairwise offerer (local < peer) invites late peers into the live GROUP mesh. */
     private fun tryReinviteGroupPeerPairwise(moduleId: String): Boolean {
         if (moduleId == localModuleId.value) return false
@@ -12828,6 +12958,7 @@ class TalkbackCoordinator(
     }
 
     private fun reconcileGroupMeshInternal(channelId: String) {
+        testReconcileGroupMeshInternalInvocationCount++
         endStaleConferenceBlockingGroup(channelId)
         if (blocksGroupOnChannel(channelId)) return
         if (isMeshRepairSuppressed(channelId)) return
