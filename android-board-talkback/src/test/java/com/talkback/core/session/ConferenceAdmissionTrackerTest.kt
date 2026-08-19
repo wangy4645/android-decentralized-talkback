@@ -84,4 +84,30 @@ class ConferenceAdmissionTrackerTest {
         assertTrue(tracker.allowsRecovery(key))
         assertEquals(readyLogsAfterFirst, logs.count { it.contains("phase=READY") })
     }
+
+    @Test
+    fun admissionHandoff_blocksRestartUntilIceConnected() {
+        tracker.beginAdmissionHandoff(key)
+        tracker.markReadyIfAbsent(key)
+
+        assertTrue(tracker.allowsRecovery(key))
+        assertTrue(tracker.isAdmissionHandoffActive(key))
+        assertFalse(tracker.canRestartConferenceEdge(key))
+
+        tracker.completeAdmissionHandoff(key)
+
+        assertTrue(tracker.canRestartConferenceEdge(key))
+        assertTrue(logs.any { it.contains("CONFERENCE_ADMISSION_HANDOFF") && it.contains("active=true") })
+        assertTrue(logs.any { it.contains("CONFERENCE_ADMISSION_HANDOFF") && it.contains("active=false") })
+    }
+
+    @Test
+    fun admissionHandoff_inviteResendBlockedBeforeReady() {
+        tracker.beginAdmissionHandoff(key)
+        tracker.transition(key, ConferenceAdmissionPhase.INVITED, ConferenceAdmissionTransitionReason.INVITE_RECEIVED)
+
+        assertTrue(tracker.isAdmissionHandoffActive(key))
+        assertFalse(tracker.canRestartConferenceEdge(key))
+        assertFalse(tracker.allowsRecovery(key))
+    }
 }
