@@ -24,7 +24,9 @@ import com.talkback.appprod.R
 import com.talkback.appprod.conference.JoinMeetingIntent
 import com.talkback.core.model.EndpointPriority
 import com.talkback.core.session.ChannelReadiness
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class TalkFragment : Fragment() {
     private val viewModel: TalkViewModel by activityViewModels { TalkViewModelFactory(requireContext()) }
@@ -446,16 +448,17 @@ class TalkFragment : Fragment() {
             txtEmergency.text = getString(R.string.meeting_control_members)
             txtRecord.text = getString(R.string.meeting_control_more)
             broadcast.setOnClickListener {
-                lifecycleScope.launch {
-                    when (viewModel.toggleMeetingMute()) {
-                        is PttDownResult.ServiceStopped -> {
+                lifecycleScope.launch(Dispatchers.Default) {
+                    val result = viewModel.toggleMeetingMute()
+                    if (result is PttDownResult.ServiceStopped) {
+                        withContext(Dispatchers.Main) {
+                            if (!isAdded) return@withContext
                             Toast.makeText(
                                 requireContext(),
                                 R.string.service_not_running,
                                 Toast.LENGTH_SHORT
                             ).show()
                         }
-                        else -> Unit
                     }
                 }
             }
@@ -534,8 +537,11 @@ class TalkFragment : Fragment() {
     }
 
     private fun startMeeting(intent: JoinMeetingIntent, target: MeetingNavigation = MeetingNavigation.MAIN) {
-        lifecycleScope.launch {
-            when (val result = viewModel.joinMeeting(intent)) {
+        lifecycleScope.launch(Dispatchers.Default) {
+            val result = viewModel.joinMeeting(intent)
+            withContext(Dispatchers.Main) {
+                if (!isAdded) return@withContext
+                when (result) {
                 is PttDownResult.Ok, is PttDownResult.Connecting -> {
                     (activity as? MainActivity)?.showMeetingScreen(target)
                 }
@@ -563,6 +569,7 @@ class TalkFragment : Fragment() {
                 is PttDownResult.MeetingActive -> {
                     (activity as? MainActivity)?.showMeetingScreen(target)
                 }
+                }
             }
         }
     }
@@ -570,52 +577,58 @@ class TalkFragment : Fragment() {
     private fun pressPtt(btnPtt: FrameLayout? = null) {
         pttHeld = true
         btnPtt?.setBackgroundResource(R.drawable.bg_ptt_button_active)
-        lifecycleScope.launch {
-            when (val result = viewModel.onPttDown()) {
-                is PttDownResult.Ok -> Unit
-                is PttDownResult.Connecting -> {
-                    if (pttHeld) {
+        lifecycleScope.launch(Dispatchers.Default) {
+            val result = viewModel.onPttDown()
+            withContext(Dispatchers.Main) {
+                if (!isAdded) return@withContext
+                when (result) {
+                    is PttDownResult.Ok -> Unit
+                    is PttDownResult.Connecting -> {
+                        if (pttHeld) {
+                            Toast.makeText(
+                                requireContext(),
+                                R.string.ptt_setting_up_channel,
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                    }
+                    is PttDownResult.NoPeers, is PttDownResult.NoTeammates -> {
                         Toast.makeText(
                             requireContext(),
-                            R.string.ptt_setting_up_channel,
+                            R.string.ptt_no_teammates,
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                    is PttDownResult.ServiceStopped -> {
+                        Toast.makeText(
+                            requireContext(),
+                            R.string.service_not_running,
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                    is PttDownResult.FloorBusy -> {
+                        btnPtt?.setBackgroundResource(R.drawable.bg_ptt_button)
+                        Toast.makeText(
+                            requireContext(),
+                            getString(R.string.ptt_floor_busy, result.speaker),
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                    is PttDownResult.MeetingActive -> {
+                        btnPtt?.setBackgroundResource(R.drawable.bg_ptt_button)
+                        Toast.makeText(
+                            requireContext(),
+                            R.string.ptt_meeting_active,
                             Toast.LENGTH_SHORT
                         ).show()
                     }
                 }
-                is PttDownResult.NoPeers, is PttDownResult.NoTeammates -> {
-                    Toast.makeText(
-                        requireContext(),
-                        R.string.ptt_no_teammates,
-                        Toast.LENGTH_SHORT
-                    ).show()
-                }
-                is PttDownResult.ServiceStopped -> {
-                    Toast.makeText(
-                        requireContext(),
-                        R.string.service_not_running,
-                        Toast.LENGTH_SHORT
-                    ).show()
-                }
-                is PttDownResult.FloorBusy -> {
-                    btnPtt?.setBackgroundResource(R.drawable.bg_ptt_button)
-                    Toast.makeText(
-                        requireContext(),
-                        getString(R.string.ptt_floor_busy, result.speaker),
-                        Toast.LENGTH_SHORT
-                    ).show()
-                }
-                is PttDownResult.MeetingActive -> {
-                    btnPtt?.setBackgroundResource(R.drawable.bg_ptt_button)
-                    Toast.makeText(
-                        requireContext(),
-                        R.string.ptt_meeting_active,
-                        Toast.LENGTH_SHORT
-                    ).show()
-                }
             }
             if (!pttHeld) {
                 viewModel.onPttUp()
-                btnPtt?.setBackgroundResource(R.drawable.bg_ptt_button)
+                withContext(Dispatchers.Main) {
+                    btnPtt?.setBackgroundResource(R.drawable.bg_ptt_button)
+                }
             }
         }
     }
@@ -623,9 +636,9 @@ class TalkFragment : Fragment() {
     private fun releasePtt(btnPtt: FrameLayout? = null) {
         if (!pttHeld) return
         pttHeld = false
-        lifecycleScope.launch {
+        btnPtt?.setBackgroundResource(R.drawable.bg_ptt_button)
+        lifecycleScope.launch(Dispatchers.Default) {
             viewModel.onPttUp()
-            btnPtt?.setBackgroundResource(R.drawable.bg_ptt_button)
         }
     }
 

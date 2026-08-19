@@ -16,6 +16,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.talkback.appprod.R
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -50,7 +51,7 @@ class MeetingFragment : Fragment() {
             R.drawable.ic_mic_ptt,
             getString(R.string.call_control_mute)
         ) {
-            lifecycleScope.launch { viewModel.toggleMeetingMute() }
+            lifecycleScope.launch(Dispatchers.Default) { viewModel.toggleMeetingMute() }
         }
         val speakerControl = view.findViewById<View>(R.id.btnMeetingSpeaker)
         val headsetControl = view.findViewById<View>(R.id.btnMeetingHeadset)
