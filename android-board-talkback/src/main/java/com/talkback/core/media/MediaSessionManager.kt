@@ -104,6 +104,10 @@ class MediaSessionManager(
 
     fun getEngine(moduleId: String): WebRtcAudioEngine? = entries[moduleId]?.engine
 
+    fun abortPendingNegotiation() {
+        entries.values.forEach { it.engine.abortPendingNegotiation() }
+    }
+
     fun onIceStateChanged(moduleId: String, iceState: String) {
         val entry = entries[moduleId] ?: run {
             if (IceConnectivity.isClosed(iceState)) {

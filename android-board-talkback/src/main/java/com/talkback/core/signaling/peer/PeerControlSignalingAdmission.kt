@@ -29,6 +29,13 @@ object PeerControlSignalingAdmission {
     }
 
     /**
+     * Session close must not wait on PEER_EDGE_READY / SDP.
+     * Does not reopen invite/accept admission.
+     */
+    fun maySendSessionClose(type: SignalType): Boolean =
+        type == SignalType.HANGUP || type == SignalType.GROUP_LEAVE
+
+    /**
      * ADR-0036 Phase 2.1: membership recovery resync may bootstrap before full PEER_EDGE_READY
      * when the authority peer is observable on the current transport epoch (not NEVER_OBSERVED).
      */

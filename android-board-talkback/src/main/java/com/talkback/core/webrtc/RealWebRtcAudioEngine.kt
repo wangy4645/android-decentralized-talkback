@@ -35,6 +35,7 @@ class RealWebRtcAudioEngine(
     private val remoteAudioTracks = CopyOnWriteArrayList<AudioTrack>()
     private val pendingRemoteCandidates = CopyOnWriteArrayList<IceCandidate>()
     private val capturing = AtomicBoolean(false)
+    private val abortNegotiation = AtomicBoolean(false)
     @Volatile
     private var remoteDescriptionApplied = false
     private var localIceListener: ((String) -> Unit)? = null
@@ -211,6 +212,10 @@ class RealWebRtcAudioEngine(
         markRemoteDescriptionApplied()
         // Next stable negotiation completion as Offerer clears Answerer settling.
         clearNegotiationSettling()
+    }
+
+    override fun abortPendingNegotiation() {
+        abortNegotiation.set(true)
     }
 
     override fun rollbackNegotiation() {
@@ -555,8 +560,14 @@ class RealWebRtcAudioEngine(
     }
 
     private fun await(latch: CountDownLatch, timeoutMessage: String) {
-        val ok = latch.await(3, TimeUnit.SECONDS)
-        check(ok) { timeoutMessage }
+        val deadlineNs = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
+        while (true) {
+            check(!abortNegotiation.get()) { "Aborted pending SDP" }
+            val remainingNs = deadlineNs - System.nanoTime()
+            check(remainingNs > 0) { timeoutMessage }
+            val waitMs = TimeUnit.NANOSECONDS.toMillis(remainingNs).coerceIn(1L, 50L)
+            if (latch.await(waitMs, TimeUnit.MILLISECONDS)) return
+        }
     }
 
     private fun encodeIceCandidate(candidate: IceCandidate): String {

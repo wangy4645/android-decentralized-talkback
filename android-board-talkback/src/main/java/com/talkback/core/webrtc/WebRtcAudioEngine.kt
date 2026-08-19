@@ -18,6 +18,8 @@ interface WebRtcAudioEngine {
     fun applyRemoteOffer(sdp: String, polite: Boolean = true): String
     fun applyRemoteAnswer(sdp: String, polite: Boolean = true)
     fun rollbackNegotiation()
+    /** Unblock coordinator SDP await so leave/hangup can run. */
+    fun abortPendingNegotiation() = Unit
     fun addIceCandidate(candidate: String)
     fun startCapture()
     fun stopCapture()
