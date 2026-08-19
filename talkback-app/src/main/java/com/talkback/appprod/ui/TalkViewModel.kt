@@ -77,6 +77,12 @@ class TalkViewModel(
     private var conferenceEndReason: ConferenceEndReason = ConferenceEndReason.NONE
     @Volatile
     private var lastSyncedMeetingPreferred: Boolean? = null
+    @Volatile
+    private var lastKnownConferenceSessionId: String? = null
+    @Volatile
+    private var lastKnownConferenceHost: Boolean = false
+    @Volatile
+    private var meetingLeaveInFlight: Boolean = false
     /** Talk page PTT/Meeting tab selection — navigation only; does not drive input binding. */
     @Volatile
     private var userSelectedTab: UserSelectedTab = UserSelectedTab.PTT
@@ -262,11 +268,21 @@ class TalkViewModel(
                 _toastMessageRes.emit(R.string.floor_acquire_timeout)
             }
         }
-        val state = buildState(config)
-        val endReason = if (wasConferenceActive && !state.conferenceActive) {
+        val raw = buildState(config)
+        if (meetingLeaveInFlight && !raw.conferenceActive) {
+            meetingLeaveInFlight = false
+        }
+        val state = if (meetingLeaveInFlight && raw.conferenceActive) {
+            overlayMeetingEnding(raw)
+        } else {
+            raw
+        }
+        val endReason = if (wasConferenceActive && !raw.conferenceActive) {
             val reason = conferenceEndReason
             conferenceEndReason = ConferenceEndReason.NONE
             if (reason != ConferenceEndReason.NONE) reason else ConferenceEndReason.REMOTE_ENDED
+        } else if (meetingLeaveInFlight) {
+            ConferenceEndReason.USER_LEFT
         } else {
             ConferenceEndReason.NONE
         }
@@ -276,18 +292,14 @@ class TalkViewModel(
         } else {
             state
         }
-        if (state.conferenceActive && !wasConferenceActive && config.meetingAutoJoin) {
+        if (raw.conferenceActive && !wasConferenceActive && !meetingLeaveInFlight && config.meetingAutoJoin) {
             _openMeetingEvents.emit(MeetingNavigation.MAIN)
         }
-        wasConferenceActive = state.conferenceActive
+        wasConferenceActive = raw.conferenceActive
         _uiState.value = displayState.copy(conferenceEndReason = endReason)
     }
 
-    fun isConferenceHost(): Boolean {
-        syncServiceState()
-        if (!serviceRunning || manager.getRuntime() == null) return false
-        return manager.isConferenceHost(configStore.load())
-    }
+    fun isConferenceHost(): Boolean = lastKnownConferenceHost
 
     suspend fun onPttDown(): PttDownResult = pttMutex.withLock {
         syncServiceState()
@@ -622,20 +634,12 @@ class TalkViewModel(
     }
 
     fun leaveMeeting() {
-        conferenceEndReason = ConferenceEndReason.USER_LEFT
+        beginLocalMeetingLeave("USER_LEAVE_MEETING")
         viewModelScope.launch(Dispatchers.Default) {
-            val config = configStore.load()
-            manager.leaveChannelSession(
-                config,
+            completeMeetingLeave(
                 reason = "USER_LEAVE_MEETING",
                 caller = "TalkViewModel.leaveMeeting"
             )
-            manager.clearConferencePttCooldown(config.defaultChannelId)
-            lastSyncedMeetingPreferred = false
-            manager.setMeetingPreferred(false, config.defaultChannelId)
-            manager.prioritizeNextMeshCall()
-            runCatching { manager.ensureChannelSession(config) }
-            refreshInternal()
         }
     }
 
@@ -686,21 +690,62 @@ class TalkViewModel(
     }
 
     fun endMeetingForAll() {
-        conferenceEndReason = ConferenceEndReason.USER_LEFT
+        beginLocalMeetingLeave("HOST_END_FOR_ALL")
         viewModelScope.launch(Dispatchers.Default) {
-            val config = configStore.load()
-            manager.leaveChannelSession(
-                config,
+            completeMeetingLeave(
                 reason = "HOST_END_FOR_ALL",
                 caller = "TalkViewModel.endMeetingForAll"
             )
-            manager.clearConferencePttCooldown(config.defaultChannelId)
-            lastSyncedMeetingPreferred = false
-            manager.setMeetingPreferred(false, config.defaultChannelId)
-            manager.prioritizeNextMeshCall()
-            runCatching { manager.ensureChannelSession(config) }
-            refreshInternal()
         }
+    }
+
+    private fun beginLocalMeetingLeave(reason: String) {
+        val sessionId = _uiState.value.meeting.sessionId ?: lastKnownConferenceSessionId
+        if (sessionId != null) {
+            lastKnownConferenceSessionId = sessionId
+        }
+        conferenceEndReason = ConferenceEndReason.USER_LEFT
+        meetingLeaveInFlight = true
+        TalkbackLog.i("MEETING_LEAVE_UI_ACCEPTED session=${sessionId ?: "none"} reason=$reason")
+        _uiState.value = overlayMeetingEnding(_uiState.value)
+    }
+
+    private suspend fun completeMeetingLeave(reason: String, caller: String) {
+        val config = configStore.load()
+        manager.leaveChannelSession(
+            config,
+            reason = reason,
+            caller = caller,
+            sessionId = lastKnownConferenceSessionId,
+            conference = true
+        )
+        manager.clearConferencePttCooldown(config.defaultChannelId)
+        lastSyncedMeetingPreferred = false
+        manager.setMeetingPreferred(false, config.defaultChannelId)
+        manager.prioritizeNextMeshCall()
+        runCatching { manager.ensureChannelSession(config) }
+        refreshInternal()
+    }
+
+    private fun overlayMeetingEnding(current: TalkUiState): TalkUiState {
+        val endingDisplay = ConferenceDisplayStateResolver.resolve(
+            lifecycle = ConferenceLifecycleFacts(
+                conferenceActive = false,
+                conferenceMode = current.conferenceMode,
+                sessionActive = false,
+                runtimePhase = null
+            ),
+            connectivity = ConferenceConnectivityFacts(channelReady = false)
+        )
+        return current.copy(
+            conferenceActive = false,
+            sessionActive = false,
+            conferenceEndReason = ConferenceEndReason.USER_LEFT,
+            conferenceReconnecting = false,
+            conferenceReconnectFailed = false,
+            conferenceDisplay = endingDisplay,
+            meeting = current.meeting.copy(sessionId = lastKnownConferenceSessionId)
+        )
     }
 
     fun inviteMeetingMembers(moduleIds: List<String>): Result<Int> {
@@ -1088,6 +1133,12 @@ class TalkViewModel(
 
         val session = manager.activeChannelSession(config)
         val conferenceActive = session?.type == SessionType.CONFERENCE
+        if (conferenceActive && session != null) {
+            lastKnownConferenceSessionId = session.sessionId
+            lastKnownConferenceHost = manager.isConferenceHost(config)
+        } else if (!meetingLeaveInFlight) {
+            lastKnownConferenceHost = false
+        }
         val conferenceMode = userSelectedTab == UserSelectedTab.MEETING
         val conferenceMuted = session?.muted == true
         val localRawKey = EndpointAddress(

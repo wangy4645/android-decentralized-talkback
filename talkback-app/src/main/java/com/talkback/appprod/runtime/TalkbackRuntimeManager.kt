@@ -583,8 +583,19 @@ class TalkbackRuntimeManager(private val appContext: Context) {
     fun leaveChannelSession(
         config: AppConfig,
         reason: String = "USER_LEAVE",
-        caller: String = "TalkbackRuntimeManager.leaveChannelSession"
+        caller: String = "TalkbackRuntimeManager.leaveChannelSession",
+        sessionId: String? = null,
+        conference: Boolean? = null
     ) {
+        val knownId = sessionId?.takeIf { it.isNotBlank() }
+        if (knownId != null) {
+            if (conference != false) {
+                runCatching { runtime?.leaveConference(knownId, reason, caller) }
+            } else {
+                hangupCall(knownId)
+            }
+            return
+        }
         val session = activeChannelSession(config) ?: return
         if (session.type == SessionType.CONFERENCE) {
             runCatching { runtime?.leaveConference(session.sessionId, reason, caller) }
