@@ -3362,7 +3362,8 @@ class ConferenceEdgeRecoveryController internal constructor(
         remoteModuleId: String,
         iceState: String,
         eligibility: EdgeRecoveryEligibility,
-        initiatesReattach: Boolean
+        initiatesReattach: Boolean,
+        topologyTargets: RecoveryTargetSnapshot? = null
     ) {
         if (isSessionCancelled(sessionId)) {
             logRecoveryDecision(
@@ -3387,6 +3388,14 @@ class ConferenceEdgeRecoveryController internal constructor(
             return
         }
         if (iceState != "DISCONNECTED" && iceState != "FAILED") return
+
+        val existingForTopology = edges[key]
+        if (!topologyAllowsNewObligation(key, topologyTargets) &&
+            (existingForTopology == null || !existingForTopology.hasActiveAttempt())
+        ) {
+            logTopologyNotAdmitted(key, iceState)
+            return
+        }
 
         val record = edges[key]
         if (record != null) clearMediaRestoredFact(record)
@@ -3416,7 +3425,8 @@ class ConferenceEdgeRecoveryController internal constructor(
                 eligibility,
                 initiatesReattach,
                 immediate = true,
-                trigger = RecoveryDecisionTrigger.ICE_FAILED
+                trigger = RecoveryDecisionTrigger.ICE_FAILED,
+                topologyTargets = topologyTargets
             )
             return
         }
@@ -3461,7 +3471,8 @@ class ConferenceEdgeRecoveryController internal constructor(
                 eligibility,
                 initiatesReattach,
                 immediate = false,
-                trigger = RecoveryDecisionTrigger.ICE_DISCONNECTED
+                trigger = RecoveryDecisionTrigger.ICE_DISCONNECTED,
+                topologyTargets = topologyTargets
             )
         }, debounceMs, TimeUnit.MILLISECONDS)
         debounceTimers[key] = debounce
@@ -4102,13 +4113,44 @@ class ConferenceEdgeRecoveryController internal constructor(
         )
     }
 
+    private fun topologyAllowsNewObligation(
+        key: ConferenceEdgeKey,
+        topologyTargets: RecoveryTargetSnapshot?
+    ): Boolean {
+        if (topologyTargets == null) return true
+        return ConferenceRecoveryBindingContract.admitsConferenceRemote(
+            topologyTargets,
+            key.sessionId,
+            key.remoteModuleId
+        )
+    }
+
+    private fun logTopologyNotAdmitted(key: ConferenceEdgeKey, iceState: String) {
+        onLog(
+            "RECOVERY_EDGE_SKIPPED session=${key.sessionId} remote=${key.remoteModuleId} " +
+                "reason=topology_not_admitted iceState=$iceState"
+        )
+        logRecoveryDecision(
+            sessionId = key.sessionId,
+            edge = key.remoteModuleId,
+            trigger = RecoveryDecisionTrigger.ICE_FAILED,
+            recoveryReason = RecoveryReason.NETWORK_RECOVERY,
+            terminationReason = RecoveryTerminationReason.NOT_ESTABLISHED,
+            policy = RecoveryDecisionPolicy.NO_RECOVERY,
+            approved = false,
+            rejectReason = "topology_not_admitted",
+            attempt = edges[key]?.recoveryAttemptId
+        )
+    }
+
     private fun beginRecovery(
         key: ConferenceEdgeKey,
         channelId: String,
         eligibility: EdgeRecoveryEligibility,
         initiatesReattach: Boolean,
         immediate: Boolean,
-        trigger: RecoveryDecisionTrigger
+        trigger: RecoveryDecisionTrigger,
+        topologyTargets: RecoveryTargetSnapshot? = null
     ) {
         if (!eligibility.isEligible()) {
             val terminationReason = inferTerminationReason(eligibility, trigger)
@@ -4140,6 +4182,10 @@ class ConferenceEdgeRecoveryController internal constructor(
                     "attempt=${existing.recoveryAttemptId} trigger=$trigger " +
                     "phase=${existing.phase} existingOwnerRetained=true"
             )
+            return
+        }
+        if (!topologyAllowsNewObligation(key, topologyTargets)) {
+            logTopologyNotAdmitted(key, trigger.name)
             return
         }
         val record = when {

@@ -109,4 +109,23 @@ class HelloPayloadTest {
         assertNotNull(decoded)
         assertEquals(6L, decoded!!.transportEpoch)
     }
+
+    @Test
+    fun encodeDecode_starMediaFacts_roundTrip() {
+        val payload = HelloPayload(
+            moduleId = "M01",
+            endpoints = emptyList(),
+            primaryModuleId = "M01",
+            starMediaFacts = listOf(
+                StarMediaFactDigest(spokeModuleId = "M04", usable = false),
+                StarMediaFactDigest(spokeModuleId = "M02", usable = true)
+            )
+        )
+        val decoded = HelloPayload.decode(payload.encode())
+        assertNotNull(decoded)
+        assertEquals(2, decoded!!.starMediaFacts.size)
+        assertEquals("M04", decoded.starMediaFacts[0].spokeModuleId)
+        assertEquals(false, decoded.starMediaFacts[0].usable)
+        assertEquals(true, decoded.starMediaFacts[1].usable)
+    }
 }

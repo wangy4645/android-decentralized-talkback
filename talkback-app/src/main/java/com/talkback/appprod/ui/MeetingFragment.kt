@@ -315,6 +315,18 @@ class MeetingFragment : Fragment() {
     ) {
         val ctx = requireContext()
         when (display.statusPill) {
+            ConferenceStatusPillKind.ROOM_FAILED -> {
+                statusPill.setCompoundDrawablesWithIntrinsicBounds(R.drawable.dot_offline, 0, 0, 0)
+                statusPill.text = getString(R.string.conference_status_room_failed)
+                statusPill.setBackgroundResource(R.drawable.bg_status_pill)
+                statusPill.setTextColor(ContextCompat.getColor(ctx, R.color.tb_text_muted))
+            }
+            ConferenceStatusPillKind.ROOM_DEGRADED -> {
+                statusPill.setCompoundDrawablesWithIntrinsicBounds(R.drawable.dot_meeting_connecting, 0, 0, 0)
+                statusPill.text = getString(R.string.conference_status_room_degraded)
+                statusPill.setBackgroundResource(R.drawable.bg_status_pill)
+                statusPill.setTextColor(ContextCompat.getColor(ctx, R.color.tb_text_muted))
+            }
             ConferenceStatusPillKind.RECONNECT_FAILED -> {
                 statusPill.setCompoundDrawablesWithIntrinsicBounds(R.drawable.dot_meeting_connecting, 0, 0, 0)
                 statusPill.text = getString(R.string.meeting_reconnect_failed)

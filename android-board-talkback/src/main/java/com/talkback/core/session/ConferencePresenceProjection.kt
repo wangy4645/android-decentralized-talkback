@@ -7,12 +7,34 @@ package com.talkback.core.session
 data class ConferencePresenceProjection(
     /** Membership-joined participants (includes local; excludes pending invitees). */
     val joinedCount: Int,
-    /** Participants with active mesh connectivity (includes local when session accepted). */
+    /** Participants with active media relation (VIA_ANCHOR/DIRECT + FRESH). */
     val connectedCount: Int,
     /** Remote module ids with an active edge recovery obligation on this device. */
     val recoveringPeers: Set<String> = emptySet(),
     /**
      * Advisory media-health facts (ADR-0023 R29-C). MUST NOT drive joined/left roster semantics.
      */
-    val mediaUnavailablePeers: Set<String> = emptySet()
-)
+    val mediaUnavailablePeers: Set<String> = emptySet(),
+    /** Canonical CPP vector. Aggregates MUST match this list when non-empty. */
+    val participants: List<ParticipantPresenceRecord> = emptyList()
+) {
+    val joiningCount: Int
+        get() = if (participants.isNotEmpty()) {
+            participants.count { it.membership == CppMembership.JOINED } -
+                participants.count { it.mediaConnected }
+        } else {
+            (joinedCount - connectedCount).coerceAtLeast(0)
+        }
+}
+
+fun ParticipantPresenceProjection.toConferencePresenceProjection(): ConferencePresenceProjection =
+    ConferencePresenceProjection(
+        joinedCount = joinedCount,
+        connectedCount = connectedCount,
+        recoveringPeers = recoveringPeers,
+        mediaUnavailablePeers = participants
+            .filter { it.mediaRelation == CppMediaRelation.DEGRADED }
+            .map { it.moduleId }
+            .toSet(),
+        participants = participants
+    )

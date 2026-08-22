@@ -112,6 +112,8 @@
     <string name="settings_conference_mode_hint">When enabled, the channel uses full-duplex Meeting (up to 8 modules). When off, use half-duplex group PTT (hold to talk).</string>
     <string name="conference_floor_all">Meeting</string>
     <string name="conference_status_live">Live</string>
+    <string name="conference_status_room_degraded">会议音频异常</string>
+    <string name="conference_status_room_failed">Meeting ended</string>
     <string name="conference_status_muted">Muted</string>
     <string name="conference_status_connecting">Connecting…</string>
     <string name="meeting_status_connecting">Connecting</string>

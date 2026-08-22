@@ -23,9 +23,10 @@ object EffectiveInteractionModeResolver {
     fun resolve(
         conferenceActive: Boolean,
         runtimePhase: ConferenceRuntimePhase?,
-        hasPendingInvite: Boolean
+        hasPendingInvite: Boolean,
+        roomOnline: Boolean? = null
     ): EffectiveInteractionMode {
-        if (conferenceActive && runtimePhase == ConferenceRuntimePhase.ACTIVE) {
+        if (conferenceActive && (roomOnline == true || runtimePhase == ConferenceRuntimePhase.ACTIVE)) {
             return EffectiveInteractionMode.CONFERENCE_ACTIVE
         }
         if (hasPendingInvite || conferenceActive) {

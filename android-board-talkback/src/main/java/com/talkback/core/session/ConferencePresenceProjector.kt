@@ -7,6 +7,8 @@ package com.talkback.core.session
  */
 object ConferencePresenceProjector {
 
+    const val DEFAULT_STALE_AFTER_MS = 5_000L
+
     data class Input(
         val sessionAccepted: Boolean,
         /** Primary meeting size from membership (ADR-0020 P2). */
@@ -36,4 +38,51 @@ object ConferencePresenceProjector {
             mediaUnavailablePeers = input.mediaUnavailableRemoteModuleIds.toSet()
         )
     }
+
+    /**
+     * CPP compose: roster wins the list; snapshot supplies media only.
+     * Rejects stale producer (anchorEpoch &lt; current). Does not equality-gate meshGeneration.
+     */
+    fun compose(
+        conferenceId: String,
+        canonicalRoster: List<String>,
+        currentAnchorEpoch: Long,
+        snapshot: ConferencePresenceSnapshot?,
+        nowMs: Long,
+        staleAfterMs: Long = DEFAULT_STALE_AFTER_MS,
+        recoveringModuleIds: Set<String> = emptySet()
+    ): ParticipantPresenceProjection {
+        val accepted = snapshot?.takeIf { snap ->
+            snap.conferenceId == conferenceId && snap.anchorEpoch == currentAnchorEpoch
+        }
+        val snapshotStale = accepted != null && nowMs - accepted.producedAtMs > staleAfterMs
+        val records = canonicalRoster.distinct().map { moduleId ->
+            val media = accepted?.mediaByModuleId?.get(moduleId)
+            val evidence = when {
+                accepted == null || media == null -> CppEvidence.UNKNOWN
+                snapshotStale -> CppEvidence.STALE
+                else -> CppEvidence.FRESH
+            }
+            ParticipantPresenceRecord(
+                moduleId = moduleId,
+                membership = CppMembership.JOINED,
+                mediaRelation = media ?: CppMediaRelation.NONE,
+                evidence = evidence
+            )
+        }
+        val recovering = recoveringModuleIds.intersect(canonicalRoster.toSet())
+        return ParticipantPresenceProjection(participants = records, recoveringPeers = recovering)
+    }
+
+    fun selectPresenceSnapshot(
+        conferenceId: String,
+        currentAnchorEpoch: Long,
+        candidates: List<ConferencePresenceSnapshot>
+    ): ConferencePresenceSnapshot? =
+        candidates
+            .filter { it.conferenceId == conferenceId && it.anchorEpoch == currentAnchorEpoch }
+            .maxWithOrNull(
+                compareBy<ConferencePresenceSnapshot> { it.meshGeneration }
+                    .thenBy { it.producedAtMs }
+            )
 }
