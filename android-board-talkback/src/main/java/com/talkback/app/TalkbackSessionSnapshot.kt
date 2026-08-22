@@ -1,9 +1,12 @@
 package com.talkback.app
 
 import com.talkback.core.ptt.PttState
+import com.talkback.core.session.ConferenceHealth
+import com.talkback.core.session.ConferenceHealthUiProjection
 import com.talkback.core.session.ConferenceParticipantViewState
 import com.talkback.core.session.ConferencePresenceProjection
 import com.talkback.core.session.ConferenceRuntimeState
+import com.talkback.core.session.ConferenceTopologySnapshot
 import com.talkback.core.session.MemberView
 import com.talkback.core.session.SessionType
 import com.talkback.core.session.UnicastCallPhase
@@ -41,6 +44,15 @@ data class TalkbackSessionSnapshot(
      * Meeting UI MUST use joined/connected/recovering from here — not roster size or ICE.
      */
     val conferencePresenceProjection: ConferencePresenceProjection? = null,
+    /**
+     * Phase 1b-2: authoritative topology read model for ANCHOR conference sessions.
+     * Null when not yet published or session is not on ANCHOR topology.
+     */
+    val conferenceTopologySnapshot: ConferenceTopologySnapshot? = null,
+    /** Phase 2-5 / 3: room health aggregate. Null for non-CONFERENCE. */
+    val conferenceHealth: ConferenceHealth? = null,
+    /** Phase 3: room-facing ONLINE projection. Null for non-CONFERENCE. */
+    val conferenceHealthUi: ConferenceHealthUiProjection? = null,
     /** Remote modules that have reached CONNECTED at least once this session (ADR-0025 presence UI). */
     val conferenceEverConnectedModuleIds: Set<String> = emptySet(),
     /** ICE-direct mesh peer count; diagnostics only — must not drive Conference UI. */

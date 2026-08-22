@@ -26,13 +26,18 @@ object ConferenceEndpointStatusMapper {
                     EndpointStatus.CONNECTING
                 }
             ConferenceParticipantDisplayState.VISIBLE_RECONNECTING,
-            ConferenceParticipantDisplayState.VISIBLE_FAILED,
-            ConferenceParticipantDisplayState.VISIBLE_EDGE_FAILED ->
+            ConferenceParticipantDisplayState.VISIBLE_FAILED ->
                 EndpointStatus.RECONNECTING
+            ConferenceParticipantDisplayState.VISIBLE_EDGE_FAILED,
             ConferenceParticipantDisplayState.VISIBLE_DOMAIN_BLOCKED ->
-                EndpointStatus.RECONNECTING
+                EndpointStatus.DEGRADED
         }
-        if (isRecoveringPeer && base != EndpointStatus.SPEAKING) {
+        if (
+            isRecoveringPeer &&
+            base != EndpointStatus.SPEAKING &&
+            displayState != ConferenceParticipantDisplayState.VISIBLE_EDGE_FAILED &&
+            displayState != ConferenceParticipantDisplayState.VISIBLE_DOMAIN_BLOCKED
+        ) {
             return EndpointStatus.RECONNECTING
         }
         return base

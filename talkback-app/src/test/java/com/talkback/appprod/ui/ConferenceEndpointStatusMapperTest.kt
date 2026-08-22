@@ -94,6 +94,30 @@ class ConferenceEndpointStatusMapperTest {
     }
 
     @Test
+    fun edgeFailed_mapsToDegraded_notReconnecting() {
+        assertEquals(
+            EndpointStatus.DEGRADED,
+            ConferenceEndpointStatusMapper.map(
+                displayState = ConferenceParticipantDisplayState.VISIBLE_EDGE_FAILED,
+                speaking = false,
+                isRecoveringPeer = true
+            )
+        )
+    }
+
+    @Test
+    fun domainBlocked_mapsToDegraded_notReconnecting() {
+        assertEquals(
+            EndpointStatus.DEGRADED,
+            ConferenceEndpointStatusMapper.map(
+                displayState = ConferenceParticipantDisplayState.VISIBLE_DOMAIN_BLOCKED,
+                speaking = false,
+                isRecoveringPeer = true
+            )
+        )
+    }
+
+    @Test
     fun signalBars_reconnectingIsOne() {
         assertEquals(1, ConferenceEndpointStatusMapper.signalBarsFor(EndpointStatus.RECONNECTING))
     }

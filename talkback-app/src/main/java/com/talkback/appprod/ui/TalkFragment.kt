@@ -200,6 +200,8 @@ class TalkFragment : Fragment() {
             talkingLabel.text = getString(R.string.meeting_participants_label)
             val display = state.conferenceDisplay
             view.findViewById<TextView>(R.id.txtFloorOwner).text = when (display.statusPill) {
+                ConferenceStatusPillKind.ROOM_DEGRADED -> getString(R.string.conference_status_room_degraded)
+                ConferenceStatusPillKind.ROOM_FAILED -> getString(R.string.conference_status_room_failed)
                 ConferenceStatusPillKind.MUTED -> getString(R.string.conference_status_muted)
                 ConferenceStatusPillKind.LIVE,
                 ConferenceStatusPillKind.POOR_NETWORK -> getString(R.string.meeting_in_progress)

@@ -1,5 +1,8 @@
 package com.talkback.appprod.ui
 
+import com.talkback.core.session.ConferenceHealthUiProjection
+import com.talkback.core.session.ConferenceL4RoomState
+import com.talkback.core.session.ConferenceRoomFacing
 import com.talkback.core.session.ConferenceRuntimePhase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -64,6 +67,74 @@ class ConferenceDisplayStateResolverTest {
     }
 
     @Test
+    fun healthOnline_runtimeRecovering_roomStaysLive() {
+        val display = ConferenceDisplayStateResolver.resolve(
+            lifecycle = ConferenceLifecycleFacts(
+                conferenceActive = true,
+                runtimePhase = ConferenceRuntimePhase.RECOVERING
+            ),
+            connectivity = ConferenceConnectivityFacts(
+                channelReady = true,
+                reconnecting = true
+            ),
+            healthUi = ConferenceHealthUiProjection(
+                roomFacing = ConferenceRoomFacing.ONLINE,
+                l4RoomState = ConferenceL4RoomState.ONLINE,
+                recoveryInFlightDiagnostic = true,
+                recoveringPeerChrome = setOf("M02")
+            )
+        )
+        assertTrue(display.live)
+        assertFalse(display.recovering)
+        assertEquals(ConferenceDisplayPhase.LIVE, display.phase)
+        assertEquals(ConferenceStatusPillKind.LIVE, display.statusPill)
+    }
+
+    @Test
+    fun healthNotOnline_notLive() {
+        val display = ConferenceDisplayStateResolver.resolve(
+            lifecycle = ConferenceLifecycleFacts(
+                conferenceActive = true,
+                runtimePhase = ConferenceRuntimePhase.ACTIVE
+            ),
+            connectivity = ConferenceConnectivityFacts(channelReady = true),
+            healthUi = ConferenceHealthUiProjection(
+                roomFacing = ConferenceRoomFacing.NOT_ONLINE,
+                l4RoomState = ConferenceL4RoomState.NOT_ESTABLISHED,
+                recoveryInFlightDiagnostic = false
+            )
+        )
+        assertFalse(display.live)
+        assertTrue(display.mediaConnecting)
+        assertTrue(display.showConnectingPanel)
+        assertFalse(display.showLivePanel)
+        assertEquals(ConferenceDisplayPhase.MEDIA_CONNECTING, display.phase)
+        assertEquals(ConferenceStatusPillKind.CONNECTING, display.statusPill)
+    }
+
+    @Test
+    fun conferenceExists_channelReady_notMediaUsable_isConnecting() {
+        val display = ConferenceDisplayStateResolver.resolve(
+            lifecycle = ConferenceLifecycleFacts(
+                conferenceActive = true,
+                runtimePhase = ConferenceRuntimePhase.CONNECTING
+            ),
+            connectivity = ConferenceConnectivityFacts(channelReady = true),
+            healthUi = ConferenceHealthUiProjection(
+                roomFacing = ConferenceRoomFacing.NOT_ONLINE,
+                l4RoomState = ConferenceL4RoomState.NOT_ESTABLISHED,
+                recoveryInFlightDiagnostic = false
+            )
+        )
+        assertFalse(display.live)
+        assertTrue(display.mediaConnecting)
+        assertTrue(display.showConnectingPanel)
+        assertFalse(display.showLivePanel)
+        assertEquals(ConferenceDisplayPhase.MEDIA_CONNECTING, display.phase)
+        assertEquals(ConferenceStatusPillKind.CONNECTING, display.statusPill)
+    }
+
+    @Test
     fun awaitingRejoin_showsConnectingPanel() {
         val display = ConferenceDisplayStateResolver.resolve(
             lifecycle = ConferenceLifecycleFacts(
@@ -75,6 +146,28 @@ class ConferenceDisplayStateResolverTest {
         assertFalse(display.live)
         assertTrue(display.showConnectingPanel)
         assertEquals(ConferenceDisplayPhase.AWAITING_REJOIN, display.phase)
+    }
+
+    @Test
+    fun l4RoomDegraded_doesNotOverrideConnectingChrome() {
+        val display = ConferenceDisplayStateResolver.resolve(
+            lifecycle = ConferenceLifecycleFacts(
+                conferenceActive = true,
+                runtimePhase = ConferenceRuntimePhase.ACTIVE,
+            ),
+            connectivity = ConferenceConnectivityFacts(
+                channelReady = true,
+                reconnecting = false,
+            ),
+            healthUi = ConferenceHealthUiProjection(
+                roomFacing = ConferenceRoomFacing.NOT_ONLINE,
+                l4RoomState = ConferenceL4RoomState.DEGRADED,
+                recoveryInFlightDiagnostic = true,
+            ),
+        )
+        assertFalse(display.live)
+        assertTrue(display.mediaConnecting)
+        assertEquals(ConferenceStatusPillKind.CONNECTING, display.statusPill)
     }
 
     @Test

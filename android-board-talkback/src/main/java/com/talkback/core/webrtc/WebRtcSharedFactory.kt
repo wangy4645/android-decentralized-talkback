@@ -11,6 +11,7 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.locks.ReentrantLock
 
 /**
  * Single PeerConnectionFactory + AudioDeviceModule for the process.
@@ -18,6 +19,11 @@ import java.util.concurrent.atomic.AtomicInteger
  */
 internal object WebRtcSharedFactory {
     private val lock = Any()
+    /**
+     * P0.1g-1: serialize setRemoteDescription(answer) entry per shared factory.
+     * Does not cover SLD / createOffer / ICE / coordinator wait.
+     */
+    private val sdpApplyMutex = ReentrantLock()
     private val refCount = AtomicInteger(0)
     private val mainHandler = Handler(Looper.getMainLooper())
     private var factory: PeerConnectionFactory? = null
@@ -29,6 +35,15 @@ internal object WebRtcSharedFactory {
     fun addLocalOutboundSink(sink: LocalOutboundPcmSink): () -> Unit {
         localOutboundSinks.add(sink)
         return { localOutboundSinks.remove(sink) }
+    }
+
+    fun <T> withSrdApplyLock(block: () -> T): T {
+        sdpApplyMutex.lock()
+        try {
+            return block()
+        } finally {
+            sdpApplyMutex.unlock()
+        }
     }
 
     fun acquire(context: Context): PeerConnectionFactory {

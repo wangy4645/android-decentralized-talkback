@@ -1,5 +1,9 @@
 package com.talkback.appprod.ui
 
+import com.talkback.core.session.ConferencePresenceUiBind
+import com.talkback.core.session.CppAvatarAvailability
+import com.talkback.core.session.CppAvatarParticipantRow
+import com.talkback.core.session.CppPeerConnectivityAxis
 import com.talkback.core.session.ConferenceMembershipLifecycle
 import com.talkback.core.session.ConferenceParticipantDisplayState
 import com.talkback.core.session.ConferencePresenceProjection
@@ -115,6 +119,21 @@ object MeetingPresenceDisplay {
         facts: ParticipantPresentationFacts
     ): ParticipantPresentationState {
         val reachability = resolveLocalReachability(facts)
+        if (!facts.isLocal && isClassifiedFailureTerminal(facts.displayState)) {
+            return ParticipantPresentationState(
+                moduleId = facts.moduleId,
+                isLocal = false,
+                endpointStatus = ConferenceEndpointStatusMapper.map(
+                    displayState = facts.displayState,
+                    speaking = facts.speaking,
+                    isRecoveringPeer = false,
+                    mediaUnavailablePeer = facts.mediaUnavailablePeer,
+                ),
+                availabilityKind = ParticipantAvailabilityKind.DEGRADED,
+                reachability = reachability,
+                visibleConnectivity = UserVisibleConnectivityState.DEGRADED,
+            )
+        }
         if (facts.isLocal) {
             val status = if (facts.speaking) EndpointStatus.SPEAKING else EndpointStatus.ONLINE
             val kind = if (facts.captureBlocked) {
@@ -214,16 +233,107 @@ object MeetingPresenceDisplay {
         )
     }
 
+    fun renderFromProjection(
+        projection: ConferencePresenceProjection,
+        localModuleId: String,
+        speakingModuleId: String?,
+        localCaptureBlocked: Boolean = false
+    ): ConferencePresenceUi {
+        val rows = ConferencePresenceUiBind.avatarRows(
+            projection = projection,
+            localModuleId = localModuleId,
+            speakingModuleId = speakingModuleId,
+            localCaptureBlocked = localCaptureBlocked
+        )
+        val states = rows.map { it.toPresentationState() }
+        return ConferencePresenceUi(
+            headerLabel = participantCountLabel(projection.joinedCount),
+            connectingHint = ConferencePresenceUiBind.joiningHint(projection, localCaptureBlocked),
+            avatarStatuses = states.associate { it.moduleId to it.endpointStatus },
+            participantStates = states
+        )
+    }
+
+    private fun CppAvatarParticipantRow.toPresentationState(): ParticipantPresentationState {
+        val reachability = LocalReachability.Result(ParticipantPresenceState.ONLINE)
+        if (isLocal) {
+            val status = when {
+                speaking && availability != CppAvatarAvailability.CAPTURE_BLOCKED -> EndpointStatus.SPEAKING
+                else -> EndpointStatus.ONLINE
+            }
+            val kind = if (availability == CppAvatarAvailability.CAPTURE_BLOCKED) {
+                ParticipantAvailabilityKind.CAPTURE_BLOCKED
+            } else {
+                ParticipantAvailabilityKind.NONE
+            }
+            return ParticipantPresentationState(
+                moduleId = moduleId,
+                isLocal = true,
+                endpointStatus = status,
+                availabilityKind = kind,
+                reachability = reachability,
+                visibleConnectivity = UserVisibleConnectivityState.CONNECTED
+            )
+        }
+        val (status, kind, connectivity) = when (availability) {
+            CppAvatarAvailability.NORMAL -> Triple(
+                if (speaking) EndpointStatus.SPEAKING else EndpointStatus.ONLINE,
+                ParticipantAvailabilityKind.NONE,
+                UserVisibleConnectivityState.CONNECTED
+            )
+            CppAvatarAvailability.JOINING -> Triple(
+                EndpointStatus.CONNECTING,
+                ParticipantAvailabilityKind.JOINING,
+                null
+            )
+            CppAvatarAvailability.RECONNECTING -> Triple(
+                EndpointStatus.RECONNECTING,
+                ParticipantAvailabilityKind.RECONNECTING,
+                UserVisibleConnectivityState.RECONNECTING
+            )
+            CppAvatarAvailability.DEGRADED -> Triple(
+                EndpointStatus.DEGRADED,
+                ParticipantAvailabilityKind.DEGRADED,
+                UserVisibleConnectivityState.DEGRADED
+            )
+            CppAvatarAvailability.CAPTURE_BLOCKED -> Triple(
+                EndpointStatus.ONLINE,
+                ParticipantAvailabilityKind.NONE,
+                UserVisibleConnectivityState.CONNECTED
+            )
+        }
+        return ParticipantPresentationState(
+            moduleId = moduleId,
+            isLocal = false,
+            endpointStatus = status,
+            availabilityKind = kind,
+            reachability = reachability,
+            visibleConnectivity = connectivity
+        )
+    }
+
+    internal fun isClassifiedFailureTerminal(
+        displayState: ConferenceParticipantDisplayState,
+    ): Boolean =
+        displayState == ConferenceParticipantDisplayState.VISIBLE_EDGE_FAILED ||
+            displayState == ConferenceParticipantDisplayState.VISIBLE_DOMAIN_BLOCKED
+
     fun renderConferencePresence(
         presence: ConferencePresenceProjection,
         participantFacts: List<ParticipantPresentationFacts>,
         localCaptureBlocked: Boolean = false
     ): ConferencePresenceUi {
+        val failureModuleIds = participantFacts
+            .asSequence()
+            .filter { isClassifiedFailureTerminal(it.displayState) }
+            .map { it.moduleId }
+            .toSet()
         val states = participantFacts.map(::resolveParticipantPresentation)
+        val hintStates = states.filter { it.moduleId !in failureModuleIds }
         val avatarStatuses = states.associate { it.moduleId to it.endpointStatus }
         return ConferencePresenceUi(
             headerLabel = participantCountLabel(presence.joinedCount),
-            connectingHint = aggregateAvailabilityHint(states, localCaptureBlocked),
+            connectingHint = aggregateAvailabilityHint(hintStates, localCaptureBlocked),
             avatarStatuses = avatarStatuses,
             participantStates = states
         )
