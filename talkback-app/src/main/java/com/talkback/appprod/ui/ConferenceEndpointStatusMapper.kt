@@ -26,7 +26,10 @@ object ConferenceEndpointStatusMapper {
                     EndpointStatus.CONNECTING
                 }
             ConferenceParticipantDisplayState.VISIBLE_RECONNECTING,
-            ConferenceParticipantDisplayState.VISIBLE_FAILED ->
+            ConferenceParticipantDisplayState.VISIBLE_FAILED,
+            ConferenceParticipantDisplayState.VISIBLE_EDGE_FAILED ->
+                EndpointStatus.RECONNECTING
+            ConferenceParticipantDisplayState.VISIBLE_DOMAIN_BLOCKED ->
                 EndpointStatus.RECONNECTING
         }
         if (isRecoveringPeer && base != EndpointStatus.SPEAKING) {
