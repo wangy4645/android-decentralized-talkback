@@ -1600,9 +1600,10 @@ class TalkbackCoordinator(
         }
         scheduler.scheduleAtFixedRate(
             {
+                // Enforce transition deadlines on the scheduler thread so MEETING_END
+                // cannot stall when the coordinator queue is backed up.
+                expireGovernanceTransitionTimeouts()
                 runOnCoordinator {
-                    channelGovernance.transitionCoordinator.expireTimeouts()
-                        .forEach(GovernanceObservabilityLog::transitionTerminal)
                     cleanupExpiredSessions()
                     maybeEmitPeriodicBuildingSnapshots()
                 }
@@ -17033,19 +17034,37 @@ class TalkbackCoordinator(
             }
     }
 
+    private fun expireGovernanceTransitionTimeouts() {
+        channelGovernance.transitionCoordinator.expireTimeouts()
+            .forEach(GovernanceObservabilityLog::transitionTerminal)
+    }
+
     private fun onGovernanceTransitionTerminal(record: TransitionRecord) {
         if (record.trigger != TransitionTrigger.MEETING_END) return
-        if (record.terminal != TransitionTerminalState.READY) return
-        val snapshot = buildGroupTransitionReadinessSnapshot(
-            channelId = record.channelId,
-            meshRecoveryState = "transition_terminal_ready"
-        )
-        GroupTransitionReadinessLog.onTransitionTerminalReady(
-            channelId = record.channelId,
-            moduleId = localModuleId.value,
-            record = record,
-            snapshot = snapshot
-        )
+        when (record.terminal) {
+            TransitionTerminalState.READY -> {
+                val snapshot = buildGroupTransitionReadinessSnapshot(
+                    channelId = record.channelId,
+                    meshRecoveryState = "transition_terminal_ready"
+                )
+                GroupTransitionReadinessLog.onTransitionTerminalReady(
+                    channelId = record.channelId,
+                    moduleId = localModuleId.value,
+                    record = record,
+                    snapshot = snapshot
+                )
+            }
+            TransitionTerminalState.TIMED_OUT,
+            TransitionTerminalState.FAILED,
+            TransitionTerminalState.ABORTED -> {
+                log(
+                    "MEETING_END transition terminal=${record.terminal} ch=${record.channelId} " +
+                        "reason=${record.abortReason ?: "none"}; kick group mesh reconcile"
+                )
+                reconcileGroupMeshInternal(record.channelId)
+            }
+            else -> Unit
+        }
     }
 
     private fun observeGroupTransitionBootstrapAttempt(
@@ -17084,6 +17103,7 @@ class TalkbackCoordinator(
     }
 
     private fun observeGroupTransitionReadinessChanged(channelId: String, meshRecoveryState: String) {
+        expireGovernanceTransitionTimeouts()
         val snapshot = buildGroupTransitionReadinessSnapshot(
             channelId = channelId,
             meshRecoveryState = meshRecoveryState
