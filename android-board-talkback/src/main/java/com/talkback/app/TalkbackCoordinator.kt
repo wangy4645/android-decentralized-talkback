@@ -9760,8 +9760,11 @@ class TalkbackCoordinator(
         pendingConferenceSdpApply.remove(edgeKey)
         ConferenceSrdNativeObservability.endAttempt(edgeKey)
         log(
-            "CONFERENCE_MEDIA_EDGE_FAILED session=$sessionId peer=$moduleId " +
-                "reason=EDGE_LOCAL_FAILURE detail=$detail"
+            ConferenceSrdNativeDomainObservability.formatMediaEdgeDomainBlocked(
+                sessionId = sessionId,
+                peer = moduleId,
+                detail = detail,
+            )
         )
         val session = sessions[sessionId]
         if (session != null && leaseBusyHolderEdgeKey != null) {

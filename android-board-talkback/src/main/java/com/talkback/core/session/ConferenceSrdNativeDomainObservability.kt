@@ -20,6 +20,15 @@ object ConferenceSrdNativeDomainObservability {
     fun formatLeaseQuarantined(ctx: ConferenceSrdObservability.Context): String =
         formatLease("NATIVE_DOMAIN_QUARANTINED", ctx)
 
+    /** AUTH-Q4-1: peer-lease deny is L2, not L1 EDGE_LOCAL_FAILURE. */
+    fun formatMediaEdgeDomainBlocked(
+        sessionId: String,
+        peer: String,
+        detail: String,
+    ): String =
+        "CONFERENCE_MEDIA_EDGE_FAILED session=$sessionId peer=$peer " +
+            "reason=DOMAIN_BLOCKED detail=$detail"
+
     fun formatDomainExecutionEnter(ctx: ConferenceSrdObservability.Context, pcHash: Int?): String =
         formatDomainExecution("NATIVE_DOMAIN_EXECUTION_ENTER", ctx, pcHash)
 
