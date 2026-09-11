@@ -9587,6 +9587,7 @@ class TalkbackCoordinator(
         val sessionId = session.id
         val edgeKey = conferenceMediaEdgeKey(sessionId, moduleId)
         val polite = politeForMeshPair(moduleId)
+        purgeResidualConferencePeerConnections(session, activeModuleId = moduleId)
         log("CONFERENCE_MEMBER_ACCEPTED session=$sessionId peer=$moduleId")
         logGroupAcceptExec(stage = "MEMBER_ACCEPTED_FACT", sessionId = sessionId, peer = moduleId)
         log("CONFERENCE_MEDIA_EDGE_PENDING session=$sessionId peer=$moduleId")
@@ -9790,6 +9791,7 @@ class TalkbackCoordinator(
             return
         }
         conferenceAdmissionTracker.markReadyIfAbsent(conferenceAdmissionKey(session.id, moduleId))
+        purgeResidualConferencePeerConnections(session)
         recomputeNegotiationCapability(
             session = session,
             remoteModuleId = moduleId,
@@ -10834,6 +10836,36 @@ class TalkbackCoordinator(
             qosMonitor.resetRemote(moduleId)
         }
         mediaRegistry.releaseGroup(moduleId)
+    }
+
+    /**
+     * G2-RCA2 Step 2c: drop conference PCs stuck in offerer-wait with no remote answer.
+     * Heartbeat-only roster peers (e.g. M04 on another L3) keep a third attached PC alive and
+     * drive cross-edge getStats during host SRD.
+     */
+    private fun purgeResidualConferencePeerConnections(
+        session: TalkbackSession,
+        activeModuleId: String? = null,
+    ) {
+        if (session.type != SessionType.CONFERENCE || !session.accepted || !isConferenceHostSession(session)) {
+            return
+        }
+        val pendingSrdPeers = pendingConferenceSdpApply.mapNotNull { edgeKey ->
+            edgeKey.substringAfter('|', missingDelimiterValue = "").takeIf { it.isNotEmpty() }
+        }.toSet()
+        conferenceMemberRemoteIds(session).forEach { moduleId ->
+            if (moduleId == activeModuleId || moduleId in pendingSrdPeers) return@forEach
+            if (qosMonitor.isConferenceConnected(moduleId)) return@forEach
+            val engine = mediaRegistry.getConference(moduleId) ?: return@forEach
+            val snap = engine.negotiationSnapshot()
+            val stuckOfferer = snap.signalingState == "HAVE_LOCAL_OFFER" && snap.remoteDescriptionType == null
+            if (!stuckOfferer) return@forEach
+            log(
+                "${sessionTag(session)} CONFERENCE_RESIDUAL_PC_PURGE peer=$moduleId " +
+                    "pcHash=${engine.diagnosticPeerConnectionHash()} origin=unconnected_offerer"
+            )
+            releasePeerMediaOnly(session, moduleId)
+        }
     }
 
     private fun meshMediaModuleIds(session: TalkbackSession): Set<String> {

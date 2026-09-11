@@ -1,7 +1,9 @@
 package com.talkback.core.webrtc
 
 import android.content.Context
+import com.talkback.core.session.ConferenceRealizationLineage
 import com.talkback.core.session.ConferenceSrdNativeObservability
+import com.talkback.core.media.MediaObservabilityLog
 import com.talkback.core.util.TalkbackLog
 import org.webrtc.AudioTrack
 import org.webrtc.IceCandidate
@@ -27,6 +29,7 @@ import java.util.concurrent.atomic.AtomicReference
  */
 class RealWebRtcAudioEngine(
     context: Context,
+    private val observedModuleId: String? = null,
     private val onIceConnectionState: ((String) -> Unit)? = null
 ) : WebRtcAudioEngine {
     private val appContext = context.applicationContext
@@ -37,6 +40,14 @@ class RealWebRtcAudioEngine(
     private val pendingRemoteCandidates = CopyOnWriteArrayList<IceCandidate>()
     private val capturing = AtomicBoolean(false)
     private val pendingSdpWait = PendingSdpWait()
+    private val signalingTxn = PcSignalingTransaction()
+    private val iceIngressDuringSrd = AtomicBoolean(false)
+    @Volatile
+    private var outstandingOfferStartedAtNs: Long? = null
+    @Volatile
+    private var outstandingOfferLineageId: String? = null
+    @Volatile
+    private var lastAppliedRemoteIceUfrag: String? = null
     @Volatile
     private var remoteDescriptionApplied = false
     private var localIceListener: ((String) -> Unit)? = null
@@ -46,12 +57,16 @@ class RealWebRtcAudioEngine(
     private var remotePlaybackEnabled = false
     override var playbackDiagnosticTag: String? = null
     override var remoteTrackDiagnosticLogger: ((Boolean) -> Unit)? = null
+    override var transportDiagnosticOfferLineageId: String? = null
+    override var transportDiagnosticPcGeneration: Long? = null
     @Volatile
     private var inboundLevel = 0f
     @Volatile
     private var outboundLevel = 0f
     @Volatile
     private var iceConnectionStateName = "NEW"
+    @Volatile
+    private var lastIceStatsBoundary: String? = null
     @Volatile
     private var negotiationSettlingState = NegotiationSettling.NONE
     @Volatile
@@ -90,13 +105,18 @@ class RealWebRtcAudioEngine(
                     }
                     override fun onIceConnectionChange(state: PeerConnection.IceConnectionState) {
                         iceConnectionStateName = state.name
-                        TalkbackLog.i("WebRTC ICE -> ${state.name}")
+                        if (state.name in ICE_STATS_BOUNDARIES && lastIceStatsBoundary != state.name) {
+                            lastIceStatsBoundary = state.name
+                            captureIceTransportStatsAtBoundary(state.name)
+                        }
                         onIceConnectionState?.invoke(state.name)
                     }
                     override fun onIceConnectionReceivingChange(receiving: Boolean) = Unit
                     override fun onIceGatheringChange(state: PeerConnection.IceGatheringState) = Unit
                     override fun onIceCandidate(candidate: IceCandidate) {
-                        localIceListener?.invoke(encodeIceCandidate(candidate))
+                        val wire = encodeIceCandidate(candidate)
+                        logLocalCandidateGenerated(wire)
+                        localIceListener?.invoke(wire)
                     }
 
                     override fun onIceCandidatesRemoved(candidates: Array<out IceCandidate>) = Unit
@@ -130,7 +150,48 @@ class RealWebRtcAudioEngine(
         WebRtcJniThreadGuard.warnIfCoordinator(op)
     }
 
-    override fun createOffer(iceRestart: Boolean): String {
+    private fun diagnosticEdgeKey(): String {
+        val tag = playbackDiagnosticTag ?: return observedModuleId ?: "unknown"
+        return ConferenceSrdNativeObservability.edgeKeyFromDiagnosticTag(tag) ?: tag
+    }
+
+    /**
+     * Runs [block] inside this PeerConnection's signaling transaction while holding the
+     * shared-factory fence, so the whole transaction — not just the SRD native call — is the
+     * unit of mutual exclusion across edges.
+     */
+    private fun <T> inSignalingTransaction(
+        op: SignalingOp,
+        onRejected: () -> T,
+        block: () -> T
+    ): T {
+        val observation = NativeSignalingOverlapObserver.observeRequest(
+            op = op,
+            edgeKey = diagnosticEdgeKey(),
+            pcHash = System.identityHashCode(peerConnection),
+            pcGeneration = transportDiagnosticPcGeneration,
+            transaction = signalingTxn,
+        )
+        return signalingTxn.runOrReject(
+            op = op,
+            onRejected = { admission ->
+                observation.rejected(admission)
+                onRejected()
+            },
+        ) {
+            WebRtcSharedFactory.withSrdApplyLock {
+                observation.admitted()
+                block()
+            }
+        }
+    }
+
+    override fun createOffer(iceRestart: Boolean): String = inSignalingTransaction(
+        op = SignalingOp.CREATE_OFFER,
+        onRejected = { currentLocalSdpOrEmpty() },
+    ) { createOfferInTransaction(iceRestart) }
+
+    private fun createOfferInTransaction(iceRestart: Boolean): String {
         warnJni("createOffer")
         pendingSdpWait.begin()
         // INV-NEG-001: must NOT clear Answerer settling here (createOffer self-lock / skip commit).
@@ -152,10 +213,18 @@ class RealWebRtcAudioEngine(
             setAction = { observer, desc -> peerConnection.setLocalDescription(observer, desc) },
             setOp = "SLD"
         )
+        outstandingOfferStartedAtNs = System.nanoTime()
+        outstandingOfferLineageId = transportDiagnosticOfferLineageId
+        iceIngressDuringSrd.set(false)
         return currentLocalSdp()
     }
 
-    override fun applyRemoteOffer(sdp: String, polite: Boolean): String {
+    override fun applyRemoteOffer(sdp: String, polite: Boolean): String = inSignalingTransaction(
+        op = SignalingOp.APPLY_REMOTE_OFFER,
+        onRejected = { currentLocalSdpOrEmpty() },
+    ) { applyRemoteOfferInTransaction(sdp, polite) }
+
+    private fun applyRemoteOfferInTransaction(sdp: String, polite: Boolean): String {
         warnJni("applyRemoteOffer")
         pendingSdpWait.begin()
         val before = negotiationSnapshot()
@@ -194,7 +263,12 @@ class RealWebRtcAudioEngine(
         return currentLocalSdp()
     }
 
-    override fun applyRemoteAnswer(sdp: String, polite: Boolean) {
+    override fun applyRemoteAnswer(sdp: String, polite: Boolean) = inSignalingTransaction(
+        op = SignalingOp.APPLY_REMOTE_ANSWER,
+        onRejected = { },
+    ) { applyRemoteAnswerInTransaction(sdp, polite) }
+
+    private fun applyRemoteAnswerInTransaction(sdp: String, polite: Boolean) {
         warnJni("applyRemoteAnswer")
         pendingSdpWait.begin()
         val before = negotiationSnapshot()
@@ -219,7 +293,8 @@ class RealWebRtcAudioEngine(
         val remote = SessionDescription(SessionDescription.Type.ANSWER, sdp)
         awaitSetDescription(
             op = "SRD",
-            type = "ANSWER"
+            type = "ANSWER",
+            incomingSdp = sdp
         ) { observer -> peerConnection.setRemoteDescription(observer, remote) }
         markRemoteDescriptionApplied()
         // Next stable negotiation completion as Offerer clears Answerer settling.
@@ -230,7 +305,12 @@ class RealWebRtcAudioEngine(
         pendingSdpWait.abort()
     }
 
-    override fun rollbackNegotiation() {
+    override fun rollbackNegotiation() = inSignalingTransaction(
+        op = SignalingOp.ROLLBACK,
+        onRejected = { },
+    ) { rollbackNegotiationInTransaction() }
+
+    private fun rollbackNegotiationInTransaction() {
         warnJni("rollbackNegotiation")
         if (released) return
         if (peerConnection.signalingState() == PeerConnection.SignalingState.STABLE) return
@@ -258,25 +338,36 @@ class RealWebRtcAudioEngine(
         warnJni("addIceCandidate")
         if (released) return
         val ice = decodeIceCandidate(candidate) ?: return
-        if (!remoteDescriptionApplied) {
-            pendingRemoteCandidates.add(ice)
-            return
+        if (signalingTxn.wouldQueue()) {
+            iceIngressDuringSrd.set(true)
         }
-        peerConnection.addIceCandidate(ice)
+        // The applied/queued branch is decided inside the transaction: outside it, the drain
+        // could flip remoteDescriptionApplied between the check and the enqueue and strand
+        // this candidate forever.
+        inSignalingTransaction(
+            op = SignalingOp.ADD_ICE_CANDIDATE,
+            onRejected = { logCandidateApplied(candidate, queued = false, rejected = true) },
+        ) {
+            if (!remoteDescriptionApplied) {
+                pendingRemoteCandidates.add(ice)
+                logCandidateApplied(candidate, queued = true)
+            } else {
+                logCandidateApplied(candidate, queued = false)
+                peerConnection.addIceCandidate(ice)
+            }
+        }
     }
 
     override fun startCapture() {
         warnJni("startCapture")
         capturing.set(true)
         applyCaptureEnabled(true)
-        TalkbackLog.i("WebRTC local capture ON relay=$programRelayMode")
     }
 
     override fun stopCapture() {
         warnJni("stopCapture")
         capturing.set(false)
         applyCaptureEnabled(false)
-        TalkbackLog.i("WebRTC local capture OFF")
     }
 
     override fun isCapturing(): Boolean = capturing.get()
@@ -384,8 +475,25 @@ class RealWebRtcAudioEngine(
 
     override fun release() {
         warnJni("release")
-        if (released) return
+        if (released) {
+            MediaObservabilityLog.pcCloseSkipped(observedModuleId ?: "unknown", "alreadyReleased")
+            return
+        }
+        // Abort first: the close fence waits for the in-flight transaction to drain, and an SRD
+        // blocked on its native callback must not hold destruction for the full SDP timeout.
+        pendingSdpWait.abort()
+        signalingTxn.close {
+            WebRtcSharedFactory.withSrdApplyLock { releaseInTransaction() }
+        }
+    }
+
+    private fun releaseInTransaction() {
+        if (released) {
+            MediaObservabilityLog.pcCloseSkipped(observedModuleId ?: "unknown", "alreadyReleased")
+            return
+        }
         released = true
+        val moduleTag = observedModuleId ?: "unknown"
         iceConnectionStateName = "CLOSED"
         clearNegotiationSettling()
         inboundLevel = 0f
@@ -400,10 +508,12 @@ class RealWebRtcAudioEngine(
         programAudioSource = null
         programCapturerObserver = null
         pendingRemoteCandidates.clear()
+        MediaObservabilityLog.pcCloseEnter(moduleTag)
         runCatching { peerConnection.close() }
         runCatching { peerConnection.dispose() }
+        MediaObservabilityLog.pcCloseExit(moduleTag)
         SharedLocalAudio.notePeerDetached()
-        WebRtcSharedFactory.release()
+        WebRtcSharedFactory.release(moduleTag)
     }
 
     override fun negotiationSettling(): NegotiationSettling = negotiationSettlingState
@@ -429,6 +539,16 @@ class RealWebRtcAudioEngine(
     override fun refreshAudioLevel() {
         warnJni("refreshAudioLevel")
         if (released) return
+        val edgeKey = diagnosticEdgeKey()
+        val pcHash = System.identityHashCode(peerConnection)
+        if (NativeSignalingOverlapObserver.shouldDeferGetStats()) {
+            NativeSignalingOverlapObserver.logGetStatsDeferred(
+                edgeKey = edgeKey,
+                pcHash = pcHash,
+                pcGeneration = transportDiagnosticPcGeneration,
+            )
+            return
+        }
         peerConnection.getStats { report -> applyStatsReport(report) }
     }
 
@@ -440,6 +560,8 @@ class RealWebRtcAudioEngine(
 
     override fun diagnosticPeerConnectionHash(): Int? =
         if (released) null else System.identityHashCode(peerConnection)
+
+    override fun diagnosticIceUfrags(): Pair<String?, String?> = credentialUfrags()
 
     override fun negotiationSnapshot(): NegotiationPcSnapshot {
         warnJni("negotiationSnapshot")
@@ -462,7 +584,7 @@ class RealWebRtcAudioEngine(
 
     private fun logNegotiation(fields: String) {
         val tag = playbackDiagnosticTag ?: "unknown"
-        TalkbackLog.i("WEBRTC_NEGOTIATION tag=$tag $fields")
+        TalkbackLog.i("WEBRTC_NEGOTIATION tag=$tag $fields${ConferenceRealizationLineage.negotiationSuffix()}")
     }
 
     private fun applyStatsReport(report: RTCStatsReport) {
@@ -492,12 +614,25 @@ class RealWebRtcAudioEngine(
     private fun RTCStats.readAudioLevel(): Double? =
         (members["audioLevel"] as? Number)?.toDouble()?.coerceIn(0.0, 1.0)
 
+    /**
+     * Must run inside the SRD transaction: flipping the flag and draining the candidates it
+     * unblocks is a single step, otherwise a concurrent addIceCandidate sees the flag already
+     * true while the drain has not reached its entry yet.
+     */
     private fun markRemoteDescriptionApplied() {
+        check(signalingTxn.isActive()) { "ICE drain must run inside the signaling transaction" }
         remoteDescriptionApplied = true
+        lastAppliedRemoteIceUfrag = credentialUfrags().second
+        val drained = pendingRemoteCandidates.size
         pendingRemoteCandidates.forEach { candidate ->
             runCatching { peerConnection.addIceCandidate(candidate) }
         }
         pendingRemoteCandidates.clear()
+        TalkbackLog.i(
+            "SRD_ICE_DRAIN edgeKey=${diagnosticEdgeKey()} drained=$drained " +
+                "pcHash=${System.identityHashCode(peerConnection)} " +
+                "transactionOwner=${signalingTxn.transactionOwner() ?: "NONE"}"
+        )
     }
 
     private fun attachRemoteAudioTrack(track: MediaStreamTrack?) {
@@ -583,6 +718,7 @@ class RealWebRtcAudioEngine(
     private fun awaitSetDescription(
         op: String,
         type: String,
+        incomingSdp: String? = null,
         action: (SdpObserver) -> Unit
     ) {
         val before = negotiationSnapshot()
@@ -625,51 +761,118 @@ class RealWebRtcAudioEngine(
             }
         }
         observerHash.set(System.identityHashCode(observer))
-        invokeNativeSet(op, type) { action(observer) }
         if (op == "SRD" && type == "ANSWER") {
-            logSrdBoundary(
-                "SRD_JNI_RETURN",
-                type,
-                observerHash = observerHash.get()
-            )
+            logSrdBoundary("SRD_MUTEX_WAIT_BEGIN", type)
+            val waitStartNs = System.nanoTime()
+            WebRtcSharedFactory.withSrdApplyLock {
+                val acquiredNs = System.nanoTime()
+                logSrdBoundary(
+                    "SRD_MUTEX_ACQUIRED",
+                    type,
+                    waitMs = TimeUnit.NANOSECONDS.toMillis(acquiredNs - waitStartNs),
+                )
+                try {
+                    val nativeStartNs = System.nanoTime()
+                    logSrdPreNativeSnapshot(type, incomingSdp)
+                    NativeSignalingOverlapObserver.beginSrd(
+                        diagnosticEdgeKey(),
+                        System.identityHashCode(peerConnection),
+                    )
+                    logSrdBoundary("SRD_NATIVE_CALL_ENTER", type)
+                    try {
+                        action(observer)
+                        val nativeElapsedMs =
+                            TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - nativeStartNs)
+                        logSrdBoundary("SRD_NATIVE_CALL_EXIT", type, elapsedMs = nativeElapsedMs)
+                        pendingSdpWait.await(latch, "Timed out setting SDP")
+                        logSrdBoundary(
+                            "SRD_JNI_RETURN",
+                            type,
+                            observerHash = observerHash.get(),
+                        )
+                    } finally {
+                        NativeSignalingOverlapObserver.endSrd(System.identityHashCode(peerConnection))
+                    }
+                } finally {
+                    logSrdBoundary(
+                        "SRD_MUTEX_RELEASED",
+                        type,
+                        holdMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - acquiredNs),
+                    )
+                }
+            }
+        } else {
+            invokeNativeSet(op, type) { action(observer) }
+            pendingSdpWait.await(latch, "Timed out setting SDP")
         }
-        pendingSdpWait.await(latch, "Timed out setting SDP")
         setError.get()?.let { error(it) }
         val after = negotiationSnapshot()
         logNegotiation(
             "op=$op type=$type phase=AFTER ${after.formatFields()}"
         )
+        logCredentialBoundary(op, type)
     }
 
-    /** Mutex covers native setRemoteDescription(answer) entry only, not latch wait. */
+    /**
+     * Non-answer SDP paths take no fence of their own: they already run inside the enclosing
+     * signaling transaction, which holds both the per-PC queue and the shared-factory fence.
+     */
     private fun invokeNativeSet(op: String, type: String, nativeCall: () -> Unit) {
-        if (op != "SRD" || type != "ANSWER") {
-            nativeCall()
-            return
-        }
-        logSrdBoundary("SRD_MUTEX_WAIT_BEGIN", type)
-        val waitStartNs = System.nanoTime()
-        WebRtcSharedFactory.withSrdApplyLock {
-            val acquiredNs = System.nanoTime()
-            logSrdBoundary(
-                "SRD_MUTEX_ACQUIRED",
-                type,
-                waitMs = TimeUnit.NANOSECONDS.toMillis(acquiredNs - waitStartNs)
+        nativeCall()
+    }
+
+    /**
+     * Step 2b probe A+B: the last read-only observation before control leaves for native code.
+     * If the process aborts, this is the final statement of what the PeerConnection looked like.
+     */
+    private fun logSrdPreNativeSnapshot(type: String, incomingSdp: String?) {
+        val tag = playbackDiagnosticTag ?: "unknown"
+        val snapshot = negotiationSnapshot()
+        val thread = Thread.currentThread()
+        val localCreds = IceTransportDiagnostic.extractIceCredentials(
+            peerConnection.localDescription?.description
+        )
+        val answerCreds = IceTransportDiagnostic.extractIceCredentials(incomingSdp)
+        val offerAgeMs = outstandingOfferStartedAtNs
+            ?.let { TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - it) } ?: -1L
+        val decision = SrdAdmissionDecision.evaluate(
+            SrdAdmissionInput(
+                signalingState = snapshot.signalingState,
+                localDescriptionType = snapshot.localDescriptionType,
+                remoteDescriptionType = snapshot.remoteDescriptionType,
+                expectedPcGeneration = transportDiagnosticPcGeneration,
+                actualPcGeneration = transportDiagnosticPcGeneration,
+                outstandingOfferLineageId = outstandingOfferLineageId,
+                answerOfferLineageId = transportDiagnosticOfferLineageId,
+                latestAdmittedTaskId = null,
+                taskId = null,
+                localOfferIceUfrag = localCreds.iceUfrag,
+                answerIceUfrag = answerCreds.iceUfrag,
+                answerIcePwdFingerprint = answerCreds.icePwdFingerprint,
+                previouslyAppliedRemoteIceUfrag = lastAppliedRemoteIceUfrag,
+                remoteDescriptionAlreadyApplied = remoteDescriptionApplied,
+                outstandingOfferAgeMs = offerAgeMs,
+                queuedIceCount = pendingRemoteCandidates.size,
+                iceIngressDuringSrd = iceIngressDuringSrd.get(),
             )
-            try {
-                val nativeStartNs = System.nanoTime()
-                logSrdBoundary("SRD_NATIVE_CALL_ENTER", type)
-                nativeCall()
-                val elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - nativeStartNs)
-                logSrdBoundary("SRD_NATIVE_CALL_EXIT", type, elapsedMs = elapsedMs)
-            } finally {
-                logSrdBoundary(
-                    "SRD_MUTEX_RELEASED",
-                    type,
-                    holdMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - acquiredNs)
-                )
-            }
-        }
+        )
+        TalkbackLog.i(
+            "SRD_PRE_NATIVE_SNAPSHOT type=$type " +
+                ConferenceSrdNativeObservability.correlationFieldsFromTag(tag) + " " +
+                snapshot.formatFields() + " " +
+                "pcHash=${System.identityHashCode(peerConnection)} " +
+                "factoryHash=${System.identityHashCode(peerConnectionFactory)} " +
+                "attachedPcCount=${SharedLocalAudio.attachedPcCount()} " +
+                "transactionOwner=${signalingTxn.transactionOwner() ?: "NONE"} " +
+                "transactionState=${signalingTxn.lifecycleState().name} " +
+                "foreignSrdInFlight=${NativeSignalingOverlapObserver.foreignSrdInFlight()?.edgeKey ?: "NONE"} " +
+                "localIceUfrag=${localCreds.iceUfrag ?: "NONE"} " +
+                "answerIceUfrag=${answerCreds.iceUfrag ?: "NONE"} " +
+                "answerIcePwdFingerprint=${answerCreds.icePwdFingerprint ?: "NONE"} " +
+                "thread=${thread.name} tid=${thread.id} " +
+                decision.formatFields() +
+                ConferenceRealizationLineage.negotiationSuffix()
+        )
     }
 
     private fun logSrdBoundary(
@@ -714,7 +917,8 @@ class RealWebRtcAudioEngine(
                 "thread=${thread.name} tid=${thread.id}$observerField$resultField$errorField" +
                 "$waitField$holdField$elapsedField " +
                 "trackId=${SharedLocalAudio.trackId()} " +
-                "attachedPcCount=${SharedLocalAudio.attachedPcCount()}"
+                "attachedPcCount=${SharedLocalAudio.attachedPcCount()}" +
+                ConferenceRealizationLineage.negotiationSuffix()
         )
     }
 
@@ -729,5 +933,92 @@ class RealWebRtcAudioEngine(
         val lineIndex = parts[1].toIntOrNull() ?: return null
         val sdp = parts[2]
         return IceCandidate(mid, lineIndex, sdp)
+    }
+
+    private fun logLocalCandidateGenerated(wire: String) {
+        val peer = observedModuleId ?: diagnosticPeerFromTag()
+        val (localUfrag, remoteUfrag) = credentialUfrags()
+        IceTransportDiagnostic.logCandidate(
+            seam = IceTransportDiagnostic.CandidateSeam.GENERATED,
+            peer = peer,
+            offerLineageId = transportDiagnosticOfferLineageId,
+            pcGeneration = transportDiagnosticPcGeneration,
+            pcHash = diagnosticPeerConnectionHash(),
+            wire = wire,
+            localUfrag = localUfrag,
+            remoteUfrag = remoteUfrag,
+        )
+    }
+
+    private fun logCandidateApplied(wire: String, queued: Boolean, rejected: Boolean = false) {
+        if (rejected) {
+            TalkbackLog.w(
+                "ICE_CANDIDATE_REJECTED_CLOSING edgeKey=${diagnosticEdgeKey()} " +
+                    "state=${signalingTxn.lifecycleState().name}"
+            )
+            return
+        }
+        val peer = observedModuleId ?: diagnosticPeerFromTag()
+        val (localUfrag, remoteUfrag) = credentialUfrags()
+        IceTransportDiagnostic.logCandidate(
+            seam = IceTransportDiagnostic.CandidateSeam.APPLY,
+            peer = peer,
+            offerLineageId = transportDiagnosticOfferLineageId,
+            pcGeneration = transportDiagnosticPcGeneration,
+            pcHash = diagnosticPeerConnectionHash(),
+            wire = wire,
+            queued = queued,
+            localUfrag = localUfrag,
+            remoteUfrag = remoteUfrag,
+        )
+    }
+
+    private fun logCredentialBoundary(op: String, descriptionType: String) {
+        val sdp =
+            when (op) {
+                "SLD" -> peerConnection.localDescription?.description
+                "SRD" ->
+                    when (descriptionType) {
+                        "OFFER" -> peerConnection.remoteDescription?.description
+                        "ANSWER" -> peerConnection.remoteDescription?.description
+                        else -> peerConnection.remoteDescription?.description
+                    }
+                else -> null
+            }
+        IceTransportDiagnostic.logCredentialBoundary(
+            op = op,
+            descriptionType = descriptionType,
+            peer = observedModuleId ?: diagnosticPeerFromTag(),
+            offerLineageId = transportDiagnosticOfferLineageId,
+            pcGeneration = transportDiagnosticPcGeneration,
+            pcHash = diagnosticPeerConnectionHash(),
+            sdp = sdp,
+        )
+    }
+
+    private fun captureIceTransportStatsAtBoundary(boundary: String) {
+        if (NativeSignalingOverlapObserver.shouldDeferGetStats()) return
+        if (released) return
+        IceTransportDiagnostic.captureStatsAtIceBoundary(
+            peerConnection,
+            playbackDiagnosticTag,
+            boundary,
+        )
+    }
+
+    private fun diagnosticPeerFromTag(): String =
+        playbackDiagnosticTag?.split("|")?.getOrNull(1) ?: "unknown"
+
+    private fun credentialUfrags(): Pair<String?, String?> {
+        val local = peerConnection.localDescription?.description
+            ?.let { IceTransportDiagnostic.extractIceCredentials(it).iceUfrag }
+        val remote = peerConnection.remoteDescription?.description
+            ?.let { IceTransportDiagnostic.extractIceCredentials(it).iceUfrag }
+        return local to remote
+    }
+
+    companion object {
+        private val ICE_STATS_BOUNDARIES =
+            setOf("CHECKING", "CONNECTED", "COMPLETED", "FAILED")
     }
 }
