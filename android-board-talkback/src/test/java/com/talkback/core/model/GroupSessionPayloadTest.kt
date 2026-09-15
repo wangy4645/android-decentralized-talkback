@@ -79,6 +79,25 @@ class GroupSessionPayloadTest {
     }
 
     @Test
+    fun encodeDecodeRealizationLineageFields() {
+        val original = GroupSessionPayload(
+            sdp = "v=0",
+            channelId = "CH-01",
+            members = listOf("M01-E01", "M03-E01"),
+            initiatorModuleId = "M01",
+            floorAuthorityModuleId = "M01",
+            sessionMode = MeshSessionMode.CONFERENCE,
+            realizationOfferLineageId = "CR1",
+            realizationAttemptId = "RA2"
+        )
+        val decoded = GroupSessionPayload.decode(original.encode())
+        assertNotNull(decoded)
+        assertEquals("CR1", decoded!!.realizationOfferLineageId)
+        assertEquals("RA2", decoded.realizationAttemptId)
+        assertEquals(null, decoded.offerLineageId)
+    }
+
+    @Test
     fun decodeMissingOfferCorrelationDefaultsNull() {
         val raw = """{"sdp":"v=0","channelId":"CH-01","members":["M01-E01"],"initiatorModuleId":"M01","floorAuthorityModuleId":"M01"}"""
         val decoded = GroupSessionPayload.decode(raw)

@@ -276,6 +276,7 @@ class TalkbackRuntimeManager(private val appContext: Context) {
             sessionId
         } else {
             if (remotes == null) return null
+            if (rt.deferHangupBootstrap(channelId, "runtime_mesh_call")) return null
             noteReachableTeammatesIf(true)
             val now = System.currentTimeMillis()
             if (!skipNextMeshBackoff && now - lastMeshCallAttemptMs < MESH_CALL_BACKOFF_MS) {
@@ -305,6 +306,7 @@ class TalkbackRuntimeManager(private val appContext: Context) {
         if (rt.activeUnicastSession() != null) return null
         if (!hasReachableTeammates(config)) return null
         val channelId = config.defaultChannelId
+        if (rt.deferHangupBootstrap(channelId, "runtime_reconcile_channel_mesh")) return null
         rt.reconcileGroupMesh(channelId)
         return rt.sessionSnapshotForChannel(channelId)?.sessionId
     }

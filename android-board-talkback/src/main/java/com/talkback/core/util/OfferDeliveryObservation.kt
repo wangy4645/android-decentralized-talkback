@@ -156,13 +156,18 @@ object OfferDeliveryObservation {
     )
 
     fun correlationFromEnvelope(envelope: SignalEnvelope): EnvelopeCorrelation {
-        if (envelope.type != SignalType.GROUP_JOIN) {
+        if (envelope.type != SignalType.GROUP_JOIN && envelope.type != SignalType.GROUP_INVITE) {
             return EnvelopeCorrelation(null, null, null, null)
         }
         val payload = GroupSessionPayload.decode(envelope.payload)
             ?: return EnvelopeCorrelation(null, null, null, null)
+        val lineage = when (envelope.type) {
+            SignalType.GROUP_INVITE ->
+                payload.realizationOfferLineageId ?: payload.offerLineageId
+            else -> payload.offerLineageId
+        }
         return EnvelopeCorrelation(
-            offerLineageId = payload.offerLineageId,
+            offerLineageId = lineage,
             restartAttemptId = payload.restartAttemptId,
             transportGeneration = payload.transportGeneration,
             deliveryAttemptId = payload.deliveryAttemptId

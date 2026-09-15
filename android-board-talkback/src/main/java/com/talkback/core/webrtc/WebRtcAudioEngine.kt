@@ -30,6 +30,16 @@ interface WebRtcAudioEngine {
         get() = null
         set(_) = Unit
 
+    /** GPLB offer lineage for transport diagnostics (GROUP only). */
+    var transportDiagnosticOfferLineageId: String?
+        get() = null
+        set(_) = Unit
+
+    /** Local PC generation for transport diagnostics. */
+    var transportDiagnosticPcGeneration: Long?
+        get() = null
+        set(_) = Unit
+
     /** Coordinator hook when a remote audio track is first attached. */
     var remoteTrackDiagnosticLogger: ((Boolean) -> Unit)?
         get() = null
@@ -96,4 +106,7 @@ interface WebRtcAudioEngine {
 
     /** Observation-only PeerConnection identity for SRD/domain correlation. */
     fun diagnosticPeerConnectionHash(): Int? = null
+
+    /** Local/remote SDP ice-ufrag for transport diagnostics (observation only). */
+    fun diagnosticIceUfrags(): Pair<String?, String?> = null to null
 }

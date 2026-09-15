@@ -223,6 +223,69 @@ class ConferenceControlMediaJniIsolationTest {
         }
     }
 
+    @Test
+    fun blockedStopCaptureOnM03_doesNotBlockMeetingEndTeardown() {
+        val coordinator = Executors.newSingleThreadExecutor { r ->
+            Thread(r, "talkback-coordinator")
+        }
+        val media = PeerMediaExecutors(threadNamePrefix = "test-edge")
+        val captureHold = CountDownLatch(1)
+        val captureEntered = CountDownLatch(1)
+        val teardownContinued = CountDownLatch(1)
+        try {
+            coordinator.execute {
+                ConferenceMediaJniAffinity.dispatch(media, SESSION, "M03") {
+                    captureEntered.countDown()
+                    captureHold.await(5, TimeUnit.SECONDS)
+                }
+            }
+            assertTrue("M03 stopCapture must start off coordinator", captureEntered.await(1, TimeUnit.SECONDS))
+            coordinator.execute { teardownContinued.countDown() }
+            assertTrue(
+                "MEETING_END teardown must proceed while M03 stopCapture is blocked",
+                teardownContinued.await(500, TimeUnit.MILLISECONDS)
+            )
+        } finally {
+            captureHold.countDown()
+            media.shutdownAll()
+            coordinator.shutdownNow()
+        }
+    }
+
+    @Test
+    fun blockedReleaseOnM03_doesNotBlockMeetingEndTeardown() {
+        val coordinator = Executors.newSingleThreadExecutor { r ->
+            Thread(r, "talkback-coordinator")
+        }
+        val media = PeerMediaExecutors(threadNamePrefix = "test-edge")
+        val releaseHold = CountDownLatch(1)
+        val releaseEntered = CountDownLatch(1)
+        val teardownContinued = CountDownLatch(1)
+        try {
+            coordinator.execute {
+                ConferenceMediaJniAffinity.dispatch(
+                    media,
+                    SESSION,
+                    "M03",
+                    origin = "releaseSessionMedia"
+                ) {
+                    releaseEntered.countDown()
+                    releaseHold.await(5, TimeUnit.SECONDS)
+                }
+            }
+            assertTrue("M03 release must start off coordinator", releaseEntered.await(1, TimeUnit.SECONDS))
+            coordinator.execute { teardownContinued.countDown() }
+            assertTrue(
+                "MEETING_END teardown must proceed while M03 release is blocked",
+                teardownContinued.await(500, TimeUnit.MILLISECONDS)
+            )
+        } finally {
+            releaseHold.countDown()
+            media.shutdownAll()
+            coordinator.shutdownNow()
+        }
+    }
+
     companion object {
         private const val SESSION = "conf-1"
     }

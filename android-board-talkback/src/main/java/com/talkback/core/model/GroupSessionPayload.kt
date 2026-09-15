@@ -33,6 +33,13 @@ data class GroupSessionPayload(
      * Optional; older peers ignore unknown keys. Used to join OFFER_SENT ↔ OFFER_RECEIVED.
      */
     val offerLineageId: String? = null,
+    /**
+     * GCT / conference media realization offer id (IA-001 observation).
+     * Distinct from recovery [offerLineageId]. Older peers ignore unknown keys.
+     */
+    val realizationOfferLineageId: String? = null,
+    /** One createOffer / GROUP_INVITE attempt within a realization (IA-001 observation). */
+    val realizationAttemptId: String? = null,
     /** Sender-side recovery attempt id for the offer (observation / correlation). */
     val restartAttemptId: Long? = null,
     /** Sender-side transport/PC generation stamped on the offer (observation / correlation). */
@@ -86,6 +93,12 @@ data class GroupSessionPayload(
         membershipSnapshot?.let { json.put("membershipSnapshot", it.encode()) }
         if (!offerLineageId.isNullOrBlank()) {
             json.put("offerLineageId", offerLineageId)
+        }
+        if (!realizationOfferLineageId.isNullOrBlank()) {
+            json.put("realizationOfferLineageId", realizationOfferLineageId)
+        }
+        if (!realizationAttemptId.isNullOrBlank()) {
+            json.put("realizationAttemptId", realizationAttemptId)
         }
         if (restartAttemptId != null && restartAttemptId > 0L) {
             json.put("restartAttemptId", restartAttemptId)
@@ -142,6 +155,10 @@ data class GroupSessionPayload(
                         MembershipSnapshot.decode(it)
                     },
                     offerLineageId = json.optString("offerLineageId").takeIf { it.isNotBlank() },
+                    realizationOfferLineageId = json.optString("realizationOfferLineageId")
+                        .takeIf { it.isNotBlank() },
+                    realizationAttemptId = json.optString("realizationAttemptId")
+                        .takeIf { it.isNotBlank() },
                     restartAttemptId = json.optLong("restartAttemptId", 0L).takeIf { it > 0L },
                     transportGeneration = json.optLong("transportGeneration", 0L).takeIf { it > 0L },
                     obligationGeneration = json.optLong("obligationGeneration", 0L).takeIf { it > 0L },

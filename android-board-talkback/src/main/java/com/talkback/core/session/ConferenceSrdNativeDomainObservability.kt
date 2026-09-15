@@ -84,6 +84,7 @@ object ConferenceSrdNativeDomainObservability {
             ctx.conferenceGeneration?.let { append(" conferenceGeneration=").append(it) }
             append(" domainId=").append(DOMAIN_ID)
             pcHash?.let { append(" pcHash=").append(it) }
+            append(ctx.lineageFields())
             append(" thread=").append(thread.name)
             append(" tid=").append(thread.id)
             elapsedMs?.let { append(" elapsedMs=").append(it) }

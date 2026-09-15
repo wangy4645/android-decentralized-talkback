@@ -19,6 +19,7 @@ import com.talkback.appprod.R
 import com.talkback.appprod.TalkbackApp
 import com.talkback.appprod.data.AppConfigStore
 import com.talkback.appprod.debug.DebugHarnessBroadcastDispatcher
+import com.talkback.appprod.debug.P1cGroupPreconditionLeaveDebug
 import com.talkback.appprod.runtime.TalkbackRuntimeManager
 import com.talkback.appprod.ui.SettingsActions
 import java.util.concurrent.Executors
@@ -26,6 +27,7 @@ import java.util.concurrent.Executors
 class TalkbackForegroundService : Service() {
     private lateinit var runtimeManager: TalkbackRuntimeManager
     private var wakeLock: PowerManager.WakeLock? = null
+    @Volatile
     private var serviceStopped = false
     private var pr52cDebugReceiverRegistered = false
 
@@ -80,6 +82,38 @@ class TalkbackForegroundService : Service() {
                             runtime.debugD1ArmDropRecoveryOfferIngress()
                         ACTION_DEBUG_D1_CLEAR_INGRESS_MISS ->
                             runtime.debugD1ClearIngressMissInjection()
+                        ACTION_DEBUG_P1C_REPUBLISH_AFTER_BIND ->
+                            runtime.debugP1cRepublishMediaKeyPackageAfterPeerBind(remote)
+                        ACTION_DEBUG_P1C_CF7_VERSION_MISMATCH -> {
+                            val wireVersion =
+                                if (intent.hasExtra(EXTRA_DEBUG_WIRE_RECIPIENT_KEY_VERSION)) {
+                                    intent.getLongExtra(EXTRA_DEBUG_WIRE_RECIPIENT_KEY_VERSION, -1L)
+                                        .takeIf { it > 0L }
+                                } else {
+                                    null
+                                }
+                            runtime.debugP1cEmitRecipientKeyVersionMismatchFixture(
+                                remote,
+                                wireVersion,
+                            )
+                        }
+                        ACTION_DEBUG_PA_SR5_ROTATE_LOCAL_SOURCE ->
+                            runtime.debugPaSr5RotateLocalConferenceSource(remote)
+                        ACTION_DEBUG_RC1_PILOT_ENABLE ->
+                            runtime.debugRc1PilotEnable(
+                                intent.getBooleanExtra(EXTRA_DEBUG_RC1_ENABLED, false),
+                            )
+                        ACTION_DEBUG_RC1_ARM_CUTOVER ->
+                            runtime.debugRc1ArmCutover(remote)
+                        ACTION_DEBUG_RC1_EXECUTE_CUTOVER ->
+                            runtime.debugRc1ExecuteCutover(remote)
+                        ACTION_DEBUG_RC1_ROLLBACK ->
+                            runtime.debugRc1Rollback(remote)
+                        ACTION_DEBUG_P1C_FORCE_LEAVE_CHANNEL ->
+                            P1cGroupPreconditionLeaveDebug.forceLeave(
+                                runtimeManager,
+                                AppConfigStore(this@TalkbackForegroundService),
+                            )
                         ACTION_DEBUG_SUPPRESS_SUCCESSOR_ARM ->
                             runtime.debugSuppressSuccessorAttemptArm(remote, ttlMs)
                         ACTION_DEBUG_SUPPRESS_SUCCESSOR_CLEAR ->
@@ -135,6 +169,14 @@ class TalkbackForegroundService : Service() {
                 addAction(ACTION_DEBUG_EXPLICIT_SUPERSEDE)
                 addAction(ACTION_DEBUG_D1_ARM_DROP_INGRESS)
                 addAction(ACTION_DEBUG_D1_CLEAR_INGRESS_MISS)
+                addAction(ACTION_DEBUG_P1C_REPUBLISH_AFTER_BIND)
+                addAction(ACTION_DEBUG_P1C_CF7_VERSION_MISMATCH)
+                addAction(ACTION_DEBUG_PA_SR5_ROTATE_LOCAL_SOURCE)
+                addAction(ACTION_DEBUG_RC1_PILOT_ENABLE)
+                addAction(ACTION_DEBUG_RC1_ARM_CUTOVER)
+                addAction(ACTION_DEBUG_RC1_EXECUTE_CUTOVER)
+                addAction(ACTION_DEBUG_RC1_ROLLBACK)
+                addAction(ACTION_DEBUG_P1C_FORCE_LEAVE_CHANNEL)
                 addAction(ACTION_DEBUG_SUPPRESS_SUCCESSOR_ARM)
                 addAction(ACTION_DEBUG_SUPPRESS_SUCCESSOR_CLEAR)
                 addAction(ACTION_DEBUG_P180_MEMBERSHIP_FIRST)
@@ -162,25 +204,31 @@ class TalkbackForegroundService : Service() {
             return START_NOT_STICKY
         }
 
+        // A later start intent cancels a pending stopSelf(); clear the stop latch so
+        // runtime can attach again and a subsequent stop is not a no-op.
+        serviceStopped = false
+
         val config = AppConfigStore(this).load()
         SettingsActions.validateSecret(config.sharedSecret)?.let { reason ->
-            TalkbackApp.get(this).serviceRunning = false
-            sendServiceState(STATE_ERROR, "Start failed: $reason")
+            stopServiceInternal("Start failed: $reason")
+            stopSelf()
             return START_NOT_STICKY
         }
         if (runtimeManager.isRunning()) {
+            TalkbackApp.get(this).serviceRunning = true
             sendServiceState(STATE_RUNNING, "Service already running for ${config.moduleId}-${config.endpointId}")
             return START_STICKY
         }
         acquireWakeLock()
-        runtimeManager.start(config).onSuccess {
+        val started = runtimeManager.start(config)
+        started.onSuccess {
             TalkbackApp.get(this).serviceRunning = true
             sendServiceState(STATE_RUNNING, "Service running for ${config.moduleId}-${config.endpointId}")
         }.onFailure {
-            TalkbackApp.get(this).serviceRunning = false
-            sendServiceState(STATE_ERROR, "Start failed: ${it.message}")
+            stopServiceInternal("Start failed: ${it.message}")
+            stopSelf()
         }
-        return START_STICKY
+        return if (started.isSuccess) START_STICKY else START_NOT_STICKY
     }
 
     override fun onDestroy() {
@@ -194,10 +242,12 @@ class TalkbackForegroundService : Service() {
     }
 
     private fun stopServiceInternal(reason: String) {
-        if (serviceStopped) return
-        serviceStopped = true
+        // Always tear down runtime even if the latch was already set (stop/start race
+        // can leave a foreground ServiceRecord with getRuntime()==null).
         runCatching { runtimeManager.stop() }
         TalkbackApp.get(this).serviceRunning = false
+        if (serviceStopped) return
+        serviceStopped = true
         releaseWakeLock()
         runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
         sendServiceState(STATE_STOPPED, reason)
@@ -297,6 +347,29 @@ class TalkbackForegroundService : Service() {
         /** D1 Option A: arm recovery-offer ingress drop on this device (typically M03). */
         const val ACTION_DEBUG_D1_ARM_DROP_INGRESS = "com.talkback.appprod.debug.D1_ARM_DROP_INGRESS"
         const val ACTION_DEBUG_D1_CLEAR_INGRESS_MISS = "com.talkback.appprod.debug.D1_CLEAR_INGRESS_MISS"
+        /** P1-C field: trigger product post-bind republish obligation (P1-C-R1). */
+        const val ACTION_DEBUG_P1C_REPUBLISH_AFTER_BIND =
+            "com.talkback.appprod.debug.P1C_REPUBLISH_MEDIA_KEY_PACKAGE_AFTER_BIND"
+        /** P1-C field C-F7: emit recipientKeyVersion mismatch MEDIA_KEY_PACKAGE (host only). */
+        const val ACTION_DEBUG_P1C_CF7_VERSION_MISMATCH =
+            "com.talkback.appprod.debug.P1C_CF7_RECIPIENT_KEY_VERSION_MISMATCH"
+        /** PA-SR5 field: M01 SOURCE generation succession (product path; not fake leave). */
+        const val ACTION_DEBUG_PA_SR5_ROTATE_LOCAL_SOURCE =
+            "com.talkback.appprod.debug.PA_SR5_ROTATE_LOCAL_SOURCE"
+        /** RC1 field: controlled audible ownership transition on peer device. */
+        const val ACTION_DEBUG_RC1_PILOT_ENABLE =
+            "com.talkback.appprod.debug.RC1_PILOT_ENABLE"
+        const val ACTION_DEBUG_RC1_ARM_CUTOVER =
+            "com.talkback.appprod.debug.RC1_ARM_CUTOVER"
+        const val ACTION_DEBUG_RC1_EXECUTE_CUTOVER =
+            "com.talkback.appprod.debug.RC1_EXECUTE_CUTOVER"
+        const val ACTION_DEBUG_RC1_ROLLBACK =
+            "com.talkback.appprod.debug.RC1_ROLLBACK"
+        const val EXTRA_DEBUG_RC1_ENABLED = "enabled"
+        /** P1-C field PRE-G: force leave via product leaveChannelSession (live service runtime). */
+        const val ACTION_DEBUG_P1C_FORCE_LEAVE_CHANNEL =
+            "com.talkback.appprod.debug.P1C_FORCE_LEAVE_CHANNEL_SESSION"
+        const val EXTRA_DEBUG_WIRE_RECIPIENT_KEY_VERSION = "wireRecipientKeyVersion"
         /** Harness: suppress successor obligation admission (Attempt-4c-S). */
         const val ACTION_DEBUG_SUPPRESS_SUCCESSOR_ARM =
             "com.talkback.appprod.debug.SUPPRESS_SUCCESSOR_ATTEMPT_ARM"

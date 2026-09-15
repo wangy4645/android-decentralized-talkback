@@ -1,10 +1,13 @@
 package com.talkback.core.conference.session
 
 import android.content.Context
+import com.talkback.core.conference.authority.AuthorityWiringRuntime
 import com.talkback.core.conference.authority.MediaKeyContextFact
 import com.talkback.core.conference.authority.SourceAuthorizationFact
 import com.talkback.core.conference.runtime.ConferenceMediaExecutionOrchestrator
+import com.talkback.core.conference.runtime.FrameAdmitDisposition
 import com.talkback.core.conference.runtime.MediaGroupEndpointBinding
+import com.talkback.core.conference.runtime.MediaJitterConstants
 import com.talkback.core.conference.transport.MulticastLockPolicy
 import com.talkback.core.conference.runtime.TransportHandle
 import com.talkback.core.conference.transport.ConferenceMulticastNetworkBinding
@@ -31,12 +34,13 @@ class ConferenceSessionMediaWiring(
     private val appContext: Context? = null,
 ) {
     private data class SessionState(
-        val fact: ConferenceSessionMediaFact,
+        var fact: ConferenceSessionMediaFact,
         val assembly: ConferenceMulticastRealMediaAssembly,
         val catalog: SourceBindingCatalog,
         val mediaTimeline: RelativeMediaTimeline,
         var ingressBlocked: Boolean,
         var playoutStarted: Boolean,
+        var lastPlayoutTickMediaTimeMs: Long? = null,
     )
 
     private val sessions = linkedMapOf<String, SessionState>()
@@ -47,7 +51,10 @@ class ConferenceSessionMediaWiring(
         val slotMediaTimeMs: Long,
     )
 
-    fun sessionPlayoutAnchorMs(sessionId: String): Long? = sessions[sessionId]?.fact?.startedAtMs
+    fun sessionPlayoutAnchorMs(sessionId: String): Long? {
+        val state = sessions[sessionId] ?: return null
+        return state.mediaTimeline.anchorWallMs() ?: state.fact.startedAtMs
+    }
 
     fun withSessionPipelineLock(
         sessionId: String,
@@ -56,6 +63,86 @@ class ConferenceSessionMediaWiring(
         val lock = sessionPipelineLocks.computeIfAbsent(sessionId) { Any() }
         synchronized(lock) {
             block()
+        }
+    }
+
+    fun capturePlayoutFunnelSnapshot(
+        sessionId: String,
+        tickMediaTimeMs: Long,
+        resolvedMixSlot: Long? = null,
+    ): PlayoutFunnelSnapshot? {
+        val state = sessions[sessionId] ?: return null
+        if (state.ingressBlocked) return null
+        val orchestrator = state.assembly.orchestrator
+        val pipeline = orchestrator.pipeline
+        val admitted = orchestrator.authority.store.currentAdmitted()
+        val anchorMs = state.mediaTimeline.anchorWallMs() ?: state.fact.startedAtMs
+        val playoutTargetSlot = state.mediaTimeline.mediaSlotForPlayoutTickMs(tickMediaTimeMs)
+        val perSource =
+            admitted.map { (sourceIdentity, source) ->
+                pipeline.jitterSlotDomainSnapshot(sourceIdentity, source.incarnationId)
+                    ?: JitterSlotDomainSnapshot(
+                        sourceIdentity = sourceIdentity,
+                        incarnationId = source.incarnationId,
+                        nextExpectedSlot = null,
+                        bySlotSize = 0,
+                        earliestBufferedSlot = null,
+                        latestBufferedSlot = null,
+                        executable = pipeline.isJitterExecutable(sourceIdentity, source.incarnationId),
+                    )
+            }
+        return PlayoutFunnelSnapshot(
+            tickMediaTimeMs = tickMediaTimeMs,
+            playoutAnchorMs = anchorMs,
+            playoutTargetSlot = playoutTargetSlot,
+            resolvedMixSlot = resolvedMixSlot,
+            selectedTopK = orchestrator.selection.currentTopK().members.map { it.sourceIdentity },
+            activeJitterSources = pipeline.activeJitterSourceCount(),
+            admittedCount = admitted.size,
+            perSource = perSource,
+        )
+    }
+
+    /**
+     * RCA5-B2 — map playout tick onto anchored RTP media-slot domain and return the
+     * earliest buffered slot that is playable at or before the tick target.
+     */
+    fun resolvePlayoutMixSlot(
+        sessionId: String,
+        tickMediaTimeMs: Long,
+    ): BufferedMixSlot? {
+        val state = sessions[sessionId] ?: return null
+        if (state.ingressBlocked) return null
+        state.lastPlayoutTickMediaTimeMs = tickMediaTimeMs
+        val targetMediaSlot = state.mediaTimeline.mediaSlotForPlayoutTickMs(tickMediaTimeMs)
+        if (targetMediaSlot == null) {
+            return resolveEarliestBufferedMixSlot(sessionId)
+        }
+        val pipeline = state.assembly.orchestrator.pipeline
+        val admitted = state.assembly.orchestrator.authority.store.currentAdmitted()
+        var bestSlot: Long? = null
+        var bestMediaTimeMs: Long? = null
+        for ((sourceIdentity, source) in admitted) {
+            val nextExpected = pipeline.nextExpectedSlot(sourceIdentity, source.incarnationId)
+            val buffered = pipeline.bufferedSlots(sourceIdentity, source.incarnationId)
+            val eligible =
+                buffered.filter { slot -> nextExpected == null || slot >= nextExpected }
+            val slot =
+                eligible.filter { it <= targetMediaSlot }.minOrNull()
+                    ?: eligible.minOrNull()
+                    ?: continue
+            val frame =
+                pipeline.peekBufferedFrame(sourceIdentity, source.incarnationId, slot)
+                    ?: continue
+            if (bestSlot == null || slot < bestSlot) {
+                bestSlot = slot
+                bestMediaTimeMs = frame.mediaTimeMs
+            }
+        }
+        return if (bestSlot != null && bestMediaTimeMs != null) {
+            BufferedMixSlot(slot = bestSlot, slotMediaTimeMs = bestMediaTimeMs)
+        } else {
+            null
         }
     }
 
@@ -111,8 +198,23 @@ class ConferenceSessionMediaWiring(
     fun audiblePlayoutSeam(sessionId: String): AudiblePlayoutOwnershipSeam? =
         sessions[sessionId]?.assembly?.audiblePlayoutSeam()
 
+    fun currentMediaKeyEpoch(sessionId: String): Long? = sessions[sessionId]?.fact?.mediaKeyEpoch
+
+    /** Harness-only — exposes authority runtime for cross-node crypto regression tests. */
+    internal fun authorityRuntime(sessionId: String): AuthorityWiringRuntime? =
+        sessions[sessionId]?.assembly?.orchestrator?.authority
+
     fun startSession(fact: ConferenceSessionMediaFact): Boolean {
-        if (fact.sessionId in sessions) return false
+        val existing = sessions[fact.sessionId]
+        if (existing != null) {
+            return when {
+                fact.mediaKeyEpoch > existing.fact.mediaKeyEpoch ->
+                    rotateMediaKeyEpoch(fact.sessionId, fact)
+                fact.mediaKeyEpoch == existing.fact.mediaKeyEpoch ->
+                    refreshMediaKeyMaterialIfChanged(fact.sessionId, fact)
+                else -> false
+            }
+        }
         val assembly = assemblyFactory(appContext, fact.sessionId)
         val store = assembly.orchestrator.authority.store
         store.acceptVerifiedKey(
@@ -161,6 +263,105 @@ class ConferenceSessionMediaWiring(
         }
         return true
     }
+
+    /**
+     * Membership convergence media-key epoch bump — atomic retire old epoch + install new key.
+     * Caller reinstalls member bindings at the new epoch after rotation.
+     */
+    fun rotateMediaKeyEpoch(
+        sessionId: String,
+        newFact: ConferenceSessionMediaFact,
+    ): Boolean {
+        val lock = sessionPipelineLocks.computeIfAbsent(sessionId) { Any() }
+        synchronized(lock) {
+            val state = sessions[sessionId] ?: return false
+            if (state.ingressBlocked) return false
+            if (newFact.sessionId != sessionId) return false
+            val oldEpoch = state.fact.mediaKeyEpoch
+            when {
+                newFact.mediaKeyEpoch < oldEpoch -> return false
+                newFact.mediaKeyEpoch == oldEpoch ->
+                    return refreshMediaKeyMaterialIfChanged(sessionId, newFact)
+            }
+            val authority = state.assembly.orchestrator.authority
+            val pipeline = state.assembly.orchestrator.pipeline
+            val decodeMix = state.assembly.orchestrator.decodeMix
+            for (entry in state.catalog.all()) {
+                authority.revokeSource(entry.sourceIdentity, entry.incarnationId)
+                decodeMix.hardFence(entry.sourceIdentity, entry.incarnationId)
+                pipeline.drainSourceAfterSessionRevoke(entry.sourceIdentity)
+            }
+            state.catalog.clear()
+            authority.retireMediaKeyEpoch(oldEpoch)
+            pipeline.drainAllForSessionWiring()
+            authority.store.acceptVerifiedKey(
+                MediaKeyContextFact(
+                    mediaKeyEpoch = newFact.mediaKeyEpoch,
+                    masterKey = newFact.masterKey.copyOf(),
+                    masterSalt = newFact.masterSalt.copyOf(),
+                    keyContextHint64 = newFact.keyContextHint64.copyOf(),
+                ),
+            )
+            state.fact = newFact
+            Profile01ShadowRuntimeObservability.bindActiveSession(
+                sessionId = sessionId,
+                conferenceId = Profile01ShadowRuntimeObservability.activeConferenceId,
+                mediaKeyEpoch = newFact.mediaKeyEpoch,
+            )
+            runtimeSnapshot(sessionId)?.let { snap ->
+                Profile01ShadowRuntimeObservability.logRuntimeSnapshot(
+                    phase = "WIRING_MEDIA_KEY_EPOCH_ROTATED",
+                    sessionId = sessionId,
+                    conferenceId = Profile01ShadowRuntimeObservability.activeConferenceId,
+                    mediaKeyEpoch = newFact.mediaKeyEpoch,
+                    snapshot = snap,
+                    extra =
+                        mapOf(
+                            "previousMediaKeyEpoch" to oldEpoch.toString(),
+                            "generation" to newFact.generation.toString(),
+                        ),
+                )
+            }
+            return true
+        }
+    }
+
+    /**
+     * Propagate authoritative session key refresh at an unchanged mediaKeyEpoch
+     * (e.g. supplement-backed registry correction after stale republication).
+     */
+    private fun refreshMediaKeyMaterialIfChanged(
+        sessionId: String,
+        newFact: ConferenceSessionMediaFact,
+    ): Boolean {
+        val lock = sessionPipelineLocks.computeIfAbsent(sessionId) { Any() }
+        synchronized(lock) {
+            val state = sessions[sessionId] ?: return false
+            if (state.ingressBlocked) return false
+            if (newFact.sessionId != sessionId) return false
+            if (newFact.mediaKeyEpoch != state.fact.mediaKeyEpoch) return false
+            if (sessionKeyMaterialMatches(state.fact, newFact)) return true
+            val authority = state.assembly.orchestrator.authority
+            authority.store.acceptVerifiedKey(
+                MediaKeyContextFact(
+                    mediaKeyEpoch = newFact.mediaKeyEpoch,
+                    masterKey = newFact.masterKey.copyOf(),
+                    masterSalt = newFact.masterSalt.copyOf(),
+                    keyContextHint64 = newFact.keyContextHint64.copyOf(),
+                ),
+            )
+            state.fact = newFact
+            return true
+        }
+    }
+
+    private fun sessionKeyMaterialMatches(
+        left: ConferenceSessionMediaFact,
+        right: ConferenceSessionMediaFact,
+    ): Boolean =
+        left.masterKey.contentEquals(right.masterKey) &&
+            left.masterSalt.contentEquals(right.masterSalt) &&
+            left.keyContextHint64.contentEquals(right.keyContextHint64)
 
     fun installMember(
         sessionId: String,
@@ -404,15 +605,56 @@ class ConferenceSessionMediaWiring(
                 return@withSessionPipelineLock
             }
             result =
-                locked.assembly.pipeline.admitProtectedDatagram(
+                alignIngressAfterAdmit(
+                    state = locked,
                     sourceIdentity = entry.sourceIdentity,
-                    datagram = datagram,
-                    rxWallMs = rxWallMs,
-                    roc = roc,
-                    mediaTimeline = locked.mediaTimeline,
+                    result =
+                        locked.assembly.pipeline.admitProtectedDatagram(
+                            sourceIdentity = entry.sourceIdentity,
+                            datagram = datagram,
+                            rxWallMs = rxWallMs,
+                            roc = roc,
+                            mediaTimeline = locked.mediaTimeline,
+                            playoutReferenceMs =
+                                locked.lastPlayoutTickMediaTimeMs
+                                    ?: locked.mediaTimeline.anchorWallMs(),
+                        ),
+                    nowMs = rxWallMs,
                 )
         }
         return result!!
+    }
+
+    private fun alignIngressAfterAdmit(
+        state: SessionState,
+        sourceIdentity: String,
+        result: PipelineAdmitResult,
+        nowMs: Long,
+    ): PipelineAdmitResult {
+        if (result.frameAdmit != FrameAdmitDisposition.REORDER_DISPLACEMENT_EXCEEDED) {
+            return result
+        }
+        val admitted =
+            state.assembly.orchestrator.authority.store.derivedAdmitted(sourceIdentity)
+                ?: return result
+        val aligned =
+            SessionMediaLiveEdgeAligner.maybeAlignLiveEdgeOnReorder(
+                pipeline = state.assembly.orchestrator.pipeline,
+                sourceIdentity = sourceIdentity,
+                incarnationId = admitted.incarnationId,
+                liveSlot = result.mediaSlot,
+                mediaTimeMs = result.mediaTimeMs ?: nowMs,
+                arrivalMs = nowMs,
+                nowMs = nowMs,
+            ) ?: return result
+        return result.copy(
+            frameAdmit = aligned.disposition,
+            jitterDepth =
+                state.assembly.orchestrator.pipeline.jitterSize(
+                    sourceIdentity,
+                    admitted.incarnationId,
+                ),
+        )
     }
 
     private fun pipelineReject(

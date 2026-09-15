@@ -1,15 +1,18 @@
 package com.talkback.app
 
 import android.content.Context
+import android.net.ConnectivityManager
 import com.talkback.core.discovery.FixedDiscoveryService
 import com.talkback.core.discovery.ModulePresence
 import com.talkback.core.model.EndpointAddress
 import com.talkback.core.model.EndpointId
 import com.talkback.core.model.EndpointPriority
 import com.talkback.core.model.ModuleId
+import com.talkback.core.network.SelectedOperationalNetworkRegistry
 import com.talkback.core.signaling.InMemorySignalingChannel
 import com.talkback.core.signaling.InMemorySignalingHub
 import com.talkback.core.signaling.PeerTarget
+import com.talkback.core.webrtc.WebRtcNetworkBridgeInstall
 
 internal class TestTalkbackNode(
     context: Context,
@@ -29,7 +32,9 @@ internal class TestTalkbackNode(
     edgeRecoveryAttemptBudgetMs: Long = 15_000L,
     edgeRecoveryObservationWindowMs: Long = 30_000L,
     acquireReleaseTimeoutMs: Long = 500L,
-    discoveryService: FixedDiscoveryService? = null
+    discoveryService: FixedDiscoveryService? = null,
+    gbcTrustWiring: com.talkback.core.session.gbc.wiring.GbcTrustWiring =
+        com.talkback.core.session.gbc.wiring.TestGbcTrustWiring(),
 ) {
     val logs = mutableListOf<String>()
     val channel = InMemorySignalingChannel(hub, TEST_HOST, port)
@@ -56,7 +61,9 @@ internal class TestTalkbackNode(
         mode = AudioEngineMode.STUB,
         discoveryService = discovery,
         signalingChannel = channel,
-        onLog = { msg -> synchronized(logs) { logs.add(msg) } }
+        gbcTrustWiring = gbcTrustWiring,
+        onLog = { msg -> synchronized(logs) { logs.add(msg) } },
+        selectedOperationalNetworkRegistry = sharedOperationalNetworkRegistry(context),
     )
 
     val localEndpoint = EndpointAddress(moduleId, EndpointId("E01"))
@@ -101,6 +108,28 @@ internal class TestTalkbackNode(
 
     companion object {
         const val TEST_HOST = "127.0.0.1"
+
+        @Volatile
+        private var sharedRegistry: SelectedOperationalNetworkRegistry? = null
+
+        /**
+         * Multi-node JVM tests share one F8 registry — process-global
+         * [WebRtcNetworkBridgeInstall] rejects a second distinct instance.
+         */
+        @Synchronized
+        fun sharedOperationalNetworkRegistry(context: Context): SelectedOperationalNetworkRegistry {
+            sharedRegistry?.let { return it }
+            WebRtcNetworkBridgeInstall.resetForTest()
+            val connectivity =
+                context.applicationContext.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            return SelectedOperationalNetworkRegistry(connectivity).also { sharedRegistry = it }
+        }
+
+        @Synchronized
+        fun resetSharedOperationalNetworkRegistryForTest() {
+            sharedRegistry = null
+            WebRtcNetworkBridgeInstall.resetForTest()
+        }
 
         fun allPeers(vararg modules: Pair<ModuleId, Int>): List<ModulePresence> {
             val now = System.currentTimeMillis()

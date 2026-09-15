@@ -24,8 +24,9 @@ class Profile01ShadowPlayoutClockSeam(
     private val resolveBufferedSlot: (
         ConferenceSessionMediaWiring,
         String,
-    ) -> ConferenceSessionMediaWiring.BufferedMixSlot? = { wiring, sessionId ->
-        wiring.resolveEarliestBufferedMixSlot(sessionId)
+        Long,
+    ) -> ConferenceSessionMediaWiring.BufferedMixSlot? = { wiring, sessionId, tickMediaTimeMs ->
+        wiring.resolvePlayoutMixSlot(sessionId, tickMediaTimeMs)
     },
     private val runMixPlayoutCycle: (
         ConferenceSessionMediaWiring,
@@ -161,16 +162,16 @@ class Profile01ShadowPlayoutClockSeam(
             wiring.withSessionPipelineLock(session.sessionId) {
                 if (!hasSession(session.sessionId)) return@withSessionPipelineLock
                 val buffered =
-                    resolveBufferedSlot(wiring, session.sessionId)
+                    resolveBufferedSlot(wiring, session.sessionId, tickMediaTimeMs)
                         ?: run {
-                            wiring.runtimeSnapshot(session.sessionId)?.let { snap ->
+                            wiring.capturePlayoutFunnelSnapshot(
+                                sessionId = session.sessionId,
+                                tickMediaTimeMs = tickMediaTimeMs,
+                            )?.let { funnel ->
                                 Profile01ShadowRuntimeObservability.maybeLogPlayoutBufferStarvation(
                                     sessionId = session.sessionId,
-                                    tickMediaTimeMs = tickMediaTimeMs,
-                                    admittedCount = snap.admittedCount,
-                                    activeJitterSources = snap.activeJitterSources,
-                                    jitterBufferCount = snap.jitterBufferCount,
-                                    liveDecoders = snap.liveDecoders,
+                                    funnel = funnel,
+                                    liveDecoders = wiring.runtimeSnapshot(session.sessionId)?.liveDecoders ?: 0,
                                 )
                             }
                             return@withSessionPipelineLock
@@ -186,14 +187,30 @@ class Profile01ShadowPlayoutClockSeam(
                     )
                 if (result != null) {
                     session.mixCyclesExecuted.incrementAndGet()
+                    val liveDecoders = wiring.runtimeSnapshot(session.sessionId)?.liveDecoders ?: 0
+                    val successfulPlayoutWrites =
+                        wiring.playoutSuccessfulWrites(session.sessionId) ?: 0L
+                    val audioTrackOwner = rc1AudioTrackOwnerLabel()
+                    wiring.capturePlayoutFunnelSnapshot(
+                        sessionId = session.sessionId,
+                        tickMediaTimeMs = tickMediaTimeMs,
+                        resolvedMixSlot = buffered.slot,
+                    )?.let { funnel ->
+                        Profile01ShadowRuntimeObservability.maybeLogPlayoutFunnelCycle(
+                            sessionId = session.sessionId,
+                            funnel = funnel,
+                            liveDecoders = liveDecoders,
+                            successfulPlayoutWrites = successfulPlayoutWrites,
+                            audioTrackOwner = audioTrackOwner,
+                        )
+                    }
                     Profile01ShadowRuntimeObservability.maybeLogShadowPlayoutCycle(
                         sessionId = session.sessionId,
                         tickMediaTimeMs = tickMediaTimeMs,
                         slot = buffered.slot,
-                        liveDecoders = wiring.runtimeSnapshot(session.sessionId)?.liveDecoders ?: 0,
-                        successfulPlayoutWrites =
-                            wiring.playoutSuccessfulWrites(session.sessionId) ?: 0L,
-                        audioTrackOwner = rc1AudioTrackOwnerLabel(),
+                        liveDecoders = liveDecoders,
+                        successfulPlayoutWrites = successfulPlayoutWrites,
+                        audioTrackOwner = audioTrackOwner,
                     )
                 }
             }

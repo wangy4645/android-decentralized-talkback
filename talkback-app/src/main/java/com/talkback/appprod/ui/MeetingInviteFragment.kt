@@ -27,6 +27,10 @@ class MeetingInviteFragment : Fragment() {
         view.findViewById<TextView>(R.id.txtInviteChannel).text = channelTitle
 
         view.findViewById<View>(R.id.btnJoinMeeting).setOnClickListener {
+            val sessionId = arguments?.getString(ARG_SESSION_ID).orEmpty()
+            if (sessionId.isNotBlank()) {
+                MeetingInviteUiObservability.log(sessionId, "JOIN_CLICKED")
+            }
             viewModel.acceptIncomingMeeting()
         }
         view.findViewById<View>(R.id.btnDeclineMeeting).setOnClickListener {
@@ -36,12 +40,18 @@ class MeetingInviteFragment : Fragment() {
 
     companion object {
         const val TAG_MEETING_INVITE = "meeting_invite"
+        private const val ARG_SESSION_ID = "session_id"
         private const val ARG_HOST_LABEL = "host_label"
         private const val ARG_CHANNEL_TITLE = "channel_title"
 
-        fun newInstance(hostLabel: String, channelTitle: String): MeetingInviteFragment =
+        fun newInstance(
+            sessionId: String,
+            hostLabel: String,
+            channelTitle: String,
+        ): MeetingInviteFragment =
             MeetingInviteFragment().apply {
                 arguments = Bundle().apply {
+                    putString(ARG_SESSION_ID, sessionId)
                     putString(ARG_HOST_LABEL, hostLabel)
                     putString(ARG_CHANNEL_TITLE, channelTitle)
                 }

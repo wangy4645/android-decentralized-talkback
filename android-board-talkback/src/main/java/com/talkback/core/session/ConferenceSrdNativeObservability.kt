@@ -116,6 +116,7 @@ object ConferenceSrdNativeObservability {
             append(conferenceGen)
             append(" answerSdpBytes=").append(state.answerSdpBytes)
             append(" answerSdpLines=").append(state.answerSdpLines)
+            append(ctx.lineageFields())
         }
     }
 

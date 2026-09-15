@@ -1,9 +1,13 @@
 package com.talkback.core.webrtc
 
 import android.content.Context
+import com.talkback.core.media.CreateContinuationEligibility
+import com.talkback.core.media.EngineRequestIntent
 import com.talkback.core.media.MediaBarrierResult
 import com.talkback.core.media.MediaSessionManager
 import com.talkback.core.media.MediaSessionState
+import com.talkback.core.media.MeshMediaAsyncRelease
+import com.talkback.core.media.MeshMediaCoordinatorDeferral
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -32,16 +36,52 @@ class SessionMediaRegistry(
         sessionManager = manager
     }
 
+    fun installAsyncMeshMediaRelease(release: MeshMediaAsyncRelease) {
+        sessionManager.installAsyncMeshMediaRelease(release)
+    }
+
+    fun installMeshMediaCoordinatorDeferral(deferral: MeshMediaCoordinatorDeferral) {
+        sessionManager.installMeshMediaCoordinatorDeferral(deferral)
+    }
+
+    fun installCreateContinuationEligibility(eligibility: CreateContinuationEligibility) {
+        sessionManager.installCreateContinuationEligibility(eligibility)
+    }
+
+    fun registerHangupMediaBarrier(
+        moduleIds: Collection<String>,
+        onComplete: (allSucceeded: Boolean) -> Unit
+    ) {
+        sessionManager.registerHangupMediaBarrier(moduleIds, onComplete)
+    }
+
     fun groupEngine(remoteModuleId: String): WebRtcAudioEngine =
         sessionManager.create(remoteModuleId, MediaBearerScope.GROUP)
+
+    fun requestGroupEngine(
+        remoteModuleId: String,
+        sessionId: String?,
+        onReady: (WebRtcAudioEngine) -> Unit,
+        onFailed: (() -> Unit)? = null
+    ) {
+        sessionManager.requestEngine(remoteModuleId, MediaBearerScope.GROUP, sessionId, onReady, onFailed)
+    }
 
     fun getGroup(remoteModuleId: String): WebRtcAudioEngine? =
         sessionManager.getEngine(remoteModuleId)?.takeIf {
             sessionManager.getState(remoteModuleId)?.scope == MediaBearerScope.GROUP
         }
 
-    fun releaseGroup(remoteModuleId: String) {
-        sessionManager.close(remoteModuleId)
+    fun releaseGroup(remoteModuleId: String, sessionId: String? = null) {
+        sessionManager.close(remoteModuleId, sessionId)
+    }
+
+    /**
+     * A0.4: admit conference release on coordinator without waiting for teardown JNI queue.
+     * Schedules [MEDIA_RELEASE_SCHEDULED] immediately; native release still runs on edge executor.
+     */
+    fun admitConferenceRelease(remoteModuleId: String, sessionId: String?, origin: String) {
+        sessionManager.admitConferenceRelease(remoteModuleId, sessionId, origin)
     }
 
     fun getMesh(remoteModuleId: String): WebRtcAudioEngine? =
@@ -54,6 +94,23 @@ class SessionMediaRegistry(
 
     fun conferenceEngine(remoteModuleId: String): WebRtcAudioEngine =
         sessionManager.create(remoteModuleId, MediaBearerScope.CONFERENCE)
+
+    fun requestConferenceEngine(
+        remoteModuleId: String,
+        sessionId: String?,
+        onReady: (WebRtcAudioEngine) -> Unit,
+        onFailed: (() -> Unit)? = null,
+        intent: EngineRequestIntent = EngineRequestIntent.DEFAULT,
+    ) {
+        sessionManager.requestEngine(
+            remoteModuleId,
+            MediaBearerScope.CONFERENCE,
+            sessionId,
+            onReady,
+            onFailed,
+            intent,
+        )
+    }
 
     fun getConference(remoteModuleId: String): WebRtcAudioEngine? =
         sessionManager.getEngine(remoteModuleId)?.takeIf {

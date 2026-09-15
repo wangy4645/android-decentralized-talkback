@@ -1,0 +1,49 @@
+{
+  "schema": "adr0057-pv1-golden-vectors-v1",
+  "vectors": [
+    {
+      "name": "active_success",
+      "generationIdentity": "G-GOLDEN-ACTIVE",
+      "originAuthorityIdentity": "M01",
+      "signerKeyVersion": 1,
+      "trustBindingRevision": 10,
+      "authorityCanonicalBytesB64": "AQAAAA9HLUdPTERFTi1BQ1RJVkUBAAAAA00wMQEAAAAA",
+      "verificationContextBytesB64": "AQAAAANNMDEAAAAAAAAAAQAAAAAAAAAK",
+      "signatureRsB64": "X0V4u0k4X/6wVKfsVYJ2LoyjkYDjQS3gL7Hlqv64ePRi3KuDMx5KkIwvF/+WB4BLyVp5f3Ot/W2bnUU5Mqt6hw==",
+      "semanticDigestHex": "29a14e5a4a361b37b5c1bc43dcf9de459d6b712ac12836cf183dbb944bc3b061",
+      "signatureValid": true,
+      "trustMode": "active",
+      "expectedOutcome": "Success"
+    },
+    {
+      "name": "retired_verify_success",
+      "generationIdentity": "G-GOLDEN-HIST",
+      "originAuthorityIdentity": "M01",
+      "signerKeyVersion": 1,
+      "trustBindingRevision": 10,
+      "authorityCanonicalBytesB64": "AQAAAA1HLUdPTERFTi1ISVNUAQAAAANNMDEBAAAAAA==",
+      "verificationContextBytesB64": "AQAAAANNMDEAAAAAAAAAAQAAAAAAAAAK",
+      "signatureRsB64": "omgqQvbiCAp6QPT7n+a9LcaBjaji0TF/eZjMJNhM7RRdQq8FExn1ftOTNgMPUaIgIUkcorMLqpfMc5vfj08kcw==",
+      "semanticDigestHex": "21da47d6e520da39535f013e903ae1be8f8eb8645176deeea39724eb84e03b61",
+      "signatureValid": true,
+      "trustMode": "retired_with_inclusion",
+      "expectedOutcome": "Success",
+      "historicalInclusionProofB64": "AAAAAAA="
+    },
+    {
+      "name": "post_retirement_forgery_fail",
+      "generationIdentity": "G-GOLDEN-FORGED",
+      "originAuthorityIdentity": "M01",
+      "signerKeyVersion": 1,
+      "trustBindingRevision": 10,
+      "authorityCanonicalBytesB64": "AQAAAA9HLUdPTERFTi1GT1JHRUQBAAAAA00wMQEAAAAA",
+      "verificationContextBytesB64": "AQAAAANNMDEAAAAAAAAAAQAAAAAAAAAK",
+      "signatureRsB64": "5X0h9OLNzAXE72DOc15nz/cBscx9MmnD/LpI6bU9aZcLYQjOIqcEU1z6K5sRxcJjSQV74rfMsXDgWroC9PhrIA==",
+      "semanticDigestHex": "9134babeb744fbd53abff5b791955841bf591e73d593271175720b254b800d89",
+      "signatureValid": true,
+      "trustMode": "retired_without_inclusion",
+      "expectedOutcome": "VerifyFail",
+      "issuedAuthorityCanonicalBytesB64": "AQAAAA9HLUdPTERFTi1JU1NVRUQBAAAAA00wMQEAAAAA"
+    }
+  ]
+}

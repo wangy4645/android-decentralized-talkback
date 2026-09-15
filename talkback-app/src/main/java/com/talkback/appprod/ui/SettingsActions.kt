@@ -80,7 +80,10 @@ object SettingsActions {
     }
 
     fun stopService(context: Context) {
-        context.startService(
+        // Prefer foreground-service start so ACTION_STOP reaches an already-running
+        // TalkbackForegroundService on Android O+ (plain startService can be dropped).
+        ContextCompat.startForegroundService(
+            context,
             Intent(context, TalkbackForegroundService::class.java).apply {
                 action = TalkbackForegroundService.ACTION_STOP_SERVICE
             }

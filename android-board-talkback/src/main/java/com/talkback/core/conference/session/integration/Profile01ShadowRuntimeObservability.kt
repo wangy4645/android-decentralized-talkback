@@ -1,7 +1,10 @@
 package com.talkback.core.conference.session.integration
 
 import android.util.Log
+import com.talkback.core.conference.runtime.FrameAdmitDisposition
+import com.talkback.core.conference.session.JitterSlotDomainSnapshot
 import com.talkback.core.conference.session.MemberBindingFact
+import com.talkback.core.conference.session.PlayoutFunnelSnapshot
 import com.talkback.core.conference.session.SessionMediaRuntimeSnapshot
 
 /**
@@ -48,6 +51,28 @@ object Profile01ShadowRuntimeObservability {
     private val playoutCycleLoggedSessions = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
     private val playoutStarvationCounters =
         java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicLong>()
+    private val ingressFunnelCounters =
+        java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicLong>()
+    private val playoutFunnelCycleCounters =
+        java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicLong>()
+    private val lastSuccessfulFunnelSnapshots =
+        java.util.concurrent.ConcurrentHashMap<String, PlayoutFunnelSnapshot>()
+    private val starvationOnsetLoggedSessions = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+    private val rxAdmissionWindows =
+        java.util.concurrent.ConcurrentHashMap<String, RxAdmissionWindowAccumulator>()
+    private val rxAdmissionFirstAdmittedLogged =
+        java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+    private val rxAdmissionFirstRejectReasonLogged =
+        java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.ConcurrentHashMap<String, Boolean>>()
+
+    private class RxAdmissionWindowAccumulator {
+        var windowStartMs: Long = System.currentTimeMillis()
+        var admitted: Int = 0
+        var rejected: Int = 0
+        var keyMismatch: Int = 0
+        var aeadFail: Int = 0
+        var otherReject: Int = 0
+    }
 
     fun bindActiveSession(
         sessionId: String,
@@ -71,6 +96,14 @@ object Profile01ShadowRuntimeObservability {
         rxActivityLoggedSessions.remove(sessionId)
         playoutCycleLoggedSessions.remove(sessionId)
         playoutStarvationCounters.remove(sessionId)
+        ingressFunnelCounters.remove(sessionId)
+        playoutFunnelCycleCounters.remove(sessionId)
+        lastSuccessfulFunnelSnapshots.remove(sessionId)
+        starvationOnsetLoggedSessions.remove(sessionId)
+        flushRxAdmissionSummary(sessionId, force = true)
+        rxAdmissionWindows.remove(sessionId)
+        rxAdmissionFirstAdmittedLogged.remove(sessionId)
+        rxAdmissionFirstRejectReasonLogged.remove(sessionId)
     }
 
     fun logShadowPlayoutArmed(
@@ -151,10 +184,7 @@ object Profile01ShadowRuntimeObservability {
 
     fun maybeLogPlayoutBufferStarvation(
         sessionId: String,
-        tickMediaTimeMs: Long,
-        admittedCount: Int,
-        activeJitterSources: Int,
-        jitterBufferCount: Int,
+        funnel: PlayoutFunnelSnapshot,
         liveDecoders: Int,
     ) {
         val count =
@@ -162,23 +192,153 @@ object Profile01ShadowRuntimeObservability {
                 .computeIfAbsent(sessionId) { java.util.concurrent.atomic.AtomicLong(0L) }
                 .incrementAndGet()
         val first = count == 1L
+        if (first) {
+            maybeLogPlayoutFunnelStarvationOnset(sessionId, funnel, liveDecoders)
+        }
         if (!first && count % 50L != 0L) return
-        logPhase(
+        logPlayoutFunnelPhase(
             phase = "SHADOW_PLAYOUT_BUFFER_STARVATION",
             sessionId = sessionId,
-            conferenceId = activeConferenceId,
-            mediaKeyEpoch = activeMediaKeyEpoch,
-            fields =
+            funnel = funnel,
+            extra =
                 mapOf(
-                    "tickMediaTimeMs" to tickMediaTimeMs.toString(),
                     "starvationTicks" to count.toString(),
-                    "admittedCount" to admittedCount.toString(),
-                    "activeJitterSources" to activeJitterSources.toString(),
-                    "jitterBufferCount" to jitterBufferCount.toString(),
                     "liveDecoders" to liveDecoders.toString(),
                 ),
         )
     }
+
+    fun maybeLogIngressFunnel(
+        sessionId: String,
+        sourceIdentity: String,
+        mediaSlot: Long,
+        frameAdmit: FrameAdmitDisposition?,
+        jitter: JitterSlotDomainSnapshot?,
+    ) {
+        val count =
+            ingressFunnelCounters
+                .computeIfAbsent(sessionId) { java.util.concurrent.atomic.AtomicLong(0L) }
+                .incrementAndGet()
+        val first = count == 1L
+        if (!first && count % 25L != 0L) return
+        val fields =
+            mutableMapOf(
+                "ingressOrdinal" to count.toString(),
+                "mediaSlot" to mediaSlot.toString(),
+                "jitterOutcome" to (frameAdmit?.name ?: "null"),
+            )
+        jitter?.let { fields.putAll(jitterFields("jitter", it)) }
+        logPhase(
+            phase = "INGRESS_FUNNEL",
+            sessionId = sessionId,
+            conferenceId = activeConferenceId,
+            mediaKeyEpoch = activeMediaKeyEpoch,
+            moduleId = sourceIdentity,
+            fields = fields,
+        )
+    }
+
+    fun maybeLogPlayoutFunnelCycle(
+        sessionId: String,
+        funnel: PlayoutFunnelSnapshot,
+        liveDecoders: Int,
+        successfulPlayoutWrites: Long,
+        audioTrackOwner: String,
+    ) {
+        lastSuccessfulFunnelSnapshots[sessionId] = funnel
+        starvationOnsetLoggedSessions.remove(sessionId)
+        val count =
+            playoutFunnelCycleCounters
+                .computeIfAbsent(sessionId) { java.util.concurrent.atomic.AtomicLong(0L) }
+                .incrementAndGet()
+        val first = count == 1L
+        if (!first && count % 25L != 0L) return
+        logPlayoutFunnelPhase(
+            phase = "PLAYOUT_FUNNEL_CYCLE",
+            sessionId = sessionId,
+            funnel = funnel,
+            extra =
+                mapOf(
+                    "cycleOrdinal" to count.toString(),
+                    "liveDecoders" to liveDecoders.toString(),
+                    "successfulPlayoutWrites" to successfulPlayoutWrites.toString(),
+                    "audioTrackOwner" to audioTrackOwner,
+                ),
+        )
+    }
+
+    private fun maybeLogPlayoutFunnelStarvationOnset(
+        sessionId: String,
+        funnel: PlayoutFunnelSnapshot,
+        liveDecoders: Int,
+    ) {
+        if (starvationOnsetLoggedSessions.putIfAbsent(sessionId, true) != null) return
+        val prior = lastSuccessfulFunnelSnapshots[sessionId]
+        val fields =
+            mutableMapOf(
+                "liveDecoders" to liveDecoders.toString(),
+            )
+        fields.putAll(funnelSummaryFields("starvation", funnel))
+        prior?.let { fields.putAll(funnelSummaryFields("lastCycle", it)) }
+        logPhase(
+            phase = "PLAYOUT_FUNNEL_STARVATION_ONSET",
+            sessionId = sessionId,
+            conferenceId = activeConferenceId,
+            mediaKeyEpoch = activeMediaKeyEpoch,
+            fields = fields,
+        )
+    }
+
+    private fun logPlayoutFunnelPhase(
+        phase: String,
+        sessionId: String,
+        funnel: PlayoutFunnelSnapshot,
+        extra: Map<String, String> = emptyMap(),
+    ) {
+        val fields = mutableMapOf<String, String>()
+        fields.putAll(funnelSummaryFields("funnel", funnel))
+        fields.putAll(extra)
+        logPhase(
+            phase = phase,
+            sessionId = sessionId,
+            conferenceId = activeConferenceId,
+            mediaKeyEpoch = activeMediaKeyEpoch,
+            fields = fields,
+        )
+    }
+
+    private fun funnelSummaryFields(
+        prefix: String,
+        funnel: PlayoutFunnelSnapshot,
+    ): Map<String, String> {
+        val fields =
+            mutableMapOf(
+                "${prefix}TickMediaTimeMs" to funnel.tickMediaTimeMs.toString(),
+                "${prefix}PlayoutTargetSlot" to (funnel.playoutTargetSlot?.toString() ?: "null"),
+                "${prefix}ResolvedMixSlot" to (funnel.resolvedMixSlot?.toString() ?: "null"),
+                "${prefix}SelectedTopK" to funnel.selectedTopK.joinToString(",").ifEmpty { "none" },
+                "${prefix}ActiveJitterSources" to funnel.activeJitterSources.toString(),
+                "${prefix}AdmittedCount" to funnel.admittedCount.toString(),
+            )
+        funnel.perSource.forEachIndexed { index, source ->
+            val sourcePrefix = "${prefix}Source$index"
+            fields["${sourcePrefix}Id"] = source.sourceIdentity
+            fields.putAll(jitterFields(sourcePrefix, source))
+        }
+        return fields
+    }
+
+    private fun jitterFields(
+        prefix: String,
+        jitter: JitterSlotDomainSnapshot,
+    ): Map<String, String> =
+        mapOf(
+            "${prefix}NextExpectedSlot" to (jitter.nextExpectedSlot?.toString() ?: "null"),
+            "${prefix}BySlotSize" to jitter.bySlotSize.toString(),
+            "${prefix}EarliestBufferedSlot" to (jitter.earliestBufferedSlot?.toString() ?: "null"),
+            "${prefix}LatestBufferedSlot" to (jitter.latestBufferedSlot?.toString() ?: "null"),
+            "${prefix}Executable" to jitter.executable.toString(),
+        )
 
     fun logShadowPlayoutFailed(
         sessionId: String,
@@ -226,17 +386,103 @@ object Profile01ShadowRuntimeObservability {
         outcome: String,
         reason: String? = null,
     ) {
-        val fields =
-            if (reason == null) {
-                mapOf("outcome" to outcome)
-            } else {
-                mapOf("outcome" to outcome, "reason" to reason)
+        when (outcome) {
+            "ADMITTED" ->
+                if (rxAdmissionFirstAdmittedLogged.putIfAbsent(sessionId, true) == null) {
+                    logPhase(
+                        phase = "SHADOW_RX_ADMISSION",
+                        sessionId = sessionId,
+                        fields = mapOf("outcome" to outcome),
+                    )
+                }
+            "REJECTED" -> {
+                val reasonKey = reason ?: "UNKNOWN"
+                val perSession =
+                    rxAdmissionFirstRejectReasonLogged.computeIfAbsent(sessionId) {
+                        java.util.concurrent.ConcurrentHashMap()
+                    }
+                if (perSession.putIfAbsent(reasonKey, true) == null) {
+                    logPhase(
+                        phase = "SHADOW_RX_ADMISSION",
+                        sessionId = sessionId,
+                        fields = mapOf("outcome" to outcome, "reason" to reasonKey),
+                    )
+                }
             }
+            else ->
+                logPhase(
+                    phase = "SHADOW_RX_ADMISSION",
+                    sessionId = sessionId,
+                    fields = mapOf("outcome" to outcome),
+                )
+        }
+
+        val nowMs = System.currentTimeMillis()
+        val window =
+            rxAdmissionWindows.computeIfAbsent(sessionId) {
+                RxAdmissionWindowAccumulator().apply { windowStartMs = nowMs }
+            }
+        synchronized(window) {
+            when (outcome) {
+                "ADMITTED" -> window.admitted++
+                "REJECTED" -> {
+                    window.rejected++
+                    when (reason) {
+                        "sourceAdmissionKey48 mismatch" -> window.keyMismatch++
+                        "AEAD authentication or decryption failed" -> window.aeadFail++
+                        else -> window.otherReject++
+                    }
+                }
+            }
+            if (nowMs - window.windowStartMs >= RX_ADMISSION_SUMMARY_WINDOW_MS) {
+                emitRxAdmissionSummary(sessionId, window)
+                resetRxAdmissionWindow(window, nowMs)
+            }
+        }
+    }
+
+    private fun flushRxAdmissionSummary(
+        sessionId: String,
+        force: Boolean,
+    ) {
+        val window = rxAdmissionWindows[sessionId] ?: return
+        synchronized(window) {
+            if (!force && window.admitted == 0 && window.rejected == 0) return
+            emitRxAdmissionSummary(sessionId, window)
+            resetRxAdmissionWindow(window, System.currentTimeMillis())
+        }
+    }
+
+    private fun emitRxAdmissionSummary(
+        sessionId: String,
+        window: RxAdmissionWindowAccumulator,
+    ) {
+        if (window.admitted == 0 && window.rejected == 0) return
         logPhase(
-            phase = "SHADOW_RX_ADMISSION",
+            phase = "SHADOW_RX_ADMISSION_SUMMARY",
             sessionId = sessionId,
-            fields = fields,
+            fields =
+                mapOf(
+                    "windowMs" to RX_ADMISSION_SUMMARY_WINDOW_MS.toString(),
+                    "admitted" to window.admitted.toString(),
+                    "rejected" to window.rejected.toString(),
+                    "keyMismatch" to window.keyMismatch.toString(),
+                    "aeadFail" to window.aeadFail.toString(),
+                    "other" to window.otherReject.toString(),
+                ),
         )
+    }
+
+    private fun resetRxAdmissionWindow(
+        window: RxAdmissionWindowAccumulator,
+        nowMs: Long,
+    ) {
+        window.windowStartMs = nowMs
+        window.admitted = 0
+        window.rejected = 0
+        window.keyMismatch = 0
+        window.aeadFail = 0
+        window.otherReject = 0
     }
 
     fun logShadowRxFailed(
@@ -489,4 +735,6 @@ object Profile01ShadowRuntimeObservability {
         } catch (_: Throwable) {
         }
     }
+
+    private const val RX_ADMISSION_SUMMARY_WINDOW_MS = 1_000L
 }

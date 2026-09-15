@@ -56,6 +56,10 @@ class TalkbackSession(
     val participants: MutableMap<String, ParticipantState> = linkedMapOf()
     /** #180 F2: outbound GROUP_INVITE delivery evidence keyed by remote module id. */
     val outboundGroupInviteAttemptsByRemoteModule: MutableMap<String, OutboundGroupInviteAttempt> = linkedMapOf()
+    /** ADR-0057 GPLB: offer ↔ PC lineage bindings keyed by session|peer|offerLineageId. */
+    val groupOfferBindingsByKey: MutableMap<String, GroupOfferBinding> = linkedMapOf()
+    /** ADR-0057 GPLB: invite offerLineageId retained until answerer binding is recorded. */
+    val pendingGroupInviteOfferLineageByPeer: MutableMap<String, String> = linkedMapOf()
 
     var lastActiveMs: Long = System.currentTimeMillis()
     var accepted: Boolean = false

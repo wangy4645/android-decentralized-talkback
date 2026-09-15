@@ -470,6 +470,7 @@ class MainActivity : AppCompatActivity() {
             as? MeetingInviteFragment
         if (existing?.isAdded == true) {
             findViewById<View>(R.id.callOverlayContainer).isVisible = true
+            MeetingInviteUiObservability.log(invite.sessionId, "OVERLAY_VISIBLE")
             return
         }
         dismissCallOverlay()
@@ -478,10 +479,15 @@ class MainActivity : AppCompatActivity() {
             setReorderingAllowed(true)
             replace(
                 R.id.callOverlayContainer,
-                MeetingInviteFragment.newInstance(invite.hostLabel, invite.channelTitle),
+                MeetingInviteFragment.newInstance(
+                    invite.sessionId,
+                    invite.hostLabel,
+                    invite.channelTitle,
+                ),
                 MeetingInviteFragment.TAG_MEETING_INVITE
             )
         }
+        MeetingInviteUiObservability.log(invite.sessionId, "OVERLAY_VISIBLE")
     }
 
     private fun dismissMeetingInviteOverlay() {

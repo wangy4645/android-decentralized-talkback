@@ -1,18 +1,28 @@
 package com.talkback.core.session.failure
 
+import com.talkback.core.session.ConferenceNativeExecutionDomain
 import com.talkback.core.session.ConferenceSrdNativeDomainObservability
 import java.util.concurrent.ConcurrentHashMap
 
 /**
  * PR-A5: maps B2-1 / SRD observation facts into the existing CFC-1 PARTIAL pipeline.
  *
- * Consumes facts only — does not redefine lease ownership, admission, or domain lifecycle.
+ * B1: Scenario E EDGE_FAILED also creates edge recovery intent (control plane only).
  */
 class ConferenceFailureRuntimeWiring(
     private val clock: ConferenceFailureTelemetryPipeline.Clock =
         ConferenceFailureTelemetryPipeline.systemClock,
+    domainSnapshotProvider: () -> ConferenceNativeExecutionDomain.HolderSnapshot? = { null },
     private val logLine: (String) -> Unit = {},
+    recoveryIntentService: EdgeSrdRecoveryIntentService? = null,
 ) {
+
+    private val recoveryIntents =
+        recoveryIntentService ?: EdgeSrdRecoveryIntentService(
+            domainSnapshotProvider = domainSnapshotProvider,
+            clock = { clock.nowMs() },
+            logLine = logLine,
+        )
 
     private val terminalsBySession =
         ConcurrentHashMap<String, ConcurrentHashMap<String, ConferenceFailureTerminal>>()
@@ -20,13 +30,17 @@ class ConferenceFailureRuntimeWiring(
     fun terminalsForSession(sessionId: String): Map<String, ConferenceFailureTerminal> =
         terminalsBySession[sessionId]?.toMap() ?: emptyMap()
 
+    fun recoveryIntentsForSession(sessionId: String): List<EdgeSrdRecoveryIntent> =
+        recoveryIntents.intentsForSession(sessionId)
+
     fun clearSession(sessionId: String) {
+        recoveryIntents.clearSession(sessionId)
         terminalsBySession.remove(sessionId)
     }
 
     /**
      * Scenario D path: impact edge saw LEASE_BUSY with known holder (B2-1 fact).
-     * LEASE_BUSY alone is not causeFact — holder attribution becomes LEASE_HELD_BY_CAUSE.
+     * No B1 recovery intent on impact or cause via this path.
      */
     fun onLeaseBusy(
         sessionId: String,
@@ -78,6 +92,9 @@ class ConferenceFailureRuntimeWiring(
         edgeKey: String,
         meshGeneration: Long,
         pcGeneration: Long? = null,
+        conferenceGeneration: Long? = null,
+        offerLineageId: String? = null,
+        realizationAttemptId: String? = null,
         srdTimeout: Boolean = false,
         hangingObserved: Boolean = true,
         edgeLocalFailure: Boolean = false,
@@ -99,6 +116,16 @@ class ConferenceFailureRuntimeWiring(
         val result = ConferenceFailureTelemetryPipeline.emitScenarioE(obs, clock) ?: return
         store(sessionId, moduleId, result.terminal)
         result.auditLines.forEach(logLine)
+        recoveryIntents.onScenarioEdgeFailed(
+            EdgeSrdRecoveryTrigger(
+                terminal = result.terminal,
+                remoteModuleId = moduleId,
+                conferenceGeneration = conferenceGeneration,
+                offerLineageId = offerLineageId,
+                realizationAttemptId = realizationAttemptId,
+                causeFact = causeFactFromObservation(obs),
+            )
+        )
     }
 
     private fun store(
@@ -110,4 +137,13 @@ class ConferenceFailureRuntimeWiring(
         terminalsBySession
             .getOrPut(sessionId) { ConcurrentHashMap() }[moduleId] = terminal
     }
+
+    private fun causeFactFromObservation(obs: ConferenceFailureObservation): String =
+        when {
+            obs.srdTimeoutObserved -> "SRD_TIMEOUT"
+            obs.hangingObserved -> "HANGING_OBSERVED"
+            obs.edgeLocalFailureObserved -> "EDGE_LOCAL_FAILURE"
+            obs.negotiationStuckObserved -> "NEGOTIATION_STUCK"
+            else -> "EDGE_FAILED"
+        }
 }

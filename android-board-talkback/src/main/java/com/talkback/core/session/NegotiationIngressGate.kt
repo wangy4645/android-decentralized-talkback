@@ -39,7 +39,11 @@ internal object NegotiationIngressGate {
         SignalType.FLOOR_DENY,
         SignalType.FLOOR_PREEMPTED,
         SignalType.FLOOR_RELEASE,
-        SignalType.HANGUP -> true
+        SignalType.HANGUP,
+        SignalType.FACT_REQUEST,
+        SignalType.FACT_RESPONSE_CANDIDATE,
+        SignalType.FACT_RESPONSE_INSUFFICIENT,
+        SignalType.CONFERENCE_SIGNED_FACT -> true
     }
 
     /**

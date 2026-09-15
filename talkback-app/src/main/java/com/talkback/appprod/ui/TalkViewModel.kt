@@ -649,6 +649,9 @@ class TalkViewModel(
         viewModelScope.launch(Dispatchers.Default) {
             val config = configStore.load()
             val meetingConfig = meetingSessionConfig(config)
+            manager.pendingConferenceInvite(meetingConfig.defaultChannelId)?.sessionId?.let { sessionId ->
+                MeetingInviteUiObservability.log(sessionId, "ACCEPT_DISPATCHED")
+            }
             userSelectedTab = UserSelectedTab.MEETING
             lastSyncedMeetingPreferred = true
             manager.setMeetingPreferred(true, meetingConfig.defaultChannelId)

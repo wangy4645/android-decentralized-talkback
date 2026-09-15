@@ -59,9 +59,9 @@ class Profile01ShadowRca5ConcurrencyReproTest {
                 wiringProvider = { wiring },
                 hasSession = { wiring.hasSession(sessionId) },
                 sessionAnchorMs = { wiring.sessionPlayoutAnchorMs(sessionId) },
-                resolveBufferedSlot = { w, sid ->
+                resolveBufferedSlot = { w, sid, tickMediaTimeMs ->
                     try {
-                        w.resolveEarliestBufferedMixSlot(sid)
+                        w.resolvePlayoutMixSlot(sid, tickMediaTimeMs)
                     } catch (t: Throwable) {
                         recordCme(cmeStacks, t)
                         throw t

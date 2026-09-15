@@ -48,6 +48,65 @@ class ConferenceFailureRuntimeWiringTest {
     }
 
     @Test
+    fun srdTimeout_createsB1RecoveryIntent() {
+        val domain = com.talkback.core.session.ConferenceNativeExecutionDomain()
+        domain.requestLease("sess-1|M03")
+        val lines = mutableListOf<String>()
+        val wiring = ConferenceFailureRuntimeWiring(
+            domainSnapshotProvider = { domain.currentSnapshot() },
+            logLine = { lines += it },
+        )
+        wiring.onSelfAttributedHang(
+            sessionId = "sess-1",
+            moduleId = "M03",
+            edgeKey = "sess-1|M03",
+            meshGeneration = 1L,
+            pcGeneration = 4L,
+            conferenceGeneration = 1L,
+            offerLineageId = "CR4",
+            realizationAttemptId = "RA4",
+            srdTimeout = true,
+            hangingObserved = true,
+        )
+        val intents = wiring.recoveryIntentsForSession("sess-1")
+        assertEquals(1, intents.size)
+        assertEquals(EdgeSrdRecoveryState.WAITING_FOR_SAFE_ADMISSION, intents.single().state)
+        assertTrue(lines.any { it.startsWith("RECOVERY_REQUESTED") })
+        assertTrue(lines.any { it.startsWith("RECOVERY_WAITING_FOR_DOMAIN") })
+    }
+
+    @Test
+    fun leaseBusy_doesNotCreateRecoveryIntent() {
+        val lines = mutableListOf<String>()
+        val wiring = ConferenceFailureRuntimeWiring(logLine = { lines += it })
+        wiring.onLeaseBusy(
+            sessionId = "sess-1",
+            impactModuleId = "M04",
+            impactEdgeKey = "sess-1|M04",
+            holderEdgeKey = "sess-1|M02",
+            meshGeneration = 1L,
+        )
+        assertTrue(wiring.recoveryIntentsForSession("sess-1").isEmpty())
+        assertTrue(lines.none { it.startsWith("RECOVERY_REQUESTED") })
+    }
+
+    @Test
+    fun clearSession_terminalsRecoveryIntent() {
+        val lines = mutableListOf<String>()
+        val wiring = ConferenceFailureRuntimeWiring(logLine = { lines += it })
+        wiring.onSelfAttributedHang(
+            sessionId = "sess-1",
+            moduleId = "M03",
+            edgeKey = "sess-1|M03",
+            meshGeneration = 1L,
+            srdTimeout = true,
+        )
+        wiring.clearSession("sess-1")
+        assertTrue(wiring.recoveryIntentsForSession("sess-1").isEmpty())
+        assertTrue(lines.any { it.startsWith("RECOVERY_TERMINAL") })
+    }
+
+    @Test
     fun leaseBusyAloneWithoutHolder_doesNotStore() {
         val wiring = ConferenceFailureRuntimeWiring()
         // Invalid holder encoding — adapter must no-op rather than invent cause

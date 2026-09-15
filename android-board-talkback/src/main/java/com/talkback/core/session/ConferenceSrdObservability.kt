@@ -12,9 +12,22 @@ object ConferenceSrdObservability {
         val pcGeneration: Long,
         val conferenceGeneration: Long? = null,
         val edgeKey: String = ConferenceMediaJniAffinity.edgeKey(sessionId, remoteModuleId),
-        val executorName: String = "tb-edge-$edgeKey"
+        val executorName: String = "tb-edge-$edgeKey",
+        val offerLineageId: String? = null,
+        val realizationAttemptId: String? = null,
+        val hostLocalOfferLineageId: String? = null,
+        val lineageCorrelation: String? = null
     ) {
         val edgeLabel: String get() = "$localModuleId->$remoteModuleId"
+
+        fun lineageFields(): String = buildString {
+            append(" offerLineageId=")
+            append(offerLineageId?.takeIf { it.isNotBlank() } ?: ConferenceRealizationLineage.UNKNOWN)
+            append(" realizationAttemptId=")
+            append(realizationAttemptId?.takeIf { it.isNotBlank() } ?: ConferenceRealizationLineage.UNKNOWN)
+            hostLocalOfferLineageId?.let { append(" hostLocalOfferLineageId=").append(it) }
+            lineageCorrelation?.let { append(" lineageCorrelation=").append(it) }
+        }
     }
 
     fun formatDispatch(ctx: Context): String = formatEvent("SRD_DISPATCH", ctx)
@@ -38,6 +51,7 @@ object ConferenceSrdObservability {
             append(" executor=").append(ctx.executorName)
             append(" thread=").append(thread.name)
             append(" tid=").append(thread.id)
+            append(ctx.lineageFields())
         }
     }
 }

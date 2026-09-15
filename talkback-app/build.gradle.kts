@@ -13,11 +13,14 @@ android {
         targetSdk = 34
         versionCode = 1
         versionName = "1.0.0"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
+            // Field / RC smoke: sign release with debug keystore so assembleRelease is installable on lab devices.
+            signingConfig = signingConfigs.getByName("debug")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -42,6 +45,21 @@ android {
             isIncludeAndroidResources = true
         }
     }
+
+    val prodAar = rootProject.file("libs/talkback-production-stream-webrtc-android.aar")
+    val pnsrdInstAar = rootProject.file("libs/pnsrd-inst-1-stream-webrtc-android.aar")
+    val webrtcAar = when {
+        prodAar.exists() -> prodAar
+        pnsrdInstAar.exists() -> pnsrdInstAar
+        else -> null
+    }
+    if (webrtcAar != null) {
+        sourceSets {
+            getByName("main") {
+                jniLibs.srcDir(layout.buildDirectory.dir("webrtc-packaged-jni"))
+            }
+        }
+    }
 }
 
 dependencies {
@@ -58,4 +76,27 @@ dependencies {
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.robolectric:robolectric:4.14.1")
+
+    androidTestImplementation(project(":android-board-talkback"))
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test:rules:1.6.1")
+}
+
+val prodAarForJni = rootProject.file("libs/talkback-production-stream-webrtc-android.aar")
+val pnsrdInstAarForJni = rootProject.file("libs/pnsrd-inst-1-stream-webrtc-android.aar")
+val packagedWebrtcAar = when {
+    prodAarForJni.exists() -> prodAarForJni
+    pnsrdInstAarForJni.exists() -> pnsrdInstAarForJni
+    else -> null
+}
+if (packagedWebrtcAar != null) {
+    val extractPackagedWebrtcJni = tasks.register<Copy>("extractPackagedWebrtcJni") {
+        from(zipTree(packagedWebrtcAar)) {
+            include("jni/arm64-v8a/**")
+            include("jni/armeabi-v7a/**")
+        }
+        into(layout.buildDirectory.dir("webrtc-packaged-jni"))
+    }
+    tasks.named("preBuild") { dependsOn(extractPackagedWebrtcJni) }
 }

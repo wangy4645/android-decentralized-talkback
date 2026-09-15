@@ -1,6 +1,7 @@
 package com.talkback.core.webrtc
 
 import android.content.Context
+import com.talkback.core.media.MediaObservabilityLog
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -13,26 +14,37 @@ class ModuleMediaEngineFactory(
 ) {
     private val engines = ConcurrentHashMap<String, WebRtcAudioEngine>()
 
-    fun getOrCreate(remoteModuleId: String): WebRtcAudioEngine {
-        return engines.getOrPut(remoteModuleId) {
+    fun getOrCreate(remoteModuleId: String): WebRtcAudioEngine =
+        getOrCreateDetailed(remoteModuleId).engine
+
+    fun getOrCreateDetailed(remoteModuleId: String): EngineFactoryProvision {
+        var factoryHit = FactoryHit.REUSE
+        val engine = engines.getOrPut(remoteModuleId) {
+            factoryHit = FactoryHit.NEW
             if (useStub) {
-                StubWebRtcAudioEngine()
+                StubWebRtcAudioEngine(observedModuleId = remoteModuleId)
             } else {
-                RealWebRtcAudioEngine(context) { state ->
+                RealWebRtcAudioEngine(context, observedModuleId = remoteModuleId) { state ->
                     onIceConnectionState?.invoke(remoteModuleId, state)
                 }
             }
         }
+        return EngineFactoryProvision(engine, factoryHit)
     }
 
     fun get(remoteModuleId: String): WebRtcAudioEngine? = engines[remoteModuleId]
 
     fun release(remoteModuleId: String) {
-        engines.remove(remoteModuleId)?.release()
+        MediaObservabilityLog.releaseEnter(remoteModuleId)
+        val engine = engines.remove(remoteModuleId)
+        if (engine == null) {
+            MediaObservabilityLog.pcCloseSkipped(remoteModuleId, "factoryMiss")
+            return
+        }
+        engine.release()
     }
 
     fun releaseAll() {
-        engines.values.forEach { runCatching { it.release() } }
-        engines.clear()
+        engines.keys.toList().forEach { release(it) }
     }
 }

@@ -3,7 +3,10 @@ package com.talkback.core.media
 import com.talkback.core.webrtc.MediaBearerScope
 import com.talkback.core.webrtc.ModuleMediaEngineFactory
 import com.talkback.core.webrtc.StubWebRtcAudioEngine
+import com.talkback.core.media.MeshMediaAsyncRelease
+import com.talkback.core.media.MeshMediaCoordinatorDeferral
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertNull
@@ -122,6 +125,263 @@ class MediaSessionManagerTest {
 
         assertEquals(0, manager.mediaSessionReuseCount())
         assertEquals("CHECKING", manager.getState("M02")!!.iceState)
+    }
+
+    private fun provisionConferenceOnCoordinator(
+        manager: MediaSessionManager,
+        coordinator: java.util.concurrent.ExecutorService,
+        moduleId: String
+    ) {
+        val ready = java.util.concurrent.CountDownLatch(1)
+        coordinator.execute {
+            manager.requestEngine(moduleId, MediaBearerScope.CONFERENCE, sessionId = "setup", onReady = {
+                ready.countDown()
+            })
+        }
+        org.junit.Assert.assertTrue(ready.await(2, java.util.concurrent.TimeUnit.SECONDS))
+    }
+
+    @Test
+    fun create_conferenceToGroup_usesAsyncReleaseWithoutBlockingCaller() {
+        val coordinator = java.util.concurrent.Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, "talkback-coordinator")
+        }
+        val releaseStarted = java.util.concurrent.CountDownLatch(1)
+        val releaseHold = java.util.concurrent.CountDownLatch(1)
+        val groupReady = java.util.concurrent.CountDownLatch(1)
+        manager.installMeshMediaCoordinatorDeferral(
+            MeshMediaCoordinatorDeferral { block -> coordinator.execute { block() } }
+        )
+        manager.installAsyncMeshMediaRelease(
+            MeshMediaAsyncRelease { _, _, origin, releaseAction, onReleased ->
+                Thread {
+                    if (origin == "mediaSessionProvision") {
+                        releaseAction()
+                        coordinator.execute { onReleased(true) }
+                    } else {
+                        releaseStarted.countDown()
+                        releaseHold.await(5, java.util.concurrent.TimeUnit.SECONDS)
+                        releaseAction()
+                        coordinator.execute { onReleased(true) }
+                    }
+                }.apply { isDaemon = true }.start()
+            }
+        )
+        provisionConferenceOnCoordinator(manager, coordinator, "M02")
+        manager.onIceStateChanged("M02", "CONNECTED")
+
+        val caller = Thread {
+            manager.requestEngine("M02", MediaBearerScope.GROUP, sessionId = "grp:CH-01", onReady = {
+                groupReady.countDown()
+            })
+        }
+        caller.start()
+        Thread.sleep(100)
+        assertFalse(releaseStarted.await(200, java.util.concurrent.TimeUnit.MILLISECONDS))
+        manager.close("M02", sessionId = "302fb48d")
+        assertTrue(releaseStarted.await(1, java.util.concurrent.TimeUnit.SECONDS))
+        assertTrue(groupReady.await(200, java.util.concurrent.TimeUnit.MILLISECONDS).not())
+        releaseHold.countDown()
+        caller.join(2_000)
+        assertTrue(groupReady.await(1, java.util.concurrent.TimeUnit.SECONDS))
+        assertEquals(MediaBearerScope.GROUP, manager.getState("M02")!!.scope)
+        coordinator.shutdownNow()
+    }
+
+    @Test
+    fun create_conferenceToGroup_provisionsOnNextCoordinatorTurn() {
+        val coordinator = java.util.concurrent.Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, "talkback-coordinator")
+        }
+        val releaseTurn = java.util.concurrent.atomic.AtomicInteger(0)
+        val provisionTurn = java.util.concurrent.atomic.AtomicInteger(0)
+        val turnCounter = java.util.concurrent.atomic.AtomicInteger(0)
+        manager.installMeshMediaCoordinatorDeferral(
+            MeshMediaCoordinatorDeferral { block -> coordinator.execute { block() } }
+        )
+        manager.installAsyncMeshMediaRelease(
+            MeshMediaAsyncRelease { _, _, origin, releaseAction, onReleased ->
+                Thread {
+                    if (origin == "mediaSessionProvision") {
+                        releaseAction()
+                        coordinator.execute { onReleased(true) }
+                    } else {
+                        releaseAction()
+                        coordinator.execute {
+                            val turn = turnCounter.incrementAndGet()
+                            releaseTurn.set(turn)
+                            onReleased(true)
+                            assertTrue(
+                                "provision must not run on release coordinator turn",
+                                provisionTurn.get() == 0 || provisionTurn.get() > turn
+                            )
+                        }
+                    }
+                }.apply { isDaemon = true }.start()
+            }
+        )
+        provisionConferenceOnCoordinator(manager, coordinator, "M02")
+        manager.onIceStateChanged("M02", "CONNECTED")
+
+        val groupReady = java.util.concurrent.CountDownLatch(1)
+        manager.requestEngine("M02", MediaBearerScope.GROUP, sessionId = "grp:CH-01", onReady = {
+            provisionTurn.set(turnCounter.incrementAndGet())
+            groupReady.countDown()
+        })
+        manager.close("M02", sessionId = "302fb48d")
+        assertTrue(groupReady.await(2, java.util.concurrent.TimeUnit.SECONDS))
+        assertTrue(releaseTurn.get() > 0)
+        assertTrue(provisionTurn.get() > releaseTurn.get())
+        coordinator.shutdownNow()
+    }
+
+    @Test
+    fun create_conferenceToGroup_releaseFailed_doesNotProvision() {
+        val coordinator = java.util.concurrent.Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, "talkback-coordinator")
+        }
+        val groupReady = java.util.concurrent.CountDownLatch(1)
+        manager.installMeshMediaCoordinatorDeferral(
+            MeshMediaCoordinatorDeferral { block -> coordinator.execute { block() } }
+        )
+        manager.installAsyncMeshMediaRelease(
+            MeshMediaAsyncRelease { _, _, origin, releaseAction, onReleased ->
+                if (origin == "mediaSessionProvision") {
+                    Thread {
+                        releaseAction()
+                        coordinator.execute { onReleased(true) }
+                    }.apply { isDaemon = true }.start()
+                } else {
+                    coordinator.execute { onReleased(false) }
+                }
+            }
+        )
+        provisionConferenceOnCoordinator(manager, coordinator, "M02")
+        manager.onIceStateChanged("M02", "CONNECTED")
+        manager.close("M02", sessionId = "302fb48d")
+
+        manager.requestEngine("M02", MediaBearerScope.GROUP, sessionId = "grp:CH-01", onReady = {
+            groupReady.countDown()
+        })
+        assertTrue(groupReady.await(500, java.util.concurrent.TimeUnit.MILLISECONDS).not())
+        assertNull(manager.getState("M02"))
+        val snapshot = manager.engineOwnershipGateForTest().stateSnapshot("M02")
+        assertEquals(EngineOwnershipGate.Owner.CONFERENCE_EDGE, snapshot?.first)
+        assertEquals(EngineOwnershipGate.State.FAILED, snapshot?.second)
+        coordinator.shutdownNow()
+    }
+
+    @Test
+    fun create_conferenceToGroup_defersReuseUntilConferenceReleased() {
+        val coordinator = java.util.concurrent.Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, "talkback-coordinator")
+        }
+        val groupReady = java.util.concurrent.CountDownLatch(1)
+        val reuseReleaseAttempted = java.util.concurrent.atomic.AtomicBoolean(false)
+        manager.installMeshMediaCoordinatorDeferral(
+            MeshMediaCoordinatorDeferral { block -> coordinator.execute { block() } }
+        )
+        manager.installAsyncMeshMediaRelease(
+            MeshMediaAsyncRelease { _, _, origin, releaseAction, onReleased ->
+                Thread {
+                    if (origin == "mediaSessionProvision") {
+                        releaseAction()
+                        coordinator.execute { onReleased(true) }
+                    } else {
+                        if (origin == "mediaSessionReuse") {
+                            reuseReleaseAttempted.set(true)
+                        }
+                        releaseAction()
+                        coordinator.execute { onReleased(true) }
+                    }
+                }.apply { isDaemon = true }.start()
+            }
+        )
+        provisionConferenceOnCoordinator(manager, coordinator, "M02")
+        manager.onIceStateChanged("M02", "CONNECTED")
+
+        manager.requestEngine("M02", MediaBearerScope.GROUP, sessionId = "grp:CH-01", onReady = {
+            groupReady.countDown()
+        })
+        Thread.sleep(100)
+        assertFalse(reuseReleaseAttempted.get())
+
+        manager.close("M02", sessionId = "302fb48d")
+        assertTrue(groupReady.await(2, java.util.concurrent.TimeUnit.SECONDS))
+        assertTrue(reuseReleaseAttempted.get())
+        coordinator.shutdownNow()
+    }
+
+    @Test
+    fun hangupBarrier_waitsForConferenceReleaseBeforeCallback() {
+        val coordinator = java.util.concurrent.Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, "talkback-coordinator")
+        }
+        val barrierComplete = java.util.concurrent.CountDownLatch(1)
+        var barrierResult = false
+        val releaseHold = java.util.concurrent.CountDownLatch(1)
+        manager.installMeshMediaCoordinatorDeferral(
+            MeshMediaCoordinatorDeferral { block -> coordinator.execute { block() } }
+        )
+        manager.installAsyncMeshMediaRelease(
+            MeshMediaAsyncRelease { _, _, origin, releaseAction, onReleased ->
+                Thread {
+                    if (origin == "mediaSessionProvision") {
+                        releaseAction()
+                        coordinator.execute { onReleased(true) }
+                    } else if (origin == "mediaSessionClose") {
+                        releaseHold.await(5, java.util.concurrent.TimeUnit.SECONDS)
+                        releaseAction()
+                        coordinator.execute { onReleased(true) }
+                    } else {
+                        releaseAction()
+                        coordinator.execute { onReleased(true) }
+                    }
+                }.apply { isDaemon = true }.start()
+            }
+        )
+        provisionConferenceOnCoordinator(manager, coordinator, "M02")
+        manager.onIceStateChanged("M02", "CONNECTED")
+        manager.registerHangupMediaBarrier(listOf("M02")) { success ->
+            barrierResult = success
+            barrierComplete.countDown()
+        }
+        manager.close("M02", sessionId = "302fb48d")
+        assertTrue(barrierComplete.await(200, java.util.concurrent.TimeUnit.MILLISECONDS).not())
+        releaseHold.countDown()
+        assertTrue(barrierComplete.await(2, java.util.concurrent.TimeUnit.SECONDS))
+        assertTrue(barrierResult)
+        coordinator.shutdownNow()
+    }
+
+    @Test
+    fun admitConferenceRelease_schedulesImmediatelyWithoutEdgeDispatch() {
+        val coordinator = java.util.concurrent.Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, "talkback-coordinator")
+        }
+        val releaseScheduled = java.util.concurrent.CountDownLatch(1)
+        manager.installMeshMediaCoordinatorDeferral(
+            MeshMediaCoordinatorDeferral { block -> coordinator.execute { block() } }
+        )
+        manager.installAsyncMeshMediaRelease(
+            MeshMediaAsyncRelease { _, _, origin, releaseAction, onReleased ->
+                if (origin == "mediaSessionProvision") {
+                    Thread {
+                        releaseAction()
+                        coordinator.execute { onReleased(true) }
+                    }.apply { isDaemon = true }.start()
+                } else {
+                    releaseScheduled.countDown()
+                }
+            }
+        )
+        provisionConferenceOnCoordinator(manager, coordinator, "M02")
+        manager.onIceStateChanged("M02", "CONNECTED")
+
+        manager.admitConferenceRelease("M02", sessionId = "302fb48d", origin = "releaseSessionMedia")
+
+        assertTrue(releaseScheduled.await(500, java.util.concurrent.TimeUnit.MILLISECONDS))
+        coordinator.shutdownNow()
     }
 
     @Test

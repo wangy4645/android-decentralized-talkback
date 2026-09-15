@@ -21,6 +21,7 @@ class ConferenceSrdObservabilityTest {
         assertTrue(line.contains("edge=M01->M04"))
         assertTrue(line.contains("remote=M04"))
         assertTrue(line.contains("pcGeneration=4"))
+        assertTrue(line.contains("offerLineageId=OFFER_LINEAGE_UNKNOWN"))
         assertTrue(line.contains("executor=tb-edge-sess-1|M04"))
     }
 
