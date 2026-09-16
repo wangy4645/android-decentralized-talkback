@@ -11,15 +11,16 @@ android {
         applicationId = "com.talkback.appprod"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 100001
+        versionName = "1.0.0-rc.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
-            // Field / RC smoke: sign release with debug keystore so assembleRelease is installable on lab devices.
+            // RC engineering release: variant=release, signing=LAB_NON_PRODUCTION (debug keystore).
+            // release build != production-signed build; production signing frozen at GA 1.0.0.
             signingConfig = signingConfigs.getByName("debug")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
