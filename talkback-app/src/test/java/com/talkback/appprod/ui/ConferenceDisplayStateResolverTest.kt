@@ -91,7 +91,7 @@ class ConferenceDisplayStateResolverTest {
     }
 
     @Test
-    fun healthNotOnline_notLive() {
+    fun healthNotOnline_channelReady_isLive() {
         val display = ConferenceDisplayStateResolver.resolve(
             lifecycle = ConferenceLifecycleFacts(
                 conferenceActive = true,
@@ -104,22 +104,21 @@ class ConferenceDisplayStateResolverTest {
                 recoveryInFlightDiagnostic = false
             )
         )
-        assertFalse(display.live)
-        assertTrue(display.mediaConnecting)
-        assertTrue(display.showConnectingPanel)
-        assertFalse(display.showLivePanel)
-        assertEquals(ConferenceDisplayPhase.MEDIA_CONNECTING, display.phase)
-        assertEquals(ConferenceStatusPillKind.CONNECTING, display.statusPill)
+        assertTrue(display.live)
+        assertTrue(display.showLivePanel)
+        assertFalse(display.showConnectingPanel)
+        assertEquals(ConferenceDisplayPhase.LIVE, display.phase)
+        assertEquals(ConferenceStatusPillKind.LIVE, display.statusPill)
     }
 
     @Test
-    fun conferenceExists_channelReady_notMediaUsable_isConnecting() {
+    fun conferenceActive_channelNotReady_isConnecting() {
         val display = ConferenceDisplayStateResolver.resolve(
             lifecycle = ConferenceLifecycleFacts(
                 conferenceActive = true,
                 runtimePhase = ConferenceRuntimePhase.CONNECTING
             ),
-            connectivity = ConferenceConnectivityFacts(channelReady = true),
+            connectivity = ConferenceConnectivityFacts(channelReady = false),
             healthUi = ConferenceHealthUiProjection(
                 roomFacing = ConferenceRoomFacing.NOT_ONLINE,
                 l4RoomState = ConferenceL4RoomState.NOT_ESTABLISHED,
@@ -149,7 +148,46 @@ class ConferenceDisplayStateResolverTest {
     }
 
     @Test
-    fun l4RoomDegraded_doesNotOverrideConnectingChrome() {
+    fun overlayReturn_activeSessionStillReady_isLive() {
+        val display = ConferenceDisplayStateResolver.resolve(
+            lifecycle = ConferenceLifecycleFacts(
+                conferenceActive = true,
+                conferenceMode = true,
+                runtimePhase = ConferenceRuntimePhase.ACTIVE
+            ),
+            connectivity = ConferenceConnectivityFacts(
+                channelReady = true,
+                awaitingRejoin = false
+            ),
+            healthUi = ConferenceHealthUiProjection(
+                roomFacing = ConferenceRoomFacing.NOT_ONLINE,
+                l4RoomState = ConferenceL4RoomState.NOT_ESTABLISHED,
+                recoveryInFlightDiagnostic = false
+            )
+        )
+        assertTrue(display.live)
+        assertTrue(display.timerEligible)
+        assertFalse(display.showConnectingPanel)
+        assertEquals(ConferenceStatusPillKind.LIVE, display.statusPill)
+    }
+
+    @Test
+    fun noActiveSession_isNotLive() {
+        val display = ConferenceDisplayStateResolver.resolve(
+            lifecycle = ConferenceLifecycleFacts(
+                conferenceActive = false,
+                conferenceMode = false
+            ),
+            connectivity = ConferenceConnectivityFacts(channelReady = true)
+        )
+        assertFalse(display.live)
+        assertFalse(display.timerEligible)
+        assertEquals(ConferenceDisplayPhase.INACTIVE, display.phase)
+        assertEquals(ConferenceStatusPillKind.INACTIVE, display.statusPill)
+    }
+
+    @Test
+    fun l4RoomDegraded_channelReady_staysLive() {
         val display = ConferenceDisplayStateResolver.resolve(
             lifecycle = ConferenceLifecycleFacts(
                 conferenceActive = true,
@@ -165,9 +203,9 @@ class ConferenceDisplayStateResolverTest {
                 recoveryInFlightDiagnostic = true,
             ),
         )
-        assertFalse(display.live)
-        assertTrue(display.mediaConnecting)
-        assertEquals(ConferenceStatusPillKind.CONNECTING, display.statusPill)
+        assertTrue(display.live)
+        assertFalse(display.mediaConnecting)
+        assertEquals(ConferenceStatusPillKind.LIVE, display.statusPill)
     }
 
     @Test

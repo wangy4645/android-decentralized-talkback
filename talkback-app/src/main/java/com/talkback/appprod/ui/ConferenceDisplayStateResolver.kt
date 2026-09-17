@@ -37,6 +37,7 @@ data class ConferenceLifecycleFacts(
 )
 
 data class ConferenceConnectivityFacts(
+    /** For CONFERENCE, coordinator [isChannelMediaReady] projects [isConferenceUiReady]. */
     val channelReady: Boolean,
     val channelConnecting: Boolean = false,
     val reconnecting: Boolean = false,
@@ -90,11 +91,10 @@ object ConferenceDisplayStateResolver {
                         lifecycle.runtimePhase == ConferenceRuntimePhase.RECOVERING
                     )
         }
-        val live = if (healthUi != null) {
-            lifecycle.conferenceActive && healthUi.roomOnline && !awaitingRejoin
-        } else {
-            lifecycle.conferenceActive && connectivity.channelReady && !awaitingRejoin
-        }
+        // Live admission: conference session + UI-ready channel only. L4 roomOnline is health/diagnostic.
+        val live = lifecycle.conferenceActive &&
+            connectivity.channelReady &&
+            !awaitingRejoin
         val mediaConnecting = lifecycle.conferenceActive && !live && !awaitingRejoin
 
         val phase = when {

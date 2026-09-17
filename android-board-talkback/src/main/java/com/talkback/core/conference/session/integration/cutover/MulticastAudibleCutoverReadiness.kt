@@ -2,6 +2,7 @@ package com.talkback.core.conference.session.integration.cutover
 
 import com.talkback.core.conference.session.ConferenceSessionMediaBridge
 import com.talkback.core.conference.session.ConferenceSessionMediaCoordinatorDelegate
+import com.talkback.core.conference.session.integration.Profile01ShadowMulticastReceiveSeam
 import com.talkback.core.conference.session.integration.Profile01ShadowPlayoutClockSeam
 
 /**
@@ -18,6 +19,8 @@ data class MulticastAudibleCutoverReadiness(
             localModuleId: String,
             playoutSeam: Profile01ShadowPlayoutClockSeam? =
                 ConferenceSessionMediaCoordinatorDelegate.profile01ShadowPlayoutClockSeam,
+            receiveSeam: Profile01ShadowMulticastReceiveSeam? =
+                ConferenceSessionMediaCoordinatorDelegate.profile01ShadowReceiveSeam,
         ): MulticastAudibleCutoverReadiness {
             val missing = mutableListOf<String>()
             val wiring = ConferenceSessionMediaBridge.wiring
@@ -37,6 +40,12 @@ data class MulticastAudibleCutoverReadiness(
             if (playoutSeam?.isArmed(sessionId) != true) {
                 missing += "AUDIBLE_PLAYOUT_PATH_NOT_READY"
             }
+            if (receiveSeam?.isArmed(sessionId) != true) {
+                missing += "MULTICAST_RECEIVE_PATH_NOT_READY"
+            }
+            if (!hasRemoteMulticastSourceBinding(sessionId, localModuleId)) {
+                missing += "REMOTE_MULTICAST_RX_SOURCE_NOT_READY"
+            }
             val ownership = ReplacementCutoverRc1.currentState()
             if (ownership != null && ownership != AudibleOwnershipState.ANCHOR_ACTIVE) {
                 missing += "OWNERSHIP_NOT_ANCHOR_ACTIVE"
@@ -46,6 +55,18 @@ data class MulticastAudibleCutoverReadiness(
                 ready = missing.isEmpty(),
                 missing = missing,
             )
+        }
+
+        /**
+         * Structural remote receive capability: a non-local [SourceBindingCatalog] entry,
+         * same catalog authority already used for LOCAL_TX_BINDING_NOT_READY.
+         */
+        private fun hasRemoteMulticastSourceBinding(
+            sessionId: String,
+            localModuleId: String,
+        ): Boolean {
+            val bindings = ConferenceSessionMediaBridge.wiring?.catalog(sessionId)?.all() ?: return false
+            return bindings.any { it.moduleId != localModuleId }
         }
     }
 }

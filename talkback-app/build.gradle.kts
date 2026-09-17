@@ -11,8 +11,8 @@ android {
         applicationId = "com.talkback.appprod"
         minSdk = 26
         targetSdk = 34
-        versionCode = 100001
-        versionName = "1.0.0-rc.1"
+        versionCode = 100003
+        versionName = "1.0.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 

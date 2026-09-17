@@ -1227,7 +1227,7 @@ class TalkViewModel(
 
         val runtimePhase = session?.conferenceRuntimeState?.phase
         val healthUi = session?.conferenceHealthUi
-        val conferenceMediaLive = conferenceActive && (healthUi?.roomOnline ?: channelReady)
+        val conferenceMediaLive = conferenceActive && channelReady
 
         if (conferenceMediaLive) {
             if (meetingStartedAtMs == null) {
