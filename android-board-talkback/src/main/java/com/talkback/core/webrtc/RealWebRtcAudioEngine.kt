@@ -673,12 +673,20 @@ class RealWebRtcAudioEngine(
     }
 
     private fun currentLocalSdp(): String {
+        if (released) error("PeerConnection released; no local SDP")
         return peerConnection.localDescription?.description
             ?: error("Missing local SDP after negotiation")
     }
 
-    private fun currentLocalSdpOrEmpty(): String =
-        peerConnection.localDescription?.description ?: ""
+    /**
+     * Never touch the native PC once released: getLocalDescription on a closed PC is a
+     * use-after-free (field SIGSEGV/SIGBUS 2026-09-24, fault addr == "PC_CLOSE").
+     * Reached via inSignalingTransaction onRejected when admission == REJECTED_CLOSED.
+     */
+    private fun currentLocalSdpOrEmpty(): String {
+        if (released) return ""
+        return runCatching { peerConnection.localDescription?.description }.getOrNull() ?: ""
+    }
 
     private fun createLocalDescription(
         createAction: (SdpObserver) -> Unit,
