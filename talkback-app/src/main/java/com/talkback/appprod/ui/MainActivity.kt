@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.media.AudioManager
 import android.os.Build
 import android.os.Bundle
 import androidx.appcompat.app.AppCompatActivity
@@ -51,6 +52,8 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+        // Hardware volume keys drive the in-call stream used by both WebRTC and multicast playout.
+        volumeControlStream = AudioManager.STREAM_VOICE_CALL
         talkViewModel = ViewModelProvider(this, TalkViewModelFactory(this))[TalkViewModel::class.java]
         requestAudioPermissionIfNeeded()
         requestNotificationPermissionIfNeeded()

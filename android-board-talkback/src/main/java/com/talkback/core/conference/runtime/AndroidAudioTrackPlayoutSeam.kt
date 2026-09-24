@@ -12,10 +12,14 @@ import com.talkback.core.conference.session.integration.cutover.ReplacementCutov
  * Product C-IG-01 AudioTrack playout seam (Phase 1 Slice 3).
  *
  * Mono PCM s16 @ 48 kHz. Does not wire Meeting UI / ADR-0056.
+ *
+ * Usage is VOICE_COMMUNICATION so the track follows STREAM_VOICE_CALL volume (same as the
+ * WebRTC ADM playout) and is not attenuated by OEM policy as a background "media" track
+ * while the app is in MODE_IN_COMMUNICATION.
  */
 class AndroidAudioTrackPlayoutSeam(
     context: Context,
-    private val streamType: Int = AudioAttributes.USAGE_MEDIA,
+    private val streamType: Int = AudioAttributes.USAGE_VOICE_COMMUNICATION,
 ) : AudioTrackPlayoutSeam,
     PlayoutMetricsSeam {
     private val appContext = context.applicationContext
