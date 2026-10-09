@@ -650,8 +650,17 @@ class RealWebRtcAudioEngine(
 
     private fun attachInboundSink(audioTrack: AudioTrack) {
         val sink = inboundPcmSink ?: return
-        audioTrack.addSink { audioData, bitsPerSample, sampleRate, numberOfChannels, numberOfFrames, _ ->
-            sink.onPcm(audioData, bitsPerSample, sampleRate, numberOfChannels, numberOfFrames)
+        // Production AAR lacks AudioTrack.nativeWrapSink; uncaught ULE on signaling_thread
+        // aborts WebRTC via JNI ExceptionCheck (M01 field: SIGABRT during SRD/onTrack).
+        try {
+            audioTrack.addSink { audioData, bitsPerSample, sampleRate, numberOfChannels, numberOfFrames, _ ->
+                sink.onPcm(audioData, bitsPerSample, sampleRate, numberOfChannels, numberOfFrames)
+            }
+        } catch (e: UnsatisfiedLinkError) {
+            TalkbackLog.w(
+                "INBOUND_SINK_UNAVAILABLE track=${audioTrack.id()} " +
+                    "tag=${playbackDiagnosticTag ?: "unknown"} reason=${e.message}"
+            )
         }
     }
 
@@ -781,25 +790,38 @@ class RealWebRtcAudioEngine(
                 )
                 try {
                     val nativeStartNs = System.nanoTime()
-                    logSrdPreNativeSnapshot(type, incomingSdp)
-                    NativeSignalingOverlapObserver.beginSrd(
-                        diagnosticEdgeKey(),
-                        System.identityHashCode(peerConnection),
-                    )
-                    logSrdBoundary("SRD_NATIVE_CALL_ENTER", type)
-                    try {
-                        action(observer)
-                        val nativeElapsedMs =
-                            TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - nativeStartNs)
-                        logSrdBoundary("SRD_NATIVE_CALL_EXIT", type, elapsedMs = nativeElapsedMs)
-                        pendingSdpWait.await(latch, "Timed out setting SDP")
+                    val admission = evaluateSrdPreNativeSnapshot(type, incomingSdp)
+                    if (!admission.admit) {
+                        val detail = admission.violations.joinToString(",")
                         logSrdBoundary(
-                            "SRD_JNI_RETURN",
+                            "SRD_NATIVE_REJECTED",
                             type,
-                            observerHash = observerHash.get(),
+                            error = detail,
                         )
-                    } finally {
-                        NativeSignalingOverlapObserver.endSrd(System.identityHashCode(peerConnection))
+                        setError.set("SRD_ADMISSION_REJECTED:$detail")
+                        latch.countDown()
+                    } else {
+                        NativeSignalingOverlapObserver.beginSrd(
+                            diagnosticEdgeKey(),
+                            System.identityHashCode(peerConnection),
+                        )
+                        logSrdBoundary("SRD_NATIVE_CALL_ENTER", type)
+                        try {
+                            action(observer)
+                            val nativeElapsedMs =
+                                TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - nativeStartNs)
+                            logSrdBoundary("SRD_NATIVE_CALL_EXIT", type, elapsedMs = nativeElapsedMs)
+                            pendingSdpWait.await(latch, "Timed out setting SDP")
+                            logSrdBoundary(
+                                "SRD_JNI_RETURN",
+                                type,
+                                observerHash = observerHash.get(),
+                            )
+                        } finally {
+                            NativeSignalingOverlapObserver.endSrd(
+                                System.identityHashCode(peerConnection),
+                            )
+                        }
                     }
                 } finally {
                     logSrdBoundary(
@@ -830,10 +852,14 @@ class RealWebRtcAudioEngine(
     }
 
     /**
-     * Step 2b probe A+B: the last read-only observation before control leaves for native code.
-     * If the process aborts, this is the final statement of what the PeerConnection looked like.
+     * Step 2b probe A+B: last observation before native setRemoteDescription(ANSWER).
+     * Returns the admission decision; caller MUST NOT enter native when [SrdAdmissionDecision.admit]
+     * is false (MC4 field: STALE_OR_MISMATCHED_ANSWER → SIGABRT).
      */
-    private fun logSrdPreNativeSnapshot(type: String, incomingSdp: String?) {
+    private fun evaluateSrdPreNativeSnapshot(
+        type: String,
+        incomingSdp: String?,
+    ): SrdAdmissionDecision {
         val tag = playbackDiagnosticTag ?: "unknown"
         val snapshot = negotiationSnapshot()
         val thread = Thread.currentThread()
@@ -881,6 +907,7 @@ class RealWebRtcAudioEngine(
                 decision.formatFields() +
                 ConferenceRealizationLineage.negotiationSuffix()
         )
+        return decision
     }
 
     private fun logSrdBoundary(

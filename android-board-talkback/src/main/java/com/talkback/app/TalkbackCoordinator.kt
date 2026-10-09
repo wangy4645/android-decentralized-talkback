@@ -2946,6 +2946,9 @@ class TalkbackCoordinator(
             )
         )
         lastConferenceOfferLineageByEdge["$sessionId|$moduleId"] = offerLineageId
+        // G2-RCA2: createOffer snapshots outstandingOfferLineageId from transport diagnostics.
+        // Must stamp the new CR lineage BEFORE createOffer or admit sees STALE and native SRD aborts.
+        syncTransportDiagnostics(engine, moduleId, offerLineageId)
         val offer = try {
             ConferenceRealizationLineage.bind(
                 ConferenceRealizationLineage.Bound(
@@ -11788,6 +11791,9 @@ class TalkbackCoordinator(
                         ConferenceSrdNativeDomainObservability.recordDomainExecutionEnter(edgeKey)
                         log(ConferenceSrdNativeDomainObservability.formatDomainExecutionEnter(srdObs, pcHash))
                         try {
+                            // Align engine diagnostic lineage with the answer being applied so
+                            // SrdAdmissionDecision compares outstanding offer vs answer on the same CR id.
+                            syncTransportDiagnostics(engine, moduleId, answerOfferLineageId)
                             ConferenceRealizationLineage.bind(
                                 ConferenceRealizationLineage.Bound(
                                     offerLineageId = answerOfferLineageId,

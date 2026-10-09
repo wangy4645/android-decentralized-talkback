@@ -9,6 +9,8 @@ import com.talkback.core.conference.session.profile01.wire.Profile01MediaGroupDe
 import com.talkback.core.conference.session.profile01.wire.Profile01MembershipAuthoritySnapshot
 import com.talkback.core.conference.session.profile01.wire.Profile01MembershipIncarnationAuthority
 import com.talkback.core.conference.session.profile01.wire.Profile01SignedFactEnvelope
+import com.talkback.core.conference.session.profile01.wire.Profile01SignedFactSignerResolveResult
+import com.talkback.core.conference.session.profile01.wire.Profile01SignedFactSignerSource
 import com.talkback.core.conference.session.profile01.wire.Profile01WireCborDecoder
 import com.talkback.core.conference.session.profile01.wire.Profile01WireConstants
 import com.talkback.core.conference.session.profile01.wire.hexToId128Bytes
@@ -27,7 +29,7 @@ class MeetingProfile01MembershipOriginBridge(
     private val creationOriginBridge: MeetingProfile01CreationOriginBridge,
     private val mediaKeyAuthority: Profile01ConferenceMediaKeyMaterialAuthority,
     private val membershipConvergence: Profile01MembershipConvergenceRegistry,
-    private val publisher: MeetingProfile01MembershipOriginPublisher?,
+    private val signerSource: Profile01SignedFactSignerSource,
     private val hostLocalSupplementMaterializer: Profile01HostLocalMediaSupplementMaterializer? = null,
     private val onHostMembershipAuthoritativeCommit: ((sessionId: String) -> Unit)? = null,
     private val onLog: (String) -> Unit = {},
@@ -138,11 +140,15 @@ class MeetingProfile01MembershipOriginBridge(
         snapshot: ConferenceTopologySnapshot,
         converged: com.talkback.core.conference.session.profile01.Profile01MembershipGeneration,
     ): MembershipFactResult {
-        val publisher = publisher
-        if (publisher == null) {
-            logGap(sessionId, "NO_SIGNER")
-            return MembershipFactResult.Gap(OriginEmitOutcome.ORIGIN_SOURCE_GAP)
-        }
+        val publisher =
+            when (val resolved = signerSource.resolve()) {
+                is Profile01SignedFactSignerResolveResult.Ready ->
+                    MeetingProfile01MembershipOriginPublisher(resolved.signer)
+                is Profile01SignedFactSignerResolveResult.Unavailable -> {
+                    logGap(sessionId, resolved.reason)
+                    return MembershipFactResult.Gap(OriginEmitOutcome.ORIGIN_SOURCE_GAP)
+                }
+            }
 
         val authoritativeMemberIds = snapshot.members.distinct().sorted()
         val convergedMemberIds = converged.members.map { it.moduleId }.distinct().sorted()

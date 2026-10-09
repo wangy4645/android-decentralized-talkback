@@ -19,6 +19,8 @@ import com.talkback.core.conference.session.profile01.wire.Profile01MediaGroupDe
 import com.talkback.core.conference.session.profile01.wire.Profile01MembershipIncarnationAuthority
 
 import com.talkback.core.conference.session.profile01.wire.Profile01SignedFactEnvelope
+import com.talkback.core.conference.session.profile01.wire.Profile01SignedFactSignerResolveResult
+import com.talkback.core.conference.session.profile01.wire.Profile01SignedFactSignerSource
 
 import com.talkback.core.conference.session.profile01.wire.Profile01WireConstants
 
@@ -56,7 +58,7 @@ class MeetingProfile01CreationOriginBridge(
 
     private val mediaKeyAuthority: Profile01ConferenceMediaKeyMaterialAuthority,
 
-    private val publisher: MeetingProfile01CreationOriginPublisher?,
+    private val signerSource: Profile01SignedFactSignerSource,
 
     private val membershipConvergence: Profile01MembershipConvergenceRegistry? = null,
 
@@ -207,15 +209,15 @@ class MeetingProfile01CreationOriginBridge(
 
     ): CreationFactResult {
 
-        val publisher = publisher
-
-        if (publisher == null) {
-
-            logGap(sessionId, "NO_SIGNER")
-
-            return CreationFactResult.Gap(OriginEmitOutcome.ORIGIN_SOURCE_GAP)
-
-        }
+        val publisher =
+            when (val resolved = signerSource.resolve()) {
+                is Profile01SignedFactSignerResolveResult.Ready ->
+                    MeetingProfile01CreationOriginPublisher(resolved.signer)
+                is Profile01SignedFactSignerResolveResult.Unavailable -> {
+                    logGap(sessionId, resolved.reason)
+                    return CreationFactResult.Gap(OriginEmitOutcome.ORIGIN_SOURCE_GAP)
+                }
+            }
 
         val members = snapshot.members.distinct().sorted()
 

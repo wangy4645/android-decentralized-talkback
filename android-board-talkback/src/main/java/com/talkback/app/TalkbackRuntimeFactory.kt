@@ -34,14 +34,13 @@ import com.talkback.core.conference.session.integration.MeetingProfile01AwareCon
 import com.talkback.core.conference.session.integration.MeetingProfile01ConferenceSessionIndex
 import com.talkback.core.conference.session.integration.MeetingProfile01CreationOriginBridge
 import com.talkback.core.conference.session.integration.MeetingProfile01MembershipOriginBridge
-import com.talkback.core.conference.session.integration.MeetingProfile01MembershipOriginPublisher
-import com.talkback.core.conference.session.integration.MeetingProfile01CreationOriginPublisher
+import com.talkback.core.conference.session.profile01.wire.Profile01FieldEstablishedSignedFactSignerSource
+import com.talkback.core.conference.session.profile01.wire.Profile01SignedFactSignerSource
 import com.talkback.core.conference.session.integration.MeetingProfile01FactWireIngress
 import com.talkback.core.conference.session.integration.MeetingProfile01IncompleteApplyContinuation
 import com.talkback.core.conference.session.integration.MeetingProfile01MediaKeyPackageOriginBridge
 import com.talkback.core.conference.session.integration.MeetingProfile01PreBindFactRetention
 import com.talkback.core.conference.session.integration.MeetingProfile01SourceOriginBridge
-import com.talkback.core.conference.session.integration.MeetingProfile01SourceOriginPublisher
 import com.talkback.core.conference.session.integration.Profile01HostLocalMediaSupplementMaterializer
 import com.talkback.core.conference.session.integration.Profile01HostLocalSessionFactProjection
 import com.talkback.core.conference.session.integration.Profile01LocalConferenceSourceIdentityAuthority
@@ -59,13 +58,8 @@ import com.talkback.core.conference.session.profile01.Profile01ProfileBackedModu
 import com.talkback.core.conference.session.profile01.Profile01SessionMediaSupplementRegistry
 import com.talkback.core.conference.session.profile01.wire.Profile01ConferenceMediaKeyMaterialAuthority
 import com.talkback.core.conference.session.profile01.wire.Profile01EstablishmentAuthoritySurface
-import com.talkback.core.conference.session.profile01.wire.Profile01MediaKeyPackageBuilder
 import com.talkback.core.conference.session.profile01.wire.Profile01ProductionMediaKeyDecryptComposition
-import com.talkback.core.conference.session.profile01.wire.Profile01PersistedSignedFactSigner
-import com.talkback.core.session.gbc.issuance.GbcFieldEstablishedSignerSupport
-import com.talkback.core.session.gbc.issuance.GenerationFactSignerPersistenceState
 import com.talkback.core.conference.transport.Slice4MulticastNetworkConstants
-import com.talkback.core.session.gbc.trust.GenerationFactKeyState
 import com.talkback.core.session.gbc.trust.profile.AcceptedLocalTrustStateStore
 import com.talkback.core.signaling.prr.LocalEndpointSnapshot
 import com.talkback.core.signaling.prr.PeerReachabilityReannounceController
@@ -386,14 +380,12 @@ object TalkbackRuntimeFactory {
         ConferenceSessionMediaCoordinatorDelegate.factPort = profile01AwareFactPort
         val profile01IncompleteApplyContinuation = MeetingProfile01IncompleteApplyContinuation()
         val profile01MediaKeyAuthority = Profile01ConferenceMediaKeyMaterialAuthority()
-        val profile01CreationSigner =
-            loadProfile01CreationOriginPublisher(
-                context = context,
-                localModuleId = config.localModuleId.value,
+        val profile01SignerSource: Profile01SignedFactSignerSource =
+            Profile01FieldEstablishedSignedFactSignerSource(
+                trustDir = context.filesDir.resolve("gbc-trust"),
                 trustStore = profile01TrustStore,
+                localModuleId = config.localModuleId.value,
             )
-        val profile01CreationPublisher =
-            profile01CreationSigner?.let { MeetingProfile01CreationOriginPublisher(it) }
         val profile01HostLocalSupplementMaterializer =
             Profile01HostLocalMediaSupplementMaterializer(
                 sessionIndex = meetingProfile01SessionIndex,
@@ -408,7 +400,7 @@ object TalkbackRuntimeFactory {
             MeetingProfile01CreationOriginBridge(
                 sessionIndex = meetingProfile01SessionIndex,
                 mediaKeyAuthority = profile01MediaKeyAuthority,
-                publisher = profile01CreationPublisher,
+                signerSource = profile01SignerSource,
                 membershipConvergence = profile01ConferenceMediaFactIngress.membershipRegistry(),
                 onHostCreationAuthoritativeCommit = { sessionId ->
                     coordinator.onMeetingProfile01HostCreationAuthoritativeCommit(sessionId)
@@ -417,15 +409,13 @@ object TalkbackRuntimeFactory {
                 onLog = { message -> onLog?.invoke(message) },
             )
         coordinator.attachMeetingProfile01CreationOriginBridge(profile01CreationOriginBridge)
-        val profile01MembershipOriginPublisher =
-            profile01CreationSigner?.let { MeetingProfile01MembershipOriginPublisher(it) }
         val profile01MembershipOriginBridge =
             MeetingProfile01MembershipOriginBridge(
                 sessionIndex = meetingProfile01SessionIndex,
                 creationOriginBridge = profile01CreationOriginBridge,
                 mediaKeyAuthority = profile01MediaKeyAuthority,
                 membershipConvergence = profile01ConferenceMediaFactIngress.membershipRegistry(),
-                publisher = profile01MembershipOriginPublisher,
+                signerSource = profile01SignerSource,
                 hostLocalSupplementMaterializer = profile01HostLocalSupplementMaterializer,
                 onHostMembershipAuthoritativeCommit = { sessionId ->
                     coordinator.onMeetingProfile01HostMembershipAuthoritativeCommit(sessionId)
@@ -433,29 +423,25 @@ object TalkbackRuntimeFactory {
                 onLog = { message -> onLog?.invoke(message) },
             )
         coordinator.attachMeetingProfile01MembershipOriginBridge(profile01MembershipOriginBridge)
-        val profile01PackageBuilder =
-            profile01CreationSigner?.let { Profile01MediaKeyPackageBuilder(signer = it) }
         val profile01MediaKeyPackageOriginBridge =
             MeetingProfile01MediaKeyPackageOriginBridge(
                 sessionIndex = meetingProfile01SessionIndex,
                 creationOrigin = profile01CreationOriginBridge,
                 mediaKeyAuthority = profile01MediaKeyAuthority,
                 establishmentLookup = profile01EstablishmentAuthority.recipientEstablishmentKeyLookup,
-                packageBuilder = profile01PackageBuilder,
+                signerSource = profile01SignerSource,
                 membershipConvergence = profile01ConferenceMediaFactIngress.membershipRegistry(),
                 onLog = { message -> onLog?.invoke(message) },
             )
         coordinator.attachMeetingProfile01MediaKeyPackageOriginBridge(profile01MediaKeyPackageOriginBridge)
         val profile01LocalConferenceSourceIdentityAuthority = Profile01LocalConferenceSourceIdentityAuthority()
-        val profile01SourceOriginPublisher =
-            profile01CreationSigner?.let { MeetingProfile01SourceOriginPublisher(it) }
         val profile01SourceOriginBridge =
             MeetingProfile01SourceOriginBridge(
                 sessionIndex = meetingProfile01SessionIndex,
                 mediaKeyAuthority = profile01MediaKeyAuthority,
                 supplementRegistry = profile01SupplementRegistry,
                 membershipConvergence = profile01ConferenceMediaFactIngress.membershipRegistry(),
-                publisher = profile01SourceOriginPublisher,
+                signerSource = profile01SignerSource,
                 onLog = { message -> onLog?.invoke(message) },
             )
         coordinator.attachMeetingProfile01SourceOriginBridge(
@@ -581,35 +567,4 @@ object TalkbackRuntimeFactory {
         }
     }
 
-    private fun localActiveSignerKeyVersion(
-        trustStore: AcceptedLocalTrustStateStore,
-        moduleId: String,
-    ): Long {
-        val snapshot = trustStore.currentSnapshot() ?: return 0L
-        return snapshot.bindingsByKey.values
-            .asSequence()
-            .filter { binding ->
-                binding.moduleId == moduleId && binding.keyState == GenerationFactKeyState.ACTIVE
-            }
-            .maxOfOrNull { it.signerKeyVersion }
-            ?: 0L
-    }
-
-    private fun loadProfile01CreationOriginPublisher(
-        context: Context,
-        localModuleId: String,
-        trustStore: AcceptedLocalTrustStateStore,
-    ): Profile01PersistedSignedFactSigner? {
-        val trustDir = context.filesDir.resolve("gbc-trust")
-        val persistence = GbcFieldEstablishedSignerSupport.signerPersistence(trustDir)
-        val state = persistence.currentState()
-        if (state !is GenerationFactSignerPersistenceState.Established) return null
-        val signerKeyVersion = localActiveSignerKeyVersion(trustStore, localModuleId)
-        if (signerKeyVersion <= 0L) return null
-        return Profile01PersistedSignedFactSigner.fromPkcs8(
-            pkcs8PrivateKey = state.pkcs8PrivateKey,
-            signerModuleId = localModuleId,
-            signerKeyVersion = signerKeyVersion,
-        )
-    }
 }
