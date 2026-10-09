@@ -1,7 +1,7 @@
 package com.talkback.core.conference.session.integration
 
+import com.talkback.core.conference.runtime.ConcentusOpusEncoderSeam
 import com.talkback.core.conference.runtime.OpusCodecConstants
-import com.talkback.core.conference.runtime.OpusTestVectors
 import com.talkback.core.conference.session.ConferenceSessionMediaBridge
 import com.talkback.core.conference.session.ConferenceSessionMediaControlFactRegistry
 import com.talkback.core.conference.session.ConferenceSessionMediaFactPort
@@ -34,6 +34,7 @@ class Profile01ShadowMulticastTransmitSeam(
     private data class ArmedSession(
         val releaseMic: () -> Unit,
         val assembler: PcmFrameAssembler,
+        val opusEncoder: ConcentusOpusEncoderSeam = ConcentusOpusEncoderSeam(),
         var halfFrame: ShortArray? = null,
     )
 
@@ -101,7 +102,10 @@ class Profile01ShadowMulticastTransmitSeam(
     }
 
     private fun disarmCaptureTap(sessionId: String) {
-        armed.remove(sessionId)?.releaseMic?.invoke()
+        armed.remove(sessionId)?.let { session ->
+            session.releaseMic.invoke()
+            session.opusEncoder.release()
+        }
     }
 
     private fun onMicPcm(
@@ -151,7 +155,7 @@ class Profile01ShadowMulticastTransmitSeam(
         val context = resolveEgressContext(sessionId) ?: return
         val transport = ConferenceSessionMediaBridge.wiring?.transport(sessionId) ?: return
         try {
-            val opusPayload = OpusTestVectors.encodePcm(merged)
+            val opusPayload = state.opusEncoder.encode(merged, context.sourceGeneration)
             if (transport.sendFromSource(context.egress, opusPayload, context.endpoint)) {
                 val snap = transport.observability.snapshot()
                 Profile01ShadowRuntimeObservability.maybeLogShadowTxActivity(

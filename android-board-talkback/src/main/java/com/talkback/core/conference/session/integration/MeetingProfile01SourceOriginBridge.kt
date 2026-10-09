@@ -1,4 +1,4 @@
-﻿package com.talkback.core.conference.session.integration
+package com.talkback.core.conference.session.integration
 
 
 
@@ -12,6 +12,8 @@ import com.talkback.core.conference.session.profile01.wire.Profile01ConferenceMe
 import com.talkback.core.conference.session.profile01.wire.Profile01FactDigest
 
 import com.talkback.core.conference.session.profile01.wire.Profile01SignedFactEnvelope
+import com.talkback.core.conference.session.profile01.wire.Profile01SignedFactSignerResolveResult
+import com.talkback.core.conference.session.profile01.wire.Profile01SignedFactSignerSource
 
 import com.talkback.core.conference.session.profile01.wire.Profile01SourceDeclarationAuthoritySnapshot
 
@@ -63,7 +65,7 @@ class MeetingProfile01SourceOriginBridge(
 
     private val membershipConvergence: Profile01MembershipConvergenceRegistry,
 
-    private val publisher: MeetingProfile01SourceOriginPublisher?,
+    private val signerSource: Profile01SignedFactSignerSource,
 
     private val publicationLedger: SourcePublicationLedger = SourcePublicationLedger(),
 
@@ -137,15 +139,15 @@ class MeetingProfile01SourceOriginBridge(
 
     ): SourceOriginBuildOutcome {
 
-        val pub = publisher
-
-        if (pub == null) {
-
-            logGap(sessionId, localModuleId, "NO_SIGNER")
-
-            return SourceOriginBuildOutcome.ORIGIN_SOURCE_GAP
-
-        }
+        val pub =
+            when (val resolved = signerSource.resolve()) {
+                is Profile01SignedFactSignerResolveResult.Ready ->
+                    MeetingProfile01SourceOriginPublisher(resolved.signer)
+                is Profile01SignedFactSignerResolveResult.Unavailable -> {
+                    logGap(sessionId, localModuleId, resolved.reason)
+                    return SourceOriginBuildOutcome.ORIGIN_SOURCE_GAP
+                }
+            }
 
         if (localModuleId != pub.signerModuleId) {
 
@@ -530,7 +532,12 @@ class MeetingProfile01SourceOriginBridge(
         val committed = committedIdentityBySession[sessionId]
             ?: return SourcePostBindRepublishOutcome.SKIPPED_STALE_IDENTITY
 
-        val pub = publisher
+        val pub =
+            when (val resolved = signerSource.resolve()) {
+                is Profile01SignedFactSignerResolveResult.Ready ->
+                    MeetingProfile01SourceOriginPublisher(resolved.signer)
+                is Profile01SignedFactSignerResolveResult.Unavailable -> null
+            }
         if (pub == null || localModuleId != pub.signerModuleId) {
             return SourcePostBindRepublishOutcome.SKIPPED_NOT_SELF_ORIGIN
         }

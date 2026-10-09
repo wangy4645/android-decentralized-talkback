@@ -13,6 +13,8 @@ import com.talkback.core.conference.session.profile01.wire.Profile01MediaKeyPack
 import com.talkback.core.conference.session.profile01.wire.Profile01PackageRecipientBinding
 import com.talkback.core.conference.session.profile01.wire.Profile01RecipientEstablishmentKeyLookup
 import com.talkback.core.conference.session.profile01.wire.Profile01SignedFactEnvelope
+import com.talkback.core.conference.session.profile01.wire.Profile01SignedFactSignerResolveResult
+import com.talkback.core.conference.session.profile01.wire.Profile01SignedFactSignerSource
 import com.talkback.core.conference.session.profile01.wire.Profile01WireCborDecoder
 import com.talkback.core.conference.session.profile01.wire.Profile01WireConstants
 import com.talkback.core.conference.session.profile01.wire.hexToId128Bytes
@@ -30,7 +32,7 @@ class MeetingProfile01MediaKeyPackageOriginBridge(
     private val creationOrigin: MeetingProfile01CreationOriginBridge,
     private val mediaKeyAuthority: Profile01ConferenceMediaKeyMaterialAuthority,
     private val establishmentLookup: Profile01RecipientEstablishmentKeyLookup,
-    private val packageBuilder: Profile01MediaKeyPackageBuilder?,
+    private val signerSource: Profile01SignedFactSignerSource,
     private val membershipConvergence: Profile01MembershipConvergenceRegistry? = null,
     private val publicationLedger: MediaKeyPackagePublicationLedger = MediaKeyPackagePublicationLedger(),
     private val postBindPublicationLedger: MediaKeyPackagePostBindPublicationLedger =
@@ -53,11 +55,9 @@ class MeetingProfile01MediaKeyPackageOriginBridge(
             logGap(sessionId, null, "NOT_HOST_OWNER")
             return MediaKeyPackageOriginOutcome.SKIPPED_NOT_OWNER
         }
-        val builder = packageBuilder
-        if (builder == null) {
-            logGap(sessionId, null, "NO_BUILDER")
-            return MediaKeyPackageOriginOutcome.ORIGIN_SOURCE_GAP
-        }
+        val builder =
+            resolvePackageBuilder(sessionId, null)
+                ?: return MediaKeyPackageOriginOutcome.ORIGIN_SOURCE_GAP
         val creationContext =
             resolveActivePackageContext(sessionId, snapshot.hostModuleId)
                 ?: return MediaKeyPackageOriginOutcome.SKIPPED_NO_CREATION
@@ -191,8 +191,9 @@ class MeetingProfile01MediaKeyPackageOriginBridge(
         if (localModuleId != snapshot.hostModuleId) {
             return MediaKeyPackagePostBindRepublishOutcome.SKIPPED_NOT_OWNER
         }
-        val builder = packageBuilder
-            ?: return MediaKeyPackagePostBindRepublishOutcome.SKIPPED_NO_BUILDER
+        val builder =
+            resolvePackageBuilder(sessionId, recipientModuleId)
+                ?: return MediaKeyPackagePostBindRepublishOutcome.SKIPPED_NO_BUILDER
         val creationContext =
             resolveActivePackageContext(sessionId, snapshot.hostModuleId)
                 ?: return MediaKeyPackagePostBindRepublishOutcome.SKIPPED_NO_CREATION
@@ -313,8 +314,9 @@ class MeetingProfile01MediaKeyPackageOriginBridge(
         if (localModuleId != snapshot.hostModuleId) {
             return MediaKeyPackageNegativeFixtureOutcome.SKIPPED_NOT_OWNER
         }
-        val builder = packageBuilder
-            ?: return MediaKeyPackageNegativeFixtureOutcome.SKIPPED_NO_BUILDER
+        val builder =
+            resolvePackageBuilder(sessionId, recipientModuleId)
+                ?: return MediaKeyPackageNegativeFixtureOutcome.SKIPPED_NO_BUILDER
         val creationContext =
             resolveActivePackageContext(sessionId, snapshot.hostModuleId)
                 ?: return MediaKeyPackageNegativeFixtureOutcome.SKIPPED_NO_CREATION
@@ -531,6 +533,19 @@ class MeetingProfile01MediaKeyPackageOriginBridge(
                 "publicationOutcome=$publicationOutcome",
         )
     }
+
+    private fun resolvePackageBuilder(
+        sessionId: String,
+        recipientModuleId: String?,
+    ): Profile01MediaKeyPackageBuilder? =
+        when (val resolved = signerSource.resolve()) {
+            is Profile01SignedFactSignerResolveResult.Ready ->
+                Profile01MediaKeyPackageBuilder(resolved.signer)
+            is Profile01SignedFactSignerResolveResult.Unavailable -> {
+                logGap(sessionId, recipientModuleId, resolved.reason)
+                null
+            }
+        }
 
     private fun logPostBindRepublish(
         conferenceIdHex: String,
