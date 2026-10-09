@@ -10,15 +10,21 @@ import kotlin.math.sin
 
 /**
  * Real Opus decode seam using Concentus (RFC 6716).
+ *
+ * P2: one [OpusDecoder] per admitted pool seat (source × incarnation), synchronized;
+ * physical instances are created only via [onPoolAllocated] after [LiveDecoderPool.allocate].
  */
 class ConcentusOpusDecoderSeam(
     private val payloadStore: OpusPayloadStore,
-) : OpusDecodeSeam {
-    private val decoder =
-        OpusDecoder(
-            OpusCodecConstants.SAMPLE_RATE_HZ,
-            OpusCodecConstants.CHANNELS,
-        )
+) : OpusDecodeSeam,
+    OpusDecoderLifecycleSeam {
+    private data class DecoderEntry(
+        val incarnationId: Long,
+        val decoder: OpusDecoder,
+    )
+
+    private val lock = Any()
+    private val decoders = linkedMapOf<String, DecoderEntry>()
 
     var decodeInvocationCount: Long = 0
         private set
@@ -27,44 +33,127 @@ class ConcentusOpusDecoderSeam(
     var lastDecodeDurationUs: Long = 0
         private set
 
+    /** Harness / desk — matches [LiveDecoderPool.liveCount] when pool-bound. */
+    val physicalDecoderCount: Int
+        get() =
+            synchronized(lock) {
+                decoders.size
+            }
+
+    override fun onPoolAllocated(
+        sourceIdentity: String,
+        incarnationId: Long,
+    ) {
+        synchronized(lock) {
+            val existing = decoders[sourceIdentity]
+            if (existing != null && existing.incarnationId == incarnationId) {
+                return
+            }
+            if (existing == null && decoders.size >= MediaMixConstants.MAX_LIVE_DECODERS) {
+                return
+            }
+            decoders[sourceIdentity] =
+                DecoderEntry(
+                    incarnationId = incarnationId,
+                    decoder = newOpusDecoder(),
+                )
+        }
+    }
+
+    override fun evict(
+        sourceIdentity: String,
+        incarnationId: Long,
+    ) {
+        synchronized(lock) {
+            val cur = decoders[sourceIdentity]
+            if (cur != null && cur.incarnationId == incarnationId) {
+                decoders.remove(sourceIdentity)
+            }
+        }
+    }
+
+    override fun evictSourceSeat(sourceIdentity: String) {
+        synchronized(lock) {
+            decoders.remove(sourceIdentity)
+        }
+    }
+
+    override fun clearAll() {
+        synchronized(lock) {
+            decoders.clear()
+        }
+    }
+
     override fun decode(
         sourceIdentity: String,
         incarnationId: Long,
         mediaSlot: Long,
         nowMs: Long,
     ): PcmFrame? {
-        decodeInvocationCount += 1
         val opus =
             payloadStore.take(sourceIdentity, incarnationId, mediaSlot)
                 ?: return null
-        val pcm = ShortArray(OpusCodecConstants.FRAME_SAMPLES_20MS)
-        val startNs = System.nanoTime()
-        return try {
-            val samplesDecoded =
-                decoder.decode(
-                    opus,
-                    0,
-                    opus.size,
-                    pcm,
-                    0,
-                    pcm.size,
-                    false,
-                )
-            lastDecodeDurationUs = (System.nanoTime() - startNs) / 1_000L
-            if (samplesDecoded <= 0) {
-                null
-            } else {
-                decodeSuccessCount += 1
-                PcmFrame(
-                    samples = if (samplesDecoded == pcm.size) pcm else pcm.copyOf(samplesDecoded),
-                    usableForMix = true,
-                )
+        synchronized(lock) {
+            decodeInvocationCount += 1
+            val entry = decoders[sourceIdentity] ?: return null
+            if (entry.incarnationId != incarnationId) {
+                return null
             }
-        } catch (_: Exception) {
-            lastDecodeDurationUs = (System.nanoTime() - startNs) / 1_000L
-            null
+            val pcm = ShortArray(OpusCodecConstants.FRAME_SAMPLES_20MS)
+            val startNs = System.nanoTime()
+            return try {
+                val samplesDecoded =
+                    entry.decoder.decode(
+                        opus,
+                        0,
+                        opus.size,
+                        pcm,
+                        0,
+                        pcm.size,
+                        false,
+                    )
+                lastDecodeDurationUs = (System.nanoTime() - startNs) / 1_000L
+                if (samplesDecoded <= 0) {
+                    null
+                } else {
+                    decodeSuccessCount += 1
+                    PcmFrame(
+                        samples = if (samplesDecoded == pcm.size) pcm else pcm.copyOf(samplesDecoded),
+                        usableForMix = true,
+                    )
+                }
+            } catch (_: Exception) {
+                lastDecodeDurationUs = (System.nanoTime() - startNs) / 1_000L
+                null
+            }
         }
     }
+
+    private fun newOpusDecoder(): OpusDecoder =
+        OpusDecoder(
+            OpusCodecConstants.SAMPLE_RATE_HZ,
+            OpusCodecConstants.CHANNELS,
+        )
+}
+
+/**
+ * Pool-bound physical Opus decoder lifecycle (P2).
+ */
+interface OpusDecoderLifecycleSeam {
+    fun onPoolAllocated(
+        sourceIdentity: String,
+        incarnationId: Long,
+    )
+
+    /** Aligns with [LiveDecoderPool.hardFenceRelease]. */
+    fun evict(
+        sourceIdentity: String,
+        incarnationId: Long,
+    )
+
+    fun evictSourceSeat(sourceIdentity: String)
+
+    fun clearAll()
 }
 
 /**

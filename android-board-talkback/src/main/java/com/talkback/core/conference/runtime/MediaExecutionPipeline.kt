@@ -97,7 +97,11 @@ class MediaExecutionPipeline(
 
     private fun jitterKey(identity: String, incarnationId: Long) = "$identity#$incarnationId"
 
-    fun admitFrame(frame: AdmittedMediaFrame, nowMs: Long): FrameAdmitDisposition {
+    fun admitFrame(
+        frame: AdmittedMediaFrame,
+        nowMs: Long,
+        sharedMixReferenceSlot: Long? = null,
+    ): FrameAdmitDisposition {
         val inst = selection.registry.get(frame.sourceIdentity)
         if (inst == null || inst.source.incarnationId != frame.incarnationId) {
             return FrameAdmitDisposition.NOT_ADMITTED_INCARNATION
@@ -130,11 +134,73 @@ class MediaExecutionPipeline(
             return FrameAdmitDisposition.FENCED_NON_EXECUTABLE
         }
         val disposition = buf.admit(frame, nowMs)
+        if (disposition == FrameAdmitDisposition.QUEUED && sharedMixReferenceSlot != null) {
+            buf.establishMixPlayoutAlignment(
+                mixReferenceSlot = sharedMixReferenceSlot,
+                sourceReferenceSlot = frame.mediaSlot,
+            )
+        }
         if (disposition == FrameAdmitDisposition.LATE_FOR_PLAYOUT) {
             lateForPlayoutCount += 1
         }
         return disposition
     }
+
+    /** F9.2/F9.3 — incarnation alignment for shared mix resolver. */
+    fun mixPlayoutAlignment(
+        sourceIdentity: String,
+        incarnationId: Long,
+    ): com.talkback.core.conference.transport.SourceMixPlayoutAlignment? =
+        jitters[jitterKey(sourceIdentity, incarnationId)]?.mixPlayoutAlignment()
+
+    fun sourceSlotForSharedMixPlayout(
+        sourceIdentity: String,
+        incarnationId: Long,
+        sharedMixPlayoutSlot: Long,
+    ): Long =
+        jitters[jitterKey(sourceIdentity, incarnationId)]
+            ?.sourceSlotForSharedMixPlayout(sharedMixPlayoutSlot)
+            ?: sharedMixPlayoutSlot
+
+    /**
+     * F9.2/F9.3 — map shared mix slot M onto source S, then consume.
+     * Does not include F9.4 activation fence / steady-hold policy.
+     */
+    fun pullSlotForSharedMixPlayout(
+        sourceIdentity: String,
+        incarnationId: Long,
+        sharedMixPlayoutSlot: Long,
+        resolvedMixSlotMediaTimeMs: Long,
+        nowMs: Long,
+    ): SlotPullDisposition {
+        val sourceSlot =
+            sourceSlotForSharedMixPlayout(
+                sourceIdentity,
+                incarnationId,
+                sharedMixPlayoutSlot,
+            )
+        val buf = jitters[jitterKey(sourceIdentity, incarnationId)]
+        val sourceSlotMediaTimeMs =
+            buf?.peekFrame(sourceSlot)?.mediaTimeMs
+                ?: (
+                    resolvedMixSlotMediaTimeMs -
+                        (sharedMixPlayoutSlot - sourceSlot) * MediaJitterConstants.MEDIA_SLOT_MS
+                )
+        return pullSlot(
+            sourceIdentity = sourceIdentity,
+            incarnationId = incarnationId,
+            slot = sourceSlot,
+            slotMediaTimeMs = sourceSlotMediaTimeMs,
+            nowMs = nowMs,
+        )
+    }
+
+    /** F9.1 not wired in this tree — desk boundary expects null. */
+    @Suppress("UNUSED_PARAMETER")
+    fun playoutExpirationFrontier(
+        sourceIdentity: String,
+        incarnationId: Long,
+    ): Long? = null
 
     /**
      * Advance one media slot for [sourceIdentity] at [slot] / [slotMediaTimeMs].

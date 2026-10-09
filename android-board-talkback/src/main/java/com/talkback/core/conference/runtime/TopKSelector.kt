@@ -18,6 +18,7 @@ class TopKSelector {
         registry: AdmittedMediaSourceRegistry,
         voice: Map<String, VoiceLevelObservation>,
         previous: SelectionState,
+        localModuleIdForTopKExclusion: String? = null,
     ): SelectionState {
         data class Cand(
             val identity: String,
@@ -28,6 +29,9 @@ class TopKSelector {
 
         val eligible = mutableListOf<Cand>()
         for ((identity, inst) in registry.installedSnapshot()) {
+            if (localModuleIdForTopKExclusion != null && identity == localModuleIdForTopKExclusion) {
+                continue
+            }
             if (!inst.isExecutable) continue
             val obs = voice[identity] ?: continue
             if (obs.incarnationId != inst.source.incarnationId) continue

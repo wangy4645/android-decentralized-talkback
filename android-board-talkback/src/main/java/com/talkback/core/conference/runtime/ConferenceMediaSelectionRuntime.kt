@@ -9,6 +9,13 @@ class ConferenceMediaSelectionRuntime(
     val voiceStore: VoiceLevelStore = VoiceLevelStore(registry),
     private val selector: TopKSelector = TopKSelector(),
 ) {
+    /**
+     * Session-local module id excluded from Top-K / decode / audible mix (A3-P).
+     * Null = fail-open (no exclusion).
+     */
+    @Volatile
+    var localModuleIdForTopKExclusion: String? = null
+
     private var selection: TopKSelector.SelectionState = TopKSelector.SelectionState()
 
     fun install(source: AdmittedMediaSource) {
@@ -26,7 +33,14 @@ class ConferenceMediaSelectionRuntime(
         voiceStore.observe(observation)
 
     fun selectTopK(nowMs: Long): TopKSelector.SelectionState {
-        selection = selector.select(nowMs, registry, voiceStore.snapshot(), selection)
+        selection =
+            selector.select(
+                nowMs = nowMs,
+                registry = registry,
+                voice = voiceStore.snapshot(),
+                previous = selection,
+                localModuleIdForTopKExclusion = localModuleIdForTopKExclusion,
+            )
         return selection
     }
 
@@ -49,6 +63,7 @@ class ConferenceMediaSelectionRuntime(
 
     /** Conference session wiring teardown — after authority facts removed. */
     fun clearRegistryForSessionWiring() {
+        localModuleIdForTopKExclusion = null
         registry.clearForSessionWiring()
     }
 }

@@ -1,5 +1,7 @@
 package com.talkback.core.conference.runtime
 
+import com.talkback.core.conference.transport.SourceMixPlayoutAlignment
+
 /**
  * Per-incarnation jitter / reorder state (Profile 03 Q3).
  *
@@ -14,6 +16,8 @@ class PerIncarnationJitterBuffer(
 ) {
     private val bySlot = sortedMapOf<Long, AdmittedMediaFrame>()
     private var nextExpectedSlot: Long? = null
+    /** F9.2 — fixed source↔mix alignment; established once at first QUEUED. */
+    private var mixPlayoutAlignment: SourceMixPlayoutAlignment? = null
     private var executable: Boolean = true
 
     fun size(): Int = bySlot.size
@@ -24,7 +28,26 @@ class PerIncarnationJitterBuffer(
     fun invalidateForHardFence() {
         executable = false
         bySlot.clear()
+        mixPlayoutAlignment = null
     }
+
+    fun mixPlayoutAlignment(): SourceMixPlayoutAlignment? = mixPlayoutAlignment
+
+    /** One-shot at first QUEUED; [mixReferenceSlot] and [sourceReferenceSlot] must be co-temporal. */
+    fun establishMixPlayoutAlignment(
+        mixReferenceSlot: Long,
+        sourceReferenceSlot: Long,
+    ) {
+        if (mixPlayoutAlignment != null) return
+        mixPlayoutAlignment =
+            SourceMixPlayoutAlignment(
+                mixReferenceSlot = mixReferenceSlot,
+                sourceReferenceSlot = sourceReferenceSlot,
+            )
+    }
+
+    fun sourceSlotForSharedMixPlayout(sharedMixPlayoutSlot: Long): Long =
+        mixPlayoutAlignment?.sourceSlotForMix(sharedMixPlayoutSlot) ?: sharedMixPlayoutSlot
 
     fun admit(frame: AdmittedMediaFrame, nowMs: Long): FrameAdmitDisposition {
         require(frame.sourceIdentity == sourceIdentity)

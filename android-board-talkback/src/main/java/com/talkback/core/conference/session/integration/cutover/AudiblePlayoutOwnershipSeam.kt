@@ -6,6 +6,7 @@ import com.talkback.core.conference.runtime.AudioTrackPlayoutSeam
 import com.talkback.core.conference.runtime.MixedBlock
 import com.talkback.core.conference.runtime.PlayoutMetricsSeam
 import com.talkback.core.conference.transport.RecordingPlayoutMetricsSeam
+import com.talkback.core.webrtc.MulticastApmReverseFeed
 
 /**
  * Resource-level playout ownership for RC1.
@@ -30,7 +31,12 @@ class AudiblePlayoutOwnershipSeam(
     var mode: PlayoutMode = PlayoutMode.SHADOW_METRICS_ONLY
         private set
 
+    /** Desk-only — invoked with the same [MixedBlock] passed to production AudioTrack write. */
+    @Volatile
+    internal var deskTestOnProductionWrite: ((MixedBlock) -> Unit)? = null
+
     fun fenceProductionPlayout() {
+        MulticastApmReverseFeed.setSessionActive(false)
         productionSeam?.stop()
         productionSeam = null
         mode = PlayoutMode.FENCED
@@ -55,6 +61,7 @@ class AudiblePlayoutOwnershipSeam(
             seam.start()
             productionSeam = seam
             mode = PlayoutMode.MULTICAST_PRODUCTION
+            MulticastApmReverseFeed.setSessionActive(true)
             ReplacementCutoverObservability.logMulticastAudibleProbe(
                 sessionId = sessionId,
                 active = true,
@@ -68,6 +75,7 @@ class AudiblePlayoutOwnershipSeam(
     }
 
     fun releaseProductionAudioTrack() {
+        MulticastApmReverseFeed.setSessionActive(false)
         productionSeam?.stop()
         productionSeam = null
         mode = PlayoutMode.SHADOW_METRICS_ONLY
@@ -123,7 +131,10 @@ class AudiblePlayoutOwnershipSeam(
                 metricsSeam.write(block, nowMs)
                 false
             }
-            PlayoutMode.MULTICAST_PRODUCTION ->
+            PlayoutMode.MULTICAST_PRODUCTION -> {
+                MulticastApmReverseFeed.submitPlayoutPcm(block.samples)
+                deskTestOnProductionWrite?.invoke(block)
                 productionSeam?.write(block, nowMs) ?: false
+            }
         }
 }
