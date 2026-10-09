@@ -1,11 +1,15 @@
 package com.talkback.core.webrtc
 
 import android.content.Context
+import android.media.AudioFormat
 import android.media.AudioManager
 import android.os.Handler
 import android.os.Looper
 import org.webrtc.PeerConnectionFactory
 import org.webrtc.audio.JavaAudioDeviceModule
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
@@ -20,6 +24,12 @@ internal object WebRtcSharedFactory {
     private var audioDeviceModule: JavaAudioDeviceModule? = null
     private var audioConfigured = false
     private var pendingTeardown: Runnable? = null
+    private val localOutboundSinks = CopyOnWriteArrayList<LocalOutboundPcmSink>()
+
+    fun addLocalOutboundSink(sink: LocalOutboundPcmSink): () -> Unit {
+        localOutboundSinks.add(sink)
+        return { localOutboundSinks.remove(sink) }
+    }
 
     fun acquire(context: Context): PeerConnectionFactory {
         synchronized(lock) {
@@ -36,6 +46,7 @@ internal object WebRtcSharedFactory {
                 audioDeviceModule = JavaAudioDeviceModule.builder(appContext)
                     .setUseHardwareAcousticEchoCanceler(true)
                     .setUseHardwareNoiseSuppressor(true)
+                    .setSamplesReadyCallback(::dispatchLocalOutboundPcm)
                     .createAudioDeviceModule()
                 factory = PeerConnectionFactory.builder()
                     .setOptions(PeerConnectionFactory.Options())
@@ -86,5 +97,19 @@ internal object WebRtcSharedFactory {
 
     private fun resetAndroidAudio() {
         // Best-effort; context may be unavailable on last release.
+    }
+
+    private fun dispatchLocalOutboundPcm(samples: JavaAudioDeviceModule.AudioSamples) {
+        if (localOutboundSinks.isEmpty()) return
+        if (samples.audioFormat != AudioFormat.ENCODING_PCM_16BIT) return
+        val channels = samples.channelCount
+        if (channels <= 0) return
+        val bytesPerFrame = 2 * channels
+        if (bytesPerFrame <= 0 || samples.data.size < bytesPerFrame) return
+        val frames = samples.data.size / bytesPerFrame
+        val buffer = ByteBuffer.wrap(samples.data).order(ByteOrder.LITTLE_ENDIAN)
+        localOutboundSinks.forEach { sink ->
+            sink.onPcm(buffer.duplicate(), 16, samples.sampleRate, channels, frames)
+        }
     }
 }
