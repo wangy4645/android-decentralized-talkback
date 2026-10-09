@@ -19,7 +19,10 @@ class DecodeMixRuntime(
 
     fun hardFence(sourceIdentity: String, incarnationId: Long): Boolean {
         val ok = selection.hardFence(sourceIdentity, incarnationId)
-        if (ok) decoderPool.hardFenceRelease(sourceIdentity, incarnationId)
+        if (ok) {
+            decoderPool.hardFenceRelease(sourceIdentity, incarnationId)
+            decoderLifecycle()?.evict(sourceIdentity, incarnationId)
+        }
         return ok
     }
 
@@ -56,6 +59,7 @@ class DecodeMixRuntime(
                     forTransitionOnly = allocateAsTransition,
                 ) ?: return null
         }
+        decoderLifecycle()?.onPoolAllocated(sourceIdentity, incarnationId)
 
         val pcm =
             decodeSeam.decode(sourceIdentity, incarnationId, mediaSlot, nowMs)
@@ -99,9 +103,12 @@ class DecodeMixRuntime(
             // ACTIVE_MIX that somehow never became usable: release decoder seat only.
             decoderPool.release(sourceIdentity)
         }
+        decoderLifecycle()?.evictSourceSeat(sourceIdentity)
         warmupExpiryCount += 1
         // MUST NOT fence / revoke / change Top-K.
     }
+
+    private fun decoderLifecycle(): OpusDecoderLifecycleSeam? = decodeSeam as? OpusDecoderLifecycleSeam
 
     /**
      * Mix up to MixMaxSources from [candidates] that produce usable PCM.

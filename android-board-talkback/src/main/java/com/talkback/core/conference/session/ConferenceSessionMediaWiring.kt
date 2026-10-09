@@ -13,10 +13,14 @@ import com.talkback.core.conference.runtime.TransportHandle
 import com.talkback.core.conference.transport.ConferenceMulticastNetworkBinding
 import com.talkback.core.conference.transport.ConferenceMulticastRealMediaAssembly
 import com.talkback.core.conference.transport.ConferenceMulticastRtpSrtpTransport
+import com.talkback.core.conference.transport.PerIncarnationIngressTimelineRegistry
 import com.talkback.core.conference.transport.PipelineAdmitResult
 import com.talkback.core.conference.transport.PipelinePlayoutResult
 import com.talkback.core.conference.transport.RecordingPlayoutMetricsSeam
 import com.talkback.core.conference.transport.RelativeMediaTimeline
+import com.talkback.core.conference.transport.SharedMixPlayoutSlotResolver
+import com.talkback.core.conference.session.integration.Profile01A3MixInputTelemetry
+import com.talkback.core.conference.session.integration.Profile01A3MixOutputTelemetry
 import com.talkback.core.conference.session.integration.Profile01ShadowRuntimeObservability
 import com.talkback.core.conference.session.integration.cutover.AudiblePlayoutOwnershipSeam
 import com.talkback.core.conference.session.integration.cutover.audiblePlayoutSeam
@@ -32,12 +36,14 @@ import java.util.concurrent.ConcurrentHashMap
 class ConferenceSessionMediaWiring(
     private val assemblyFactory: (Context?, sessionId: String) -> ConferenceMulticastRealMediaAssembly,
     private val appContext: Context? = null,
+    private val localModuleIdProvider: (() -> String?)? = null,
 ) {
     private data class SessionState(
         var fact: ConferenceSessionMediaFact,
         val assembly: ConferenceMulticastRealMediaAssembly,
         val catalog: SourceBindingCatalog,
         val mediaTimeline: RelativeMediaTimeline,
+        val ingressTimeline: PerIncarnationIngressTimelineRegistry,
         var ingressBlocked: Boolean,
         var playoutStarted: Boolean,
         var lastPlayoutTickMediaTimeMs: Long? = null,
@@ -103,9 +109,15 @@ class ConferenceSessionMediaWiring(
         )
     }
 
+    fun sessionPlayoutTargetSlot(
+        sessionId: String,
+        tickMediaTimeMs: Long,
+    ): Long? =
+        sessions[sessionId]?.mediaTimeline?.mediaSlotForPlayoutTickMs(tickMediaTimeMs)
+
     /**
-     * RCA5-B2 — map playout tick onto anchored RTP media-slot domain and return the
-     * earliest buffered slot that is playable at or before the tick target.
+     * ADR-0058 F9.3 — resolve shared mix slot M at/before session playout target.
+     * Cross-source compare uses normalized mix-domain slots, never raw source S min.
      */
     fun resolvePlayoutMixSlot(
         sessionId: String,
@@ -120,30 +132,33 @@ class ConferenceSessionMediaWiring(
         }
         val pipeline = state.assembly.orchestrator.pipeline
         val admitted = state.assembly.orchestrator.authority.store.currentAdmitted()
-        var bestSlot: Long? = null
-        var bestMediaTimeMs: Long? = null
-        for ((sourceIdentity, source) in admitted) {
-            val nextExpected = pipeline.nextExpectedSlot(sourceIdentity, source.incarnationId)
-            val buffered = pipeline.bufferedSlots(sourceIdentity, source.incarnationId)
-            val eligible =
-                buffered.filter { slot -> nextExpected == null || slot >= nextExpected }
-            val slot =
-                eligible.filter { it <= targetMediaSlot }.minOrNull()
-                    ?: eligible.minOrNull()
-                    ?: continue
-            val frame =
-                pipeline.peekBufferedFrame(sourceIdentity, source.incarnationId, slot)
-                    ?: continue
-            if (bestSlot == null || slot < bestSlot) {
-                bestSlot = slot
-                bestMediaTimeMs = frame.mediaTimeMs
+        val candidates =
+            admitted.map { (sourceIdentity, source) ->
+                SharedMixPlayoutSlotResolver.SourceMixCandidate(
+                    sourceIdentity = sourceIdentity,
+                    alignment =
+                        pipeline.mixPlayoutAlignment(
+                            sourceIdentity,
+                            source.incarnationId,
+                        ),
+                    bufferedSourceSlots =
+                        pipeline.bufferedSlots(sourceIdentity, source.incarnationId),
+                    nextExpectedSourceSlot =
+                        pipeline.nextExpectedSlot(sourceIdentity, source.incarnationId),
+                    mediaTimeMsForSourceSlot = { slot ->
+                        pipeline
+                            .peekBufferedFrame(sourceIdentity, source.incarnationId, slot)
+                            ?.mediaTimeMs
+                    },
+                )
             }
-        }
-        return if (bestSlot != null && bestMediaTimeMs != null) {
-            BufferedMixSlot(slot = bestSlot, slotMediaTimeMs = bestMediaTimeMs)
-        } else {
-            null
-        }
+        val resolved =
+            SharedMixPlayoutSlotResolver.resolveAtOrBeforeTarget(targetMediaSlot, candidates)
+                ?: return null
+        return BufferedMixSlot(
+            slot = resolved.mixSlot,
+            slotMediaTimeMs = resolved.mixSlotMediaTimeMs,
+        )
     }
 
     fun resolveEarliestBufferedMixSlot(sessionId: String): BufferedMixSlot? {
@@ -176,14 +191,30 @@ class ConferenceSessionMediaWiring(
         nowMs: Long,
         slot: Long,
         slotMediaTimeMs: Long,
+        tickMediaTimeMs: Long? = null,
     ): PipelinePlayoutResult? {
         val state = sessions[sessionId] ?: return null
         if (state.ingressBlocked) return null
+        if (tickMediaTimeMs != null) {
+            state.lastPlayoutTickMediaTimeMs = tickMediaTimeMs
+        }
         return state.assembly.pipeline.runMixPlayoutCycle(
             nowMs = nowMs,
             slot = slot,
             slotMediaTimeMs = slotMediaTimeMs,
-        )
+        ).also { result ->
+            Profile01A3MixOutputTelemetry.recordCycle(
+                sessionId = sessionId,
+                owner = Profile01A3MixOutputTelemetry.audioTrackOwnerLabel(),
+                mixCycle = result.mixCycle,
+                playoutObserved = result.playoutObserved,
+            )
+            Profile01A3MixInputTelemetry.recordCycle(
+                sessionId = sessionId,
+                owner = Profile01A3MixInputTelemetry.audioTrackOwnerLabel(),
+                mixCycle = result.mixCycle,
+            )
+        }
     }
 
     fun playoutSuccessfulWrites(sessionId: String): Long? {
@@ -244,9 +275,11 @@ class ConferenceSessionMediaWiring(
                 assembly = assembly,
                 catalog = SourceBindingCatalog(),
                 mediaTimeline = RelativeMediaTimeline(),
+                ingressTimeline = PerIncarnationIngressTimelineRegistry(),
                 ingressBlocked = false,
                 playoutStarted = false,
             )
+        bindLocalModuleIdForTopKExclusion(assembly)
         Profile01ShadowRuntimeObservability.bindActiveSession(
             sessionId = fact.sessionId,
             conferenceId = null,
@@ -290,10 +323,16 @@ class ConferenceSessionMediaWiring(
                 authority.revokeSource(entry.sourceIdentity, entry.incarnationId)
                 decodeMix.hardFence(entry.sourceIdentity, entry.incarnationId)
                 pipeline.drainSourceAfterSessionRevoke(entry.sourceIdentity)
+                state.assembly.opusPayloadStore.evictIncarnation(
+                    entry.sourceIdentity,
+                    entry.incarnationId,
+                )
             }
             state.catalog.clear()
+            state.ingressTimeline.clearAll()
             authority.retireMediaKeyEpoch(oldEpoch)
             pipeline.drainAllForSessionWiring()
+            state.assembly.opusPayloadStore.clearAll()
             authority.store.acceptVerifiedKey(
                 MediaKeyContextFact(
                     mediaKeyEpoch = newFact.mediaKeyEpoch,
@@ -493,6 +532,10 @@ class ConferenceSessionMediaWiring(
                 authority.revokeSource(entry.sourceIdentity, entry.incarnationId)
                 decodeMix.hardFence(entry.sourceIdentity, entry.incarnationId)
                 pipeline.drainSourceAfterSessionRevoke(entry.sourceIdentity)
+                state.assembly.opusPayloadStore.evictIncarnation(
+                    entry.sourceIdentity,
+                    entry.incarnationId,
+                )
             }
             state.catalog.clear()
             state.assembly.stopPlayout()
@@ -500,7 +543,11 @@ class ConferenceSessionMediaWiring(
             pipeline.drainAllForSessionWiring()
             drainResidualDecoders(decodeMix)
             state.assembly.orchestrator.selection.clearRegistryForSessionWiring()
+            state.assembly.decoderSeam.clearAll()
+            state.assembly.opusPayloadStore.clearAll()
             state.assembly.pipeline.transport.endScope()
+            Profile01A3MixOutputTelemetry.clearSession(sessionId)
+            Profile01A3MixInputTelemetry.clearSession(sessionId)
             assertRuntimeEmptyAfterStop(state)
             Profile01ShadowRuntimeObservability.logTeardown(
                 sessionId = sessionId,
@@ -615,6 +662,7 @@ class ConferenceSessionMediaWiring(
                             rxWallMs = rxWallMs,
                             roc = roc,
                             mediaTimeline = locked.mediaTimeline,
+                            ingressTimeline = locked.ingressTimeline,
                             playoutReferenceMs =
                                 locked.lastPlayoutTickMediaTimeMs
                                     ?: locked.mediaTimeline.anchorWallMs(),
@@ -737,6 +785,12 @@ class ConferenceSessionMediaWiring(
         authority.revokeSource(moduleId, incarnationId)
         state.assembly.orchestrator.decodeMix.hardFence(moduleId, incarnationId)
         state.assembly.orchestrator.pipeline.drainSourceAfterSessionRevoke(moduleId)
+        state.assembly.opusPayloadStore.evictIncarnation(moduleId, incarnationId)
+        ConferenceSessionMediaSourceSuccessionLifecycle.clearIngressMapping(
+            state.ingressTimeline,
+            moduleId,
+            incarnationId,
+        )
     }
 
     private fun drainResidualDecoders(decodeMix: com.talkback.core.conference.runtime.DecodeMixRuntime) {
@@ -750,6 +804,10 @@ class ConferenceSessionMediaWiring(
             state.assembly.startPlayout()
             state.playoutStarted = true
         }
+    }
+
+    private fun bindLocalModuleIdForTopKExclusion(assembly: ConferenceMulticastRealMediaAssembly) {
+        assembly.orchestrator.selection.localModuleIdForTopKExclusion = localModuleIdProvider?.invoke()
     }
 
     private fun assertRuntimeEmptyAfterStop(state: SessionState) {
@@ -773,10 +831,14 @@ class ConferenceSessionMediaWiring(
     }
 
     companion object {
+        private fun coordinatorLocalModuleId(): String? =
+            ConferenceSessionMediaCoordinatorDelegate.localModuleIdProvider?.invoke()
+
         fun forProduct(context: Context): ConferenceSessionMediaWiring =
             ConferenceSessionMediaWiring(
                 assemblyFactory = { ctx, _ -> ConferenceMulticastRealMediaAssembly.create(ctx!!) },
                 appContext = context.applicationContext,
+                localModuleIdProvider = { coordinatorLocalModuleId() },
             )
 
         /** Phase A shadow — real underlay/multicast; no AudioTrack playout. */
@@ -786,12 +848,14 @@ class ConferenceSessionMediaWiring(
                     ConferenceMulticastRealMediaAssembly.createShadow(ctx!!, sessionId)
                 },
                 appContext = context.applicationContext,
+                localModuleIdProvider = { coordinatorLocalModuleId() },
             )
 
         fun forHarness(): ConferenceSessionMediaWiring =
             ConferenceSessionMediaWiring(
                 assemblyFactory = { _, _ -> ConferenceMulticastRealMediaAssembly.createHarness() },
                 appContext = null,
+                localModuleIdProvider = { coordinatorLocalModuleId() },
             )
     }
 }

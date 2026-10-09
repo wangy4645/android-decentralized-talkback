@@ -61,8 +61,58 @@ object WireIngressMediaMapper {
 }
 
 /**
- * Maps RTP sequence onto a wall-clock-anchored media timeline for live receive.
+ * ADR-0058 Layer A — per-incarnation ingress RTP sequence → mediaTimeMs.
+ * Must not read or write [RelativeMediaTimeline] session baseSeq.
+ */
+class PerIncarnationIngressTimelineRegistry {
+    private data class Origin(
+        val seq: Long,
+        val wallMs: Long,
+    )
+
+    private val origins = linkedMapOf<String, Origin>()
+
+    fun mediaTimeMs(
+        sourceIdentity: String,
+        incarnationId: Long,
+        sequence: Int,
+        arrivalMs: Long,
+    ): Long {
+        val key = key(sourceIdentity, incarnationId)
+        val seq = sequence.toLong()
+        val origin =
+            origins.getOrPut(key) {
+                Origin(seq = seq, wallMs = arrivalMs)
+            }
+        return origin.wallMs + (seq - origin.seq) * MediaJitterConstants.MEDIA_SLOT_MS
+    }
+
+    fun clear(
+        sourceIdentity: String,
+        incarnationId: Long,
+    ) {
+        origins.remove(key(sourceIdentity, incarnationId))
+    }
+
+    fun clearIdentity(sourceIdentity: String) {
+        val prefix = "$sourceIdentity#"
+        origins.keys.filter { it.startsWith(prefix) }.forEach { origins.remove(it) }
+    }
+
+    fun clearAll() {
+        origins.clear()
+    }
+
+    private fun key(
+        sourceIdentity: String,
+        incarnationId: Long,
+    ): String = "$sourceIdentity#$incarnationId"
+}
+
+/**
+ * Session playout domain (ADR-0058 Layer B / F4).
  * First accepted packet defines origin; subsequent packets advance by 20 ms/slot.
+ * Do not use this mapping to interpret a foreign source's RTP sequence for jitter deadline.
  */
 class RelativeMediaTimeline {
     private var baseSeq: Long? = null
@@ -74,15 +124,23 @@ class RelativeMediaTimeline {
 
     fun isAnchored(): Boolean = baseSeq != null && baseArrivalMs != null
 
+    /** First packet of the session anchors playout projection; later sources must not reset it. */
+    fun ensureAnchor(
+        sequence: Int,
+        arrivalMs: Long,
+    ) {
+        if (baseSeq == null) {
+            baseSeq = sequence.toLong()
+            baseArrivalMs = arrivalMs
+        }
+    }
+
     fun mediaTimeMs(
         sequence: Int,
         arrivalMs: Long,
     ): Long {
         val seq = sequence.toLong()
-        if (baseSeq == null) {
-            baseSeq = seq
-            baseArrivalMs = arrivalMs
-        }
+        ensureAnchor(sequence, arrivalMs)
         return baseArrivalMs!! + (seq - baseSeq!!) * MediaJitterConstants.MEDIA_SLOT_MS
     }
 

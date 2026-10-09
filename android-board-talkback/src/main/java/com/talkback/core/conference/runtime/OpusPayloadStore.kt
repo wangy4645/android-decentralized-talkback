@@ -3,6 +3,9 @@ package com.talkback.core.conference.runtime
 /**
  * Post-P02 Opus plaintext staging for real decoder seam (Phase 1 Slice 3).
  * Keyed by source × incarnation × media slot — not a new authority surface.
+ *
+ * P3: writes only from pipeline after jitter [FrameAdmitDisposition.QUEUED];
+ * consumption gated by [SlotPullDisposition.DECODE_FRAME] at mix time.
  */
 class OpusPayloadStore {
     private data class Key(
@@ -11,6 +14,7 @@ class OpusPayloadStore {
         val mediaSlot: Long,
     )
 
+    private val lock = Any()
     private val payloads = linkedMapOf<Key, ByteArray>()
 
     fun put(
@@ -19,22 +23,56 @@ class OpusPayloadStore {
         mediaSlot: Long,
         opusPayload: ByteArray,
     ) {
-        payloads[Key(sourceIdentity, incarnationId, mediaSlot)] = opusPayload.copyOf()
+        synchronized(lock) {
+            payloads[Key(sourceIdentity, incarnationId, mediaSlot)] = opusPayload.copyOf()
+        }
     }
 
     fun take(
         sourceIdentity: String,
         incarnationId: Long,
         mediaSlot: Long,
-    ): ByteArray? = payloads.remove(Key(sourceIdentity, incarnationId, mediaSlot))
+    ): ByteArray? =
+        synchronized(lock) {
+            payloads.remove(Key(sourceIdentity, incarnationId, mediaSlot))
+        }
 
     fun peek(
         sourceIdentity: String,
         incarnationId: Long,
         mediaSlot: Long,
-    ): ByteArray? = payloads[Key(sourceIdentity, incarnationId, mediaSlot)]?.copyOf()
+    ): ByteArray? =
+        synchronized(lock) {
+            payloads[Key(sourceIdentity, incarnationId, mediaSlot)]?.copyOf()
+        }
 
-    fun size(): Int = payloads.size
+    fun size(): Int =
+        synchronized(lock) {
+            payloads.size
+        }
+
+    fun evictIncarnation(
+        sourceIdentity: String,
+        incarnationId: Long,
+    ) {
+        synchronized(lock) {
+            payloads.keys.removeAll { key ->
+                key.sourceIdentity == sourceIdentity && key.incarnationId == incarnationId
+            }
+        }
+    }
+
+    fun evictSourceIdentity(sourceIdentity: String) {
+        synchronized(lock) {
+            payloads.keys.removeAll { key -> key.sourceIdentity == sourceIdentity }
+        }
+    }
+
+    fun clearAll() {
+        synchronized(lock) {
+            payloads.clear()
+        }
+    }
 }
 
 object OpusCodecConstants {

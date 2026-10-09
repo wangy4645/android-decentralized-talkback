@@ -1,5 +1,7 @@
 package com.talkback.core.conference.session
 
+import com.talkback.core.conference.transport.PerIncarnationIngressTimelineRegistry
+
 /**
  * SOURCE generation succession — authoritative replace-before-ready sequencing.
  *
@@ -36,5 +38,14 @@ internal object ConferenceSessionMediaSourceSuccessionLifecycle {
             bindingIncarnation < catalog -> SourceSuccessionMediaReadyDecision.REJECT_STALE_GENERATION
             else -> SourceSuccessionMediaReadyDecision.DEFER_REPLACE_PENDING
         }
+    }
+
+    /** F5 — new incarnation must not inherit the previous ingress origin. */
+    fun clearIngressMapping(
+        ingressTimeline: PerIncarnationIngressTimelineRegistry,
+        sourceIdentity: String,
+        incarnationId: Long,
+    ) {
+        ingressTimeline.clear(sourceIdentity, incarnationId)
     }
 }
