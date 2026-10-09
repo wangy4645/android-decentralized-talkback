@@ -13,6 +13,7 @@ internal object SharedLocalAudio {
     private val lock = Any()
     private var audioSource: AudioSource? = null
     private var localTrack: AudioTrack? = null
+    private var attachedPcCount = 0
 
     fun acquireLocalTrack(factory: PeerConnectionFactory): AudioTrack {
         synchronized(lock) {
@@ -30,8 +31,25 @@ internal object SharedLocalAudio {
         }
     }
 
+    fun notePeerAttached() {
+        synchronized(lock) { attachedPcCount++ }
+    }
+
+    fun notePeerDetached() {
+        synchronized(lock) {
+            if (attachedPcCount > 0) attachedPcCount--
+        }
+    }
+
+    fun trackId(): String = synchronized(lock) {
+        localTrack?.id() ?: "none"
+    }
+
+    fun attachedPcCount(): Int = synchronized(lock) { attachedPcCount }
+
     fun release() {
         synchronized(lock) {
+            attachedPcCount = 0
             runCatching { localTrack?.setEnabled(false) }
             runCatching { localTrack?.dispose() }
             runCatching { audioSource?.dispose() }

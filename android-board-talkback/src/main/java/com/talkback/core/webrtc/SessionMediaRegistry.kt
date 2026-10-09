@@ -47,6 +47,11 @@ class SessionMediaRegistry(
     fun getMesh(remoteModuleId: String): WebRtcAudioEngine? =
         sessionManager.getEngine(remoteModuleId)
 
+    fun abortPendingNegotiation() {
+        sessionManager.abortPendingNegotiation()
+        unicastEngines.values.forEach { it.abortPendingNegotiation() }
+    }
+
     fun conferenceEngine(remoteModuleId: String): WebRtcAudioEngine =
         sessionManager.create(remoteModuleId, MediaBearerScope.CONFERENCE)
 

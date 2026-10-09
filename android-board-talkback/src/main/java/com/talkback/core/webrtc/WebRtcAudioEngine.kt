@@ -18,6 +18,8 @@ interface WebRtcAudioEngine {
     fun applyRemoteOffer(sdp: String, polite: Boolean = true): String
     fun applyRemoteAnswer(sdp: String, polite: Boolean = true)
     fun rollbackNegotiation()
+    /** Unblock coordinator SDP await so leave/hangup can run. */
+    fun abortPendingNegotiation() = Unit
     fun addIceCandidate(candidate: String)
     fun startCapture()
     fun stopCapture()
@@ -88,4 +90,10 @@ interface WebRtcAudioEngine {
         numberOfChannels: Int,
         numberOfFrames: Int
     ) = Unit
+
+    /** P0 observation only: outbound audio sender vs expected PROGRAM track. */
+    fun programSenderSnapshot(): ProgramSenderSnapshot? = null
+
+    /** Observation-only PeerConnection identity for SRD/domain correlation. */
+    fun diagnosticPeerConnectionHash(): Int? = null
 }

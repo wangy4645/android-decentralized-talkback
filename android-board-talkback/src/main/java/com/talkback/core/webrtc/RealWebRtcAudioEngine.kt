@@ -1,6 +1,7 @@
 package com.talkback.core.webrtc
 
 import android.content.Context
+import com.talkback.core.session.ConferenceSrdNativeObservability
 import com.talkback.core.util.TalkbackLog
 import org.webrtc.AudioTrack
 import org.webrtc.IceCandidate
@@ -35,6 +36,7 @@ class RealWebRtcAudioEngine(
     private val remoteAudioTracks = CopyOnWriteArrayList<AudioTrack>()
     private val pendingRemoteCandidates = CopyOnWriteArrayList<IceCandidate>()
     private val capturing = AtomicBoolean(false)
+    private val pendingSdpWait = PendingSdpWait()
     @Volatile
     private var remoteDescriptionApplied = false
     private var localIceListener: ((String) -> Unit)? = null
@@ -120,10 +122,17 @@ class RealWebRtcAudioEngine(
             localAudioTrack,
             listOf("tb_stream")
         )
+        SharedLocalAudio.notePeerAttached()
         localAudioTrack.setEnabled(false)
     }
 
+    private fun warnJni(op: String) {
+        WebRtcJniThreadGuard.warnIfCoordinator(op)
+    }
+
     override fun createOffer(iceRestart: Boolean): String {
+        warnJni("createOffer")
+        pendingSdpWait.begin()
         // INV-NEG-001: must NOT clear Answerer settling here (createOffer self-lock / skip commit).
         // Settling clears only via commitAnswererTransaction / rollback / offerer answer path.
         val before = negotiationSnapshot()
@@ -147,6 +156,8 @@ class RealWebRtcAudioEngine(
     }
 
     override fun applyRemoteOffer(sdp: String, polite: Boolean): String {
+        warnJni("applyRemoteOffer")
+        pendingSdpWait.begin()
         val before = negotiationSnapshot()
         logNegotiation(
             "op=ROLE role=ANSWERER reason=applyRemoteOffer polite=$polite " +
@@ -184,6 +195,8 @@ class RealWebRtcAudioEngine(
     }
 
     override fun applyRemoteAnswer(sdp: String, polite: Boolean) {
+        warnJni("applyRemoteAnswer")
+        pendingSdpWait.begin()
         val before = negotiationSnapshot()
         logNegotiation(
             "op=ROLE role=OFFERER reason=applyRemoteAnswer polite=$polite " +
@@ -213,7 +226,12 @@ class RealWebRtcAudioEngine(
         clearNegotiationSettling()
     }
 
+    override fun abortPendingNegotiation() {
+        pendingSdpWait.abort()
+    }
+
     override fun rollbackNegotiation() {
+        warnJni("rollbackNegotiation")
         if (released) return
         if (peerConnection.signalingState() == PeerConnection.SignalingState.STABLE) return
         runCatching {
@@ -237,6 +255,7 @@ class RealWebRtcAudioEngine(
     }
 
     override fun addIceCandidate(candidate: String) {
+        warnJni("addIceCandidate")
         if (released) return
         val ice = decodeIceCandidate(candidate) ?: return
         if (!remoteDescriptionApplied) {
@@ -247,12 +266,14 @@ class RealWebRtcAudioEngine(
     }
 
     override fun startCapture() {
+        warnJni("startCapture")
         capturing.set(true)
         applyCaptureEnabled(true)
         TalkbackLog.i("WebRTC local capture ON relay=$programRelayMode")
     }
 
     override fun stopCapture() {
+        warnJni("stopCapture")
         capturing.set(false)
         applyCaptureEnabled(false)
         TalkbackLog.i("WebRTC local capture OFF")
@@ -275,6 +296,7 @@ class RealWebRtcAudioEngine(
     }
 
     override fun setMuted(muted: Boolean) {
+        warnJni("setMuted")
         if (released) return
         if (muted) {
             localAudioTrack.setEnabled(false)
@@ -285,6 +307,7 @@ class RealWebRtcAudioEngine(
     }
 
     override fun setRemotePlaybackEnabled(enabled: Boolean) {
+        warnJni("setRemotePlaybackEnabled")
         if (released) return
         remotePlaybackEnabled = enabled
         remoteAudioTracks.forEach { track -> track.setEnabled(enabled) }
@@ -293,6 +316,7 @@ class RealWebRtcAudioEngine(
     override fun isRemotePlaybackEnabled(): Boolean = remotePlaybackEnabled
 
     override fun setProgramRelayMode(mode: ProgramRelayMode) {
+        warnJni("setProgramRelayMode")
         programRelayMode = mode
         if (mode == ProgramRelayMode.PROGRAM) {
             ensureProgramTrack()
@@ -303,6 +327,7 @@ class RealWebRtcAudioEngine(
     }
 
     override fun setInboundPcmSink(sink: InboundPcmSink?) {
+        warnJni("setInboundPcmSink")
         inboundPcmSink = sink
         remoteAudioTracks.forEach { attachInboundSink(it) }
     }
@@ -314,6 +339,7 @@ class RealWebRtcAudioEngine(
         numberOfChannels: Int,
         numberOfFrames: Int
     ) {
+        warnJni("feedProgramPcm")
         if (released || programRelayMode != ProgramRelayMode.PROGRAM) return
         val observer = programCapturerObserver ?: return
         runCatching {
@@ -332,7 +358,32 @@ class RealWebRtcAudioEngine(
         }.onFailure { TalkbackLog.w("Program PCM inject failed: ${it.message}") }
     }
 
+    override fun programSenderSnapshot(): ProgramSenderSnapshot? {
+        warnJni("programSenderSnapshot")
+        if (released) return ProgramSenderSnapshot.NONE
+        return runCatching {
+            val programId = programAudioTrack?.id() ?: "none"
+            val micId = localAudioTrack.id()
+            val audioSenders = peerConnection.senders.filter { sender ->
+                sender.track()?.kind() == MediaStreamTrack.AUDIO_TRACK_KIND
+            }
+            val sender = audioSenders.firstOrNull { it.track()?.id() == programId }
+                ?: audioSenders.firstOrNull { it.track()?.id() == micId }
+                ?: audioSenders.firstOrNull()
+            val track = sender?.track()
+            ProgramSenderSnapshot(
+                senderId = sender?.id() ?: "none",
+                currentTrackId = track?.id() ?: "none",
+                expectedTrackId = programId,
+                enabled = track?.enabled() == true,
+                readyState = track?.state()?.name ?: "none",
+                lastReplaceAt = "none"
+            )
+        }.getOrElse { ProgramSenderSnapshot.NONE }
+    }
+
     override fun release() {
+        warnJni("release")
         if (released) return
         released = true
         iceConnectionStateName = "CLOSED"
@@ -351,6 +402,7 @@ class RealWebRtcAudioEngine(
         pendingRemoteCandidates.clear()
         runCatching { peerConnection.close() }
         runCatching { peerConnection.dispose() }
+        SharedLocalAudio.notePeerDetached()
         WebRtcSharedFactory.release()
     }
 
@@ -375,6 +427,7 @@ class RealWebRtcAudioEngine(
     }
 
     override fun refreshAudioLevel() {
+        warnJni("refreshAudioLevel")
         if (released) return
         peerConnection.getStats { report -> applyStatsReport(report) }
     }
@@ -385,7 +438,11 @@ class RealWebRtcAudioEngine(
 
     override fun iceConnectionState(): String = iceConnectionStateName
 
+    override fun diagnosticPeerConnectionHash(): Int? =
+        if (released) null else System.identityHashCode(peerConnection)
+
     override fun negotiationSnapshot(): NegotiationPcSnapshot {
+        warnJni("negotiationSnapshot")
         if (released) {
             return NegotiationPcSnapshot(
                 signalingState = "CLOSED",
@@ -512,7 +569,7 @@ class RealWebRtcAudioEngine(
             override fun onSetFailure(error: String?) = Unit
         })
 
-        await(createLatch, "Timed out creating SDP")
+        pendingSdpWait.await(createLatch, "Timed out creating SDP")
         createError.get()?.let { error(it) }
         val desc = created.get() ?: error("Missing SDP after create")
 
@@ -532,21 +589,51 @@ class RealWebRtcAudioEngine(
         logNegotiation(
             "op=$op type=$type phase=BEFORE ${before.formatFields()}"
         )
+        if (op == "SRD" && type == "ANSWER") {
+            logSrdBoundary("SRD_ENTER", type)
+        }
         val latch = CountDownLatch(1)
         val setError = AtomicReference<String>()
-        action(object : SdpObserver {
+        val observerHash = AtomicReference<Int>()
+        val observer = object : SdpObserver {
             override fun onCreateSuccess(desc: SessionDescription?) = Unit
             override fun onSetSuccess() {
+                if (op == "SRD" && type == "ANSWER") {
+                    logSrdBoundary(
+                        "SRD_CALLBACK_ENTER",
+                        type,
+                        observerHash = System.identityHashCode(this)
+                    )
+                    logSrdBoundary("SRD_EXIT", type, result = "SUCCESS")
+                }
                 latch.countDown()
             }
 
             override fun onCreateFailure(error: String?) = Unit
             override fun onSetFailure(error: String?) {
+                if (op == "SRD" && type == "ANSWER") {
+                    logSrdBoundary(
+                        "SRD_CALLBACK_FAILURE",
+                        type,
+                        observerHash = System.identityHashCode(this),
+                        error = error ?: "Unknown set failure"
+                    )
+                    logSrdBoundary("SRD_EXIT", type, result = "FAILURE")
+                }
                 setError.set(error ?: "Unknown set failure")
                 latch.countDown()
             }
-        })
-        await(latch, "Timed out setting SDP")
+        }
+        observerHash.set(System.identityHashCode(observer))
+        invokeNativeSet(op, type) { action(observer) }
+        if (op == "SRD" && type == "ANSWER") {
+            logSrdBoundary(
+                "SRD_JNI_RETURN",
+                type,
+                observerHash = observerHash.get()
+            )
+        }
+        pendingSdpWait.await(latch, "Timed out setting SDP")
         setError.get()?.let { error(it) }
         val after = negotiationSnapshot()
         logNegotiation(
@@ -554,9 +641,81 @@ class RealWebRtcAudioEngine(
         )
     }
 
-    private fun await(latch: CountDownLatch, timeoutMessage: String) {
-        val ok = latch.await(3, TimeUnit.SECONDS)
-        check(ok) { timeoutMessage }
+    /** Mutex covers native setRemoteDescription(answer) entry only, not latch wait. */
+    private fun invokeNativeSet(op: String, type: String, nativeCall: () -> Unit) {
+        if (op != "SRD" || type != "ANSWER") {
+            nativeCall()
+            return
+        }
+        logSrdBoundary("SRD_MUTEX_WAIT_BEGIN", type)
+        val waitStartNs = System.nanoTime()
+        WebRtcSharedFactory.withSrdApplyLock {
+            val acquiredNs = System.nanoTime()
+            logSrdBoundary(
+                "SRD_MUTEX_ACQUIRED",
+                type,
+                waitMs = TimeUnit.NANOSECONDS.toMillis(acquiredNs - waitStartNs)
+            )
+            try {
+                val nativeStartNs = System.nanoTime()
+                logSrdBoundary("SRD_NATIVE_CALL_ENTER", type)
+                nativeCall()
+                val elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - nativeStartNs)
+                logSrdBoundary("SRD_NATIVE_CALL_EXIT", type, elapsedMs = elapsedMs)
+            } finally {
+                logSrdBoundary(
+                    "SRD_MUTEX_RELEASED",
+                    type,
+                    holdMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - acquiredNs)
+                )
+            }
+        }
+    }
+
+    private fun logSrdBoundary(
+        event: String,
+        type: String,
+        result: String? = null,
+        observerHash: Int? = null,
+        error: String? = null,
+        waitMs: Long? = null,
+        holdMs: Long? = null,
+        elapsedMs: Long? = null
+    ) {
+        val thread = Thread.currentThread()
+        val tag = playbackDiagnosticTag ?: "unknown"
+        val parts = tag.split("|", limit = 2)
+        val conferenceId = parts.getOrNull(0) ?: "unknown"
+        val remote = parts.getOrNull(1) ?: "unknown"
+        ConferenceSrdNativeObservability.recordFromTag(tag, event)
+        if (event == "SRD_NATIVE_CALL_EXIT" && elapsedMs != null) {
+            ConferenceSrdNativeObservability.edgeKeyFromDiagnosticTag(tag)?.let { edgeKey ->
+                ConferenceSrdNativeObservability.recordNativeCallExit(edgeKey, elapsedMs)
+            }
+        }
+        val snapshot = if (released) {
+            NegotiationPcSnapshot(signalingState = "CLOSED")
+        } else {
+            negotiationSnapshot()
+        }
+        val pcHash = System.identityHashCode(peerConnection)
+        val resultField = result?.let { " result=$it" } ?: ""
+        val observerField = observerHash?.let { " observerHash=$it" } ?: ""
+        val errorField = error?.let { " error=$it" } ?: ""
+        val waitField = waitMs?.let { " waitMs=$it" } ?: ""
+        val holdField = holdMs?.let { " holdMs=$it" } ?: ""
+        val elapsedField = elapsedMs?.let { " elapsedMs=$it" } ?: ""
+        TalkbackLog.i(
+            "$event type=$type " +
+                ConferenceSrdNativeObservability.correlationFieldsFromTag(tag) + " " +
+                snapshot.formatFields() + " " +
+                "pcHash=$pcHash " +
+                "factoryHash=${System.identityHashCode(peerConnectionFactory)} " +
+                "thread=${thread.name} tid=${thread.id}$observerField$resultField$errorField" +
+                "$waitField$holdField$elapsedField " +
+                "trackId=${SharedLocalAudio.trackId()} " +
+                "attachedPcCount=${SharedLocalAudio.attachedPcCount()}"
+        )
     }
 
     private fun encodeIceCandidate(candidate: IceCandidate): String {

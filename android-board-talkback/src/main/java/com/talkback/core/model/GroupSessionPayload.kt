@@ -42,7 +42,9 @@ data class GroupSessionPayload(
     /** ADR-0035 PR1: delivery attempt within a lineage (default 1; no retry owner yet). */
     val deliveryAttemptId: Long = 1L,
     /** ADR-0037 Phase 3.2: wire-carried negotiation owner (A), not a second election. */
-    val negotiationOwnerModuleId: String? = null
+    val negotiationOwnerModuleId: String? = null,
+    /** P0.1e-1: Host→Anchor membership fact for a late spoke. Not SDP. */
+    val lateSpokeRemoteId: String? = null
 ) {
     fun encode(): String {
         val arr = JSONArray()
@@ -100,6 +102,9 @@ data class GroupSessionPayload(
         if (!negotiationOwnerModuleId.isNullOrBlank()) {
             json.put("negotiationOwnerModuleId", negotiationOwnerModuleId)
         }
+        if (!lateSpokeRemoteId.isNullOrBlank()) {
+            json.put("lateSpokeRemoteId", lateSpokeRemoteId)
+        }
         return json.toString()
     }
 
@@ -141,7 +146,8 @@ data class GroupSessionPayload(
                     transportGeneration = json.optLong("transportGeneration", 0L).takeIf { it > 0L },
                     obligationGeneration = json.optLong("obligationGeneration", 0L).takeIf { it > 0L },
                     deliveryAttemptId = json.optLong("deliveryAttemptId", 1L).coerceAtLeast(1L),
-                    negotiationOwnerModuleId = json.optString("negotiationOwnerModuleId").takeIf { it.isNotBlank() }
+                    negotiationOwnerModuleId = json.optString("negotiationOwnerModuleId").takeIf { it.isNotBlank() },
+                    lateSpokeRemoteId = json.optString("lateSpokeRemoteId").takeIf { it.isNotBlank() }
                 )
             }.getOrNull()
         }

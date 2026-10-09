@@ -107,6 +107,19 @@ class StubWebRtcAudioEngine : WebRtcAudioEngine {
         injectedProgramFrames.add(bytes)
     }
 
+    override fun programSenderSnapshot(): ProgramSenderSnapshot {
+        val programId = "stub-program"
+        val currentId = if (programRelayMode == ProgramRelayMode.PROGRAM) programId else "stub-mic"
+        return ProgramSenderSnapshot(
+            senderId = "stub-sender",
+            currentTrackId = currentId,
+            expectedTrackId = programId,
+            enabled = capturing.get(),
+            readyState = "LIVE",
+            lastReplaceAt = "none"
+        )
+    }
+
     override fun release() {
         capturing.set(false)
         remoteOffer = null
