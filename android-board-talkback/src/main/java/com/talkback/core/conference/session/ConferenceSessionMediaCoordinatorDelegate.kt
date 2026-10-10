@@ -259,6 +259,25 @@ object ConferenceSessionMediaCoordinatorDelegate {
         ConferenceSessionMediaBridge.beginSessionTeardown(sessionId)
     }
 
+    /**
+     * Meeting mute/unmute — multicast B-layer RX playout ingress recovery (no AudioTrack fence).
+     */
+    fun onConferenceCallMuteChanged(
+        sessionId: String,
+        muted: Boolean,
+    ) {
+        if (!MeetingProductMediaShadow.enabled) return
+        try {
+            ConferenceSessionMediaBridge.wiring?.onConferenceCallMuteChanged(sessionId, muted)
+        } catch (t: Throwable) {
+            Profile01ShadowRuntimeObservability.logShadowPlayoutFailed(
+                sessionId = sessionId,
+                reason = t.javaClass.simpleName,
+                detail = "conference_mute_changed muted=$muted ${t.message}",
+            )
+        }
+    }
+
     fun onConferenceSessionStopped(sessionId: String) {
         MulticastAudibleAutomaticCutover.onSessionStopped(sessionId)
         ReplacementCutoverRc1.onSessionTeardown(sessionId)

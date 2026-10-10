@@ -16,6 +16,7 @@ import com.talkback.core.conference.session.profile01.wire.Profile01DerivedMedia
 import com.talkback.core.conference.session.profile01.wire.Profile01FactDigest
 import com.talkback.core.conference.session.profile01.wire.Profile01PersistedSignedFactSigner
 import com.talkback.core.conference.session.profile01.wire.Profile01SignedFactEnvelope
+import com.talkback.core.conference.session.profile01.wire.Profile01SignedFactSignerSource
 import com.talkback.core.conference.session.profile01.wire.Profile01SignedFactVerifier
 import com.talkback.core.conference.session.profile01.wire.Profile01WireCborDecoder
 import com.talkback.core.conference.session.profile01.wire.Profile01WireConstants
@@ -274,7 +275,7 @@ class MeetingProfile01SourceOriginEligibilityContinuationTest {
                 mediaKeyAuthority = mediaKeyAuthority,
                 supplementRegistry = supplementRegistry,
                 membershipConvergence = ingress.membershipRegistry(),
-                publisher = MeetingProfile01SourceOriginPublisher(signerFixture.signer),
+                signerSource = Profile01SignedFactSignerSource.fixed(signerFixture.signer),
             )
         ingress.onCreationMembershipEstablished = { conferenceId ->
             val boundSessionId = sessionIndex.sessionIdForConference(conferenceId)
@@ -295,8 +296,8 @@ class MeetingProfile01SourceOriginEligibilityContinuationTest {
             MeetingProfile01CreationOriginBridge(
                 sessionIndex = sessionIndex,
                 mediaKeyAuthority = mediaKeyAuthority,
-                publisher =
-                    MeetingProfile01CreationOriginPublisher(
+                signerSource =
+                    Profile01SignedFactSignerSource.fixed(
                         (creationSignerFixture ?: signerFixture).signer,
                     ),
                 membershipConvergence = ingress.membershipRegistry(),

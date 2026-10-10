@@ -187,6 +187,11 @@ class MediaExecutionPipeline(
         if (nowMs <= slotMediaTimeMs + MediaJitterConstants.MAX_PLAYOUT_DELAY_MS) {
             return SlotPullDisposition.EMPTY
         }
+        // B5 — slotMediaTimeMs must share wall clock with nowMs. Reject fantasy advances
+        // from slot-index*20ms (pulls cursor ahead of real RTP → LATE deadlock).
+        if (nowMs - slotMediaTimeMs > MediaJitterConstants.WALL_MEDIA_TIME_SKEW_LIMIT_MS) {
+            return SlotPullDisposition.EMPTY
+        }
 
         buf?.advanceExpectedTo(slot + 1)
         val plc = plcFor(sourceIdentity)
@@ -235,6 +240,25 @@ class MediaExecutionPipeline(
 
     fun jitterSize(sourceIdentity: String, incarnationId: Long): Int =
         jitters[jitterKey(sourceIdentity, incarnationId)]?.size() ?: 0
+
+    fun gapEmptyBetweenLatestBufferedAnd(
+        sourceIdentity: String,
+        incarnationId: Long,
+        beforeSlot: Long,
+    ): Boolean =
+        jitters[jitterKey(sourceIdentity, incarnationId)]
+            ?.gapEmptyBetweenLatestBufferedAnd(beforeSlot)
+            ?: true
+
+    fun allBufferedPastUsefulDeadline(
+        sourceIdentity: String,
+        incarnationId: Long,
+        nowMs: Long,
+    ): Boolean {
+        val buf = jitters[jitterKey(sourceIdentity, incarnationId)] ?: return true
+        if (buf.size() == 0) return true
+        return buf.allBufferedPastUsefulDeadline(nowMs)
+    }
 
     fun hasBufferedFrame(
         sourceIdentity: String,
@@ -287,6 +311,31 @@ class MediaExecutionPipeline(
     ): Int {
         val buf = jitters[jitterKey(sourceIdentity, incarnationId)] ?: return 0
         return buf.soakDiscardBelowAndResync(liveSlot)
+    }
+
+    /** Advance nextExpected without discarding buffered frames. */
+    fun slideJitterExpectedTo(
+        sourceIdentity: String,
+        incarnationId: Long,
+        slot: Long,
+    ): Boolean {
+        val buf = jitters[jitterKey(sourceIdentity, incarnationId)] ?: return false
+        buf.slideExpectedTo(slot)
+        return true
+    }
+
+    fun latestBufferedSlot(
+        sourceIdentity: String,
+        incarnationId: Long,
+    ): Long? = jitters[jitterKey(sourceIdentity, incarnationId)]?.latestBufferedSlot()
+
+    /** Clears a stale expected slot when jitter is empty (conference unmute RX recovery). */
+    fun recoverEmptyJitterLiveEdge(
+        sourceIdentity: String,
+        incarnationId: Long,
+    ): Boolean {
+        val buf = jitters[jitterKey(sourceIdentity, incarnationId)] ?: return false
+        return buf.resetLiveEdgeWhenEmpty()
     }
 
     private fun releaseJitterBuffersForIdentity(sourceIdentity: String) {

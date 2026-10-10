@@ -16,11 +16,14 @@ import com.talkback.core.conference.transport.ConferenceMulticastRtpSrtpTranspor
 import com.talkback.core.conference.transport.PipelineAdmitResult
 import com.talkback.core.conference.transport.PipelinePlayoutResult
 import com.talkback.core.conference.transport.RecordingPlayoutMetricsSeam
+import com.talkback.core.conference.transport.PerIncarnationIngressTimelineRegistry
 import com.talkback.core.conference.transport.RelativeMediaTimeline
 import com.talkback.core.conference.session.integration.Profile01A3MixInputTelemetry
 import com.talkback.core.conference.session.integration.Profile01A3MixOutputTelemetry
 import com.talkback.core.conference.session.integration.Profile01ShadowRuntimeObservability
+import com.talkback.core.conference.session.integration.cutover.AudibleOwnershipState
 import com.talkback.core.conference.session.integration.cutover.AudiblePlayoutOwnershipSeam
+import com.talkback.core.conference.session.integration.cutover.ReplacementCutoverRc1
 import com.talkback.core.conference.session.integration.cutover.audiblePlayoutSeam
 import com.talkback.core.conference.wire.WireIngressResult
 import java.util.concurrent.ConcurrentHashMap
@@ -40,17 +43,22 @@ class ConferenceSessionMediaWiring(
         val assembly: ConferenceMulticastRealMediaAssembly,
         val catalog: SourceBindingCatalog,
         val mediaTimeline: RelativeMediaTimeline,
+        val ingressTimeline: PerIncarnationIngressTimelineRegistry,
         var ingressBlocked: Boolean,
         var playoutStarted: Boolean,
         var lastPlayoutTickMediaTimeMs: Long? = null,
+        val playoutSlotProgress: PlayoutMixSlotResolver.PlayoutSlotProgress =
+            PlayoutMixSlotResolver.PlayoutSlotProgress(),
     )
 
     private val sessions = linkedMapOf<String, SessionState>()
     private val sessionPipelineLocks = ConcurrentHashMap<String, Any>()
 
     data class BufferedMixSlot(
+        /** Session playout-domain representative slot (telemetry); pulls use [perSourceSlots]. */
         val slot: Long,
         val slotMediaTimeMs: Long,
+        val perSourceSlots: Map<String, Long> = emptyMap(),
     )
 
     fun sessionPlayoutAnchorMs(sessionId: String): Long? {
@@ -109,6 +117,50 @@ class ConferenceSessionMediaWiring(
      * RCA5-B2 — map playout tick onto anchored RTP media-slot domain and return the
      * earliest buffered slot that is playable at or before the tick target.
      */
+    /**
+     * RCA5-B7 — Top-K mix only pulls selected sources; admitted non-Top-K jitter prefixes
+     * otherwise never advance [nextExpected] (M04 field: M01 next stuck, starvation while bySlot>0).
+     * Discard-pull up to [maxSlotsPerSource] consecutive ready slots per off-Top-K source each tick.
+     * Does not change Top-K / VAD / reorder constants.
+     */
+    fun maintainOffTopKPlayoutCursors(
+        sessionId: String,
+        nowMs: Long,
+        maxSlotsPerSource: Int = MediaJitterConstants.MAX_REORDER_PACKETS,
+    ) {
+        val state = sessions[sessionId] ?: return
+        if (state.ingressBlocked) return
+        val orchestrator = state.assembly.orchestrator
+        orchestrator.selectTopK(nowMs)
+        val topKIds =
+            orchestrator.selection.currentTopK().members.map { it.sourceIdentity }.toSet()
+        val admitted = orchestrator.authority.store.currentAdmitted()
+        val pipeline = orchestrator.pipeline
+        for ((sourceIdentity, source) in admitted) {
+            if (sourceIdentity in topKIds) continue
+            var drained = 0
+            while (drained < maxSlotsPerSource) {
+                val next =
+                    pipeline.nextExpectedSlot(sourceIdentity, source.incarnationId)
+                        ?: break
+                val frame =
+                    pipeline.peekBufferedFrame(
+                        sourceIdentity,
+                        source.incarnationId,
+                        next,
+                    ) ?: break
+                pipeline.pullSlot(
+                    sourceIdentity = sourceIdentity,
+                    incarnationId = source.incarnationId,
+                    slot = next,
+                    slotMediaTimeMs = frame.mediaTimeMs,
+                    nowMs = nowMs,
+                )
+                drained++
+            }
+        }
+    }
+
     fun resolvePlayoutMixSlot(
         sessionId: String,
         tickMediaTimeMs: Long,
@@ -117,35 +169,17 @@ class ConferenceSessionMediaWiring(
         if (state.ingressBlocked) return null
         state.lastPlayoutTickMediaTimeMs = tickMediaTimeMs
         val targetMediaSlot = state.mediaTimeline.mediaSlotForPlayoutTickMs(tickMediaTimeMs)
-        if (targetMediaSlot == null) {
-            return resolveEarliestBufferedMixSlot(sessionId)
-        }
-        val pipeline = state.assembly.orchestrator.pipeline
-        val admitted = state.assembly.orchestrator.authority.store.currentAdmitted()
-        var bestSlot: Long? = null
-        var bestMediaTimeMs: Long? = null
-        for ((sourceIdentity, source) in admitted) {
-            val nextExpected = pipeline.nextExpectedSlot(sourceIdentity, source.incarnationId)
-            val buffered = pipeline.bufferedSlots(sourceIdentity, source.incarnationId)
-            val eligible =
-                buffered.filter { slot -> nextExpected == null || slot >= nextExpected }
-            val slot =
-                eligible.filter { it <= targetMediaSlot }.minOrNull()
-                    ?: eligible.minOrNull()
-                    ?: continue
-            val frame =
-                pipeline.peekBufferedFrame(sourceIdentity, source.incarnationId, slot)
-                    ?: continue
-            if (bestSlot == null || slot < bestSlot) {
-                bestSlot = slot
-                bestMediaTimeMs = frame.mediaTimeMs
-            }
-        }
-        return if (bestSlot != null && bestMediaTimeMs != null) {
-            BufferedMixSlot(slot = bestSlot, slotMediaTimeMs = bestMediaTimeMs)
-        } else {
-            null
-        }
+        val orchestrator = state.assembly.orchestrator
+        val admitted = orchestrator.authority.store.currentAdmitted()
+        return PlayoutMixSlotResolver.resolve(
+            orchestrator = orchestrator,
+            admitted = admitted,
+            ingressTimeline = state.ingressTimeline,
+            tickMediaTimeMs = tickMediaTimeMs,
+            targetMediaSlot = targetMediaSlot,
+            progress = state.playoutSlotProgress,
+            selectionNowMs = System.currentTimeMillis(),
+        )
     }
 
     fun resolveEarliestBufferedMixSlot(sessionId: String): BufferedMixSlot? {
@@ -178,6 +212,7 @@ class ConferenceSessionMediaWiring(
         nowMs: Long,
         slot: Long,
         slotMediaTimeMs: Long,
+        perSourceSlots: Map<String, Long> = emptyMap(),
     ): PipelinePlayoutResult? {
         val state = sessions[sessionId] ?: return null
         if (state.ingressBlocked) return null
@@ -185,12 +220,22 @@ class ConferenceSessionMediaWiring(
             nowMs = nowMs,
             slot = slot,
             slotMediaTimeMs = slotMediaTimeMs,
+            perSourceSlots = perSourceSlots,
         ).also { result ->
+            val mixProducedPcm =
+                result.mixCycle.mixParticipantIdentities.isNotEmpty() &&
+                    result.mixCycle.mixedBlock.samples.isNotEmpty()
+            PlayoutMixSlotResolver.recordMixOutcome(
+                progress = state.playoutSlotProgress,
+                slot = slot,
+                mixProducedPcm = mixProducedPcm,
+            )
             Profile01A3MixOutputTelemetry.recordCycle(
                 sessionId = sessionId,
                 owner = Profile01A3MixOutputTelemetry.audioTrackOwnerLabel(),
                 mixCycle = result.mixCycle,
                 playoutObserved = result.playoutObserved,
+                pipelinePlcCount = state.assembly.orchestrator.pipeline.plcCount,
             )
             Profile01A3MixInputTelemetry.recordCycle(
                 sessionId = sessionId,
@@ -207,6 +252,63 @@ class ConferenceSessionMediaWiring(
             is RecordingPlayoutMetricsSeam -> metrics.successfulWrites
             else -> null
         }
+    }
+
+    /**
+     * Meeting mute/unmute — keep multicast RX playout ingress aligned with the shadow playout clock.
+     * Does not acquire/release production AudioTrack (B-layer ownership unchanged).
+     */
+    fun onConferenceCallMuteChanged(
+        sessionId: String,
+        muted: Boolean,
+    ): Boolean {
+        if (ReplacementCutoverRc1.currentState() != AudibleOwnershipState.MULTICAST_ACTIVE) {
+            return false
+        }
+        val state = sessions[sessionId] ?: return false
+        if (state.ingressBlocked) return false
+        val playoutTimeMs =
+            state.lastPlayoutTickMediaTimeMs
+                ?: state.mediaTimeline.anchorWallMs()
+                ?: System.currentTimeMillis()
+        var recoveredSources = 0
+        var reanchoredIngressSources = 0
+        withSessionPipelineLock(sessionId) {
+            val locked = sessions[sessionId] ?: return@withSessionPipelineLock
+            val pipeline = locked.assembly.orchestrator.pipeline
+            val admitted = locked.assembly.orchestrator.authority.store.currentAdmitted()
+            for ((sourceIdentity, source) in admitted) {
+                pipeline.applyPromotionLiveEdgeFence(
+                    sourceIdentity = sourceIdentity,
+                    incarnationId = source.incarnationId,
+                    currentPlayoutTimeMs = playoutTimeMs,
+                )
+                if (!muted) {
+                    val jitterEmpty =
+                        pipeline.jitterSize(sourceIdentity, source.incarnationId) == 0
+                    if (jitterEmpty) {
+                        locked.ingressTimeline.clear(sourceIdentity, source.incarnationId)
+                        reanchoredIngressSources += 1
+                    }
+                    if (pipeline.recoverEmptyJitterLiveEdge(
+                            sourceIdentity = sourceIdentity,
+                            incarnationId = source.incarnationId,
+                        )
+                    ) {
+                        recoveredSources += 1
+                    }
+                }
+            }
+        }
+        if (recoveredSources > 0 || reanchoredIngressSources > 0) {
+            Profile01ShadowRuntimeObservability.logConferenceMutePlayoutRecovery(
+                sessionId = sessionId,
+                muted = muted,
+                recoveredSources = recoveredSources,
+                reanchoredIngressSources = reanchoredIngressSources,
+            )
+        }
+        return recoveredSources > 0 || reanchoredIngressSources > 0 || !muted
     }
 
     fun audiblePlayoutSeam(sessionId: String): AudiblePlayoutOwnershipSeam? =
@@ -258,6 +360,7 @@ class ConferenceSessionMediaWiring(
                 assembly = assembly,
                 catalog = SourceBindingCatalog(),
                 mediaTimeline = RelativeMediaTimeline(),
+                ingressTimeline = PerIncarnationIngressTimelineRegistry(),
                 ingressBlocked = false,
                 playoutStarted = false,
             )
@@ -631,6 +734,7 @@ class ConferenceSessionMediaWiring(
                             rxWallMs = rxWallMs,
                             roc = roc,
                             mediaTimeline = locked.mediaTimeline,
+                            ingressTimeline = locked.ingressTimeline,
                             playoutReferenceMs =
                                 locked.lastPlayoutTickMediaTimeMs
                                     ?: locked.mediaTimeline.anchorWallMs(),
@@ -647,30 +751,53 @@ class ConferenceSessionMediaWiring(
         result: PipelineAdmitResult,
         nowMs: Long,
     ): PipelineAdmitResult {
-        if (result.frameAdmit != FrameAdmitDisposition.REORDER_DISPLACEMENT_EXCEEDED) {
-            return result
-        }
         val admitted =
             state.assembly.orchestrator.authority.store.derivedAdmitted(sourceIdentity)
                 ?: return result
-        val aligned =
-            SessionMediaLiveEdgeAligner.maybeAlignLiveEdgeOnReorder(
-                pipeline = state.assembly.orchestrator.pipeline,
-                sourceIdentity = sourceIdentity,
-                incarnationId = admitted.incarnationId,
-                liveSlot = result.mediaSlot,
-                mediaTimeMs = result.mediaTimeMs ?: nowMs,
-                arrivalMs = nowMs,
-                nowMs = nowMs,
-            ) ?: return result
-        return result.copy(
-            frameAdmit = aligned.disposition,
-            jitterDepth =
-                state.assembly.orchestrator.pipeline.jitterSize(
-                    sourceIdentity,
-                    admitted.incarnationId,
-                ),
-        )
+        when (result.frameAdmit) {
+            FrameAdmitDisposition.LATE_FOR_PLAYOUT -> {
+                val recovered =
+                    SessionMediaLiveEdgeAligner.maybeRecoverOnLateForPlayout(
+                        pipeline = state.assembly.orchestrator.pipeline,
+                        ingressTimeline = state.ingressTimeline,
+                        sourceIdentity = sourceIdentity,
+                        incarnationId = admitted.incarnationId,
+                        liveSlot = result.mediaSlot,
+                        arrivalMs = nowMs,
+                        nowMs = nowMs,
+                    ) ?: return result
+                return result.copy(
+                    frameAdmit = recovered.disposition,
+                    jitterDepth =
+                        state.assembly.orchestrator.pipeline.jitterSize(
+                            sourceIdentity,
+                            admitted.incarnationId,
+                        ),
+                    mediaTimeMs = nowMs,
+                )
+            }
+            FrameAdmitDisposition.REORDER_DISPLACEMENT_EXCEEDED -> {
+                val aligned =
+                    SessionMediaLiveEdgeAligner.maybeAlignLiveEdgeOnReorder(
+                        pipeline = state.assembly.orchestrator.pipeline,
+                        sourceIdentity = sourceIdentity,
+                        incarnationId = admitted.incarnationId,
+                        liveSlot = result.mediaSlot,
+                        mediaTimeMs = result.mediaTimeMs ?: nowMs,
+                        arrivalMs = nowMs,
+                        nowMs = nowMs,
+                    ) ?: return result
+                return result.copy(
+                    frameAdmit = aligned.disposition,
+                    jitterDepth =
+                        state.assembly.orchestrator.pipeline.jitterSize(
+                            sourceIdentity,
+                            admitted.incarnationId,
+                        ),
+                )
+            }
+            else -> return result
+        }
     }
 
     private fun pipelineReject(

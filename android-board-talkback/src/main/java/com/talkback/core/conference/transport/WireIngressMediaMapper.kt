@@ -61,8 +61,74 @@ object WireIngressMediaMapper {
 }
 
 /**
- * Maps RTP sequence onto a wall-clock-anchored media timeline for live receive.
+ * ADR-0058 Layer A — per-incarnation ingress RTP sequence → mediaTimeMs (jitter deadline).
+ * Must not read or write [RelativeMediaTimeline] session baseSeq.
+ */
+class PerIncarnationIngressTimelineRegistry {
+    private data class Origin(
+        val seq: Long,
+        val wallMs: Long,
+    )
+
+    private val origins = linkedMapOf<String, Origin>()
+
+    fun mediaTimeMs(
+        sourceIdentity: String,
+        incarnationId: Long,
+        sequence: Int,
+        arrivalMs: Long,
+    ): Long {
+        val key = key(sourceIdentity, incarnationId)
+        val seq = sequence.toLong()
+        val origin =
+            origins.getOrPut(key) {
+                Origin(seq = seq, wallMs = arrivalMs)
+            }
+        return origin.wallMs + (seq - origin.seq) * MediaJitterConstants.MEDIA_SLOT_MS
+    }
+
+    fun clear(
+        sourceIdentity: String,
+        incarnationId: Long,
+    ) {
+        origins.remove(key(sourceIdentity, incarnationId))
+    }
+
+    fun clearIdentity(sourceIdentity: String) {
+        val prefix = "$sourceIdentity#"
+        origins.keys.filter { it.startsWith(prefix) }.forEach { origins.remove(it) }
+    }
+
+    fun clearAll() {
+        origins.clear()
+    }
+
+    /**
+     * Layer A playout projection: map wall-aligned [tickMediaTimeMs] onto this incarnation's RTP slot domain.
+     * Must match [mediaTimeMs] origin semantics; do not use [RelativeMediaTimeline] for foreign sources.
+     */
+    fun mediaSlotForPlayoutTickMs(
+        sourceIdentity: String,
+        incarnationId: Long,
+        tickMediaTimeMs: Long,
+    ): Long? {
+        val origin = origins[key(sourceIdentity, incarnationId)] ?: return null
+        val offset =
+            ((tickMediaTimeMs - origin.wallMs).coerceAtLeast(0L)) /
+                MediaJitterConstants.MEDIA_SLOT_MS
+        return origin.seq + offset
+    }
+
+    private fun key(
+        sourceIdentity: String,
+        incarnationId: Long,
+    ): String = "$sourceIdentity#$incarnationId"
+}
+
+/**
+ * Session playout domain (ADR-0058 Layer B).
  * First accepted packet defines origin; subsequent packets advance by 20 ms/slot.
+ * Do not use this mapping alone to interpret a foreign source's RTP sequence for jitter deadline.
  */
 class RelativeMediaTimeline {
     private var baseSeq: Long? = null
@@ -74,15 +140,23 @@ class RelativeMediaTimeline {
 
     fun isAnchored(): Boolean = baseSeq != null && baseArrivalMs != null
 
+    /** First packet of the session anchors playout projection; later sources must not reset it. */
+    fun ensureAnchor(
+        sequence: Int,
+        arrivalMs: Long,
+    ) {
+        if (baseSeq == null) {
+            baseSeq = sequence.toLong()
+            baseArrivalMs = arrivalMs
+        }
+    }
+
     fun mediaTimeMs(
         sequence: Int,
         arrivalMs: Long,
     ): Long {
         val seq = sequence.toLong()
-        if (baseSeq == null) {
-            baseSeq = seq
-            baseArrivalMs = arrivalMs
-        }
+        ensureAnchor(sequence, arrivalMs)
         return baseArrivalMs!! + (seq - baseSeq!!) * MediaJitterConstants.MEDIA_SLOT_MS
     }
 

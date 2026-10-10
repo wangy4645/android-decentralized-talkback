@@ -53,7 +53,7 @@ class Profile01ShadowRca5B2SlotDomainAlignmentTest {
 
         val nextTickTarget =
             wiring.resolvePlayoutMixSlot(sessionId, firstMediaWallMs + 40L)
-        assertEquals(baseMediaSlot.toLong(), nextTickTarget?.slot)
+        assertEquals(baseMediaSlot + 2L, nextTickTarget?.slot)
     }
 
     @Test

@@ -14,6 +14,7 @@ import com.talkback.core.conference.session.profile01.Profile01SessionMediaSuppl
 import com.talkback.core.conference.session.profile01.Profile01SessionMediaSupplementRegistry
 import com.talkback.core.conference.session.profile01.wire.Profile01ConferenceMediaKeyMaterialAuthority
 import com.talkback.core.conference.session.profile01.wire.Profile01PersistedSignedFactSigner
+import com.talkback.core.conference.session.profile01.wire.Profile01SignedFactSignerSource
 import com.talkback.core.conference.session.profile01.wire.Profile01WireCborDecoder
 import com.talkback.core.conference.session.profile01.wire.Profile01WireConstants
 import com.talkback.core.model.EndpointAddress
@@ -71,7 +72,7 @@ class MeetingProfile01MembershipOriginBridgeTest {
             MeetingProfile01CreationOriginBridge(
                 sessionIndex = sessionIndex,
                 mediaKeyAuthority = mediaKeyAuthority,
-                publisher = MeetingProfile01CreationOriginPublisher(signer),
+                signerSource = Profile01SignedFactSignerSource.fixed(signer),
                 membershipConvergence = membershipConvergence,
             )
         membershipBridge =
@@ -80,7 +81,7 @@ class MeetingProfile01MembershipOriginBridgeTest {
                 creationOriginBridge = creationBridge,
                 mediaKeyAuthority = mediaKeyAuthority,
                 membershipConvergence = membershipConvergence,
-                publisher = MeetingProfile01MembershipOriginPublisher(signer),
+                signerSource = Profile01SignedFactSignerSource.fixed(signer),
             )
     }
 

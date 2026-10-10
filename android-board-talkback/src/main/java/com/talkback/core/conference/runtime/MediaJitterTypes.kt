@@ -5,6 +5,8 @@ package com.talkback.core.conference.runtime
  */
 object MediaJitterConstants {
     const val MAX_PLAYOUT_DELAY_MS: Long = 120L
+    /** B5 — if nowMs − slotMediaTimeMs exceeds this, treat media time as wrong clock domain. */
+    const val WALL_MEDIA_TIME_SKEW_LIMIT_MS: Long = 3_600_000L
     const val MAX_REORDER_PACKETS: Int = 4
     const val MAX_CONSECUTIVE_PLC_FRAMES: Int = 5
     /** Nominal media slot duration for fixture clocks (20 ms @ 50 pps). */

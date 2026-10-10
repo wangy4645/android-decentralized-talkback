@@ -55,8 +55,62 @@ object Profile01ShadowRuntimeObservability {
         java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicLong>()
     private val playoutFunnelCycleCounters =
         java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicLong>()
+    private val ingressAnomalyAccumulators =
+        java.util.concurrent.ConcurrentHashMap<String, IngressAnomalyAccumulator>()
+    private val lastEmittedResolvedMixSlots =
+        java.util.concurrent.ConcurrentHashMap<String, Long>()
     private val lastSuccessfulFunnelSnapshots =
         java.util.concurrent.ConcurrentHashMap<String, PlayoutFunnelSnapshot>()
+
+    private class IngressAnomalyAccumulator {
+        var lateForPlayout: Int = 0
+        var reorderDisplacementExceeded: Int = 0
+    }
+
+    internal enum class ResolvedMixSlotDeltaClass {
+        UNKNOWN,
+        NORMAL,
+        FORWARD_SMALL,
+        FORWARD_LARGE,
+        BACKWARD,
+    }
+
+    internal fun classifyResolvedMixSlotDelta(delta: Long): ResolvedMixSlotDeltaClass =
+        when {
+            delta < 0L -> ResolvedMixSlotDeltaClass.BACKWARD
+            delta <= 1L -> ResolvedMixSlotDeltaClass.NORMAL
+            delta <= 100L -> ResolvedMixSlotDeltaClass.FORWARD_SMALL
+            else -> ResolvedMixSlotDeltaClass.FORWARD_LARGE
+        }
+
+    /** Per-frame ingress anomaly tally for correlation with A3 / playout funnel windows. */
+    fun recordIngressFrameAdmit(
+        sessionId: String,
+        frameAdmit: FrameAdmitDisposition?,
+    ) {
+        when (frameAdmit) {
+            FrameAdmitDisposition.LATE_FOR_PLAYOUT ->
+                ingressAnomalyAccumulators
+                    .computeIfAbsent(sessionId) { IngressAnomalyAccumulator() }
+                    .lateForPlayout++
+            FrameAdmitDisposition.REORDER_DISPLACEMENT_EXCEEDED ->
+                ingressAnomalyAccumulators
+                    .computeIfAbsent(sessionId) { IngressAnomalyAccumulator() }
+                    .reorderDisplacementExceeded++
+            else -> Unit
+        }
+    }
+
+    fun snapshotIngressAnomalyCounts(sessionId: String): Pair<Int, Int> {
+        val acc = ingressAnomalyAccumulators[sessionId] ?: return 0 to 0
+        return acc.lateForPlayout to acc.reorderDisplacementExceeded
+    }
+
+    fun resetIngressAnomalyCounts(sessionId: String) {
+        val acc = ingressAnomalyAccumulators[sessionId] ?: return
+        acc.lateForPlayout = 0
+        acc.reorderDisplacementExceeded = 0
+    }
     private val starvationOnsetLoggedSessions = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
     private val rxAdmissionWindows =
         java.util.concurrent.ConcurrentHashMap<String, RxAdmissionWindowAccumulator>()
@@ -97,6 +151,8 @@ object Profile01ShadowRuntimeObservability {
         playoutCycleLoggedSessions.remove(sessionId)
         playoutStarvationCounters.remove(sessionId)
         ingressFunnelCounters.remove(sessionId)
+        ingressAnomalyAccumulators.remove(sessionId)
+        lastEmittedResolvedMixSlots.remove(sessionId)
         playoutFunnelCycleCounters.remove(sessionId)
         lastSuccessfulFunnelSnapshots.remove(sessionId)
         starvationOnsetLoggedSessions.remove(sessionId)
@@ -253,17 +309,42 @@ object Profile01ShadowRuntimeObservability {
                 .incrementAndGet()
         val first = count == 1L
         if (!first && count % 25L != 0L) return
+        val resolved = funnel.resolvedMixSlot
+        val priorResolved = lastEmittedResolvedMixSlots[sessionId]
+        val resolvedDelta =
+            if (resolved != null && priorResolved != null) {
+                resolved - priorResolved
+            } else {
+                null
+            }
+        if (resolved != null) {
+            lastEmittedResolvedMixSlots[sessionId] = resolved
+        }
+        val (ingressLate, ingressReorder) = snapshotIngressAnomalyCounts(sessionId)
+        resetIngressAnomalyCounts(sessionId)
         logPlayoutFunnelPhase(
             phase = "PLAYOUT_FUNNEL_CYCLE",
             sessionId = sessionId,
             funnel = funnel,
             extra =
-                mapOf(
-                    "cycleOrdinal" to count.toString(),
-                    "liveDecoders" to liveDecoders.toString(),
-                    "successfulPlayoutWrites" to successfulPlayoutWrites.toString(),
-                    "audioTrackOwner" to audioTrackOwner,
-                ),
+                buildMap {
+                    put("cycleOrdinal", count.toString())
+                    put("liveDecoders", liveDecoders.toString())
+                    put("successfulPlayoutWrites", successfulPlayoutWrites.toString())
+                    put("audioTrackOwner", audioTrackOwner)
+                    put("ingressLateForPlayout", ingressLate.toString())
+                    put("ingressReorderExceeded", ingressReorder.toString())
+                    if (resolvedDelta != null) {
+                        put("resolvedMixSlotDelta", resolvedDelta.toString())
+                        put(
+                            "resolvedMixSlotDeltaClass",
+                            classifyResolvedMixSlotDelta(resolvedDelta).name,
+                        )
+                    } else {
+                        put("resolvedMixSlotDelta", "na")
+                        put("resolvedMixSlotDeltaClass", ResolvedMixSlotDeltaClass.UNKNOWN.name)
+                    }
+                },
         )
     }
 
@@ -516,6 +597,80 @@ object Profile01ShadowRuntimeObservability {
         )
     }
 
+    private val ingressVoiceCounters = java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicLong>()
+
+    fun maybeLogIngressVoiceLevelSample(
+        sessionId: String,
+        sourceIdentity: String,
+        voiceActive: Boolean,
+        audioLevel: Int,
+        wireOctet: Int,
+    ) {
+        val key = "$sessionId|$sourceIdentity"
+        val ingressOrdinal =
+            ingressVoiceCounters
+                .computeIfAbsent(key) { java.util.concurrent.atomic.AtomicLong(0L) }
+                .incrementAndGet()
+        maybeLogIngressVoiceLevel(
+            sessionId = sessionId,
+            sourceIdentity = sourceIdentity,
+            ingressOrdinal = ingressOrdinal,
+            voiceActive = voiceActive,
+            audioLevel = audioLevel,
+            wireOctet = wireOctet,
+        )
+    }
+
+    fun maybeLogIngressVoiceLevel(
+        sessionId: String,
+        sourceIdentity: String,
+        ingressOrdinal: Long,
+        voiceActive: Boolean,
+        audioLevel: Int,
+        wireOctet: Int,
+    ) {
+        if (ingressOrdinal == 1L || ingressOrdinal % 25L == 0L) {
+            logPhase(
+                phase = "INGRESS_VOICE_LEVEL",
+                sessionId = sessionId,
+                moduleId = sourceIdentity,
+                fields =
+                    mapOf(
+                        "ingressOrdinal" to ingressOrdinal.toString(),
+                        "voiceActive" to voiceActive.toString(),
+                        "audioLevel" to audioLevel.toString(),
+                        "wireOctet" to "0x%02X".format(wireOctet and 0xFF),
+                    ),
+            )
+        }
+    }
+
+    fun maybeLogShadowTxVoiceLevel(
+        sessionId: String,
+        moduleId: String,
+        packetOrdinal: Long,
+        instantVoiceActive: Boolean,
+        voiceActive: Boolean,
+        audioLevel: Int,
+        wireOctet: Int,
+    ) {
+        if (packetOrdinal == 1L || packetOrdinal % 25L == 0L) {
+            logPhase(
+                phase = "SHADOW_TX_VOICE_LEVEL",
+                sessionId = sessionId,
+                moduleId = moduleId,
+                fields =
+                    mapOf(
+                        "packetOrdinal" to packetOrdinal.toString(),
+                        "instantVoiceActive" to instantVoiceActive.toString(),
+                        "voiceActive" to voiceActive.toString(),
+                        "audioLevel" to audioLevel.toString(),
+                        "wireOctet" to "0x%02X".format(wireOctet and 0xFF),
+                    ),
+            )
+        }
+    }
+
     fun maybeLogShadowTxActivity(
         sessionId: String,
         moduleId: String,
@@ -687,6 +842,26 @@ object Profile01ShadowRuntimeObservability {
                     "liveDecoders" to liveDecoders.toString(),
                     "successfulPlayoutWrites" to successfulPlayoutWrites.toString(),
                     "audioTrackOwner" to "SHADOW_METRICS_ONLY",
+                ),
+        )
+    }
+
+    fun logConferenceMutePlayoutRecovery(
+        sessionId: String,
+        muted: Boolean,
+        recoveredSources: Int,
+        reanchoredIngressSources: Int,
+    ) {
+        logPhase(
+            phase = "CONFERENCE_MUTE_PLAYOUT_RECOVERY",
+            sessionId = sessionId,
+            conferenceId = activeConferenceId,
+            mediaKeyEpoch = activeMediaKeyEpoch,
+            fields =
+                mapOf(
+                    "muted" to muted.toString(),
+                    "recoveredSources" to recoveredSources.toString(),
+                    "reanchoredIngressSources" to reanchoredIngressSources.toString(),
                 ),
         )
     }

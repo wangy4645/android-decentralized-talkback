@@ -206,6 +206,11 @@ object Profile01A3MixInputTelemetry {
         private val sourcePlc = linkedMapOf<String, AmplitudeBucket>()
         private val observedSources = linkedSetOf<String>()
         private val mixedBucket = AmplitudeBucket()
+        private var postAttenClipSamples: Long = 0
+        private var postAttenSumSquares: Double = 0.0
+        private var postAttenSampleCount: Long = 0
+        private var postAttenPeakLinear: Double = 0.0
+        private var experimentWindowActive: Boolean = false
 
         val pendingCycles: Long
             get() = windowCycles
@@ -223,12 +228,32 @@ object Profile01A3MixInputTelemetry {
             for ((source, snapshot) in mixCycle.sourceMixInputs) {
                 val stats = analyzePcm(snapshot.samples)
                 when (snapshot.kind) {
-                    SourceMixInputKind.REAL ->
+                    SourceMixInputKind.REAL -> {
                         mergeBucket(
                             sourceReal.getOrPut(source) { AmplitudeBucket() },
                             stats,
                             snapshot.samples,
                         )
+                        if (MulticastMixInputHeadroomFieldExperiment.isActive()) {
+                            experimentWindowActive = true
+                            val attenuated =
+                                snapshot.mixerInputSamples
+                                    ?: MulticastMixInputHeadroomFieldExperiment.attenuateSamples(
+                                        snapshot.samples,
+                                    )
+                            val post = analyzePcm(attenuated)
+                            postAttenClipSamples += post.clipSamples
+                            postAttenSampleCount += post.frames
+                            for (sample in attenuated) {
+                                val v = sample.toDouble()
+                                postAttenSumSquares += v * v
+                            }
+                            val peakAbs = attenuated.maxOfOrNull { kotlin.math.abs(it.toInt()) } ?: 0
+                            if (peakAbs.toDouble() > postAttenPeakLinear) {
+                                postAttenPeakLinear = peakAbs.toDouble()
+                            }
+                        }
+                    }
                     SourceMixInputKind.PLC ->
                         mergeBucket(
                             sourcePlc.getOrPut(source) { AmplitudeBucket() },
@@ -267,6 +292,11 @@ object Profile01A3MixInputTelemetry {
             mixedBucket.peakLinear = 0.0
             mixedBucket.clipSamples = 0
             mixedBucket.silenceFrames = 0
+            postAttenClipSamples = 0
+            postAttenSumSquares = 0.0
+            postAttenSampleCount = 0
+            postAttenPeakLinear = 0.0
+            experimentWindowActive = false
         }
 
         fun buildSummary(): Map<String, String> {
@@ -280,16 +310,34 @@ object Profile01A3MixInputTelemetry {
                     )
                 }
             val mixed = bucketSummary(mixedBucket)
-            return linkedMapOf(
-                "owner" to owner,
-                "cycles" to windowCycles.toString(),
-                "sourceInput" to sourceInput,
-                "mixedFrames" to mixed.frames.toString(),
-                "mixedRmsDbfs" to (mixed.rmsDbfs?.let { formatDbfs(it) } ?: "na"),
-                "mixedPeakDbfs" to (mixed.peakDbfs?.let { formatDbfs(it) } ?: "na"),
-                "mixedClipSamples" to mixed.clipSamples.toString(),
-                "mixedSilenceFrames" to mixed.silenceFrames.toString(),
-            )
+            val summary =
+                linkedMapOf(
+                    "owner" to owner,
+                    "cycles" to windowCycles.toString(),
+                    "sourceInput" to sourceInput,
+                    "mixedFrames" to mixed.frames.toString(),
+                    "mixedRmsDbfs" to (mixed.rmsDbfs?.let { formatDbfs(it) } ?: "na"),
+                    "mixedPeakDbfs" to (mixed.peakDbfs?.let { formatDbfs(it) } ?: "na"),
+                    "mixedClipSamples" to mixed.clipSamples.toString(),
+                    "mixedSilenceFrames" to mixed.silenceFrames.toString(),
+                )
+            if (experimentWindowActive) {
+                val postRmsDbfs =
+                    if (postAttenSampleCount > 0) {
+                        linearToDbfs(kotlin.math.sqrt(postAttenSumSquares / postAttenSampleCount))
+                    } else {
+                        null
+                    }
+                val postPeakDbfs =
+                    if (postAttenPeakLinear > 0.0) linearToDbfs(postAttenPeakLinear) else null
+                summary["experimentHeadroom"] = "ACTIVE"
+                summary["experimentGainDb"] =
+                    String.format("%.1f", MulticastMixInputHeadroomFieldExperiment.gainDb)
+                summary["postAttenClipSamples"] = postAttenClipSamples.toString()
+                summary["postAttenPeakDbfs"] = postPeakDbfs?.let { formatDbfs(it) } ?: "na"
+                summary["postAttenRmsDbfs"] = postRmsDbfs?.let { formatDbfs(it) } ?: "na"
+            }
+            return summary
         }
     }
 }

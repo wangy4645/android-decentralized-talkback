@@ -79,11 +79,30 @@ class PerIncarnationJitterBuffer(
         nextExpectedSlot = slot
     }
 
+    /** Slide playout cursor without discarding buffered frames (B6 aged-hole recovery). */
+    fun slideExpectedTo(slot: Long) {
+        nextExpectedSlot = slot
+    }
+
     fun bufferedSlots(): List<Long> = ArrayList(bySlot.keys)
 
     fun earliestBufferedSlot(): Long? = bySlot.keys.firstOrNull()
 
     fun latestBufferedSlot(): Long? = bySlot.keys.lastOrNull()
+
+    fun allBufferedPastUsefulDeadline(nowMs: Long): Boolean =
+        bySlot.values.all { nowMs > it.usefulDeadlineMs() }
+
+    /** True when no buffered frames exist in (latestBuffered, beforeSlot). */
+    fun gapEmptyBetweenLatestBufferedAnd(beforeSlot: Long): Boolean {
+        val latest = latestBufferedSlot() ?: return true
+        var slot = latest + 1
+        while (slot < beforeSlot) {
+            if (bySlot.containsKey(slot)) return false
+            slot += 1
+        }
+        return true
+    }
 
     /**
      * Promotion transition: discard buffered frames already past playout deadline.
@@ -138,5 +157,16 @@ class PerIncarnationJitterBuffer(
         }
         nextExpectedSlot = liveSlot
         return stale.size
+    }
+
+    /**
+     * Meeting mute/unmute RX recovery — when the buffer is empty but [nextExpectedSlot]
+     * was advanced by playout starvation, clear the cursor so fresh ingress can re-anchor.
+     */
+    fun resetLiveEdgeWhenEmpty(): Boolean {
+        if (!executable || bySlot.isNotEmpty()) return false
+        if (nextExpectedSlot == null) return false
+        nextExpectedSlot = null
+        return true
     }
 }

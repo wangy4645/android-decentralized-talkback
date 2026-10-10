@@ -1,7 +1,9 @@
 package com.talkback.appprod
 
 import android.app.Application
+import com.talkback.core.conference.session.integration.MulticastMixInputHeadroomFieldExperiment
 import com.talkback.appprod.data.TaskProfileManager
+import java.io.File
 import com.talkback.appprod.endpointtext.ChannelConversationStore
 import com.talkback.appprod.endpointtext.ConversationStore
 import com.talkback.appprod.endpointtext.EndpointTextInboundNotifier
@@ -26,6 +28,9 @@ class TalkbackApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        MulticastMixInputHeadroomFieldExperiment.applyStartupFromPrivateFlagFile(
+            File(filesDir, MulticastMixInputHeadroomFieldExperiment.FIELD_FLAG_FILE_NAME),
+        )
         runtimeManager = TalkbackRuntimeManager(this)
         endpointTextInboundNotifier = EndpointTextInboundNotifier(this, MainScope())
         TaskProfileManager(this).ensureInitialized()

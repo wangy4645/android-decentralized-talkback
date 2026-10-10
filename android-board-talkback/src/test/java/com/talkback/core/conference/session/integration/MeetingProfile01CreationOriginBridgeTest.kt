@@ -3,6 +3,7 @@ package com.talkback.core.conference.session.integration
 
 
 import com.talkback.core.conference.session.profile01.wire.Profile01SignedFactEnvelope
+import com.talkback.core.conference.session.profile01.wire.Profile01SignedFactSignerSource
 
 import com.talkback.core.conference.session.profile01.wire.Profile01WireConstants
 
@@ -66,8 +67,6 @@ class MeetingProfile01CreationOriginBridgeTest {
 
             )!!
 
-        val publisher = MeetingProfile01CreationOriginPublisher(signer)
-
         val emitted = AtomicReference<ByteArray>()
 
         val bridge =
@@ -78,7 +77,7 @@ class MeetingProfile01CreationOriginBridgeTest {
 
                 mediaKeyAuthority = mediaKeyAuthority,
 
-                publisher = publisher,
+                signerSource = Profile01SignedFactSignerSource.fixed(signer),
 
             )
 
@@ -226,8 +225,6 @@ class MeetingProfile01CreationOriginBridgeTest {
 
             )!!
 
-        val publisher = MeetingProfile01CreationOriginPublisher(signer)
-
         val bridge =
 
             MeetingProfile01CreationOriginBridge(
@@ -236,7 +233,7 @@ class MeetingProfile01CreationOriginBridgeTest {
 
                 mediaKeyAuthority = mediaKeyAuthority,
 
-                publisher = publisher,
+                signerSource = Profile01SignedFactSignerSource.fixed(signer),
 
             )
 
@@ -366,8 +363,6 @@ class MeetingProfile01CreationOriginBridgeTest {
 
             )!!
 
-        val publisher = MeetingProfile01CreationOriginPublisher(signer)
-
         val bridge =
 
             MeetingProfile01CreationOriginBridge(
@@ -376,7 +371,7 @@ class MeetingProfile01CreationOriginBridgeTest {
 
                 mediaKeyAuthority = mediaKeyAuthority,
 
-                publisher = publisher,
+                signerSource = Profile01SignedFactSignerSource.fixed(signer),
 
             )
 

@@ -12,6 +12,7 @@ import com.talkback.core.conference.runtime.PlayoutMetricsSeam
 import com.talkback.core.conference.runtime.SlotPullDisposition
 import com.talkback.core.conference.runtime.SourceMixInputKind
 import com.talkback.core.conference.runtime.SourceMixInputSnapshot
+import com.talkback.core.conference.session.integration.MulticastMixInputHeadroomFieldExperiment
 import com.talkback.core.conference.session.integration.Profile01ShadowRuntimeObservability
 import com.talkback.core.conference.runtime.RecordingAudioTrackSeam
 import com.talkback.core.conference.wire.WireIngressResult
@@ -78,6 +79,7 @@ class ConferenceMulticastMediaPipeline(
         roc: Int = 0,
         replay: WireReplayState? = null,
         mediaTimeline: RelativeMediaTimeline? = null,
+        ingressTimeline: PerIncarnationIngressTimelineRegistry? = null,
         mediaTimeMs: Long? = null,
         playoutReferenceMs: Long? = null,
     ): PipelineAdmitResult {
@@ -125,11 +127,30 @@ class ConferenceMulticastMediaPipeline(
                 headerAndHe = ingress.headerAndHe,
             )
         orchestrator.observeVoice(voice)
+        Profile01ShadowRuntimeObservability.activeSessionId?.let { sessionId ->
+            val wireOctet = ingress.headerAndHe[31].toInt() and 0xFF
+            Profile01ShadowRuntimeObservability.maybeLogIngressVoiceLevelSample(
+                sessionId = sessionId,
+                sourceIdentity = sourceIdentity,
+                voiceActive = voice.voiceActive,
+                audioLevel = voice.audioLevel,
+                wireOctet = wireOctet,
+            )
+        }
         orchestrator.selectTopK(playoutReferenceMs ?: rxWallMs)
 
         val resolvedMediaTimeMs =
             mediaTimeMs
+                ?: ingressTimeline?.mediaTimeMs(
+                    sourceIdentity,
+                    incarnationId,
+                    ingress.sequence,
+                    rxWallMs,
+                )
                 ?: mediaTimeline?.mediaTimeMs(ingress.sequence, rxWallMs)
+        if (ingressTimeline != null) {
+            mediaTimeline?.ensureAnchor(ingress.sequence, rxWallMs)
+        }
         val frame =
             WireIngressMediaMapper.mediaFrame(
                 sourceIdentity = sourceIdentity,
@@ -138,16 +159,19 @@ class ConferenceMulticastMediaPipeline(
                 arrivalMs = rxWallMs,
                 mediaTimeMs = resolvedMediaTimeMs,
             )
-        opusPayloadStore?.put(
-            sourceIdentity = sourceIdentity,
-            incarnationId = incarnationId,
-            mediaSlot = frame.mediaSlot,
-            opusPayload = ingress.plaintextPayload,
-        )
         val frameAdmit = orchestrator.admitFrame(frame, rxWallMs)
+        if (frameAdmit == FrameAdmitDisposition.QUEUED) {
+            opusPayloadStore?.put(
+                sourceIdentity = sourceIdentity,
+                incarnationId = incarnationId,
+                mediaSlot = frame.mediaSlot,
+                opusPayload = ingress.plaintextPayload,
+            )
+        }
         val jitterDepth = orchestrator.pipeline.jitterSize(sourceIdentity, incarnationId)
         observability.recordIngressAccepted(sourceIdentity, rxWallMs, 0L, jitterDepth)
         Profile01ShadowRuntimeObservability.activeSessionId?.let { sessionId ->
+            Profile01ShadowRuntimeObservability.recordIngressFrameAdmit(sessionId, frameAdmit)
             Profile01ShadowRuntimeObservability.maybeLogIngressFunnel(
                 sessionId = sessionId,
                 sourceIdentity = sourceIdentity,
@@ -182,10 +206,11 @@ class ConferenceMulticastMediaPipeline(
         nowMs: Long,
         slot: Long,
         slotMediaTimeMs: Long,
+        perSourceSlots: Map<String, Long> = emptyMap(),
     ): PipelinePlayoutResult {
         val cycleStartNs = System.nanoTime()
         val underrunBefore = playoutMetrics?.underrunCount ?: 0L
-        val timedMix = executeTimedMixCycle(nowMs, slot, slotMediaTimeMs)
+        val timedMix = executeTimedMixCycle(nowMs, slot, slotMediaTimeMs, perSourceSlots)
         val playoutObserved = orchestrator.playout(timedMix.mixCycle.mixedBlock, nowMs)
         val playoutWriteDurationUs = playoutMetrics?.lastWriteDurationUs ?: 0L
         val underrunAfter = playoutMetrics?.underrunCount ?: 0L
@@ -322,49 +347,87 @@ class ConferenceMulticastMediaPipeline(
         nowMs: Long,
         slot: Long,
         slotMediaTimeMs: Long,
+    ): TimedMixCycleResult = executeTimedMixCycle(nowMs, slot, slotMediaTimeMs, emptyMap())
+
+    fun executeTimedMixCycle(
+        nowMs: Long,
+        slot: Long,
+        slotMediaTimeMs: Long,
+        perSourceSlots: Map<String, Long>,
     ): TimedMixCycleResult {
         orchestrator.selectTopK(nowMs)
         val topKMembers = orchestrator.selection.currentTopK().members
         val topKIds = topKMembers.map { it.sourceIdentity }.toSet()
 
+        val sourcePullDispositions = linkedMapOf<String, SlotPullDisposition>()
+        val effectivePullSlots = linkedMapOf<String, Long>()
         for (member in topKMembers) {
-            orchestrator.pipeline.pullSlot(
-                sourceIdentity = member.sourceIdentity,
-                incarnationId = member.incarnationId,
-                slot = slot,
-                slotMediaTimeMs = slotMediaTimeMs,
-                nowMs = nowMs,
-            )
+            // B6 — never fall back to session Layer-B slot as a per-source RTP pull index.
+            val pullSlot =
+                perSourceSlots[member.sourceIdentity]
+                    ?: orchestrator.pipeline.nextExpectedSlot(
+                        member.sourceIdentity,
+                        member.incarnationId,
+                    )
+            if (pullSlot == null) {
+                continue
+            }
+            effectivePullSlots[member.sourceIdentity] = pullSlot
+            val peeked =
+                orchestrator.pipeline.peekBufferedFrame(
+                    member.sourceIdentity,
+                    member.incarnationId,
+                    pullSlot,
+                )
+            // Missing frame: wait with wall-domain media time (no slot*20 fantasy advance).
+            val pullMediaTimeMs = peeked?.mediaTimeMs ?: nowMs
+            sourcePullDispositions[member.sourceIdentity] =
+                orchestrator.pipeline.pullSlot(
+                    sourceIdentity = member.sourceIdentity,
+                    incarnationId = member.incarnationId,
+                    slot = pullSlot,
+                    slotMediaTimeMs = pullMediaTimeMs,
+                    nowMs = nowMs,
+                )
         }
 
         val decodeIds = linkedSetOf<String>()
         val mixIds = linkedSetOf<String>()
         val pcmFrames = mutableListOf<PcmFrame>()
         val sourceMixInputs = linkedMapOf<String, SourceMixInputSnapshot>()
-        val sourcePullDispositions = linkedMapOf<String, SlotPullDisposition>()
 
         val decodeStartNs = System.nanoTime()
         for (member in topKMembers) {
             if (!orchestrator.selection.isDecodeEligible(member.sourceIdentity, member.incarnationId)) {
                 continue
             }
+            if (sourcePullDispositions[member.sourceIdentity] != SlotPullDisposition.DECODE_FRAME) {
+                continue
+            }
+            val decodeSlot = effectivePullSlots[member.sourceIdentity] ?: continue
             val pcm =
                 orchestrator.decodeMix.produceMixablePcm(
                     sourceIdentity = member.sourceIdentity,
                     incarnationId = member.incarnationId,
-                    mediaSlot = slot,
+                    mediaSlot = decodeSlot,
                     nowMs = nowMs,
                 )
             if (pcm != null) {
                 decodeIds += member.sourceIdentity
                 mixIds += member.sourceIdentity
-                pcmFrames += pcm
-                sourcePullDispositions[member.sourceIdentity] = SlotPullDisposition.DECODE_FRAME
+                val mixerFrame = MulticastMixInputHeadroomFieldExperiment.mixPcmFrame(pcm)
                 sourceMixInputs[member.sourceIdentity] =
                     SourceMixInputSnapshot(
                         kind = SourceMixInputKind.REAL,
                         samples = pcm.samples,
+                        mixerInputSamples =
+                            if (MulticastMixInputHeadroomFieldExperiment.isActive()) {
+                                mixerFrame.samples
+                            } else {
+                                null
+                            },
                     )
+                pcmFrames += mixerFrame
             }
         }
         val decodeDurationUs = (System.nanoTime() - decodeStartNs) / 1_000L

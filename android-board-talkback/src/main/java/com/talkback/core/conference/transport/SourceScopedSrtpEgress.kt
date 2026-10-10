@@ -23,6 +23,12 @@ class SourceScopedSrtpEgress(
     val currentSeq: Int
         get() = nextSeq
 
+    fun setVoiceActiveAudioLevel(voiceActiveAudioLevel: Int) {
+        headerHeTemplate[31] = voiceActiveAudioLevel.toByte()
+    }
+
+    fun voiceActiveAudioLevel(): Int = headerHeTemplate[31].toInt() and 0xFF
+
     fun protectNext(plaintextPayload: ByteArray): ConferenceWireEgress.EgressResult {
         require(plaintextPayload.size <= ConferenceWireConstants.MAX_OPUS_PAYLOAD_OCTETS) {
             "opus payload oversize"

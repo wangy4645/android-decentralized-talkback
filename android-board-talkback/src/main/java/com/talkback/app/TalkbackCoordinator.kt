@@ -4590,6 +4590,9 @@ class TalkbackCoordinator(
                 }
                 syncConferenceLocalMicFeed(session)
             }
+            if (session.type == SessionType.CONFERENCE && session.accepted) {
+                ConferenceSessionMediaCoordinatorDelegate.onConferenceCallMuteChanged(session.id, muted)
+            }
         }
 
     fun activeUnicastSession(): TalkbackSessionSnapshot? = runOnCoordinatorSync {

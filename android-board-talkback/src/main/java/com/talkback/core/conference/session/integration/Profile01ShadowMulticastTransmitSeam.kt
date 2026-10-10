@@ -7,7 +7,9 @@ import com.talkback.core.conference.session.ConferenceSessionMediaControlFactReg
 import com.talkback.core.conference.session.ConferenceSessionMediaFactPort
 import com.talkback.core.conference.runtime.MediaGroupEndpointBinding
 import com.talkback.core.conference.transport.Phase1MediaHarness
+import com.talkback.core.conference.transport.Rfc6464TxVoiceLevel
 import com.talkback.core.conference.transport.SourceScopedSrtpEgress
+import com.talkback.core.conference.transport.TxVoiceActivityHangover
 import com.talkback.core.webrtc.LocalMicFrameSource
 import com.talkback.core.webrtc.LocalOutboundPcmSink
 import com.talkback.core.webrtc.ProcessLocalMicFrameSource
@@ -35,7 +37,9 @@ class Profile01ShadowMulticastTransmitSeam(
         val releaseMic: () -> Unit,
         val assembler: PcmFrameAssembler,
         val opusEncoder: ConcentusOpusEncoderSeam = ConcentusOpusEncoderSeam(),
+        val voiceHangover: TxVoiceActivityHangover = TxVoiceActivityHangover(),
         var halfFrame: ShortArray? = null,
+        var packetsEncoded: Long = 0L,
     )
 
     private data class EgressContext(
@@ -155,7 +159,26 @@ class Profile01ShadowMulticastTransmitSeam(
         val context = resolveEgressContext(sessionId) ?: return
         val transport = ConferenceSessionMediaBridge.wiring?.transport(sessionId) ?: return
         try {
+            val frameLevelDbov = Rfc6464TxVoiceLevel.frameLevelDbov(merged)
+            val instantVoiceActive = state.voiceHangover.isInstantlyActiveFrameLevel(frameLevelDbov)
+            val voiceActive = state.voiceHangover.observeFrameLevel(frameLevelDbov)
+            val voiceOctet =
+                Rfc6464TxVoiceLevel.toWireByte(
+                    voiceActive = voiceActive,
+                    frameLevelDbov = frameLevelDbov,
+                )
+            context.egress.setVoiceActiveAudioLevel(voiceOctet)
             val opusPayload = state.opusEncoder.encode(merged, context.sourceGeneration)
+            state.packetsEncoded++
+            Profile01ShadowRuntimeObservability.maybeLogShadowTxVoiceLevel(
+                sessionId = sessionId,
+                moduleId = localModuleId(),
+                packetOrdinal = state.packetsEncoded,
+                instantVoiceActive = instantVoiceActive,
+                voiceActive = voiceActive,
+                audioLevel = frameLevelDbov,
+                wireOctet = voiceOctet,
+            )
             if (transport.sendFromSource(context.egress, opusPayload, context.endpoint)) {
                 val snap = transport.observability.snapshot()
                 Profile01ShadowRuntimeObservability.maybeLogShadowTxActivity(
@@ -238,7 +261,7 @@ class Profile01ShadowMulticastTransmitSeam(
                         ssrc = memberBinding.ssrc,
                         seq = SHADOW_TX_INITIAL_SEQ,
                         sourceAdmissionKey48 = memberBinding.sourceAdmissionKey48.copyOf(),
-                        voiceActiveAudioLevel = SHADOW_TX_VOICE_ACTIVE_AUDIO_LEVEL,
+                        voiceActiveAudioLevel = Rfc6464TxVoiceLevel.SILENCE_LEVEL,
                     ),
             )
         val context =
@@ -254,7 +277,6 @@ class Profile01ShadowMulticastTransmitSeam(
 
     companion object {
         private const val SHADOW_TX_INITIAL_SEQ = 0x5000
-        private const val SHADOW_TX_VOICE_ACTIVE_AUDIO_LEVEL = 0x80
     }
 
     private fun fence(

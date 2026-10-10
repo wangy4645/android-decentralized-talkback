@@ -5,6 +5,7 @@ import com.talkback.core.conference.session.profile01.Profile01SessionMediaSuppl
 import com.talkback.core.conference.session.profile01.Profile01SessionMediaSupplementRegistry
 import com.talkback.core.conference.session.profile01.wire.Profile01ConferenceMediaKeyMaterialAuthority
 import com.talkback.core.conference.session.profile01.wire.Profile01PersistedSignedFactSigner
+import com.talkback.core.conference.session.profile01.wire.Profile01SignedFactSignerSource
 import com.talkback.core.conference.session.profile01.wire.Profile01WireCborDecoder
 import com.talkback.core.conference.session.profile01.wire.toHexLower
 import com.talkback.core.conference.transport.Slice4MulticastNetworkConstants
@@ -375,7 +376,7 @@ internal object SourcePostBindTestSupport {
             MeetingProfile01CreationOriginBridge(
                 sessionIndex = sessionIndex,
                 mediaKeyAuthority = mediaKeyAuthority,
-                publisher = MeetingProfile01CreationOriginPublisher(signerFixture.signer),
+                signerSource = Profile01SignedFactSignerSource.fixed(signerFixture.signer),
                 membershipConvergence = ingress.membershipRegistry(),
             )
         val sourceBridge =
@@ -384,7 +385,7 @@ internal object SourcePostBindTestSupport {
                 mediaKeyAuthority = mediaKeyAuthority,
                 supplementRegistry = supplementRegistry,
                 membershipConvergence = ingress.membershipRegistry(),
-                publisher = MeetingProfile01SourceOriginPublisher(signerFixture.signer),
+                signerSource = Profile01SignedFactSignerSource.fixed(signerFixture.signer),
                 onLog = observabilityLogs::add,
             )
         return Harness(

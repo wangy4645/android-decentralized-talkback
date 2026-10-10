@@ -3,6 +3,7 @@ package com.talkback.core.conference.session.integration
 import com.talkback.core.conference.session.profile01.wire.Profile01EstablishmentAuthorityTestFixtures
 import com.talkback.core.conference.session.profile01.wire.Profile01MediaKeyPackageBuilder
 import com.talkback.core.conference.session.profile01.wire.Profile01PersistedSignedFactSigner
+import com.talkback.core.conference.session.profile01.wire.Profile01SignedFactSignerSource
 import com.talkback.core.conference.session.profile01.wire.Profile01ProfileBackedRecipientEstablishmentKeyLookup
 import com.talkback.core.session.ConferenceTopologyMode
 import com.talkback.core.session.ConferenceTopologySnapshot
@@ -374,7 +375,7 @@ internal object MeetingProfile01MediaKeyPackageOriginBridgeTestSupport {
             MeetingProfile01CreationOriginBridge(
                 sessionIndex = sessionIndex,
                 mediaKeyAuthority = mediaKeyAuthority,
-                publisher = MeetingProfile01CreationOriginPublisher(signer),
+                signerSource = Profile01SignedFactSignerSource.fixed(signer),
             )
         val establishmentStore = AcceptedLocalEstablishmentTrustStateStore()
         Profile01EstablishmentAuthorityTestFixtures.populateEstablishmentStore(establishmentStore)
@@ -386,7 +387,7 @@ internal object MeetingProfile01MediaKeyPackageOriginBridgeTestSupport {
                 creationOrigin = creationBridge,
                 mediaKeyAuthority = mediaKeyAuthority,
                 establishmentLookup = establishmentLookup,
-                packageBuilder = packageBuilder,
+                signerSource = Profile01SignedFactSignerSource.fixed(signer),
                 onLog = observabilityLogs::add,
             )
         return Harness(

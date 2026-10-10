@@ -11,6 +11,7 @@ import com.talkback.core.conference.session.profile01.wire.Profile01ConferenceMe
 import com.talkback.core.conference.session.profile01.wire.Profile01FactDigest
 import com.talkback.core.conference.session.profile01.wire.Profile01PersistedSignedFactSigner
 import com.talkback.core.conference.session.profile01.wire.Profile01SignedFactEnvelope
+import com.talkback.core.conference.session.profile01.wire.Profile01SignedFactSignerSource
 import com.talkback.core.conference.session.profile01.wire.Profile01SignedFactVerifier
 import com.talkback.core.conference.session.profile01.wire.Profile01WireConstants
 import com.talkback.core.conference.session.profile01.wire.Profile01WireCborDecoder
@@ -320,7 +321,7 @@ class MeetingProfile01SourceOriginBridgeTest {
             MeetingProfile01CreationOriginBridge(
                 sessionIndex = sessionIndex,
                 mediaKeyAuthority = mediaKeyAuthority,
-                publisher = MeetingProfile01CreationOriginPublisher(signerFixture.signer),
+                signerSource = Profile01SignedFactSignerSource.fixed(signerFixture.signer),
                 membershipConvergence = ingress.membershipRegistry(),
             )
         val sourceBridge =
@@ -329,7 +330,7 @@ class MeetingProfile01SourceOriginBridgeTest {
                 mediaKeyAuthority = mediaKeyAuthority,
                 supplementRegistry = supplementRegistry,
                 membershipConvergence = ingress.membershipRegistry(),
-                publisher = MeetingProfile01SourceOriginPublisher(signerFixture.signer),
+                signerSource = Profile01SignedFactSignerSource.fixed(signerFixture.signer),
             )
         return Harness(
             sessionId = sessionId,

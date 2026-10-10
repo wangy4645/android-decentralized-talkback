@@ -51,6 +51,7 @@ object Profile01A3MixOutputTelemetry {
         owner: String,
         mixCycle: MixCycleResult,
         playoutObserved: Boolean,
+        pipelinePlcCount: Int? = null,
     ) {
         if (owner != OWNER_MULTICAST_PRODUCTION && !isTestEnabled()) return
         val agg = aggregators.computeIfAbsent(sessionId) { SessionAggregator() }
@@ -58,6 +59,7 @@ object Profile01A3MixOutputTelemetry {
             owner = owner,
             mixCycle = mixCycle,
             playoutObserved = playoutObserved,
+            pipelinePlcCount = pipelinePlcCount,
         )
         if (agg.shouldEmitNow()) {
             emitSummary(sessionId, agg)
@@ -76,7 +78,9 @@ object Profile01A3MixOutputTelemetry {
         agg: SessionAggregator,
     ) {
         if (agg.pendingCycles == 0L) return
-        val summary = agg.buildSummary()
+        val (ingressLate, ingressReorder) =
+            Profile01ShadowRuntimeObservability.snapshotIngressAnomalyCounts(sessionId)
+        val summary = agg.buildSummary(ingressLate, ingressReorder)
         agg.resetWindow()
         Profile01ShadowRuntimeObservability.logPhase(
             phase = PHASE,
@@ -179,6 +183,11 @@ object Profile01A3MixOutputTelemetry {
         private val sourceEmpty = linkedMapOf<String, Int>()
         private var writeCalls: Long = 0
         private var writtenFrames: Long = 0
+        private var windowPlcCountBaseline: Int? = null
+        private var windowPlcCountEnd: Int? = null
+        private var pullRealTotal: Int = 0
+        private var pullPlcTotal: Int = 0
+        private var pullEmptyTotal: Int = 0
 
         val pendingCycles: Long
             get() = windowCycles
@@ -187,10 +196,17 @@ object Profile01A3MixOutputTelemetry {
             owner: String,
             mixCycle: MixCycleResult,
             playoutObserved: Boolean,
+            pipelinePlcCount: Int?,
         ) {
             this.owner = owner
             cycleOrdinal++
             windowCycles++
+            if (pipelinePlcCount != null) {
+                if (windowPlcCountBaseline == null) {
+                    windowPlcCountBaseline = pipelinePlcCount
+                }
+                windowPlcCountEnd = pipelinePlcCount
+            }
             val stats = analyzeMixedPcm(mixCycle.mixedBlock.samples)
             if (stats.outputFrames > 0) {
                 for (sample in mixCycle.mixedBlock.samples) {
@@ -205,7 +221,8 @@ object Profile01A3MixOutputTelemetry {
                 if (peakAbs.toDouble() > peakLinear) peakLinear = peakAbs.toDouble()
             }
             contributors += mixCycle.mixParticipantIdentities
-            for ((source, pull) in mixCycle.sourcePullDispositions) {
+            for (source in mixCycle.topKIdentities) {
+                val pull = mixCycle.sourcePullDispositions[source]
                 when (
                     classifySourceContribution(
                         source,
@@ -213,9 +230,18 @@ object Profile01A3MixOutputTelemetry {
                         mixCycle.mixParticipantIdentities,
                     )
                 ) {
-                    SourceContributionKind.REAL -> sourceReal[source] = (sourceReal[source] ?: 0) + 1
-                    SourceContributionKind.PLC -> sourcePlc[source] = (sourcePlc[source] ?: 0) + 1
-                    SourceContributionKind.EMPTY -> sourceEmpty[source] = (sourceEmpty[source] ?: 0) + 1
+                    SourceContributionKind.REAL -> {
+                        sourceReal[source] = (sourceReal[source] ?: 0) + 1
+                        pullRealTotal++
+                    }
+                    SourceContributionKind.PLC -> {
+                        sourcePlc[source] = (sourcePlc[source] ?: 0) + 1
+                        pullPlcTotal++
+                    }
+                    SourceContributionKind.EMPTY -> {
+                        sourceEmpty[source] = (sourceEmpty[source] ?: 0) + 1
+                        pullEmptyTotal++
+                    }
                 }
             }
             if (
@@ -244,9 +270,17 @@ object Profile01A3MixOutputTelemetry {
             sourceEmpty.clear()
             writeCalls = 0
             writtenFrames = 0
+            windowPlcCountBaseline = null
+            windowPlcCountEnd = null
+            pullRealTotal = 0
+            pullPlcTotal = 0
+            pullEmptyTotal = 0
         }
 
-        fun buildSummary(): Map<String, String> {
+        fun buildSummary(
+            ingressLateForPlayout: Int,
+            ingressReorderExceeded: Int,
+        ): Map<String, String> {
             val cycles = windowCycles.toInt()
             val aggregateRmsDbfs =
                 if (totalOutputFrames > 0) {
@@ -263,11 +297,23 @@ object Profile01A3MixOutputTelemetry {
                     val real = sourceReal[source] ?: 0
                     val plc = sourcePlc[source] ?: 0
                     val empty = sourceEmpty[source] ?: 0
-                    "$source:real=${formatPercent(real, cycles)},plc=${formatPercent(plc, cycles)},empty=${formatPercent(empty, cycles)}"
+                    "$source:real=${formatPercent(real, cycles)}(${real}),plc=${formatPercent(plc, cycles)}(${plc}),empty=${formatPercent(empty, cycles)}(${empty})"
+                }
+            val plcCountDelta =
+                if (windowPlcCountBaseline != null && windowPlcCountEnd != null) {
+                    windowPlcCountEnd!! - windowPlcCountBaseline!!
+                } else {
+                    null
                 }
             return linkedMapOf(
                 "owner" to owner,
                 "cycles" to cycles.toString(),
+                "pullRealTotal" to pullRealTotal.toString(),
+                "pullPlcTotal" to pullPlcTotal.toString(),
+                "pullEmptyTotal" to pullEmptyTotal.toString(),
+                "plcCountDelta" to (plcCountDelta?.toString() ?: "na"),
+                "ingressLateForPlayout" to ingressLateForPlayout.toString(),
+                "ingressReorderExceeded" to ingressReorderExceeded.toString(),
                 "outputFrames" to totalOutputFrames.toString(),
                 "rmsDbfs" to (aggregateRmsDbfs?.let { formatDbfs(it) } ?: "na"),
                 "peakDbfs" to (aggregatePeakDbfs?.let { formatDbfs(it) } ?: "na"),

@@ -8,6 +8,7 @@ import com.talkback.core.conference.session.profile01.wire.Profile01PersistedSig
 import com.talkback.core.conference.session.profile01.wire.Profile01ProfileBackedRecipientEstablishmentKeyLookup
 import com.talkback.core.conference.session.profile01.wire.Profile01Q5TestRecipientKeyEstablishmentSeam
 import com.talkback.core.conference.session.profile01.wire.Profile01SignedFactEnvelope
+import com.talkback.core.conference.session.profile01.wire.Profile01SignedFactSignerSource
 import com.talkback.core.conference.session.profile01.wire.Profile01WireConstants
 import com.talkback.core.conference.session.profile01.wire.Profile01WireCborDecoder
 import com.talkback.core.session.ConferenceTopologyMode
@@ -391,7 +392,7 @@ class MeetingProfile01MediaKeyPackageOriginBridgeTest {
                 creationOrigin = harness.creationBridge,
                 mediaKeyAuthority = harness.mediaKeyAuthority,
                 establishmentLookup = harness.establishmentLookup,
-                packageBuilder = harness.packageBuilder,
+                signerSource = Profile01SignedFactSignerSource.fixed(harness.signer),
                 onLog = logs::add,
             )
         val sends = mutableListOf<String>()
@@ -497,6 +498,7 @@ class MeetingProfile01MediaKeyPackageOriginBridgeTest {
         val establishmentStore: AcceptedLocalEstablishmentTrustStateStore,
         val establishmentLookup: Profile01ProfileBackedRecipientEstablishmentKeyLookup,
         val packageBuilder: Profile01MediaKeyPackageBuilder,
+        val signer: com.talkback.core.conference.session.profile01.wire.Profile01SignedFactSigner,
         val observabilityLogs: MutableList<String> = mutableListOf(),
     ) {
         fun duoSnapshot(): ConferenceTopologySnapshot = topologySnapshot(listOf(HOST, "M02"))
@@ -532,7 +534,7 @@ class MeetingProfile01MediaKeyPackageOriginBridgeTest {
             MeetingProfile01CreationOriginBridge(
                 sessionIndex = sessionIndex,
                 mediaKeyAuthority = mediaKeyAuthority,
-                publisher = MeetingProfile01CreationOriginPublisher(signer),
+                signerSource = Profile01SignedFactSignerSource.fixed(signer),
             )
         if (populateEstablishment) {
             Profile01EstablishmentAuthorityTestFixtures.populateEstablishmentStore(establishmentStore)
@@ -545,7 +547,7 @@ class MeetingProfile01MediaKeyPackageOriginBridgeTest {
                 creationOrigin = creationBridge,
                 mediaKeyAuthority = mediaKeyAuthority,
                 establishmentLookup = establishmentLookup,
-                packageBuilder = packageBuilder,
+                signerSource = Profile01SignedFactSignerSource.fixed(signer),
                 onLog = observabilityLogs::add,
             )
         return Harness(
@@ -557,6 +559,7 @@ class MeetingProfile01MediaKeyPackageOriginBridgeTest {
             establishmentStore = establishmentStore,
             establishmentLookup = establishmentLookup,
             packageBuilder = packageBuilder,
+            signer = signer,
             observabilityLogs = observabilityLogs,
         )
     }
