@@ -7,14 +7,13 @@ import com.talkback.core.conference.session.integration.MeetingProductMediaShado
 import com.talkback.core.conference.transport.Phase1MediaHarness
 import org.junit.After
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 
 /**
- * RCA5-B7 — non-Top-K admitted sources must still advance playout cursor when buffered
- * at [nextExpected], otherwise nextExpected freezes until the source re-enters Top-K.
+ * RCA5-B7 — off-Top-K maintenance must not consume still-playable frames; only late-drop
+ * expired frames at the playout cursor so Top-K playback is not starved of valid audio.
  */
 class OffTopKPlayoutCursorMaintenanceTest {
     private val sessionId = "rca5b7-off-topk-session"
@@ -34,7 +33,7 @@ class OffTopKPlayoutCursorMaintenanceTest {
     }
 
     @Test
-    fun maintainOffTopKPlayoutCursors_advancesNextExpected_whenSourceNotInTopK() {
+    fun maintainOffTopKPlayoutCursors_doesNotAdvance_whenBufferedFramesStillPlayable() {
         val fact =
             SessionMediaWiringHarness.sessionFact(sessionId)
                 .copy(startedAtMs = 1_700_000_000_000L)
@@ -54,18 +53,75 @@ class OffTopKPlayoutCursorMaintenanceTest {
                 )
             assertEquals(FrameAdmitDisposition.QUEUED, admitted.frameAdmit)
         }
-        for (i in 0 until 2) {
+        observeTopKQuietVsLoud(quiet, loud)
+
+        val pipeline = wiring.orchestrator(sessionId)?.pipeline ?: error("pipeline")
+        val before =
+            pipeline.nextExpectedSlot(quiet.sourceIdentity, quiet.incarnationId)
+        assertEquals(baseSlot.toLong(), before)
+
+        val stillPlayableNow = wall0 + 50L
+        wiring.maintainOffTopKPlayoutCursors(
+            sessionId,
+            tickMediaTimeMs = stillPlayableNow,
+            nowMs = stillPlayableNow,
+        )
+
+        val after =
+            pipeline.nextExpectedSlot(quiet.sourceIdentity, quiet.incarnationId)
+        assertEquals(before, after)
+    }
+
+    @Test
+    fun maintainOffTopKPlayoutCursors_discardsExpiredOnly_whenSourceNotInTopK() {
+        val fact =
+            SessionMediaWiringHarness.sessionFact(sessionId)
+                .copy(startedAtMs = 1_700_000_000_000L)
+        assertTrue(ConferenceSessionMediaBridge.startSession(fact))
+        val quiet = SessionMediaWiringHarness.memberBinding("M02")
+        val loud = SessionMediaWiringHarness.memberBinding("M03")
+        assertTrue(wiring.installMember(sessionId, quiet))
+        assertTrue(wiring.installMember(sessionId, loud))
+
+        val wall0 = 1_700_000_020_000L
+        for (i in 0 until 6) {
             val admitted =
                 wiring.admitProtectedDatagram(
                     sessionId,
-                    tonePacket(loud, baseSlot + 100 + i, audioLevel = 90),
+                    tonePacket(quiet, baseSlot + i, audioLevel = 1),
                     wall0 + i * 20L,
                 )
             assertEquals(FrameAdmitDisposition.QUEUED, admitted.frameAdmit)
         }
+        observeTopKQuietVsLoud(quiet, loud)
 
+        val pipeline = wiring.orchestrator(sessionId)?.pipeline ?: error("pipeline")
+        val lateWall =
+            wall0 +
+                MediaJitterConstants.MAX_PLAYOUT_DELAY_MS +
+                6 * MediaJitterConstants.MEDIA_SLOT_MS +
+                50L
+
+        wiring.maintainOffTopKPlayoutCursors(
+            sessionId,
+            tickMediaTimeMs = lateWall,
+            nowMs = lateWall,
+            maxSlotsPerSource = MediaJitterConstants.MAX_REORDER_PACKETS,
+        )
+
+        val after =
+            pipeline.nextExpectedSlot(quiet.sourceIdentity, quiet.incarnationId)
+        assertTrue(
+            "expired prefix should be discarded off-Top-K",
+            after != null && after!! > baseSlot.toLong(),
+        )
+    }
+
+    private fun observeTopKQuietVsLoud(
+        quiet: MemberBindingFact,
+        loud: MemberBindingFact,
+    ) {
         val orchestrator = wiring.orchestrator(sessionId) ?: error("orchestrator")
-        val pipeline = orchestrator.pipeline
         orchestrator.selection.observeVoice(
             VoiceLevelObservation(
                 sourceIdentity = quiet.sourceIdentity,
@@ -81,24 +137,6 @@ class OffTopKPlayoutCursorMaintenanceTest {
                 voiceActive = true,
                 audioLevel = 90,
             ),
-        )
-
-        val quietNextBefore =
-            pipeline.nextExpectedSlot(quiet.sourceIdentity, quiet.incarnationId)
-        assertEquals(baseSlot.toLong(), quietNextBefore)
-
-        wiring.maintainOffTopKPlayoutCursors(
-            sessionId,
-            nowMs = wall0 + 200L,
-            maxSlotsPerSource = MediaJitterConstants.MAX_REORDER_PACKETS,
-        )
-
-        val quietNextAfter =
-            pipeline.nextExpectedSlot(quiet.sourceIdentity, quiet.incarnationId)
-        assertNotNull(quietNextAfter)
-        assertTrue(
-            "quiet source should advance off-Top-K cursor",
-            quietNextAfter!! >= baseSlot + MediaJitterConstants.MAX_REORDER_PACKETS.toLong(),
         )
     }
 

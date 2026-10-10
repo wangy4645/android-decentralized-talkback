@@ -118,13 +118,13 @@ class ConferenceSessionMediaWiring(
      * earliest buffered slot that is playable at or before the tick target.
      */
     /**
-     * RCA5-B7 — Top-K mix only pulls selected sources; admitted non-Top-K jitter prefixes
-     * otherwise never advance [nextExpected] (M04 field: M01 next stuck, starvation while bySlot>0).
-     * Discard-pull up to [maxSlotsPerSource] consecutive ready slots per off-Top-K source each tick.
-     * Does not change Top-K / VAD / reorder constants.
+     * B8-A — Top-K selects mix pulls only; off-Top-K uses action A2
+     * ([MediaExecutionPipeline.releaseOffTopKNonMixPrefixBounded]) before resolve.
+     * Skips Top-K members (INV-1). Does not change VAD / Top-K ranking.
      */
     fun maintainOffTopKPlayoutCursors(
         sessionId: String,
+        tickMediaTimeMs: Long,
         nowMs: Long,
         maxSlotsPerSource: Int = MediaJitterConstants.MAX_REORDER_PACKETS,
     ) {
@@ -138,26 +138,21 @@ class ConferenceSessionMediaWiring(
         val pipeline = orchestrator.pipeline
         for ((sourceIdentity, source) in admitted) {
             if (sourceIdentity in topKIds) continue
-            var drained = 0
-            while (drained < maxSlotsPerSource) {
-                val next =
-                    pipeline.nextExpectedSlot(sourceIdentity, source.incarnationId)
-                        ?: break
-                val frame =
-                    pipeline.peekBufferedFrame(
-                        sourceIdentity,
-                        source.incarnationId,
-                        next,
-                    ) ?: break
-                pipeline.pullSlot(
-                    sourceIdentity = sourceIdentity,
-                    incarnationId = source.incarnationId,
-                    slot = next,
-                    slotMediaTimeMs = frame.mediaTimeMs,
-                    nowMs = nowMs,
+            // Cap must be same-source Layer A RTP domain as nextExpected — never session Layer B.
+            // Missing Layer A origin: deadline-only A2 (playheadSlotCap=null).
+            val layerAPlayhead =
+                state.ingressTimeline.mediaSlotForPlayoutTickMs(
+                    sourceIdentity,
+                    source.incarnationId,
+                    tickMediaTimeMs,
                 )
-                drained++
-            }
+            pipeline.releaseOffTopKNonMixPrefixBounded(
+                sourceIdentity = sourceIdentity,
+                incarnationId = source.incarnationId,
+                nowMs = nowMs,
+                playheadSlotCap = layerAPlayhead,
+                maxSlots = maxSlotsPerSource,
+            )
         }
     }
 

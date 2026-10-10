@@ -163,7 +163,11 @@ class Profile01ShadowPlayoutClockSeam(
             wiring.withSessionPipelineLock(session.sessionId) {
                 if (!hasSession(session.sessionId)) return@withSessionPipelineLock
                 val nowMs = System.currentTimeMillis()
-                wiring.maintainOffTopKPlayoutCursors(session.sessionId, nowMs)
+                wiring.maintainOffTopKPlayoutCursors(
+                    session.sessionId,
+                    tickMediaTimeMs,
+                    nowMs,
+                )
                 val buffered =
                     resolveBufferedSlot(wiring, session.sessionId, tickMediaTimeMs)
                         ?: run {

@@ -209,6 +209,67 @@ class MediaExecutionPipeline(
     }
 
     /**
+     * B8-A (ADR-0058 eligibility) — off-Top-K **non-mix release** (action A2) at [nextExpected]:
+     * - past [AdmittedMediaFrame.usefulDeadlineMs], or
+     * - [nextExpected] strictly above Layer-A [playheadSlotCap] while a frame is buffered.
+     * Action A3: still-playable frames at/before cap are not consumed. No hole advance.
+     */
+    fun releaseOffTopKNonMixPrefixBounded(
+        sourceIdentity: String,
+        incarnationId: Long,
+        nowMs: Long,
+        playheadSlotCap: Long?,
+        maxSlots: Int,
+    ): Int {
+        if (maxSlots <= 0) return 0
+        val key = jitterKey(sourceIdentity, incarnationId)
+        val buf = jitters[key] ?: return 0
+        if (!buf.isExecutable()) return 0
+        val inst = selection.registry.get(sourceIdentity)
+        if (inst == null ||
+            inst.source.incarnationId != incarnationId ||
+            inst.fence == ExecutionFenceState.HARD_FENCED
+        ) {
+            return 0
+        }
+        var released = 0
+        while (released < maxSlots) {
+            val next = buf.nextExpected() ?: break
+            val frame = buf.peekFrame(next) ?: break
+            val pastDeadline = nowMs > frame.usefulDeadlineMs()
+            val pastPlayheadCap = playheadSlotCap != null && next > playheadSlotCap
+            if (!pastDeadline && !pastPlayheadCap) {
+                break
+            }
+            pullSlot(
+                sourceIdentity = sourceIdentity,
+                incarnationId = incarnationId,
+                slot = next,
+                slotMediaTimeMs = frame.mediaTimeMs,
+                nowMs = nowMs,
+            )
+            released++
+        }
+        return released
+    }
+
+    /** @see releaseOffTopKNonMixPrefixBounded */
+    fun discardExpiredBufferedPrefixBounded(
+        sourceIdentity: String,
+        incarnationId: Long,
+        nowMs: Long,
+        playheadSlotCap: Long?,
+        maxSlots: Int,
+    ): Int =
+        releaseOffTopKNonMixPrefixBounded(
+            sourceIdentity,
+            incarnationId,
+            nowMs,
+            playheadSlotCap,
+            maxSlots,
+        )
+
+    /**
      * Drain consecutive buffered slots in media-time order while present and eligible.
      */
     fun drainReadyInOrder(
