@@ -9,6 +9,9 @@ import com.talkback.core.conference.runtime.MixCycleResult
 import com.talkback.core.conference.runtime.OpusPayloadStore
 import com.talkback.core.conference.runtime.PcmFrame
 import com.talkback.core.conference.runtime.PlayoutMetricsSeam
+import com.talkback.core.conference.runtime.SlotPullDisposition
+import com.talkback.core.conference.runtime.SourceMixInputKind
+import com.talkback.core.conference.runtime.SourceMixInputSnapshot
 import com.talkback.core.conference.session.integration.Profile01ShadowRuntimeObservability
 import com.talkback.core.conference.runtime.RecordingAudioTrackSeam
 import com.talkback.core.conference.wire.WireIngressResult
@@ -337,6 +340,8 @@ class ConferenceMulticastMediaPipeline(
         val decodeIds = linkedSetOf<String>()
         val mixIds = linkedSetOf<String>()
         val pcmFrames = mutableListOf<PcmFrame>()
+        val sourceMixInputs = linkedMapOf<String, SourceMixInputSnapshot>()
+        val sourcePullDispositions = linkedMapOf<String, SlotPullDisposition>()
 
         val decodeStartNs = System.nanoTime()
         for (member in topKMembers) {
@@ -354,6 +359,12 @@ class ConferenceMulticastMediaPipeline(
                 decodeIds += member.sourceIdentity
                 mixIds += member.sourceIdentity
                 pcmFrames += pcm
+                sourcePullDispositions[member.sourceIdentity] = SlotPullDisposition.DECODE_FRAME
+                sourceMixInputs[member.sourceIdentity] =
+                    SourceMixInputSnapshot(
+                        kind = SourceMixInputKind.REAL,
+                        samples = pcm.samples,
+                    )
             }
         }
         val decodeDurationUs = (System.nanoTime() - decodeStartNs) / 1_000L
@@ -369,6 +380,8 @@ class ConferenceMulticastMediaPipeline(
                     decodeInvocationIdentities = decodeIds,
                     mixParticipantIdentities = mixIds,
                     mixedBlock = block,
+                    sourcePullDispositions = sourcePullDispositions,
+                    sourceMixInputs = sourceMixInputs,
                 ),
             decodeDurationUs = decodeDurationUs,
             mixDurationUs = mixDurationUs,

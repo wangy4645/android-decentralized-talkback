@@ -17,6 +17,8 @@ import com.talkback.core.conference.transport.PipelineAdmitResult
 import com.talkback.core.conference.transport.PipelinePlayoutResult
 import com.talkback.core.conference.transport.RecordingPlayoutMetricsSeam
 import com.talkback.core.conference.transport.RelativeMediaTimeline
+import com.talkback.core.conference.session.integration.Profile01A3MixInputTelemetry
+import com.talkback.core.conference.session.integration.Profile01A3MixOutputTelemetry
 import com.talkback.core.conference.session.integration.Profile01ShadowRuntimeObservability
 import com.talkback.core.conference.session.integration.cutover.AudiblePlayoutOwnershipSeam
 import com.talkback.core.conference.session.integration.cutover.audiblePlayoutSeam
@@ -183,7 +185,19 @@ class ConferenceSessionMediaWiring(
             nowMs = nowMs,
             slot = slot,
             slotMediaTimeMs = slotMediaTimeMs,
-        )
+        ).also { result ->
+            Profile01A3MixOutputTelemetry.recordCycle(
+                sessionId = sessionId,
+                owner = Profile01A3MixOutputTelemetry.audioTrackOwnerLabel(),
+                mixCycle = result.mixCycle,
+                playoutObserved = result.playoutObserved,
+            )
+            Profile01A3MixInputTelemetry.recordCycle(
+                sessionId = sessionId,
+                owner = Profile01A3MixInputTelemetry.audioTrackOwnerLabel(),
+                mixCycle = result.mixCycle,
+            )
+        }
     }
 
     fun playoutSuccessfulWrites(sessionId: String): Long? {
@@ -501,6 +515,8 @@ class ConferenceSessionMediaWiring(
             drainResidualDecoders(decodeMix)
             state.assembly.orchestrator.selection.clearRegistryForSessionWiring()
             state.assembly.pipeline.transport.endScope()
+            Profile01A3MixOutputTelemetry.clearSession(sessionId)
+            Profile01A3MixInputTelemetry.clearSession(sessionId)
             assertRuntimeEmptyAfterStop(state)
             Profile01ShadowRuntimeObservability.logTeardown(
                 sessionId = sessionId,

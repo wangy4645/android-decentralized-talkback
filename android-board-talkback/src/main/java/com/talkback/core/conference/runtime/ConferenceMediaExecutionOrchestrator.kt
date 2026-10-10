@@ -15,6 +15,10 @@ data class MixCycleResult(
     val decodeInvocationIdentities: Set<String>,
     val mixParticipantIdentities: Set<String>,
     val mixedBlock: MixedBlock,
+    /** A3-only: per-source pull disposition when available (empty on GA pull path). */
+    val sourcePullDispositions: Map<String, SlotPullDisposition> = emptyMap(),
+    /** A3-only: PCM that actually entered EqualWeightMixer this cycle. */
+    val sourceMixInputs: Map<String, SourceMixInputSnapshot> = emptyMap(),
 )
 
 class ConferenceMediaExecutionOrchestrator(
@@ -76,6 +80,8 @@ class ConferenceMediaExecutionOrchestrator(
         val decodeIds = linkedSetOf<String>()
         val mixIds = linkedSetOf<String>()
         val pcmFrames = mutableListOf<PcmFrame>()
+        val sourceMixInputs = linkedMapOf<String, SourceMixInputSnapshot>()
+        val sourcePullDispositions = linkedMapOf<String, SlotPullDisposition>()
 
         for (member in topKMembers) {
             if (!selection.isDecodeEligible(member.sourceIdentity, member.incarnationId)) {
@@ -92,6 +98,13 @@ class ConferenceMediaExecutionOrchestrator(
                 decodeIds += member.sourceIdentity
                 mixIds += member.sourceIdentity
                 pcmFrames += pcm
+                // Clean GA path has no SharedMix pull kinds; treat mixer-admitted PCM as REAL.
+                sourcePullDispositions[member.sourceIdentity] = SlotPullDisposition.DECODE_FRAME
+                sourceMixInputs[member.sourceIdentity] =
+                    SourceMixInputSnapshot(
+                        kind = SourceMixInputKind.REAL,
+                        samples = pcm.samples,
+                    )
             }
         }
 
@@ -101,6 +114,8 @@ class ConferenceMediaExecutionOrchestrator(
             decodeInvocationIdentities = decodeIds,
             mixParticipantIdentities = mixIds,
             mixedBlock = block,
+            sourcePullDispositions = sourcePullDispositions,
+            sourceMixInputs = sourceMixInputs,
         )
     }
 
