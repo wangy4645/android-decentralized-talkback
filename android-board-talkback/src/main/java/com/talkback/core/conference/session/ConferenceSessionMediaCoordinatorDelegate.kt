@@ -141,7 +141,7 @@ object ConferenceSessionMediaCoordinatorDelegate {
                         moduleId,
                         ShadowOutcome.APPLIED,
                     )
-                    maybeAttemptGaDefaultCutover(sessionId, moduleId)
+                    maybeAttemptGaDefaultCutover(sessionId)
                 }
                 SourceSuccessionMediaReadyDecision.INSTALL -> {
                     val ok = ConferenceSessionMediaBridge.installMember(sessionId, binding)
@@ -156,7 +156,7 @@ object ConferenceSessionMediaCoordinatorDelegate {
                                 extra = Profile01ShadowRuntimeObservability.memberBindingFields(binding),
                             )
                         }
-                        maybeAttemptGaDefaultCutover(sessionId, moduleId)
+                        maybeAttemptGaDefaultCutover(sessionId)
                     }
                     MeetingProductMediaShadow.observability.recordOutcome(
                         ShadowHook.MEMBER_MEDIA_READY,
@@ -285,12 +285,10 @@ object ConferenceSessionMediaCoordinatorDelegate {
         }
     }
 
-    private fun maybeAttemptGaDefaultCutover(
-        sessionId: String,
-        moduleId: String? = null,
-    ) {
+    private fun maybeAttemptGaDefaultCutover(sessionId: String) {
         val localModuleId = localModuleIdProvider?.invoke() ?: return
-        if (moduleId != null && moduleId != localModuleId) return
+        // Remote MEMBER_MEDIA_READY / install is a later readiness hook: catalog
+        // REMOTE_MULTICAST_RX_SOURCE is evaluated as local, not as the remote id.
         MulticastAudibleAutomaticCutover.maybeAttempt(sessionId, localModuleId)
     }
 }
