@@ -128,6 +128,34 @@ class AudibleOwnershipController(
      * Fence+release production track only — do not treat as fatal or require Anchor reacquire
      * (session media is already draining).
      */
+    /**
+     * Membership media-key epoch bump cleared decode/catalog; release stale production
+     * ownership so [MulticastAudibleAutomaticCutover] can re-arm when readiness returns.
+     */
+    fun onMediaKeyEpochRotated(sessionId: String): CutoverOutcome {
+        if (activeSessionId != null && activeSessionId != sessionId) {
+            return CutoverOutcome.REJECTED_INVALID_STATE
+        }
+        when (state) {
+            AudibleOwnershipState.MULTICAST_ACTIVE,
+            AudibleOwnershipState.CUTOVER_ARMED,
+            -> {
+                multicastPort.fenceProductionPlayout(sessionId)
+                multicastPort.releaseProductionAudioTrack(sessionId)
+                ReplacementCutoverObservability.logHandoff(
+                    sessionId,
+                    "MEDIA_KEY_EPOCH_FENCE_MULTICAST",
+                    CutoverOutcome.APPLIED,
+                )
+                state = AudibleOwnershipState.ANCHOR_ACTIVE
+                activeSessionId = sessionId
+                ReplacementCutoverObservability.logState(sessionId, state, "media_key_epoch_rotated")
+            }
+            AudibleOwnershipState.ANCHOR_ACTIVE -> Unit
+        }
+        return CutoverOutcome.APPLIED
+    }
+
     fun onSessionTeardown(sessionId: String): CutoverOutcome {
         if (activeSessionId != null && activeSessionId != sessionId) {
             return CutoverOutcome.REJECTED_INVALID_STATE

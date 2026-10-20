@@ -34,8 +34,9 @@ class Profile01ShadowPlayoutClockSeam(
         Long,
         Long,
         Long,
-    ) -> PipelinePlayoutResult? = { wiring, sessionId, nowMs, slot, slotMediaTimeMs ->
-        wiring.runMixPlayoutCycle(sessionId, nowMs, slot, slotMediaTimeMs)
+        Map<String, Long>,
+    ) -> PipelinePlayoutResult? = { wiring, sessionId, nowMs, slot, slotMediaTimeMs, perSourceSlots ->
+        wiring.runMixPlayoutCycle(sessionId, nowMs, slot, slotMediaTimeMs, perSourceSlots)
     },
     private val clockFactory: (
         anchorMs: Long,
@@ -161,6 +162,17 @@ class Profile01ShadowPlayoutClockSeam(
         try {
             wiring.withSessionPipelineLock(session.sessionId) {
                 if (!hasSession(session.sessionId)) return@withSessionPipelineLock
+                val nowMs = System.currentTimeMillis()
+                wiring.maintainOffTopKPlayoutCursors(
+                    session.sessionId,
+                    tickMediaTimeMs,
+                    nowMs,
+                )
+                wiring.recoverEmptyBufferPlayoutCursors(
+                    session.sessionId,
+                    tickMediaTimeMs,
+                    nowMs,
+                )
                 val buffered =
                     resolveBufferedSlot(wiring, session.sessionId, tickMediaTimeMs)
                         ?: run {
@@ -172,11 +184,12 @@ class Profile01ShadowPlayoutClockSeam(
                                     sessionId = session.sessionId,
                                     funnel = funnel,
                                     liveDecoders = wiring.runtimeSnapshot(session.sessionId)?.liveDecoders ?: 0,
+                                    resolveSkipReason =
+                                        wiring.lastPlayoutResolveSkipReason(session.sessionId)?.name,
                                 )
                             }
                             return@withSessionPipelineLock
                         }
-                val nowMs = System.currentTimeMillis()
                 val result =
                     runMixPlayoutCycle(
                         wiring,
@@ -184,6 +197,7 @@ class Profile01ShadowPlayoutClockSeam(
                         nowMs,
                         buffered.slot,
                         buffered.slotMediaTimeMs,
+                        buffered.perSourceSlots,
                     )
                 if (result != null) {
                     session.mixCyclesExecuted.incrementAndGet()

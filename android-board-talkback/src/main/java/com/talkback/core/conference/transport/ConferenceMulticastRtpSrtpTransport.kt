@@ -53,7 +53,29 @@ class ConferenceMulticastRtpSrtpTransport(
         resources.endTransportScope()
     }
 
+    /**
+     * P1 option-2: rebuild multicast socket + re-join while transport scope (and locks) stay held.
+     */
+    fun rebindActiveScope(
+        handle: TransportHandle,
+        nowMs: Long,
+        networkInterfaceName: String?,
+    ): Boolean {
+        if (!isScopeActive()) return false
+        resources.rebindTransport(handle, nowMs)
+        rebindSeam.currentSocket?.let { socket ->
+            socket.soTimeout = socketReceiveTimeoutMs
+            socket.timeToLive = multicastTtl
+        }
+        if (networkInterfaceName != null) {
+            configureNetworkInterface(networkInterfaceName)
+        }
+        return lastJoinSucceeded()
+    }
+
     fun isScopeActive(): Boolean = resources.transportState().active
+
+    fun currentSocketLocalHost(): String? = rebindSeam.currentSocket?.localAddress?.hostAddress
 
     fun lastSocketBindResult() = rebindSeam.lastSocketBindResult
 
@@ -157,6 +179,15 @@ class ConferenceMulticastRtpSrtpTransport(
             socket.receive(packet)
             val rxWallMs = System.currentTimeMillis()
             val durationUs = (System.nanoTime() - startNs) / 1_000L
+            val srcHost = packet.address?.hostAddress ?: "unknown"
+            P1MulticastRxDatagramSourceTelemetry.recordDatagram(
+                srcHost = srcHost,
+                srcPort = packet.port,
+                payload = packet.data,
+                length = packet.length,
+                rxWallMs = rxWallMs,
+                socketLocalHost = socket.localAddress?.hostAddress,
+            )
             val payload = packet.data.copyOf(packet.length)
             if (sourceIdentity != null && wiring != null) {
                 val result = wiring.admitWire(sourceIdentity, payload, roc, replay)

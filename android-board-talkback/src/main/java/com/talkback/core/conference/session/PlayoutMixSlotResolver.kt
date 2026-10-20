@@ -50,6 +50,8 @@ internal object PlayoutMixSlotResolver {
 
     fun resolve(
 
+        sessionId: String,
+
         orchestrator: ConferenceMediaExecutionOrchestrator,
 
         admitted: Map<String, AdmittedMediaSource>,
@@ -72,9 +74,34 @@ internal object PlayoutMixSlotResolver {
 
         val pipeline = orchestrator.pipeline
 
-        var topKMembers = orchestrator.selection.currentTopK().members
+        val rankedTopK = orchestrator.selection.currentTopK().members
 
-        topKMembers =
+        val deferral =
+            PlayoutTopKDeferral.advanceEffectiveTopK(
+                sessionId = sessionId,
+                ranked = rankedTopK,
+                admitted = admitted,
+                pipeline = pipeline,
+                ingressTimeline = ingressTimeline,
+                tickMediaTimeMs = tickMediaTimeMs,
+                targetMediaSlot = targetMediaSlot,
+                selectionNowMs = selectionNowMs,
+            )
+
+        val rankedAnyPullable =
+            rankedTopK.any { member ->
+                PlayoutTopKDeferral.isMemberPullable(
+                    member,
+                    admitted,
+                    pipeline,
+                    ingressTimeline,
+                    tickMediaTimeMs,
+                    targetMediaSlot,
+                    selectionNowMs,
+                )
+            }
+
+        val fallbackTopK =
             BrightScreenPlayoutTopKFallback.effectiveTopKMembers(
                 selection = orchestrator.selection,
                 admitted = admitted,
@@ -83,7 +110,15 @@ internal object PlayoutMixSlotResolver {
                 tickMediaTimeMs = tickMediaTimeMs,
                 targetMediaSlot = targetMediaSlot,
                 selectionNowMs = selectionNowMs,
-                currentTopK = topKMembers,
+                currentTopK = rankedTopK,
+            )
+
+        val topKMembers =
+            selectTopKForPlayoutPick(
+                rankedTopK = rankedTopK,
+                deferralEffective = deferral.effectiveMembers,
+                fallbackTopK = fallbackTopK,
+                rankedAnyPullable = rankedAnyPullable,
             )
 
         if (topKMembers.isEmpty()) {
@@ -726,6 +761,24 @@ internal object PlayoutMixSlotResolver {
             targetMediaSlot,
             nowMs,
         ) != null
+
+    internal fun selectTopKForPlayoutPick(
+        rankedTopK: List<TopKMember>,
+        deferralEffective: List<TopKMember>,
+        fallbackTopK: List<TopKMember>,
+        rankedAnyPullable: Boolean,
+    ): List<TopKMember> {
+        val fallbackSubstituted =
+            !rankedAnyPullable &&
+                fallbackTopK.isNotEmpty() &&
+                fallbackTopK.map { it.sourceIdentity }.toSet() !=
+                    rankedTopK.map { it.sourceIdentity }.toSet()
+        return if (fallbackSubstituted) {
+            fallbackTopK
+        } else {
+            deferralEffective
+        }
+    }
 
 }
 

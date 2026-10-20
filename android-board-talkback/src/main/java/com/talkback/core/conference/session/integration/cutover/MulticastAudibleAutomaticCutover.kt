@@ -67,6 +67,16 @@ object MulticastAudibleAutomaticCutover {
         terminalSessions.remove(sessionId)
     }
 
+    /** Wiring rotated media key — allow auto cutover to run again after member reinstall. */
+    fun onMediaKeyEpochRotated(sessionId: String) {
+        terminalSessions.remove(sessionId)
+        ReplacementCutoverRc1.onMediaKeyEpochRotated(sessionId)
+        ReplacementCutoverObservability.logRc1Field(
+            outcome = "MEDIA_KEY_EPOCH_CUTOVER_RESET",
+            sessionId = sessionId,
+        )
+    }
+
     private fun executeCutover(sessionId: String) {
         val outcome = ReplacementCutoverRc1.executeCutover(sessionId)
         if (outcome == CutoverOutcome.APPLIED) {

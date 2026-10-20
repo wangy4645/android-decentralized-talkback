@@ -5,6 +5,7 @@ import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioTrack
 import android.os.Build
+import com.talkback.core.conference.session.D1EmptyTickPlayoutFill
 import com.talkback.core.conference.session.integration.Profile01ShadowRuntimeObservability
 import com.talkback.core.conference.session.integration.cutover.ReplacementCutoverObservability
 
@@ -35,6 +36,8 @@ class AndroidAudioTrackPlayoutSeam(
         private set
 
     private var lastReportedUnderrunCount: Int = 0
+    private val emptyTickFillState = D1EmptyTickPlayoutFill.State()
+    private val digitalSilenceFrame = ShortArray(D1EmptyTickPlayoutFill.silenceFrameSamples)
 
     fun start() {
         if (track != null) return
@@ -84,6 +87,7 @@ class AndroidAudioTrackPlayoutSeam(
             current.release()
         }
         track = null
+        D1EmptyTickPlayoutFill.reset(emptyTickFillState)
         ReplacementCutoverObservability.logMulticastAudibleProbe(
             sessionId = "-",
             active = false,
@@ -93,21 +97,31 @@ class AndroidAudioTrackPlayoutSeam(
 
     override fun write(block: MixedBlock, nowMs: Long): Boolean {
         val current = track ?: return false
-        if (block.samples.isEmpty()) {
-            failedWrites += 1
+        val action = D1EmptyTickPlayoutFill.decide(block, emptyTickFillState)
+        if (action == D1EmptyTickPlayoutFill.PlayoutWriteAction.SKIP) {
+            if (block.samples.isEmpty()) {
+                failedWrites += 1
+            }
             return false
         }
+        val pcm =
+            when (action) {
+                D1EmptyTickPlayoutFill.PlayoutWriteAction.WRITE_MIXED_BLOCK -> block.samples
+                D1EmptyTickPlayoutFill.PlayoutWriteAction.WRITE_DIGITAL_SILENCE -> digitalSilenceFrame
+                D1EmptyTickPlayoutFill.PlayoutWriteAction.SKIP -> return false
+            }
         val startNs = System.nanoTime()
         val written =
             current.write(
-                block.samples,
+                pcm,
                 0,
-                block.samples.size,
+                pcm.size,
                 AudioTrack.WRITE_BLOCKING,
             )
         lastWriteDurationUs = (System.nanoTime() - startNs) / 1_000L
         refreshUnderrunCount()
         return if (written > 0) {
+            D1EmptyTickPlayoutFill.onSuccessfulWrite(action, emptyTickFillState)
             successfulWrites += 1
             true
         } else {

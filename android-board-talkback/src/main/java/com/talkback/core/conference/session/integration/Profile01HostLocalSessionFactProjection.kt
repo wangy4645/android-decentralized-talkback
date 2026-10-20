@@ -2,6 +2,7 @@ package com.talkback.core.conference.session.integration
 
 import com.talkback.core.conference.session.ConferenceSessionMediaBridge
 import com.talkback.core.conference.session.ConferenceSessionMediaCoordinatorDelegate
+import com.talkback.core.conference.session.integration.cutover.MulticastAudibleAutomaticCutover
 import com.talkback.core.conference.session.ConferenceSessionMediaControlFactRegistry
 import com.talkback.core.conference.session.ControlFactPublishOutcome
 import com.talkback.core.conference.session.profile01.Profile01ConferenceMediaFactIngress
@@ -133,6 +134,7 @@ class Profile01HostLocalSessionFactProjection(
             conferenceId = conferenceId,
             mediaKeyEpoch = sessionControl.mediaKeyEpoch,
         )
+        localModuleId?.let { MulticastAudibleAutomaticCutover.maybeAttempt(sessionId, it) }
         return HostMembershipReplayOutcome.APPLIED
     }
 

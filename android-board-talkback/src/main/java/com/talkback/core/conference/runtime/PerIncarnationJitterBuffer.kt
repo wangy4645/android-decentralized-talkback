@@ -1,7 +1,5 @@
 package com.talkback.core.conference.runtime
 
-import com.talkback.core.conference.transport.SourceMixPlayoutAlignment
-
 /**
  * Per-incarnation jitter / reorder state (Profile 03 Q3).
  *
@@ -16,8 +14,6 @@ class PerIncarnationJitterBuffer(
 ) {
     private val bySlot = sortedMapOf<Long, AdmittedMediaFrame>()
     private var nextExpectedSlot: Long? = null
-    /** F9.2 — fixed source↔mix alignment; established once at first QUEUED. */
-    private var mixPlayoutAlignment: SourceMixPlayoutAlignment? = null
     private var executable: Boolean = true
 
     fun size(): Int = bySlot.size
@@ -28,26 +24,7 @@ class PerIncarnationJitterBuffer(
     fun invalidateForHardFence() {
         executable = false
         bySlot.clear()
-        mixPlayoutAlignment = null
     }
-
-    fun mixPlayoutAlignment(): SourceMixPlayoutAlignment? = mixPlayoutAlignment
-
-    /** One-shot at first QUEUED; [mixReferenceSlot] and [sourceReferenceSlot] must be co-temporal. */
-    fun establishMixPlayoutAlignment(
-        mixReferenceSlot: Long,
-        sourceReferenceSlot: Long,
-    ) {
-        if (mixPlayoutAlignment != null) return
-        mixPlayoutAlignment =
-            SourceMixPlayoutAlignment(
-                mixReferenceSlot = mixReferenceSlot,
-                sourceReferenceSlot = sourceReferenceSlot,
-            )
-    }
-
-    fun sourceSlotForSharedMixPlayout(sharedMixPlayoutSlot: Long): Long =
-        mixPlayoutAlignment?.sourceSlotForMix(sharedMixPlayoutSlot) ?: sharedMixPlayoutSlot
 
     fun admit(frame: AdmittedMediaFrame, nowMs: Long): FrameAdmitDisposition {
         require(frame.sourceIdentity == sourceIdentity)
@@ -102,11 +79,30 @@ class PerIncarnationJitterBuffer(
         nextExpectedSlot = slot
     }
 
+    /** Slide playout cursor without discarding buffered frames (B6 aged-hole recovery). */
+    fun slideExpectedTo(slot: Long) {
+        nextExpectedSlot = slot
+    }
+
     fun bufferedSlots(): List<Long> = ArrayList(bySlot.keys)
 
     fun earliestBufferedSlot(): Long? = bySlot.keys.firstOrNull()
 
     fun latestBufferedSlot(): Long? = bySlot.keys.lastOrNull()
+
+    fun allBufferedPastUsefulDeadline(nowMs: Long): Boolean =
+        bySlot.values.all { nowMs > it.usefulDeadlineMs() }
+
+    /** True when no buffered frames exist in (latestBuffered, beforeSlot). */
+    fun gapEmptyBetweenLatestBufferedAnd(beforeSlot: Long): Boolean {
+        val latest = latestBufferedSlot() ?: return true
+        var slot = latest + 1
+        while (slot < beforeSlot) {
+            if (bySlot.containsKey(slot)) return false
+            slot += 1
+        }
+        return true
+    }
 
     /**
      * Promotion transition: discard buffered frames already past playout deadline.
@@ -161,5 +157,16 @@ class PerIncarnationJitterBuffer(
         }
         nextExpectedSlot = liveSlot
         return stale.size
+    }
+
+    /**
+     * Meeting mute/unmute RX recovery — when the buffer is empty but [nextExpectedSlot]
+     * was advanced by playout starvation, clear the cursor so fresh ingress can re-anchor.
+     */
+    fun resetLiveEdgeWhenEmpty(): Boolean {
+        if (!executable || bySlot.isNotEmpty()) return false
+        if (nextExpectedSlot == null) return false
+        nextExpectedSlot = null
+        return true
     }
 }

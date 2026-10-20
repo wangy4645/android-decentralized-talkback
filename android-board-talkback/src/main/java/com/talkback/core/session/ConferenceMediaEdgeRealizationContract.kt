@@ -137,6 +137,15 @@ object ConferenceMediaEdgeRealizationContract {
     }
 
     /**
+     * Stale topology may still list edges for pruned members; intersect with current admitted roster.
+     */
+    fun realizationRemotesForAdmittedMembers(
+        localModuleId: String,
+        snapshot: ConferenceTopologySnapshot,
+        admittedModuleIds: Set<String>
+    ): Set<String> = offerRemotesIfAnchor(localModuleId, snapshot).intersect(admittedModuleIds)
+
+    /**
      * Same-session Anchor SDP: current-generation admitted spoke may apply offer.
      * Old Host-spoke cannot regain realization authority.
      */

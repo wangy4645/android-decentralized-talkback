@@ -1,7 +1,7 @@
 package com.talkback.core.conference.session.integration
 
+import com.talkback.core.conference.runtime.ConcentusOpusEncoderSeam
 import com.talkback.core.conference.runtime.OpusCodecConstants
-import com.talkback.core.conference.runtime.OpusTestVectors
 import com.talkback.core.conference.session.ConferenceSessionMediaBridge
 import com.talkback.core.conference.session.ConferenceSessionMediaControlFactRegistry
 import com.talkback.core.conference.session.ConferenceSessionMediaFactPort
@@ -10,6 +10,10 @@ import com.talkback.core.conference.transport.Phase1MediaHarness
 import com.talkback.core.conference.transport.SourceScopedSrtpEgress
 import com.talkback.core.webrtc.LocalMicFrameSource
 import com.talkback.core.webrtc.LocalOutboundPcmSink
+import com.talkback.core.conference.aqc.AqcRuntime
+import com.talkback.core.conference.aqc.TxProcessingChain
+import com.talkback.core.webrtc.CapturePcmMeasurementPoint
+import com.talkback.core.webrtc.PostApmLocalMicFrameSource
 import com.talkback.core.webrtc.ProcessLocalMicFrameSource
 import com.talkback.core.webrtc.conferenceaudio.ConferencePcmFormat
 import com.talkback.core.webrtc.conferenceaudio.PcmFrame
@@ -34,6 +38,8 @@ class Profile01ShadowMulticastTransmitSeam(
     private data class ArmedSession(
         val releaseMic: () -> Unit,
         val assembler: PcmFrameAssembler,
+        val opusEncoder: ConcentusOpusEncoderSeam = ConcentusOpusEncoderSeam(),
+        val mergeLock: Any = Any(),
         var halfFrame: ShortArray? = null,
     )
 
@@ -91,17 +97,28 @@ class Profile01ShadowMulticastTransmitSeam(
     private fun armCaptureTap(sessionId: String) {
         if (armed.containsKey(sessionId)) return
         val assembler = PcmFrameAssembler()
+        val sink =
+            LocalOutboundPcmSink { buffer, bits, rate, channels, frames ->
+                onMicPcm(sessionId, buffer, bits, rate, channels, frames)
+            }
         val release =
-            frameSource.acquire(
-                LocalOutboundPcmSink { buffer, bits, rate, channels, frames ->
-                    onMicPcm(sessionId, buffer, bits, rate, channels, frames, assembler)
-                },
-            )
+            if (D2SendChainRuntime.postApmMuxEnabled) {
+                D2ConferenceMicFrameSource.acquireForSession(sessionId, sink)
+            } else {
+                resolveProductionMicFrameSource().acquire(sink)
+            }
         armed[sessionId] = ArmedSession(releaseMic = release, assembler = assembler)
     }
 
     private fun disarmCaptureTap(sessionId: String) {
-        armed.remove(sessionId)?.releaseMic?.invoke()
+        ShadowTxEncodePcmFieldCapture.onSessionCaptureEnded(sessionId)
+        M01GatedTxEncodeLevelProcessor.clearSession(sessionId)
+        D2S2EncodePcmObserver.clearSession(sessionId)
+        D2TxPathTelemetry.clearSession(sessionId)
+        armed.remove(sessionId)?.let { session ->
+            session.releaseMic.invoke()
+            session.opusEncoder.release()
+        }
     }
 
     private fun onMicPcm(
@@ -111,12 +128,20 @@ class Profile01ShadowMulticastTransmitSeam(
         sampleRate: Int,
         numberOfChannels: Int,
         numberOfFrames: Int,
-        assembler: PcmFrameAssembler,
     ) {
-        if (!armed.containsKey(sessionId)) return
+        val state = armed[sessionId] ?: return
+        if (D2SendChainRuntime.captureChainObserveEnabled && !D2SendChainRuntime.postApmMuxEnabled) {
+            if (D2ConferenceMicFrameSource.isCanonicalChunk(bitsPerSample, sampleRate, numberOfChannels, numberOfFrames)) {
+                D2TxPathTelemetry.record(sessionId, D2TxPathTelemetry.Event.PRE_APM_FORWARD)
+            } else {
+                D2TxPathTelemetry.record(sessionId, D2TxPathTelemetry.Event.PRE_APM_FORMAT_REJECT)
+            }
+        }
         try {
-            assembler.append(audioData, bitsPerSample, sampleRate, numberOfChannels, numberOfFrames) { frame ->
-                onCanonicalPcmFrame(sessionId, frame)
+            synchronized(state.mergeLock) {
+                state.assembler.append(audioData, bitsPerSample, sampleRate, numberOfChannels, numberOfFrames) { frame ->
+                    onCanonicalPcmFrame(sessionId, frame, state)
+                }
             }
         } catch (t: Throwable) {
             Profile01ShadowRuntimeObservability.logShadowTxFailed(
@@ -130,8 +155,8 @@ class Profile01ShadowMulticastTransmitSeam(
     private fun onCanonicalPcmFrame(
         sessionId: String,
         frame: PcmFrame,
+        state: ArmedSession,
     ) {
-        val state = armed[sessionId] ?: return
         if (frame.format != ConferencePcmFormat.CANONICAL) return
 
         val merged =
@@ -148,10 +173,59 @@ class Profile01ShadowMulticastTransmitSeam(
                 pcm20
             }
 
+        val d2Chain = D2SendChainProcessor.processS1ToS2(merged)
+        Profile01ShadowRuntimeObservability.maybeLogD2SendChainTick(
+            sessionId = sessionId,
+            moduleId = localModuleId(),
+            result = d2Chain,
+        )
+
+        val pcmBeforeM01Gate =
+            if (AqcRuntime.txProcessingEnabled) {
+                val processed =
+                    TxProcessingChain.process20ms(
+                        d2Chain.samples,
+                        tapPoint = TxProcessingChain.TapPoint.POST_APM,
+                    )
+                Profile01ShadowRuntimeObservability.maybeLogAqcTxMetrics(
+                    sessionId = sessionId,
+                    moduleId = localModuleId(),
+                    metrics = processed.metrics,
+                )
+                processed.samples
+            } else {
+                d2Chain.samples
+            }
+
+        val gated =
+            M01GatedTxEncodeLevelProcessor.maybeProcess(
+                sessionId = sessionId,
+                moduleId = localModuleId(),
+                pcmForEncode = pcmBeforeM01Gate,
+            )
+        val pcmForEncode = gated.samples
+        Profile01ShadowRuntimeObservability.maybeLogM01GatedTxEncodeLevel(
+            sessionId = sessionId,
+            moduleId = localModuleId(),
+            result = gated,
+        )
+        val moduleId = localModuleId()
+        D2S2EncodePcmObserver.onEncodePcmFrame(sessionId, moduleId, pcmForEncode)
+        Profile01ShadowRuntimeObservability.maybeLogShadowTxEncodePcmLevel(
+            sessionId = sessionId,
+            moduleId = moduleId,
+            pcmForEncode = pcmForEncode,
+        )
+        ShadowTxEncodePcmFieldCapture.maybeCaptureFrame(
+            sessionId = sessionId,
+            moduleId = localModuleId(),
+            pcmForEncode = pcmForEncode,
+        )
+
         val context = resolveEgressContext(sessionId) ?: return
         val transport = ConferenceSessionMediaBridge.wiring?.transport(sessionId) ?: return
         try {
-            val opusPayload = OpusTestVectors.encodePcm(merged)
+            val opusPayload = state.opusEncoder.encode(pcmForEncode, context.sourceGeneration)
             if (transport.sendFromSource(context.egress, opusPayload, context.endpoint)) {
                 val snap = transport.observability.snapshot()
                 Profile01ShadowRuntimeObservability.maybeLogShadowTxActivity(
@@ -248,9 +322,30 @@ class Profile01ShadowMulticastTransmitSeam(
         return context
     }
 
+    internal fun resolveProductionMicFrameSource(): LocalMicFrameSource =
+        if (AqcRuntime.txProcessingEnabled) {
+            PostApmLocalMicFrameSource
+        } else {
+            frameSource
+        }
+
     companion object {
         private const val SHADOW_TX_INITIAL_SEQ = 0x5000
         private const val SHADOW_TX_VOICE_ACTIVE_AUDIO_LEVEL = 0x80
+
+        fun targetWireAuthorityMeasurementPoint(): CapturePcmMeasurementPoint =
+            CapturePcmMeasurementPoint.POST_SOFTWARE_APM_PRE_ENCODER
+
+        fun currentWireAuthorityMeasurementPoint(): CapturePcmMeasurementPoint =
+            when {
+                D2SendChainRuntime.postApmMuxEnabled && D2TxPathTelemetry.lastForwardedPath == "POST_APM" ->
+                    CapturePcmMeasurementPoint.POST_SOFTWARE_APM_PRE_ENCODER
+                else -> CapturePcmMeasurementPoint.POST_HW_PRE_WEBRTC_APM
+            }
+
+        fun usesPreApmMicFrameSource(): Boolean =
+            !D2SendChainRuntime.postApmMuxEnabled ||
+                D2TxPathTelemetry.lastForwardedPath == "PRE_APM"
     }
 
     private fun fence(

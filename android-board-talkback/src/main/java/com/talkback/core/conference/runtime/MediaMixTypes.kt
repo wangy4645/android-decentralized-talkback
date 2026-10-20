@@ -27,21 +27,38 @@ data class PcmFrame(
     override fun hashCode(): Int = 31 * samples.contentHashCode() + usableForMix.hashCode()
 }
 
+/** Per 20 ms mix block — A/B observability (behavior-neutral telemetry). */
+data class MixBlockDiagnostics(
+    val combineMode: String,
+    val preLimitPeakAbsFs: Double,
+    val limiterGain: Double,
+    val limiterActive: Boolean,
+    /** Actual blend divisor D (AVG: N; ACTIVE: A). */
+    val mixBlendDivisor: Int = 0,
+    /** ACTIVE: rms>−45dBFS routes; AVG: equals mix participant count when set. */
+    val mixActiveSpeechCount: Int = 0,
+    /** Post-mix field makeup (dB); 0 when experiment off. */
+    val mixOutputMakeupGainDb: Double = 0.0,
+)
+
 data class MixedBlock(
     val samples: ShortArray,
     val mixParticipantCount: Int,
     val peakAbsFs: Double,
+    val blockDiagnostics: MixBlockDiagnostics? = null,
 ) {
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
         if (other !is MixedBlock) return false
         return mixParticipantCount == other.mixParticipantCount &&
             peakAbsFs == other.peakAbsFs &&
+            blockDiagnostics == other.blockDiagnostics &&
             samples.contentEquals(other.samples)
     }
 
     override fun hashCode(): Int =
-        31 * (31 * samples.contentHashCode() + mixParticipantCount) + peakAbsFs.hashCode()
+        31 * (31 * (31 * samples.contentHashCode() + mixParticipantCount) + peakAbsFs.hashCode()) +
+            (blockDiagnostics?.hashCode() ?: 0)
 }
 
 /**

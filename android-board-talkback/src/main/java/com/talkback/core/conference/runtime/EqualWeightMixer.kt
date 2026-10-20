@@ -1,5 +1,6 @@
 package com.talkback.core.conference.runtime
 
+import com.talkback.core.conference.aqc.PcmLevelMetrics
 import kotlin.math.abs
 import kotlin.math.min
 
@@ -9,7 +10,40 @@ import kotlin.math.min
  * MUST NOT mutate Top-K / Source authority.
  */
 object EqualWeightMixer {
+    /** Aligns with [com.talkback.core.conference.session.integration.D2S2EncodePcmObserver] speech gate. */
+    private const val SPEECH_RMS_DBFS = -45.0
+
     fun mix(participants: List<PcmFrame>): MixedBlock {
+        val n = participants.size
+        return mixWithDivisor(
+            participants,
+            divisor = n,
+            combineModeLabel = "EQUAL_WEIGHT_AVERAGE",
+            activeSpeechCount = n,
+        )
+    }
+
+    fun mixActiveSpeechEqualWeight(participants: List<PcmFrame>): MixedBlock {
+        val active =
+            participants.count { frame ->
+                val rms = PcmLevelMetrics.rmsDbfs(frame.samples)
+                rms.isFinite() && rms > SPEECH_RMS_DBFS
+            }
+        val divisor = active.coerceAtLeast(1)
+        return mixWithDivisor(
+            participants,
+            divisor = divisor,
+            combineModeLabel = "ACTIVE_SPEECH_EQUAL_WEIGHT",
+            activeSpeechCount = active,
+        )
+    }
+
+    private fun mixWithDivisor(
+        participants: List<PcmFrame>,
+        divisor: Int,
+        combineModeLabel: String,
+        activeSpeechCount: Int,
+    ): MixedBlock {
         require(participants.size <= MediaMixConstants.MIX_MAX_SOURCES) {
             "MixMaxSources=${MediaMixConstants.MIX_MAX_SOURCES}"
         }
@@ -19,16 +53,16 @@ object EqualWeightMixer {
         val len = participants.minOf { it.samples.size }
         require(len > 0)
         val n = participants.size
+        require(divisor >= 1)
         val summed = FloatArray(len)
         for (p in participants) {
             for (i in 0 until len) {
                 summed[i] += p.samples[i].toFloat()
             }
         }
-        // Equal-weight: divide by N, then peak-protect to 0.89 FS if needed.
         var peak = 0f
         for (i in 0 until len) {
-            summed[i] /= n.toFloat()
+            summed[i] /= divisor.toFloat()
             peak = maxOf(peak, abs(summed[i]))
         }
         val ceiling = (MediaMixConstants.OUTPUT_PEAK_ABS_FS * MediaMixConstants.S16_FULL_SCALE).toFloat()
@@ -37,6 +71,12 @@ object EqualWeightMixer {
                 ceiling / peak
             } else {
                 1f
+            }
+        val preLimitPeakAbsFs =
+            if (peak > 0f) {
+                (peak / MediaMixConstants.S16_FULL_SCALE).toDouble()
+            } else {
+                0.0
             }
         val out = ShortArray(len)
         var outPeak = 0.0
@@ -60,6 +100,15 @@ object EqualWeightMixer {
             samples = out,
             mixParticipantCount = n,
             peakAbsFs = min(outPeak, MediaMixConstants.OUTPUT_PEAK_ABS_FS),
+            blockDiagnostics =
+                MixBlockDiagnostics(
+                    combineMode = combineModeLabel,
+                    preLimitPeakAbsFs = min(preLimitPeakAbsFs, 1.0),
+                    limiterGain = scale.toDouble(),
+                    limiterActive = scale < 0.999f,
+                    mixBlendDivisor = divisor,
+                    mixActiveSpeechCount = activeSpeechCount,
+                ),
         )
     }
 }

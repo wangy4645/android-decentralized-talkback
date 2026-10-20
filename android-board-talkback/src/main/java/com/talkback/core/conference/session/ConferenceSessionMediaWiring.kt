@@ -19,10 +19,12 @@ import com.talkback.core.conference.transport.PipelineAdmitResult
 import com.talkback.core.conference.transport.PipelinePlayoutResult
 import com.talkback.core.conference.transport.RecordingPlayoutMetricsSeam
 import com.talkback.core.conference.transport.RelativeMediaTimeline
+import com.talkback.core.conference.session.integration.MeetingProductionMixer
 import com.talkback.core.conference.session.integration.Profile01A3MixInputTelemetry
 import com.talkback.core.conference.session.integration.Profile01A3MixOutputTelemetry
 import com.talkback.core.conference.session.integration.Profile01ShadowRuntimeObservability
 import com.talkback.core.conference.session.integration.cutover.AudiblePlayoutOwnershipSeam
+import com.talkback.core.conference.session.integration.cutover.MulticastAudibleAutomaticCutover
 import com.talkback.core.conference.session.integration.cutover.audiblePlayoutSeam
 import com.talkback.core.conference.wire.WireIngressResult
 import java.util.concurrent.ConcurrentHashMap
@@ -51,6 +53,7 @@ class ConferenceSessionMediaWiring(
             PlayoutMixSlotResolver.PlayoutSlotProgress(),
         var lastPlayoutResolveSkipReason: PlayoutMixResolveSkipReason? = null,
         var lifecycleRebindCount: Int = 0,
+        val lastQueuedIngressWallMsBySource: MutableMap<String, Long> = mutableMapOf(),
     )
 
     enum class TransportLifecycleRebindOutcome {
@@ -183,6 +186,11 @@ class ConferenceSessionMediaWiring(
                 tickMediaTimeMs = tickMediaTimeMs,
                 nowMs = nowMs,
             )
+            val lastQueued = state.lastQueuedIngressWallMsBySource[sourceIdentity]
+            val recentQueuedIngress =
+                lastQueued != null &&
+                    (nowMs - lastQueued) <=
+                        SessionMediaLiveEdgeAligner.TOP_K_SPARSE_INGRESS_RECENCY_MS
             SessionMediaLiveEdgeAligner.maybeAdvanceEmptyBufferOnPlayoutTick(
                 pipeline = pipeline,
                 ingressTimeline = state.ingressTimeline,
@@ -191,7 +199,8 @@ class ConferenceSessionMediaWiring(
                 tickMediaTimeMs = tickMediaTimeMs,
                 nowMs = nowMs,
                 maxSlotsPerTick = maxSlotsPerSource,
-                allowSoakResyncOnEmptyBuffer = sourceIdentity !in topKIds,
+                allowSoakResyncOnEmptyBuffer =
+                    sourceIdentity !in topKIds || recentQueuedIngress,
             )
         }
     }
@@ -209,6 +218,7 @@ class ConferenceSessionMediaWiring(
         val admitted = orchestrator.authority.store.currentAdmitted()
         state.lastPlayoutResolveSkipReason = null
         return PlayoutMixSlotResolver.resolve(
+            sessionId = sessionId,
             orchestrator = orchestrator,
             admitted = admitted,
             ingressTimeline = state.ingressTimeline,
@@ -262,6 +272,7 @@ class ConferenceSessionMediaWiring(
             slot = slot,
             slotMediaTimeMs = slotMediaTimeMs,
             perSourceSlots = perSourceSlots,
+            mixSessionKey = sessionId,
         ).also { result ->
             val mixProducedPcm =
                 result.mixCycle.mixParticipantIdentities.isNotEmpty() &&
@@ -271,12 +282,31 @@ class ConferenceSessionMediaWiring(
                 slot = slot,
                 mixProducedPcm = mixProducedPcm,
             )
+            PlayoutTopKDeferral.lastTickSnapshot(sessionId)?.let { prior ->
+                PlayoutTopKDeferral.completeMixTick(
+                    sessionId = sessionId,
+                    prior = prior,
+                    mixParticipantIdentities = result.mixCycle.mixParticipantIdentities,
+                    mixProducedPcm = mixProducedPcm,
+                )
+            }
             Profile01A3MixOutputTelemetry.recordCycle(
                 sessionId = sessionId,
                 owner = Profile01A3MixOutputTelemetry.audioTrackOwnerLabel(),
                 mixCycle = result.mixCycle,
                 playoutObserved = result.playoutObserved,
                 pipelinePlcCount = state.assembly.orchestrator.pipeline.plcCount,
+                deferralTick =
+                    PlayoutTopKDeferral.lastTickSnapshot(sessionId)?.let { snap ->
+                        Profile01A3MixOutputTelemetry.TopKDeferralTickTelemetry(
+                            rankedTopKCount = snap.rankedTopKCount,
+                            effectiveTopKCount = snap.effectiveTopKCount,
+                            deferredSourceCount = snap.deferredSourceCount,
+                            pullSucceededSourceCount = snap.pullSucceededSourceCount,
+                            mixProducedThisTick = snap.mixProducedThisTick,
+                            allTopKUnpullableTick = snap.allTopKUnpullableTick,
+                        )
+                    },
             )
             Profile01A3MixInputTelemetry.recordCycle(
                 sessionId = sessionId,
@@ -434,6 +464,8 @@ class ConferenceSessionMediaWiring(
                         ),
                 )
             }
+            MulticastAudibleAutomaticCutover.onMediaKeyEpochRotated(sessionId)
+            PlayoutTopKDeferral.clearSession(sessionId)
             return true
         }
     }
@@ -622,6 +654,8 @@ class ConferenceSessionMediaWiring(
             state.assembly.pipeline.transport.endScope()
             Profile01A3MixOutputTelemetry.clearSession(sessionId)
             Profile01A3MixInputTelemetry.clearSession(sessionId)
+            MeetingProductionMixer.clearSession(sessionId)
+            PlayoutTopKDeferral.clearSession(sessionId)
             assertRuntimeEmptyAfterStop(state)
             Profile01ShadowRuntimeObservability.logTeardown(
                 sessionId = sessionId,
@@ -756,50 +790,75 @@ class ConferenceSessionMediaWiring(
         val admitted =
             state.assembly.orchestrator.authority.store.derivedAdmitted(sourceIdentity)
                 ?: return result
-        return when (result.frameAdmit) {
-            FrameAdmitDisposition.LATE_FOR_PLAYOUT -> {
-                val recovered =
-                    SessionMediaLiveEdgeAligner.maybeRecoverOnLateForPlayout(
-                        pipeline = state.assembly.orchestrator.pipeline,
-                        ingressTimeline = state.ingressTimeline,
-                        sourceIdentity = sourceIdentity,
-                        incarnationId = admitted.incarnationId,
-                        liveSlot = result.mediaSlot,
-                        arrivalMs = nowMs,
-                        nowMs = nowMs,
-                    ) ?: return result
-                result.copy(
-                    frameAdmit = recovered.disposition,
-                    jitterDepth =
-                        state.assembly.orchestrator.pipeline.jitterSize(
-                            sourceIdentity,
-                            admitted.incarnationId,
-                        ),
-                    mediaTimeMs = nowMs,
-                )
+        val aligned =
+            when (result.frameAdmit) {
+                FrameAdmitDisposition.LATE_FOR_PLAYOUT -> {
+                    val recovered =
+                        SessionMediaLiveEdgeAligner.maybeRecoverOnLateForPlayout(
+                            pipeline = state.assembly.orchestrator.pipeline,
+                            ingressTimeline = state.ingressTimeline,
+                            sourceIdentity = sourceIdentity,
+                            incarnationId = admitted.incarnationId,
+                            liveSlot = result.mediaSlot,
+                            arrivalMs = nowMs,
+                            nowMs = nowMs,
+                        ) ?: return result
+                    if (recovered.disposition == FrameAdmitDisposition.QUEUED) {
+                        result.mediaSlot?.let { slot ->
+                            state.ingressTimeline.mediaTimeMs(
+                                sourceIdentity,
+                                admitted.incarnationId,
+                                slot.toInt(),
+                                nowMs,
+                            )
+                        }
+                    }
+                    result.copy(
+                        frameAdmit = recovered.disposition,
+                        jitterDepth =
+                            state.assembly.orchestrator.pipeline.jitterSize(
+                                sourceIdentity,
+                                admitted.incarnationId,
+                            ),
+                        mediaTimeMs = nowMs,
+                    )
+                }
+                FrameAdmitDisposition.REORDER_DISPLACEMENT_EXCEEDED -> {
+                    val reorderAligned =
+                        SessionMediaLiveEdgeAligner.maybeAlignLiveEdgeOnReorder(
+                            pipeline = state.assembly.orchestrator.pipeline,
+                            sourceIdentity = sourceIdentity,
+                            incarnationId = admitted.incarnationId,
+                            liveSlot = result.mediaSlot,
+                            mediaTimeMs = result.mediaTimeMs ?: nowMs,
+                            arrivalMs = nowMs,
+                            nowMs = nowMs,
+                        ) ?: return result
+                    if (reorderAligned.disposition == FrameAdmitDisposition.QUEUED) {
+                        result.mediaSlot?.let { slot ->
+                            state.ingressTimeline.mediaTimeMs(
+                                sourceIdentity,
+                                admitted.incarnationId,
+                                slot.toInt(),
+                                nowMs,
+                            )
+                        }
+                    }
+                    result.copy(
+                        frameAdmit = reorderAligned.disposition,
+                        jitterDepth =
+                            state.assembly.orchestrator.pipeline.jitterSize(
+                                sourceIdentity,
+                                admitted.incarnationId,
+                            ),
+                    )
+                }
+                else -> result
             }
-            FrameAdmitDisposition.REORDER_DISPLACEMENT_EXCEEDED -> {
-                val aligned =
-                    SessionMediaLiveEdgeAligner.maybeAlignLiveEdgeOnReorder(
-                        pipeline = state.assembly.orchestrator.pipeline,
-                        sourceIdentity = sourceIdentity,
-                        incarnationId = admitted.incarnationId,
-                        liveSlot = result.mediaSlot,
-                        mediaTimeMs = result.mediaTimeMs ?: nowMs,
-                        arrivalMs = nowMs,
-                        nowMs = nowMs,
-                    ) ?: return result
-                result.copy(
-                    frameAdmit = aligned.disposition,
-                    jitterDepth =
-                        state.assembly.orchestrator.pipeline.jitterSize(
-                            sourceIdentity,
-                            admitted.incarnationId,
-                        ),
-                )
-            }
-            else -> result
+        if (aligned.frameAdmit == FrameAdmitDisposition.QUEUED) {
+            state.lastQueuedIngressWallMsBySource[sourceIdentity] = nowMs
         }
+        return aligned
     }
 
     private fun pipelineReject(
@@ -1012,6 +1071,14 @@ class ConferenceSessionMediaWiring(
             "live decoders remain after stopSession"
         }
     }
+
+    internal fun ingressTimelineForHarness(sessionId: String): PerIncarnationIngressTimelineRegistry? =
+        sessions[sessionId]?.ingressTimeline
+
+    internal fun lastQueuedIngressWallMsForHarness(
+        sessionId: String,
+        sourceIdentity: String,
+    ): Long? = sessions[sessionId]?.lastQueuedIngressWallMsBySource?.get(sourceIdentity)
 
     companion object {
         private fun coordinatorLocalModuleId(): String? =

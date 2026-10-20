@@ -97,11 +97,7 @@ class MediaExecutionPipeline(
 
     private fun jitterKey(identity: String, incarnationId: Long) = "$identity#$incarnationId"
 
-    fun admitFrame(
-        frame: AdmittedMediaFrame,
-        nowMs: Long,
-        sharedMixReferenceSlot: Long? = null,
-    ): FrameAdmitDisposition {
+    fun admitFrame(frame: AdmittedMediaFrame, nowMs: Long): FrameAdmitDisposition {
         val inst = selection.registry.get(frame.sourceIdentity)
         if (inst == null || inst.source.incarnationId != frame.incarnationId) {
             return FrameAdmitDisposition.NOT_ADMITTED_INCARNATION
@@ -134,73 +130,11 @@ class MediaExecutionPipeline(
             return FrameAdmitDisposition.FENCED_NON_EXECUTABLE
         }
         val disposition = buf.admit(frame, nowMs)
-        if (disposition == FrameAdmitDisposition.QUEUED && sharedMixReferenceSlot != null) {
-            buf.establishMixPlayoutAlignment(
-                mixReferenceSlot = sharedMixReferenceSlot,
-                sourceReferenceSlot = frame.mediaSlot,
-            )
-        }
         if (disposition == FrameAdmitDisposition.LATE_FOR_PLAYOUT) {
             lateForPlayoutCount += 1
         }
         return disposition
     }
-
-    /** F9.2/F9.3 — incarnation alignment for shared mix resolver. */
-    fun mixPlayoutAlignment(
-        sourceIdentity: String,
-        incarnationId: Long,
-    ): com.talkback.core.conference.transport.SourceMixPlayoutAlignment? =
-        jitters[jitterKey(sourceIdentity, incarnationId)]?.mixPlayoutAlignment()
-
-    fun sourceSlotForSharedMixPlayout(
-        sourceIdentity: String,
-        incarnationId: Long,
-        sharedMixPlayoutSlot: Long,
-    ): Long =
-        jitters[jitterKey(sourceIdentity, incarnationId)]
-            ?.sourceSlotForSharedMixPlayout(sharedMixPlayoutSlot)
-            ?: sharedMixPlayoutSlot
-
-    /**
-     * F9.2/F9.3 — map shared mix slot M onto source S, then consume.
-     * Does not include F9.4 activation fence / steady-hold policy.
-     */
-    fun pullSlotForSharedMixPlayout(
-        sourceIdentity: String,
-        incarnationId: Long,
-        sharedMixPlayoutSlot: Long,
-        resolvedMixSlotMediaTimeMs: Long,
-        nowMs: Long,
-    ): SlotPullDisposition {
-        val sourceSlot =
-            sourceSlotForSharedMixPlayout(
-                sourceIdentity,
-                incarnationId,
-                sharedMixPlayoutSlot,
-            )
-        val buf = jitters[jitterKey(sourceIdentity, incarnationId)]
-        val sourceSlotMediaTimeMs =
-            buf?.peekFrame(sourceSlot)?.mediaTimeMs
-                ?: (
-                    resolvedMixSlotMediaTimeMs -
-                        (sharedMixPlayoutSlot - sourceSlot) * MediaJitterConstants.MEDIA_SLOT_MS
-                )
-        return pullSlot(
-            sourceIdentity = sourceIdentity,
-            incarnationId = incarnationId,
-            slot = sourceSlot,
-            slotMediaTimeMs = sourceSlotMediaTimeMs,
-            nowMs = nowMs,
-        )
-    }
-
-    /** F9.1 not wired in this tree — desk boundary expects null. */
-    @Suppress("UNUSED_PARAMETER")
-    fun playoutExpirationFrontier(
-        sourceIdentity: String,
-        incarnationId: Long,
-    ): Long? = null
 
     /**
      * Advance one media slot for [sourceIdentity] at [slot] / [slotMediaTimeMs].
@@ -253,6 +187,11 @@ class MediaExecutionPipeline(
         if (nowMs <= slotMediaTimeMs + MediaJitterConstants.MAX_PLAYOUT_DELAY_MS) {
             return SlotPullDisposition.EMPTY
         }
+        // B5 — slotMediaTimeMs must share wall clock with nowMs. Reject fantasy advances
+        // from slot-index*20ms (pulls cursor ahead of real RTP → LATE deadlock).
+        if (nowMs - slotMediaTimeMs > MediaJitterConstants.WALL_MEDIA_TIME_SKEW_LIMIT_MS) {
+            return SlotPullDisposition.EMPTY
+        }
 
         buf?.advanceExpectedTo(slot + 1)
         val plc = plcFor(sourceIdentity)
@@ -268,6 +207,67 @@ class MediaExecutionPipeline(
             else -> d
         }
     }
+
+    /**
+     * B8-A (ADR-0058 eligibility) — off-Top-K **non-mix release** (action A2) at [nextExpected]:
+     * - past [AdmittedMediaFrame.usefulDeadlineMs], or
+     * - [nextExpected] strictly above Layer-A [playheadSlotCap] while a frame is buffered.
+     * Action A3: still-playable frames at/before cap are not consumed. No hole advance.
+     */
+    fun releaseOffTopKNonMixPrefixBounded(
+        sourceIdentity: String,
+        incarnationId: Long,
+        nowMs: Long,
+        playheadSlotCap: Long?,
+        maxSlots: Int,
+    ): Int {
+        if (maxSlots <= 0) return 0
+        val key = jitterKey(sourceIdentity, incarnationId)
+        val buf = jitters[key] ?: return 0
+        if (!buf.isExecutable()) return 0
+        val inst = selection.registry.get(sourceIdentity)
+        if (inst == null ||
+            inst.source.incarnationId != incarnationId ||
+            inst.fence == ExecutionFenceState.HARD_FENCED
+        ) {
+            return 0
+        }
+        var released = 0
+        while (released < maxSlots) {
+            val next = buf.nextExpected() ?: break
+            val frame = buf.peekFrame(next) ?: break
+            val pastDeadline = nowMs > frame.usefulDeadlineMs()
+            val pastPlayheadCap = playheadSlotCap != null && next > playheadSlotCap
+            if (!pastDeadline && !pastPlayheadCap) {
+                break
+            }
+            pullSlot(
+                sourceIdentity = sourceIdentity,
+                incarnationId = incarnationId,
+                slot = next,
+                slotMediaTimeMs = frame.mediaTimeMs,
+                nowMs = nowMs,
+            )
+            released++
+        }
+        return released
+    }
+
+    /** @see releaseOffTopKNonMixPrefixBounded */
+    fun discardExpiredBufferedPrefixBounded(
+        sourceIdentity: String,
+        incarnationId: Long,
+        nowMs: Long,
+        playheadSlotCap: Long?,
+        maxSlots: Int,
+    ): Int =
+        releaseOffTopKNonMixPrefixBounded(
+            sourceIdentity,
+            incarnationId,
+            nowMs,
+            playheadSlotCap,
+            maxSlots,
+        )
 
     /**
      * Drain consecutive buffered slots in media-time order while present and eligible.
@@ -301,6 +301,25 @@ class MediaExecutionPipeline(
 
     fun jitterSize(sourceIdentity: String, incarnationId: Long): Int =
         jitters[jitterKey(sourceIdentity, incarnationId)]?.size() ?: 0
+
+    fun gapEmptyBetweenLatestBufferedAnd(
+        sourceIdentity: String,
+        incarnationId: Long,
+        beforeSlot: Long,
+    ): Boolean =
+        jitters[jitterKey(sourceIdentity, incarnationId)]
+            ?.gapEmptyBetweenLatestBufferedAnd(beforeSlot)
+            ?: true
+
+    fun allBufferedPastUsefulDeadline(
+        sourceIdentity: String,
+        incarnationId: Long,
+        nowMs: Long,
+    ): Boolean {
+        val buf = jitters[jitterKey(sourceIdentity, incarnationId)] ?: return true
+        if (buf.size() == 0) return true
+        return buf.allBufferedPastUsefulDeadline(nowMs)
+    }
 
     fun hasBufferedFrame(
         sourceIdentity: String,
@@ -353,6 +372,31 @@ class MediaExecutionPipeline(
     ): Int {
         val buf = jitters[jitterKey(sourceIdentity, incarnationId)] ?: return 0
         return buf.soakDiscardBelowAndResync(liveSlot)
+    }
+
+    /** Advance nextExpected without discarding buffered frames. */
+    fun slideJitterExpectedTo(
+        sourceIdentity: String,
+        incarnationId: Long,
+        slot: Long,
+    ): Boolean {
+        val buf = jitters[jitterKey(sourceIdentity, incarnationId)] ?: return false
+        buf.slideExpectedTo(slot)
+        return true
+    }
+
+    fun latestBufferedSlot(
+        sourceIdentity: String,
+        incarnationId: Long,
+    ): Long? = jitters[jitterKey(sourceIdentity, incarnationId)]?.latestBufferedSlot()
+
+    /** Clears a stale expected slot when jitter is empty (conference unmute RX recovery). */
+    fun recoverEmptyJitterLiveEdge(
+        sourceIdentity: String,
+        incarnationId: Long,
+    ): Boolean {
+        val buf = jitters[jitterKey(sourceIdentity, incarnationId)] ?: return false
+        return buf.resetLiveEdgeWhenEmpty()
     }
 
     private fun releaseJitterBuffersForIdentity(sourceIdentity: String) {

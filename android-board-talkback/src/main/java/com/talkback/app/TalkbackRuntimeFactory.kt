@@ -26,6 +26,7 @@ import com.talkback.core.model.RemoteEndpointInfo
 import com.talkback.core.network.SelectedOperationalNetworkRegistry
 import com.talkback.core.signaling.prr.DiscoveryPrrHelloTargetProvider
 import com.talkback.core.webrtc.WebRtcNetworkBridgeInstall
+import com.talkback.core.conference.session.ConferenceMediaTransportScreenRebindMonitor
 import com.talkback.core.conference.session.ConferenceSessionMediaBridge
 import com.talkback.core.conference.session.ConferenceSessionMediaCoordinatorDelegate
 import com.talkback.core.conference.session.ConferenceSessionMediaControlFactRegistry
@@ -347,6 +348,7 @@ object TalkbackRuntimeFactory {
         }
         coordinator.updateStaticPeers(staticPeers)
         ConferenceSessionMediaBridge.wiring = ConferenceSessionMediaWiring.forShadow(context)
+        ConferenceMediaTransportScreenRebindMonitor.ensureStarted(context)
         val conferenceSessionMediaControlRegistry = ConferenceSessionMediaControlFactRegistry()
         val conferenceSessionMediaGbcPublisherBridge =
             ConferenceSessionMediaGbcPublisherBridge(conferenceSessionMediaControlRegistry)

@@ -18,6 +18,7 @@ class AndroidRuntimeResources(
     val selection: ConferenceMediaSelectionRuntime = ConferenceMediaSelectionRuntime(),
     val decoderPool: LiveDecoderPool = LiveDecoderPool(),
     val multicastLock: MulticastLockSeam = FakeMulticastLockSeam(),
+    val wifiLock: WifiLockSeam = FakeWifiLockSeam(),
     val audioTrack: RecordingAudioTrackSeam = RecordingAudioTrackSeam(),
     val rebindSeam: TransportRebindSeam = FakeTransportRebindSeam(),
 ) {
@@ -50,6 +51,11 @@ class AndroidRuntimeResources(
                     record(RuntimeDegradationKind.MULTICAST_LOCK_UNAVAILABLE, "acquire failed", nowMs)
                     return false
                 }
+                if (!wifiLock.acquire()) {
+                    multicastLock.release()
+                    record(RuntimeDegradationKind.WIFI_LOCK_UNAVAILABLE, "acquire failed", nowMs)
+                    return false
+                }
             }
             MulticastLockPolicy.NONE -> {
                 // Non-WiFi mesh netdev — MulticastLock is not a hard dependency.
@@ -77,11 +83,14 @@ class AndroidRuntimeResources(
         if (multicastLock.isHeld()) {
             multicastLock.release()
         }
+        if (wifiLock.isHeld()) {
+            wifiLock.release()
+        }
         transport = transport.copy(active = false, handle = null)
     }
 
     fun onSilenceOrEmptyTopKOrSoftReclaim() {
-        // Intentionally no MulticastLock release (R13-A / C-E2B05-01).
+        // Intentionally no MulticastLock / WifiLock release (R13-A / C-E2B05-01).
     }
 
     fun allocateJitter(sourceIdentity: String, incarnationId: Long, nowMs: Long): JitterAllocResult {
@@ -162,6 +171,7 @@ class AndroidRuntimeResources(
         ): AndroidRuntimeResources =
             AndroidRuntimeResources(
                 multicastLock = AndroidWifiMulticastLockSeam.from(context),
+                wifiLock = AndroidWifiLockSeam.from(context),
                 rebindSeam = MulticastSocketTransportRebindSeam(socketBinder),
             )
     }

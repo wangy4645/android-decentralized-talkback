@@ -5,7 +5,9 @@ import com.talkback.core.conference.runtime.FrameAdmitDisposition
 import com.talkback.core.conference.session.JitterSlotDomainSnapshot
 import com.talkback.core.conference.session.MemberBindingFact
 import com.talkback.core.conference.session.PlayoutFunnelSnapshot
+import com.talkback.core.conference.aqc.PcmLevelMetrics
 import com.talkback.core.conference.session.SessionMediaRuntimeSnapshot
+import com.talkback.core.conference.transport.Rfc6464TxVoiceLevel
 
 /**
  * Behavior-neutral Phase A shadow runtime OBS for field adjudication (PA-SR4 / PA-SR6).
@@ -55,6 +57,8 @@ object Profile01ShadowRuntimeObservability {
         java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicLong>()
     private val playoutFunnelCycleCounters =
         java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicLong>()
+    private val lastEmittedResolvedMixSlots =
+        java.util.concurrent.ConcurrentHashMap<String, Long>()
     private val lastSuccessfulFunnelSnapshots =
         java.util.concurrent.ConcurrentHashMap<String, PlayoutFunnelSnapshot>()
     private val starvationOnsetLoggedSessions = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
@@ -72,6 +76,89 @@ object Profile01ShadowRuntimeObservability {
         var keyMismatch: Int = 0
         var aeadFail: Int = 0
         var otherReject: Int = 0
+    }
+
+    private class IngressAnomalyAccumulator {
+        var lateForPlayout: Int = 0
+        var reorderDisplacementExceeded: Int = 0
+    }
+
+    internal enum class ResolvedMixSlotDeltaClass {
+        UNKNOWN,
+        NORMAL,
+        FORWARD_SMALL,
+        FORWARD_LARGE,
+        BACKWARD,
+    }
+
+    internal fun classifyResolvedMixSlotDelta(delta: Long): ResolvedMixSlotDeltaClass =
+        when {
+            delta < 0L -> ResolvedMixSlotDeltaClass.BACKWARD
+            delta <= 1L -> ResolvedMixSlotDeltaClass.NORMAL
+            delta <= 100L -> ResolvedMixSlotDeltaClass.FORWARD_SMALL
+            else -> ResolvedMixSlotDeltaClass.FORWARD_LARGE
+        }
+
+    private val ingressAnomalyAccumulators =
+        java.util.concurrent.ConcurrentHashMap<String, IngressAnomalyAccumulator>()
+
+    fun recordIngressFrameAdmit(
+        sessionId: String,
+        frameAdmit: FrameAdmitDisposition?,
+    ) {
+        when (frameAdmit) {
+            FrameAdmitDisposition.LATE_FOR_PLAYOUT ->
+                ingressAnomalyAccumulators
+                    .computeIfAbsent(sessionId) { IngressAnomalyAccumulator() }
+                    .lateForPlayout++
+            FrameAdmitDisposition.REORDER_DISPLACEMENT_EXCEEDED ->
+                ingressAnomalyAccumulators
+                    .computeIfAbsent(sessionId) { IngressAnomalyAccumulator() }
+                    .reorderDisplacementExceeded++
+            else -> Unit
+        }
+    }
+
+    fun snapshotIngressAnomalyCounts(sessionId: String): Pair<Int, Int> {
+        val acc = ingressAnomalyAccumulators[sessionId] ?: return 0 to 0
+        return acc.lateForPlayout to acc.reorderDisplacementExceeded
+    }
+
+    fun resetIngressAnomalyCounts(sessionId: String) {
+        val acc = ingressAnomalyAccumulators[sessionId] ?: return
+        acc.lateForPlayout = 0
+        acc.reorderDisplacementExceeded = 0
+    }
+
+    private val ingressVoiceCounters =
+        java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicLong>()
+
+    fun maybeLogIngressVoiceLevelSample(
+        sessionId: String,
+        sourceIdentity: String,
+        voiceActive: Boolean,
+        audioLevel: Int,
+        wireOctet: Int,
+    ) {
+        val key = "$sessionId|$sourceIdentity"
+        val ingressOrdinal =
+            ingressVoiceCounters
+                .computeIfAbsent(key) { java.util.concurrent.atomic.AtomicLong(0L) }
+                .incrementAndGet()
+        if (ingressOrdinal == 1L || ingressOrdinal % 25L == 0L) {
+            logPhase(
+                phase = "SHADOW_TX_VOICE_LEVEL",
+                sessionId = sessionId,
+                moduleId = sourceIdentity,
+                fields =
+                    mapOf(
+                        "ingressOrdinal" to ingressOrdinal.toString(),
+                        "voiceActive" to voiceActive.toString(),
+                        "audioLevel" to audioLevel.toString(),
+                        "wireOctet" to "0x%02X".format(wireOctet),
+                    ),
+            )
+        }
     }
 
     fun bindActiveSession(
@@ -104,6 +191,11 @@ object Profile01ShadowRuntimeObservability {
         rxAdmissionWindows.remove(sessionId)
         rxAdmissionFirstAdmittedLogged.remove(sessionId)
         rxAdmissionFirstRejectReasonLogged.remove(sessionId)
+        aqcTxMetricCounters.remove(sessionId)
+        aqcFallbackCounters.remove(sessionId)
+        shadowTxEncodePcmLevelCounters.remove(sessionId)
+        m01GatedTxEncodeCounters.remove(sessionId)
+        M01GatedTxEncodeLevelProcessor.clearSession(sessionId)
     }
 
     fun logShadowPlayoutArmed(
@@ -186,6 +278,7 @@ object Profile01ShadowRuntimeObservability {
         sessionId: String,
         funnel: PlayoutFunnelSnapshot,
         liveDecoders: Int,
+        resolveSkipReason: String? = null,
     ) {
         val count =
             playoutStarvationCounters
@@ -201,10 +294,13 @@ object Profile01ShadowRuntimeObservability {
             sessionId = sessionId,
             funnel = funnel,
             extra =
-                mapOf(
-                    "starvationTicks" to count.toString(),
-                    "liveDecoders" to liveDecoders.toString(),
-                ),
+                buildMap {
+                    put("starvationTicks", count.toString())
+                    put("liveDecoders", liveDecoders.toString())
+                    if (resolveSkipReason != null) {
+                        put("funnelResolveSkipReason", resolveSkipReason)
+                    }
+                },
         )
     }
 
@@ -540,6 +636,229 @@ object Profile01ShadowRuntimeObservability {
         )
     }
 
+    private val aqcTxMetricCounters =
+        java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicLong>()
+    private val aqcFallbackCounters =
+        java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicLong>()
+    private val shadowTxEncodePcmLevelCounters =
+        java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicLong>()
+    private val shadowTxPcmS1LevelCounters =
+        java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicLong>()
+    private val d2SendChainTickCounters =
+        java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicLong>()
+    private val m01GatedTxEncodeCounters =
+        java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicLong>()
+
+    fun maybeLogM01GatedTxEncodeLevel(
+        sessionId: String,
+        moduleId: String,
+        result: M01GatedTxEncodeLevelFrameResult,
+    ) {
+        if (!M01GatedTxEncodeLevelRuntime.enabled) return
+        val n =
+            m01GatedTxEncodeCounters
+                .getOrPut(sessionId) { java.util.concurrent.atomic.AtomicLong(0) }
+                .incrementAndGet()
+        if (n != 1L && n % 25L != 0L) return
+        logPhase(
+            phase = "SHADOW_TX_ENCODE_PCM_LEVEL_POST_GAIN",
+            sessionId = sessionId,
+            moduleId = moduleId,
+            fields =
+                mapOf(
+                    "packetOrdinal" to n.toString(),
+                    "gateOpen" to result.gateOpen.toString(),
+                    "gainApplied" to result.gainApplied.toString(),
+                    "limiterApplied" to result.limiterApplied.toString(),
+                    "limiterScale" to "%.3f".format(result.limiterScale),
+                    "inRmsDbfs" to if (result.inputRmsDbfs.isFinite()) "%.1f".format(result.inputRmsDbfs) else "-inf",
+                    "outRmsDbfs" to if (result.outputRmsDbfs.isFinite()) "%.1f".format(result.outputRmsDbfs) else "-inf",
+                    "wallTimeMs" to System.currentTimeMillis().toString(),
+                ),
+        )
+    }
+
+    fun logD2TxPathSecond(
+        sessionId: String,
+        epochSecond: Long,
+        postForward: Int,
+        preForward: Int,
+        postFormatReject: Int,
+        preFormatReject: Int,
+        suppressedPre: Int,
+        muxEnabled: Boolean,
+    ) {
+        if (!D2SendChainRuntime.captureChainObserveEnabled) return
+        logPhase(
+            phase = "D2_TX_PATH_SECOND",
+            sessionId = sessionId,
+            moduleId = null,
+            fields =
+                mapOf(
+                    "epochSecond" to epochSecond.toString(),
+                    "muxEnabled" to muxEnabled.toString(),
+                    "postForward" to postForward.toString(),
+                    "preForward" to preForward.toString(),
+                    "postFormatReject" to postFormatReject.toString(),
+                    "preFormatReject" to preFormatReject.toString(),
+                    "suppressedPre" to suppressedPre.toString(),
+                    "lastPath" to D2TxPathTelemetry.lastForwardedPath,
+                    "wallTimeMs" to System.currentTimeMillis().toString(),
+                ),
+        )
+    }
+
+    fun logD2S2EncodeSecond(
+        sessionId: String,
+        moduleId: String,
+        epochSecond: Long,
+        frameCount: Int,
+        speechFrameCount: Int,
+        maxRmsDbfs: Double,
+        p90SpeechRmsDbfs: Double,
+        meanRmsDbfs: Double,
+        txPath: String,
+    ) {
+        if (!D2SendChainRuntime.captureChainObserveEnabled) return
+        logPhase(
+            phase = "D2_S2_ENCODE_SECOND",
+            sessionId = sessionId,
+            moduleId = moduleId,
+            fields =
+                mapOf(
+                    "epochSecond" to epochSecond.toString(),
+                    "frameCount" to frameCount.toString(),
+                    "speechFrameCount" to speechFrameCount.toString(),
+                    "maxRmsDbfs" to if (maxRmsDbfs.isFinite()) "%.1f".format(maxRmsDbfs) else "-inf",
+                    "p90SpeechRmsDbfs" to if (p90SpeechRmsDbfs.isFinite()) "%.1f".format(p90SpeechRmsDbfs) else "na",
+                    "meanRmsDbfs" to if (meanRmsDbfs.isFinite()) "%.1f".format(meanRmsDbfs) else "-inf",
+                    "txPath" to txPath,
+                    "wallTimeMs" to System.currentTimeMillis().toString(),
+                ),
+        )
+    }
+
+    fun maybeLogD2SendChainTick(
+        sessionId: String,
+        moduleId: String,
+        result: D2SendChainFrameResult,
+    ) {
+        if (!D2SendChainRuntime.sendHeadroomEnabled) return
+        val n =
+            d2SendChainTickCounters
+                .getOrPut(sessionId) { java.util.concurrent.atomic.AtomicLong(0) }
+                .incrementAndGet()
+        if (n != 1L && n % 25L != 0L) return
+        val deltaDb =
+            if (result.inputRmsDbfs.isFinite() && result.outputRmsDbfs.isFinite()) {
+                result.outputRmsDbfs - result.inputRmsDbfs
+            } else {
+                Double.NaN
+            }
+        logPhase(
+            phase = "D2_SEND_CHAIN_S1_TO_S2",
+            sessionId = sessionId,
+            moduleId = moduleId,
+            fields =
+                mapOf(
+                    "packetOrdinal" to n.toString(),
+                    "headroomApplied" to result.headroomApplied.toString(),
+                    "limiterScale" to "%.3f".format(result.limiterScale),
+                    "inRmsDbfs" to if (result.inputRmsDbfs.isFinite()) "%.1f".format(result.inputRmsDbfs) else "-inf",
+                    "outRmsDbfs" to if (result.outputRmsDbfs.isFinite()) "%.1f".format(result.outputRmsDbfs) else "-inf",
+                    "deltaRmsDb" to if (deltaDb.isFinite()) "%.2f".format(deltaDb) else "nan",
+                    "wallTimeMs" to System.currentTimeMillis().toString(),
+                ),
+        )
+    }
+
+    /**
+     * B1-OBSERVE / D2 S2: actual [pcmForEncode] level before Opus.
+     * Logs on frame 1 and every 25th encode frame per session.
+     */
+    fun maybeLogShadowTxEncodePcmLevel(
+        sessionId: String,
+        moduleId: String,
+        pcmForEncode: ShortArray,
+    ) {
+        val packetOrdinal =
+            shadowTxEncodePcmLevelCounters
+                .getOrPut(sessionId) { java.util.concurrent.atomic.AtomicLong(0) }
+                .incrementAndGet()
+        if (packetOrdinal != 1L && packetOrdinal % 25L != 0L) return
+        val levelDbov = Rfc6464TxVoiceLevel.frameLevelDbov(pcmForEncode)
+        val rmsDbfs = PcmLevelMetrics.rmsDbfs(pcmForEncode)
+        logPhase(
+            phase = "SHADOW_TX_ENCODE_PCM_LEVEL",
+            sessionId = sessionId,
+            moduleId = moduleId,
+            fields =
+                mapOf(
+                    "packetOrdinal" to packetOrdinal.toString(),
+                    "levelDbov" to levelDbov.toString(),
+                    "rmsDbfs" to if (rmsDbfs.isFinite()) "%.1f".format(rmsDbfs) else "-inf",
+                    "wallTimeMs" to System.currentTimeMillis().toString(),
+                    "frameSamples" to pcmForEncode.size.toString(),
+                ),
+        )
+    }
+
+    /** AQC Phase 2: encode-authority PCM metrics (rate-limited). */
+    fun maybeLogAqcTxMetrics(
+        sessionId: String,
+        moduleId: String,
+        metrics: com.talkback.core.conference.aqc.TxProcessingChain.TxMetrics,
+    ) {
+        val n =
+            aqcTxMetricCounters
+                .getOrPut(sessionId) { java.util.concurrent.atomic.AtomicLong(0) }
+                .incrementAndGet()
+        if (n != 1L && n % 25L != 0L) return
+        logPhase(
+            phase = "AQC_TX_METRICS",
+            sessionId = sessionId,
+            moduleId = moduleId,
+            fields =
+                mapOf(
+                    "tapPoint" to metrics.tapPoint.name,
+                    "inPeak" to metrics.inputPeakAbs.toString(),
+                    "outPeak" to metrics.outputPeakAbs.toString(),
+                    "inClip" to metrics.inputClipSamples.toString(),
+                    "outClip" to metrics.outputClipSamples.toString(),
+                    "inRmsDb" to "%.1f".format(metrics.inputRmsDbfs),
+                    "outRmsDb" to "%.1f".format(metrics.outputRmsDbfs),
+                    "limiterScale" to "%.3f".format(metrics.limiterScale),
+                    "limiterApplied" to metrics.limiterApplied.toString(),
+                    "frameOrdinal" to n.toString(),
+                ),
+        )
+    }
+
+    /** AQC Phase 2: resolve-null continuous CN write (rate-limited). */
+    fun maybeLogAqcPlayoutFallback(
+        sessionId: String,
+        wrote: Boolean,
+        samples: Int,
+        kind: String,
+    ) {
+        val n =
+            aqcFallbackCounters
+                .getOrPut(sessionId) { java.util.concurrent.atomic.AtomicLong(0) }
+                .incrementAndGet()
+        if (n != 1L && n % 50L != 0L) return
+        logPhase(
+            phase = "AQC_PLAYOUT_FALLBACK",
+            sessionId = sessionId,
+            fields =
+                mapOf(
+                    "wrote" to wrote.toString(),
+                    "samples" to samples.toString(),
+                    "kind" to kind,
+                    "ordinal" to n.toString(),
+                ),
+        )
+    }
+
     fun logShadowTxFenced(
         sessionId: String,
         reason: String,
@@ -663,6 +982,33 @@ object Profile01ShadowRuntimeObservability {
             conferenceId = conferenceId,
             mediaKeyEpoch = mediaKeyEpoch,
             fields = fields,
+        )
+    }
+
+    fun logRxDatagramSourceBucket(
+        windowStartMs: Long,
+        windowEndMs: Long,
+        total: Long,
+        localEcho: Long,
+        remote: Long,
+        topRemote: String,
+    ) {
+        val sessionId = activeSessionId ?: return
+        logPhase(
+            phase = "RX_DATAGRAM_SOURCE_BUCKET",
+            sessionId = sessionId,
+            conferenceId = activeConferenceId,
+            mediaKeyEpoch = activeMediaKeyEpoch,
+            fields =
+                mapOf(
+                    "windowStartMs" to windowStartMs.toString(),
+                    "windowEndMs" to windowEndMs.toString(),
+                    "datagramTotal" to total.toString(),
+                    "localEcho" to localEcho.toString(),
+                    "remote" to remote.toString(),
+                    "topRemote" to topRemote,
+                    "observeOnly" to "P1_OPT3",
+                ),
         )
     }
 

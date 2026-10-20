@@ -20,6 +20,7 @@ enum class RuntimeDegradationKind {
     RESOURCE_ALLOCATION_REJECTED,
     JITTER_CAP_EXHAUSTED,
     MULTICAST_LOCK_UNAVAILABLE,
+    WIFI_LOCK_UNAVAILABLE,
     REBIND_DISRUPTION,
     /** P03 disposition recorded as evidence; MUST NOT alone flip Health. */
     LATE_FOR_PLAYOUT,

@@ -55,6 +55,9 @@ object ReplacementCutoverRc1 {
 
     fun onSessionTeardown(sessionId: String): CutoverOutcome =
         controller()?.onSessionTeardown(sessionId) ?: CutoverOutcome.REJECTED_PREREQUISITE
+
+    fun onMediaKeyEpochRotated(sessionId: String): CutoverOutcome =
+        controller()?.onMediaKeyEpochRotated(sessionId) ?: CutoverOutcome.REJECTED_PREREQUISITE
 }
 
 internal class WiringMulticastAudiblePort(

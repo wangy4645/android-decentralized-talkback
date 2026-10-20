@@ -123,6 +123,7 @@ internal object WebRtcSharedFactory {
     }
 
     private fun dispatchLocalOutboundPcm(samples: JavaAudioDeviceModule.AudioSamples) {
+        CapturePcmAbDiagnostic.onAdmSamplesReady(samples)
         if (localOutboundSinks.isEmpty()) return
         if (samples.audioFormat != AudioFormat.ENCODING_PCM_16BIT) return
         val channels = samples.channelCount

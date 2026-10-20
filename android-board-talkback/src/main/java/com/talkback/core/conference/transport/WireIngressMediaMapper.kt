@@ -61,7 +61,7 @@ object WireIngressMediaMapper {
 }
 
 /**
- * ADR-0058 Layer A — per-incarnation ingress RTP sequence → mediaTimeMs.
+ * ADR-0058 Layer A — per-incarnation ingress RTP sequence → mediaTimeMs (jitter deadline).
  * Must not read or write [RelativeMediaTimeline] session baseSeq.
  */
 class PerIncarnationIngressTimelineRegistry {
@@ -103,6 +103,32 @@ class PerIncarnationIngressTimelineRegistry {
         origins.clear()
     }
 
+    /**
+     * Layer A playout projection: map wall-aligned [tickMediaTimeMs] onto this incarnation's RTP slot domain.
+     * Must match [mediaTimeMs] origin semantics; do not use [RelativeMediaTimeline] for foreign sources.
+     */
+    fun mediaSlotForPlayoutTickMs(
+        sourceIdentity: String,
+        incarnationId: Long,
+        tickMediaTimeMs: Long,
+    ): Long? {
+        val origin = origins[key(sourceIdentity, incarnationId)] ?: return null
+        val offset =
+            ((tickMediaTimeMs - origin.wallMs).coerceAtLeast(0L)) /
+                MediaJitterConstants.MEDIA_SLOT_MS
+        return origin.seq + offset
+    }
+
+    /** Inverse of [mediaSlotForPlayoutTickMs] for a known RTP slot (Layer A deadline projection). */
+    fun slotMediaTimeMsForSlot(
+        sourceIdentity: String,
+        incarnationId: Long,
+        slot: Long,
+    ): Long? {
+        val origin = origins[key(sourceIdentity, incarnationId)] ?: return null
+        return origin.wallMs + (slot - origin.seq) * MediaJitterConstants.MEDIA_SLOT_MS
+    }
+
     private fun key(
         sourceIdentity: String,
         incarnationId: Long,
@@ -110,9 +136,9 @@ class PerIncarnationIngressTimelineRegistry {
 }
 
 /**
- * Session playout domain (ADR-0058 Layer B / F4).
+ * Session playout domain (ADR-0058 Layer B).
  * First accepted packet defines origin; subsequent packets advance by 20 ms/slot.
- * Do not use this mapping to interpret a foreign source's RTP sequence for jitter deadline.
+ * Do not use this mapping alone to interpret a foreign source's RTP sequence for jitter deadline.
  */
 class RelativeMediaTimeline {
     private var baseSeq: Long? = null

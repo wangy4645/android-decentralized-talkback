@@ -15,6 +15,42 @@ interface MulticastLockSeam {
     fun releaseCount(): Int
 }
 
+/**
+ * P1 option-1: Wi-Fi power lock for conference media transport scope (paired with MulticastLock).
+ */
+interface WifiLockSeam {
+    fun acquire(): Boolean
+    fun release()
+    fun isHeld(): Boolean
+    fun acquireCount(): Int
+    fun releaseCount(): Int
+}
+
+class FakeWifiLockSeam : WifiLockSeam {
+    private var held = false
+    private var acquires = 0
+    private var releases = 0
+
+    override fun acquire(): Boolean {
+        held = true
+        acquires += 1
+        return true
+    }
+
+    override fun release() {
+        if (held) {
+            held = false
+            releases += 1
+        }
+    }
+
+    override fun isHeld(): Boolean = held
+
+    override fun acquireCount(): Int = acquires
+
+    override fun releaseCount(): Int = releases
+}
+
 class FakeMulticastLockSeam : MulticastLockSeam {
     private var held = false
     private var acquires = 0

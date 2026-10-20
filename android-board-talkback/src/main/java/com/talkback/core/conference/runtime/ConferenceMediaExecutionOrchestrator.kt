@@ -15,7 +15,9 @@ data class MixCycleResult(
     val decodeInvocationIdentities: Set<String>,
     val mixParticipantIdentities: Set<String>,
     val mixedBlock: MixedBlock,
+    /** A3-only: per-source pull disposition when available (empty on GA pull path). */
     val sourcePullDispositions: Map<String, SlotPullDisposition> = emptyMap(),
+    /** A3-only: PCM that actually entered EqualWeightMixer this cycle. */
     val sourceMixInputs: Map<String, SourceMixInputSnapshot> = emptyMap(),
 )
 
@@ -46,36 +48,8 @@ class ConferenceMediaExecutionOrchestrator(
 
     fun selectTopK(nowMs: Long) = pipeline.selectTopK(nowMs)
 
-    fun admitFrame(
-        frame: AdmittedMediaFrame,
-        nowMs: Long,
-        sharedMixReferenceSlot: Long? = null,
-    ): FrameAdmitDisposition =
-        pipeline.admitFrame(frame, nowMs, sharedMixReferenceSlot)
-
-    /**
-     * P3b — real Opus decode only when jitter authorized [SlotPullDisposition.DECODE_FRAME].
-     */
-    fun decodeMixablePcmForPlayoutPull(
-        sourceIdentity: String,
-        incarnationId: Long,
-        pullDisposition: SlotPullDisposition?,
-        mediaSlot: Long,
-        nowMs: Long,
-    ): PcmFrame? {
-        if (pullDisposition != SlotPullDisposition.DECODE_FRAME) {
-            return null
-        }
-        if (!selection.isDecodeEligible(sourceIdentity, incarnationId)) {
-            return null
-        }
-        return decodeMix.produceMixablePcm(
-            sourceIdentity = sourceIdentity,
-            incarnationId = incarnationId,
-            mediaSlot = mediaSlot,
-            nowMs = nowMs,
-        )
-    }
+    fun admitFrame(frame: AdmittedMediaFrame, nowMs: Long): FrameAdmitDisposition =
+        pipeline.admitFrame(frame, nowMs)
 
     /**
      * Production path for one media slot:
@@ -92,59 +66,43 @@ class ConferenceMediaExecutionOrchestrator(
         pipeline.selectTopK(nowMs)
         val topKMembers = selection.currentTopK().members
         val topKIds = topKMembers.map { it.sourceIdentity }.toSet()
-        val sharedMixPlayoutSlot = slot
-        val sourcePullDispositions = linkedMapOf<String, SlotPullDisposition>()
-        val pulledSourceSlotByIdentity = linkedMapOf<String, Long>()
 
         for (member in topKMembers) {
-            val sourceSlot =
-                pipeline.sourceSlotForSharedMixPlayout(
-                    member.sourceIdentity,
-                    member.incarnationId,
-                    sharedMixPlayoutSlot,
-                )
-            pulledSourceSlotByIdentity[member.sourceIdentity] = sourceSlot
-            sourcePullDispositions[member.sourceIdentity] =
-                pipeline.pullSlotForSharedMixPlayout(
-                    sourceIdentity = member.sourceIdentity,
-                    incarnationId = member.incarnationId,
-                    sharedMixPlayoutSlot = sharedMixPlayoutSlot,
-                    resolvedMixSlotMediaTimeMs = slotMediaTimeMs,
-                    nowMs = nowMs,
-                )
+            pipeline.pullSlot(
+                sourceIdentity = member.sourceIdentity,
+                incarnationId = member.incarnationId,
+                slot = slot,
+                slotMediaTimeMs = slotMediaTimeMs,
+                nowMs = nowMs,
+            )
         }
 
         val decodeIds = linkedSetOf<String>()
         val mixIds = linkedSetOf<String>()
         val pcmFrames = mutableListOf<PcmFrame>()
         val sourceMixInputs = linkedMapOf<String, SourceMixInputSnapshot>()
+        val sourcePullDispositions = linkedMapOf<String, SlotPullDisposition>()
 
         for (member in topKMembers) {
-            val pull = sourcePullDispositions[member.sourceIdentity]
-            val decodeMediaSlot =
-                pulledSourceSlotByIdentity[member.sourceIdentity] ?: sharedMixPlayoutSlot
+            if (!selection.isDecodeEligible(member.sourceIdentity, member.incarnationId)) {
+                continue
+            }
             val pcm =
-                decodeMixablePcmForPlayoutPull(
+                decodeMix.produceMixablePcm(
                     sourceIdentity = member.sourceIdentity,
                     incarnationId = member.incarnationId,
-                    pullDisposition = pull,
-                    mediaSlot = decodeMediaSlot,
+                    mediaSlot = slot,
                     nowMs = nowMs,
                 )
             if (pcm != null) {
                 decodeIds += member.sourceIdentity
                 mixIds += member.sourceIdentity
                 pcmFrames += pcm
-                val kind =
-                    when (sourcePullDispositions[member.sourceIdentity]) {
-                        SlotPullDisposition.PLC_SYNTHESIS,
-                        SlotPullDisposition.SILENCE_GAP,
-                        -> SourceMixInputKind.PLC
-                        else -> SourceMixInputKind.REAL
-                    }
+                // Clean GA path has no SharedMix pull kinds; treat mixer-admitted PCM as REAL.
+                sourcePullDispositions[member.sourceIdentity] = SlotPullDisposition.DECODE_FRAME
                 sourceMixInputs[member.sourceIdentity] =
                     SourceMixInputSnapshot(
-                        kind = kind,
+                        kind = SourceMixInputKind.REAL,
                         samples = pcm.samples,
                     )
             }

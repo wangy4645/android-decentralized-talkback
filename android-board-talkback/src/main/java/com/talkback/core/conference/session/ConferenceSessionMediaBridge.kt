@@ -48,6 +48,12 @@ object ConferenceSessionMediaBridge {
 
     fun hasSession(sessionId: String): Boolean = wiring?.hasSession(sessionId) == true
 
+    fun rebindTransportsForScreenLifecycle(
+        trigger: String,
+        nowMs: Long = System.currentTimeMillis(),
+    ): Map<String, ConferenceSessionMediaWiring.TransportLifecycleRebindOutcome> =
+        wiring?.rebindAllActiveTransportsForLifecycle(trigger, nowMs) ?: emptyMap()
+
     fun currentMediaKeyEpoch(sessionId: String): Long? = wiring?.currentMediaKeyEpoch(sessionId)
 
     fun rotateMediaKeyEpoch(

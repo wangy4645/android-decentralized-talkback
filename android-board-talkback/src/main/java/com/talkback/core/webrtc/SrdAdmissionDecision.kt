@@ -3,9 +3,9 @@ package com.talkback.core.webrtc
 /**
  * G2-RCA2 Step 2b: native SRD(ANSWER) admission invariant.
  *
- * Compute + log only — this slice does not reject anything at runtime. It exists so the next
- * field run can state, per SRD attempt, whether the native call was made against a PeerConnection
- * that was still the legitimate owner of the outstanding offer.
+ * [RealWebRtcAudioEngine] evaluates this immediately before native setRemoteDescription(ANSWER)
+ * and MUST skip the native call when [SrdAdmissionDecision.admit] is false (field: STALE answer
+ * → SIGABRT on signaling_thread).
  */
 internal data class SrdAdmissionInput(
     val signalingState: String,
