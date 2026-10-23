@@ -45,6 +45,7 @@ import com.talkback.core.conference.session.integration.MeetingProfile01SourceOr
 import com.talkback.core.conference.session.integration.MeetingProfile01SourceOriginPublisher
 import com.talkback.core.conference.session.integration.Profile01HostLocalMediaSupplementMaterializer
 import com.talkback.core.conference.session.integration.Profile01HostLocalSessionFactProjection
+import com.talkback.core.conference.session.integration.Profile01PeerMembershipWiringReplay
 import com.talkback.core.conference.session.integration.Profile01LocalConferenceSourceIdentityAuthority
 import com.talkback.core.conference.session.integration.Profile01ShadowMemberBindingMaterializer
 import com.talkback.core.conference.session.integration.Profile01ShadowMulticastReceiveSeam
@@ -432,6 +433,9 @@ object TalkbackRuntimeFactory {
                 onHostMembershipAuthoritativeCommit = { sessionId ->
                     coordinator.onMeetingProfile01HostMembershipAuthoritativeCommit(sessionId)
                 },
+                onMembershipWireFanoutComplete = { sessionId ->
+                    coordinator.onMeetingProfile01HostMembershipWireFanoutComplete(sessionId)
+                },
                 onLog = { message -> onLog?.invoke(message) },
             )
         coordinator.attachMeetingProfile01MembershipOriginBridge(profile01MembershipOriginBridge)
@@ -471,10 +475,19 @@ object TalkbackRuntimeFactory {
                 localModuleId = { config.localModuleId.value },
                 readSignedLocalSource = profile01SourceOriginBridge::readSignedSourceFact,
                 retryLocalSourceBuild = { sessionId ->
-                    coordinator.onMeetingProfile01CreationWireAppliedForLocalSource(sessionId)
+                    coordinator.onMeetingProfile01LocalShadowWireConsumptionReady(
+                        sessionId,
+                        "r4b_peer_membership_wire_applied",
+                    )
                 },
             )
         profile01SourceOriginBridge.memberBindingMaterializer = profile01ShadowMemberBindingMaterializer
+        profile01SourceOriginBridge.onRequestMembershipContextRebuild = { sessionId ->
+            coordinator.onMeetingProfile01LocalShadowWireConsumptionReady(
+                sessionId,
+                "peer_stale_membership_context_rebuild",
+            )
+        }
         val meetingProfile01FactWireIngress =
             MeetingProfile01FactWireIngress(
                 ingress = profile01ConferenceMediaFactIngress,
@@ -486,9 +499,45 @@ object TalkbackRuntimeFactory {
                 localModuleId = { config.localModuleId.value },
                 localEstablishmentKeyVersion = profile01EstablishmentAuthority.localEstablishmentKeyVersion,
                 memberBindingMaterializer = profile01ShadowMemberBindingMaterializer,
+                scheduleDelayed = { delayMs, block ->
+                    android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(block, delayMs)
+                },
+            )
+        meetingProfile01FactWireIngress.peerMembershipWiringReplay =
+            Profile01PeerMembershipWiringReplay(
+                ingress = profile01ConferenceMediaFactIngress,
+                sessionIndex = meetingProfile01SessionIndex,
+                registry = conferenceSessionMediaControlRegistry,
+                networkInterfaceName = { Slice4MulticastNetworkConstants.DEFAULT_IFACE },
+                localModuleId = { config.localModuleId.value },
+                creationSignedBytesForSession = profile01CreationOriginBridge::readSignedCreationFact,
+                onLocalMembershipHeadConsumptionReady = { sessionId ->
+                    coordinator.onMeetingProfile01LocalShadowWireConsumptionReady(
+                        sessionId,
+                        "r4b_peer_membership_wire_applied",
+                    )
+                },
+                memberBindingMaterializer = profile01ShadowMemberBindingMaterializer,
             )
         meetingProfile01FactWireIngress.onPeerSourceDeclarationWireApplied = { sessionId, remoteModuleId ->
             coordinator.onMeetingProfile01PeerSourceDeclarationWireApplied(sessionId, remoteModuleId)
+        }
+        meetingProfile01FactWireIngress.onPeerMediaKeyEpochSourceDrainComplete = { sessionId ->
+            coordinator.onMeetingProfile01LocalShadowWireConsumptionReady(
+                sessionId,
+                "p13_media_key_epoch_source_drained",
+            )
+        }
+        meetingProfile01FactWireIngress.onPeerMembershipReplayDeferredNoSupplement = {
+                sessionId,
+                conferenceId,
+                mediaKeyEpoch,
+            ->
+            coordinator.onMeetingProfile01PeerMembershipReplayDeferredNoSupplement(
+                sessionId,
+                conferenceId,
+                mediaKeyEpoch,
+            )
         }
         coordinator.attachMeetingProfile01FactWire(
             meetingProfile01FactWireIngress,

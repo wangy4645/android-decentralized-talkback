@@ -427,9 +427,111 @@ class MeetingProfile01MediaKeyPackageOriginBridge(
         }
     }
 
+    /**
+     * P04 — allow a bounded host republish when peer still lacks supplement at membership head.
+     */
+    fun clearPostBindDeliveredForRecipientAtMembershipHead(
+        sessionId: String,
+        hostModuleId: String,
+        recipientModuleId: String,
+    ): Boolean {
+        val creationContext = resolveActivePackageContext(sessionId, hostModuleId) ?: return false
+        val conferenceIdHex = sessionIndex.ensureConferenceIdHex(sessionId)
+        val lookup =
+            when (val result = establishmentLookup.activeEstablishmentKey(recipientModuleId)) {
+                is Profile01EstablishmentKeyLookupResult.Found -> result
+                else -> return false
+            }
+        val identity =
+            MediaKeyPackagePublicationIdentity(
+                conferenceIdHex = conferenceIdHex,
+                mediaKeyEpoch = creationContext.mediaKeyEpoch,
+                recipientModuleId = recipientModuleId,
+                recipientEstablishmentKeyVersion = lookup.ref.establishmentKeyVersion,
+                membershipFactDigestHex = creationContext.membershipFactDigestHex,
+            )
+        return postBindPublicationLedger.clearPostBindDelivered(sessionId, identity)
+    }
+
     fun clearSession(sessionId: String) {
         publicationLedger.clearSession(sessionId)
         postBindPublicationLedger.clearSession(sessionId)
+    }
+
+    fun replayMediaKeyPackageToPeerForRejoinCatchUp(
+        sessionId: String,
+        snapshot: ConferenceTopologySnapshot,
+        localModuleId: String,
+        isMembershipAuthority: Boolean,
+        peerModuleId: String,
+        publishToPeer: (moduleId: String, signedFactBytes: ByteArray) -> Boolean,
+    ): Boolean {
+        if (!isMembershipAuthority || localModuleId != snapshot.hostModuleId) return false
+        val builder = packageBuilder ?: return false
+        val creationContext =
+            resolveActivePackageContext(sessionId, snapshot.hostModuleId) ?: return false
+        val material = mediaKeyAuthority.materialForSession(sessionId) ?: return false
+        val conferenceIdHex = sessionIndex.ensureConferenceIdHex(sessionId)
+        val head = membershipConvergence?.current(conferenceIdHex)
+        if (head != null &&
+            (
+                creationContext.membershipVersion != head.membershipVersion ||
+                    creationContext.mediaKeyEpoch != head.mediaKeyEpoch ||
+                    !creationContext.creationFactDigest.contentEquals(head.generationFactDigest)
+            )
+        ) {
+            return false
+        }
+        val lookup =
+            when (val result = establishmentLookup.activeEstablishmentKey(peerModuleId)) {
+                is Profile01EstablishmentKeyLookupResult.Found -> result
+                else -> return false
+            }
+        val identity =
+            MediaKeyPackagePublicationIdentity(
+                conferenceIdHex = conferenceIdHex,
+                mediaKeyEpoch = creationContext.mediaKeyEpoch,
+                recipientModuleId = peerModuleId,
+                recipientEstablishmentKeyVersion = lookup.ref.establishmentKeyVersion,
+                membershipFactDigestHex = creationContext.membershipFactDigestHex,
+            )
+        val recipient =
+            Profile01PackageRecipientBinding(
+                recipientModuleId = lookup.ref.recipientModuleId,
+                establishmentKeyVersion = lookup.ref.establishmentKeyVersion,
+                establishmentPublicKeySpki = lookup.ref.establishmentPublicKeySpki.copyOf(),
+            )
+        val buildRequest =
+            Profile01MediaKeyPackageBuildRequest(
+                material =
+                    Profile01ConferenceKeyMaterial(
+                        conferenceId = conferenceIdHex.hexToId128Bytes(),
+                        conferenceEpoch = creationContext.conferenceEpoch,
+                        ownerModuleId = creationContext.ownerModuleId,
+                        membershipVersion = creationContext.membershipVersion,
+                        mediaKeyEpoch = creationContext.mediaKeyEpoch,
+                        conferenceMediaSecret = material.conferenceMediaSecret.copyOf(),
+                        membershipKeyContextDigest = material.membershipKeyContextDigest.copyOf(),
+                        mediaKeyCommitment = material.mediaKeyCommitment.copyOf(),
+                    ),
+                creationFactDigest = creationContext.creationFactDigest.copyOf(),
+                recipient = recipient,
+            )
+        val built =
+            when (val result = builder.build(buildRequest)) {
+                is Profile01MediaKeyPackageBuildResult.Ready -> result
+                is Profile01MediaKeyPackageBuildResult.Rejected -> return false
+            }
+        if (!publishToPeer(peerModuleId, built.signedFactBytes)) {
+            return false
+        }
+        publicationLedger.markPublished(sessionId, identity)
+        onLog(
+            "PROFILE01_REJOIN_CATCHUP session=$sessionId " +
+                "factType=${Profile01WireConstants.FACT_TYPE_MEDIA_KEY_PACKAGE} target=$peerModuleId " +
+                "mediaKeyEpoch=${identity.mediaKeyEpoch}",
+        )
+        return true
     }
 
     internal fun ledger(): MediaKeyPackagePublicationLedger = publicationLedger

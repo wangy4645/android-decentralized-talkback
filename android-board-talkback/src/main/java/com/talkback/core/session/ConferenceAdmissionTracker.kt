@@ -79,6 +79,15 @@ class ConferenceAdmissionTracker(
         }
     }
 
+    /**
+     * Leave/absent: drop per-edge admission memory (phase + handoff).
+     * Do not leave TERMINATED tombstone — that forces CREATE_NEW forever on rejoin merge.
+     */
+    fun clearEdge(key: ConferenceAdmissionKey) {
+        admissionHandoffActive.remove(key)
+        phases.remove(key)
+    }
+
     fun removeSession(sessionId: String) {
         phases.keys.removeIf { it.sessionId == sessionId }
         admissionHandoffActive.keys.removeIf { it.sessionId == sessionId }

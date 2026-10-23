@@ -77,6 +77,9 @@ class MeetingProfile01SourceOriginBridge(
     private val onLog: (String) -> Unit = {},
 
 ) {
+    /** Membership head advanced while cached SOURCE bytes still carry stale mv/epoch — rebuild before post-bind replay. */
+    var onRequestMembershipContextRebuild: ((sessionId: String) -> Unit)? = null
+
 
     @Volatile
     var memberBindingMaterializer: Profile01ShadowMemberBindingMaterializer? = null
@@ -560,6 +563,7 @@ class MeetingProfile01SourceOriginBridge(
                     wire.mediaKeyEpoch != convergence.mediaKeyEpoch
             )
         ) {
+            onRequestMembershipContextRebuild?.invoke(sessionId)
             logPostBindRepublish(
                 sessionId = sessionId,
                 identity =
@@ -603,13 +607,17 @@ class MeetingProfile01SourceOriginBridge(
             )
 
         if (postBindPublicationLedger.isSatisfied(sessionId, postBindIdentity)) {
-            logPostBindRepublish(
-                sessionId = sessionId,
-                identity = postBindIdentity,
-                reason = reason,
-                outcome = "ALREADY_SATISFIED",
-            )
-            return SourcePostBindRepublishOutcome.ALREADY_SATISFIED
+            if (reason == "peer_source_declaration_wire_applied") {
+                postBindPublicationLedger.clearSatisfiedForTarget(sessionId, targetModuleId)
+            } else {
+                logPostBindRepublish(
+                    sessionId = sessionId,
+                    identity = postBindIdentity,
+                    reason = reason,
+                    outcome = "ALREADY_SATISFIED",
+                )
+                return SourcePostBindRepublishOutcome.ALREADY_SATISFIED
+            }
         }
 
         logPostBindRepublish(
@@ -620,12 +628,21 @@ class MeetingProfile01SourceOriginBridge(
         )
 
         if (publishToPeer(targetModuleId, cachedBytes)) {
-            postBindPublicationLedger.markSatisfied(sessionId, postBindIdentity)
+            val consumableClose =
+                Profile01SourcePostBindRepublishReason.marksConsumableDeliverySatisfied(reason)
+            if (consumableClose) {
+                postBindPublicationLedger.markSatisfied(sessionId, postBindIdentity)
+            }
             logPostBindRepublish(
                 sessionId = sessionId,
                 identity = postBindIdentity,
                 reason = reason,
-                outcome = "EMITTED",
+                outcome =
+                    if (consumableClose) {
+                        "EMITTED_POST_BIND_CONSUMABLE"
+                    } else {
+                        "EMITTED_PRE_BIND"
+                    },
             )
             return SourcePostBindRepublishOutcome.EMITTED
         }

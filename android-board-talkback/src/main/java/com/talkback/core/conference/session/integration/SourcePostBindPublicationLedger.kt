@@ -7,6 +7,9 @@ import java.util.concurrent.ConcurrentHashMap
  *
  * Separate from [SourcePublicationLedger]: initial transport send accepted
  * does not imply the recipient could consume the SOURCE fact.
+ *
+ * Satisfaction is recorded only when republication succeeds under a consumption-eligible
+ * coordinator reason (see [Profile01SourcePostBindRepublishReason]).
  */
 class SourcePostBindPublicationLedger {
     private val satisfiedBySession =
@@ -28,6 +31,18 @@ class SourcePostBindPublicationLedger {
 
     fun satisfiedIdentities(sessionId: String): Set<SourcePostBindPublicationIdentity> =
         satisfiedBySession[sessionId]?.toSet() ?: emptySet()
+
+    /** P13 — peer rejoin may reset consumption while ledger still holds pre-leave satisfaction. */
+    fun clearSatisfiedForTarget(
+        sessionId: String,
+        targetModuleId: String,
+    ) {
+        val set = satisfiedBySession[sessionId] ?: return
+        set.removeIf { it.targetModuleId == targetModuleId }
+        if (set.isEmpty()) {
+            satisfiedBySession.remove(sessionId)
+        }
+    }
 
     fun clearSession(sessionId: String) {
         satisfiedBySession.remove(sessionId)

@@ -46,6 +46,43 @@ android {
         jvmTarget = "17"
     }
 
+    // AQC Phase 2 desk gate: avoid compiling unrelated stale unit tests.
+    // Usage: ./gradlew :android-board-talkback:testDebugUnitTest -PaqcDeskOnly --tests "com.talkback.core.conference.aqc.*"
+    if (project.hasProperty("aqcDeskOnly")) {
+        sourceSets.getByName("test") {
+            java.setSrcDirs(
+                listOf("src/test/java/com/talkback/core/conference/aqc"),
+            )
+        }
+        logger.lifecycle("aqcDeskOnly: unit test sources limited to com.talkback.core.conference.aqc")
+    }
+    // B-R per-source playout restore desk gate (avoid unrelated stale unit tests).
+    if (project.hasProperty("playoutBrDeskOnly")) {
+        sourceSets.getByName("test") {
+            java.setSrcDirs(listOf("src/test-playout-br/java"))
+        }
+        logger.lifecycle("playoutBrDeskOnly: unit test sources limited to src/test-playout-br")
+    }
+    // Mix A/B combine-mode desk (avoid unrelated stale unit tests).
+    if (project.hasProperty("mixAbDeskOnly")) {
+        sourceSets.getByName("test") {
+            java.setSrcDirs(listOf("src/test-mix-ab/java"))
+        }
+        logger.lifecycle("mixAbDeskOnly: unit test sources limited to src/test-mix-ab")
+    }
+    if (project.hasProperty("b1DeskOnly")) {
+        sourceSets.getByName("test") {
+            java.setSrcDirs(listOf("src/test-b1-observe/java"))
+        }
+        logger.lifecycle("b1DeskOnly: unit test sources limited to src/test-b1-observe")
+    }
+    if (project.hasProperty("profile01RejoinDeskOnly")) {
+        sourceSets.getByName("test") {
+            java.setSrcDirs(listOf("src/test-profile01-rejoin/java"))
+        }
+        logger.lifecycle("profile01RejoinDeskOnly: unit test sources limited to src/test-profile01-rejoin")
+    }
+
     testOptions {
         unitTests {
             isIncludeAndroidResources = true

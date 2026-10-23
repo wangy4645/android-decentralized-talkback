@@ -1,8 +1,10 @@
 package com.talkback.core.conference.session.integration
 
+import com.talkback.core.conference.session.ConferenceSessionMediaBridge
 import com.talkback.core.conference.session.ConferenceSessionMediaCoordinatorDelegate
 import com.talkback.core.conference.session.ControlFactPublishOutcome
 import com.talkback.core.conference.session.profile01.Profile01ConferenceMediaFactIngress
+import com.talkback.core.conference.session.profile01.Profile01MembershipGeneration
 import com.talkback.core.conference.session.profile01.Profile01MembershipIngressResult
 import com.talkback.core.conference.session.profile01.Profile01SessionMediaSupplement
 import com.talkback.core.conference.session.profile01.Profile01SessionMediaSupplementRegistry
@@ -15,6 +17,7 @@ import com.talkback.core.model.ModuleId
 import com.talkback.core.model.SignalEnvelope
 import com.talkback.core.model.SignalType
 import java.util.Base64
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 
 /**
@@ -35,11 +38,40 @@ class MeetingProfile01FactWireIngress(
     private val localEstablishmentKeyVersion: () -> Long,
     private val memberBindingMaterializer: Profile01ShadowMemberBindingMaterializer? = null,
     private val clock: () -> Long = { System.currentTimeMillis() },
+    private val scheduleDelayed: (delayMs: Long, block: () -> Unit) -> Unit = { _, block -> block() },
 ) {
     val observability: MeetingProfile01FactWireObservability = MeetingProfile01FactWireObservability()
 
+    var peerMembershipWiringReplay: Profile01PeerMembershipWiringReplay? = null
+
     /** Invoked after remote SOURCE_DECLARATION is wire-applied (peer post-bind consumption eligible). */
     var onPeerSourceDeclarationWireApplied: ((sessionId: String, remoteModuleId: String) -> Unit)? = null
+
+    /** P13 — retained SOURCE drained and binding replay finished at converged mediaKeyEpoch. */
+    var onPeerMediaKeyEpochSourceDrainComplete: ((sessionId: String) -> Unit)? = null
+
+    /** P04 — peer membership replay deferred for supplement; host may republish MEDIA_KEY_PACKAGE. */
+    var onPeerMembershipReplayDeferredNoSupplement:
+        ((sessionId: String, conferenceId: String, mediaKeyEpoch: Long) -> Unit)? = null
+
+    private val pendingMediaKeyAwaitingMembership = ConcurrentHashMap<String, ByteArray>()
+    private val mediaKeyMembershipRetryAttempts = ConcurrentHashMap<String, Int>()
+    private val membershipHeadFastRecoveryInFlight = ConcurrentHashMap.newKeySet<String>()
+    private val pendingMembershipAwaitingCreation =
+        ConcurrentHashMap<String, MutableList<ByteArray>>()
+    private val pendingMembershipAwaitingCreationDigests =
+        ConcurrentHashMap<String, MutableSet<String>>()
+
+    companion object {
+        private const val MAX_MEDIA_KEY_MEMBERSHIP_RETRY = 3
+        private const val MAX_MEMBERSHIP_HEAD_FAST_RECOVERY_ATTEMPTS = 40
+        private const val MEMBERSHIP_HEAD_FAST_RECOVERY_DELAY_MS = 25L
+        private const val MAX_PENDING_MEMBERSHIP_AWAITING_CREATION = 16
+        private val MEDIA_KEY_AWAIT_MEMBERSHIP_REASONS =
+            setOf("MEMBERSHIP_CONTEXT_MISMATCH", "MEMBERSHIP_NOT_CONVERGED")
+        private val MEMBERSHIP_AWAIT_CREATION_REASONS =
+            setOf("CREATION_NOT_CONVERGED", "PREDECESSOR_NOT_CURRENT_HEAD")
+    }
 
     fun onConferenceSignedFact(signal: SignalEnvelope): WireIngressOutcome {
         if (!MeetingProductMediaShadow.enabled) return WireIngressOutcome.SHADOW_DISABLED
@@ -54,12 +86,15 @@ class MeetingProfile01FactWireIngress(
      * Drain retained CREATION facts after Meeting session bridge bind.
      * Detach/consume before re-ingress.
      */
-    fun drainRetainedAfterSessionBind(sessionId: String): SessionBindDrainOutcome {
+    fun drainRetainedAfterSessionBind(
+        sessionId: String,
+        onlyFactTypes: Set<Int>? = PRE_BIND_DRAIN_SESSION_BIND_FACT_TYPES,
+    ): SessionBindDrainOutcome {
         val conferenceIdHex =
             runCatching { sessionIndex.ensureConferenceIdHex(sessionId) }
                 .getOrNull()
                 ?: return SessionBindDrainOutcome(0, 0, 0)
-        val batch = preBindRetention.detachForDrain(conferenceIdHex)
+        val batch = preBindRetention.detachForDrain(conferenceIdHex, onlyFactTypes)
         preBindRetention.observability.logBindDrain(sessionId, conferenceIdHex, batch.size)
         var applied = 0
         var rejected = 0
@@ -92,16 +127,30 @@ class MeetingProfile01FactWireIngress(
     }
 
     fun onSessionUnregistered(sessionId: String) {
+        pendingMediaKeyAwaitingMembership.remove(sessionId)
+        mediaKeyMembershipRetryAttempts.remove(sessionId)
+        pendingMembershipAwaitingCreation.remove(sessionId)
+        pendingMembershipAwaitingCreationDigests.remove(sessionId)
         incompleteApplyContinuation.discardForSession(sessionId, IncompleteDiscardReason.SESSION_UNREGISTERED)
         val conferenceIdHex = sessionIndex.conferenceIdForSession(sessionId)
         if (conferenceIdHex != null) {
+            fenceConferenceForAuthoritativeCatchUp(conferenceIdHex)
             preBindRetention.discardForConference(conferenceIdHex, DiscardReason.SESSION_UNREGISTERED)
             return
         }
+        val derived =
+            com.talkback.core.conference.session.profile01.wire.Profile01ConferenceIdAuthority
+                .deriveId128Hex(sessionId)
+        fenceConferenceForAuthoritativeCatchUp(derived)
         preBindRetention.discardForConference(
-            com.talkback.core.conference.session.profile01.wire.Profile01ConferenceIdAuthority.deriveId128Hex(sessionId),
+            derived,
             DiscardReason.SESSION_UNREGISTERED,
         )
+    }
+
+    private fun fenceConferenceForAuthoritativeCatchUp(conferenceIdHex: String) {
+        ingress.membershipRegistry().fenceConferenceForAuthoritativeCatchUp(conferenceIdHex)
+        ingress.fenceConferenceValidatorForAuthoritativeCatchUp(conferenceIdHex)
     }
 
     private fun handlePreBindSignedFact(signal: SignalEnvelope): WireIngressOutcome {
@@ -118,7 +167,9 @@ class MeetingProfile01FactWireIngress(
                 }
         if (
             routing.factType != Profile01WireConstants.FACT_TYPE_CREATION &&
-            routing.factType != Profile01WireConstants.FACT_TYPE_MEMBERSHIP
+            routing.factType != Profile01WireConstants.FACT_TYPE_MEMBERSHIP &&
+            routing.factType != Profile01WireConstants.FACT_TYPE_SOURCE_DECLARATION &&
+            routing.factType != Profile01WireConstants.FACT_TYPE_MEDIA_KEY_PACKAGE
         ) {
             observability.recordPreBindNotRetained(signal.sessionId, routing.factType, "UNAUTHORIZED_FACT_TYPE")
             return WireIngressOutcome.PRE_BIND_NOT_RETAINED
@@ -223,10 +274,19 @@ class MeetingProfile01FactWireIngress(
                     conferenceIdHex = result.material.conferenceId,
                     sessionBinding = sessionIndex.bindingForSession(sessionId),
                 )
+                peerMembershipWiringReplay?.replayAfterMediaKeyAppliedIfMembershipReady(sessionId)
+                finalizePeerMediaKeyEpochConsumption(sessionId)
                 observability.record(WireIngressOutcome.APPLIED, sessionId, Profile01WireConstants.FACT_TYPE_MEDIA_KEY_PACKAGE)
                 WireIngressOutcome.APPLIED
             }
             is com.talkback.core.conference.session.profile01.Profile01MediaKeyPackageIngressResult.Rejected -> {
+                if (result.reason in MEDIA_KEY_AWAIT_MEMBERSHIP_REASONS) {
+                    pendingMediaKeyAwaitingMembership[sessionId] = signedBytes.copyOf()
+                    observability.recordMediaKeyAwaitingMembership(
+                        sessionId = sessionId,
+                        reason = result.reason,
+                    )
+                }
                 observability.record(
                     WireIngressOutcome.REJECTED_VERIFY,
                     sessionId,
@@ -235,6 +295,109 @@ class MeetingProfile01FactWireIngress(
                 )
                 WireIngressOutcome.REJECTED_VERIFY
             }
+        }
+    }
+
+    private enum class RetainPendingMembershipOutcome {
+        RETAINED,
+        DEDUPED,
+        REJECTED_BOUNDS,
+    }
+
+    private fun retainPendingMembershipAwaitingCreation(
+        sessionId: String,
+        signedBytes: ByteArray,
+    ): RetainPendingMembershipOutcome {
+        val routing =
+            Profile01WireCborDecoder.readRoutingIdentity(signedBytes)
+                ?: return RetainPendingMembershipOutcome.REJECTED_BOUNDS
+        val digestHex = routing.factDigestHex
+        val digests =
+            pendingMembershipAwaitingCreationDigests.getOrPut(sessionId) {
+                ConcurrentHashMap.newKeySet()
+            }
+        if (!digests.add(digestHex)) {
+            return RetainPendingMembershipOutcome.DEDUPED
+        }
+        val list =
+            pendingMembershipAwaitingCreation.getOrPut(sessionId) {
+                mutableListOf()
+            }
+        if (list.size >= MAX_PENDING_MEMBERSHIP_AWAITING_CREATION) {
+            digests.remove(digestHex)
+            return RetainPendingMembershipOutcome.REJECTED_BOUNDS
+        }
+        list.add(signedBytes.copyOf())
+        observability.recordMembershipPendingQueued(sessionId, routing.factType)
+        return RetainPendingMembershipOutcome.RETAINED
+    }
+
+    private fun replayPendingMembershipAwaitingCreation(
+        sessionId: String,
+        sessionBinding: MeetingProfile01ConferenceSessionIndex.Binding,
+    ) {
+        val pending = pendingMembershipAwaitingCreation.remove(sessionId) ?: return
+        pendingMembershipAwaitingCreationDigests.remove(sessionId)
+        if (pending.isEmpty()) return
+        observability.recordMembershipPendingReplay(sessionId, pending.size)
+        val sorted =
+            pending.sortedBy { bytes ->
+                when (val decoded = Profile01WireCborDecoder.decodeMembership(bytes)) {
+                    is Profile01WireCborDecoder.DecodeResult.Ready -> decoded.value.membershipVersion
+                    is Profile01WireCborDecoder.DecodeResult.Rejected -> Long.MAX_VALUE
+                }
+            }
+        for (bytes in sorted) {
+            val signal =
+                SignalEnvelope(
+                    type = SignalType.CONFERENCE_SIGNED_FACT,
+                    from = EndpointAddress(ModuleId("M01"), EndpointId("E01")),
+                    to = null,
+                    sessionId = sessionId,
+                    timestampMs = clock(),
+                    payload = Base64.getEncoder().encodeToString(bytes),
+                    nonce = "membership-pending-replay",
+                    signature = "membership-pending-replay",
+                )
+            ingestMembership(bytes, signal, sessionBinding)
+        }
+    }
+
+    private fun advanceMembershipHeadAfterCreationApplied(
+        sessionId: String,
+        sessionBinding: MeetingProfile01ConferenceSessionIndex.Binding,
+    ) {
+        val conferenceIdHex = sessionIndex.conferenceIdForSession(sessionId) ?: return
+        val generation = ingress.currentMembershipGeneration(conferenceIdHex) ?: return
+        if (generation.membershipVersion <= sessionBinding.rosterEpoch) {
+            return
+        }
+        sessionIndex.updateRosterEpoch(sessionId, generation.membershipVersion)
+        val updatedBinding = sessionBinding.copy(rosterEpoch = generation.membershipVersion)
+        maybeMaterializeSessionAtMembershipHead(
+            sessionId = sessionId,
+            conferenceIdHex = conferenceIdHex,
+            sessionBinding = updatedBinding,
+        )
+        onMembershipHeadApplied(sessionId, updatedBinding)
+    }
+
+    private fun retryPendingMediaKeyAfterMembership(sessionId: String) {
+        val pending = pendingMediaKeyAwaitingMembership.remove(sessionId) ?: return
+        val nextAttempt = (mediaKeyMembershipRetryAttempts[sessionId] ?: 0) + 1
+        if (nextAttempt > MAX_MEDIA_KEY_MEMBERSHIP_RETRY) {
+            mediaKeyMembershipRetryAttempts.remove(sessionId)
+            observability.recordMediaKeyPendingDropped(sessionId, "MAX_RETRIES")
+            return
+        }
+        mediaKeyMembershipRetryAttempts[sessionId] = nextAttempt
+        observability.recordMediaKeyPendingRetry(sessionId, nextAttempt)
+        when (ingestMediaKeyPackage(pending, sessionId)) {
+            WireIngressOutcome.APPLIED -> {
+                mediaKeyMembershipRetryAttempts.remove(sessionId)
+                observability.recordMediaKeyPendingApplied(sessionId)
+            }
+            else -> Unit
         }
     }
 
@@ -254,10 +417,30 @@ class MeetingProfile01FactWireIngress(
                     conferenceIdHex = result.generation.conferenceId,
                     sessionBinding = updatedBinding,
                 )
-                replayAfterMembership(signal.sessionId, updatedBinding)
+                onMembershipHeadApplied(signal.sessionId, updatedBinding)
                 WireIngressOutcome.APPLIED
             }
             is Profile01MembershipIngressResult.Pending -> {
+                if (result.reason in MEMBERSHIP_AWAIT_CREATION_REASONS) {
+                    when (retainPendingMembershipAwaitingCreation(signal.sessionId, signedBytes)) {
+                        RetainPendingMembershipOutcome.RETAINED,
+                        RetainPendingMembershipOutcome.DEDUPED,
+                        -> {
+                            observability.record(
+                                WireIngressOutcome.DEFERRED_NO_SESSION,
+                                signal.sessionId,
+                                Profile01WireConstants.FACT_TYPE_MEMBERSHIP,
+                                result.reason,
+                            )
+                            return WireIngressOutcome.DEFERRED_NO_SESSION
+                        }
+                        RetainPendingMembershipOutcome.REJECTED_BOUNDS ->
+                            observability.recordMembershipPendingDropped(
+                                signal.sessionId,
+                                "PENDING_MEMBERSHIP_BOUNDS",
+                            )
+                    }
+                }
                 observability.record(
                     WireIngressOutcome.REJECTED_PUBLISH,
                     signal.sessionId,
@@ -346,6 +529,11 @@ class MeetingProfile01FactWireIngress(
                         signal.sessionId,
                         Profile01WireConstants.FACT_TYPE_CREATION,
                         "MISSING_MEDIA_SUPPLEMENT",
+                    )
+                    // CREATION incomplete: drain retained PACKAGE only; SOURCE after mediaKeyEpoch aligns.
+                    drainRetainedAfterSessionBind(
+                        signal.sessionId,
+                        PRE_BIND_DRAIN_MEMBERSHIP_HEAD_FACT_TYPES,
                     )
                     return WireIngressOutcome.INCOMPLETE_PENDING
                 }
@@ -442,6 +630,8 @@ class MeetingProfile01FactWireIngress(
             conferenceIdHex = conferenceIdHex,
             sessionBinding = sessionIndex.bindingForSession(sessionId),
         )
+        retryPendingMediaKeyAfterMembership(sessionId)
+        peerMembershipWiringReplay?.replayAfterMediaKeyAppliedIfMembershipReady(sessionId)
     }
 
     private fun maybeMaterializeSessionAtMembershipHead(
@@ -476,8 +666,32 @@ class MeetingProfile01FactWireIngress(
                     generation.membershipVersion,
                 )
             }
+            finalizePeerMediaKeyEpochConsumption(sessionId)
             memberBindingMaterializer?.onCreationWireApplied(sessionId)
         }
+    }
+
+    /**
+     * P12 — drain retained SOURCE only after membership head and wiring mediaKeyEpoch converge.
+     * Must run before authoritative binding replay at the new epoch.
+     */
+    private fun finalizePeerMediaKeyEpochConsumption(sessionId: String) {
+        drainRetainedSourceAfterMediaKeyEpochAligned(sessionId)
+        peerMembershipWiringReplay?.replayMemberBindingsAfterMediaKeyEpochRotated(sessionId)
+        onPeerMediaKeyEpochSourceDrainComplete?.invoke(sessionId)
+    }
+
+    private fun drainRetainedSourceAfterMediaKeyEpochAligned(sessionId: String) {
+        if (ConferenceSessionMediaBridge.wiring == null) return
+        val sessionBinding = sessionIndex.bindingForSession(sessionId) ?: return
+        val conferenceIdHex =
+            sessionBinding.conferenceId
+                ?: sessionIndex.conferenceIdForSession(sessionId)
+                ?: return
+        val generation = ingress.currentMembershipGeneration(conferenceIdHex) ?: return
+        val wiringEpoch = ConferenceSessionMediaBridge.currentMediaKeyEpoch(sessionId) ?: return
+        if (wiringEpoch != generation.mediaKeyEpoch) return
+        drainRetainedAfterSessionBind(sessionId, PRE_BIND_DRAIN_SOURCE_FACT_TYPES)
     }
 
     private fun reapplyDetachedIncompleteCreation(
@@ -542,20 +756,114 @@ class MeetingProfile01FactWireIngress(
             }
         }
         observability.record(WireIngressOutcome.APPLIED, sessionId, factType)
-        replayAfterPublish(sessionId, factType, sessionBinding, moduleId, publishedMembershipVersion)
+        replayAfterPublish(
+            sessionId,
+            factType,
+            sessionBinding,
+            moduleId,
+            publishedMembershipVersion,
+            publishOutcome,
+        )
         return WireIngressOutcome.APPLIED
     }
 
-    private fun replayAfterMembership(
+    /** P05 — pending ingest before replay; bounded fast recovery before P04 channel fallback. */
+    private fun onMembershipHeadApplied(
         sessionId: String,
         sessionBinding: MeetingProfile01ConferenceSessionIndex.Binding,
     ) {
-        replaySessionStarted(sessionId, sessionBinding, sessionBinding.rosterEpoch)
-        sessionBinding.mediaConnectedModules.forEach { moduleId ->
-            memberBindingMaterializer?.onSourceDeclarationWireApplied(sessionId, moduleId)
-                ?: ConferenceSessionMediaCoordinatorDelegate.onConferenceMemberMediaReady(sessionId, moduleId)
+        // Field RCA P07: package retained pre-bind must drain here when CREATION was incomplete.
+        drainRetainedAfterSessionBind(sessionId, PRE_BIND_DRAIN_MEMBERSHIP_HEAD_FACT_TYPES)
+        retryPendingMediaKeyAfterMembership(sessionId)
+        val initialOutcome = attemptPeerMembershipWiringReplay(sessionId)
+        if (initialOutcome == PeerMembershipWiringReplayOutcome.DEFERRED_NO_SUPPLEMENT) {
+            scheduleMembershipHeadFastRecovery(sessionId, sessionBinding, attempt = 1)
+        } else {
+            finalizeMembershipReplay(sessionId, sessionBinding, initialOutcome, notifyDeferredNoSupplement = false)
         }
-        memberBindingMaterializer?.materializeLocalIfReady(sessionId)
+    }
+
+    private fun scheduleMembershipHeadFastRecovery(
+        sessionId: String,
+        sessionBinding: MeetingProfile01ConferenceSessionIndex.Binding,
+        attempt: Int,
+    ) {
+        if (!membershipHeadFastRecoveryInFlight.add(sessionId)) {
+            return
+        }
+        observability.recordMembershipHeadFastRecoveryScheduled(sessionId, attempt)
+        scheduleDelayed(MEMBERSHIP_HEAD_FAST_RECOVERY_DELAY_MS) {
+            runMembershipHeadFastRecoveryTick(sessionId, sessionBinding, attempt)
+        }
+    }
+
+    private fun runMembershipHeadFastRecoveryTick(
+        sessionId: String,
+        sessionBinding: MeetingProfile01ConferenceSessionIndex.Binding,
+        attempt: Int,
+    ) {
+        if (!membershipHeadFastRecoveryInFlight.contains(sessionId)) {
+            return
+        }
+        observability.recordMembershipHeadFastRecoveryTick(sessionId, attempt)
+        drainRetainedAfterSessionBind(sessionId, PRE_BIND_DRAIN_MEMBERSHIP_HEAD_FACT_TYPES)
+        retryPendingMediaKeyAfterMembership(sessionId)
+        peerMembershipWiringReplay?.replayAfterMediaKeyAppliedIfMembershipReady(sessionId)
+        val outcome = attemptPeerMembershipWiringReplay(sessionId)
+        when {
+            outcome != PeerMembershipWiringReplayOutcome.DEFERRED_NO_SUPPLEMENT -> {
+                membershipHeadFastRecoveryInFlight.remove(sessionId)
+                finalizeMembershipReplay(sessionId, sessionBinding, outcome, notifyDeferredNoSupplement = false)
+            }
+            attempt >= MAX_MEMBERSHIP_HEAD_FAST_RECOVERY_ATTEMPTS -> {
+                membershipHeadFastRecoveryInFlight.remove(sessionId)
+                finalizeMembershipReplay(
+                    sessionId,
+                    sessionBinding,
+                    outcome,
+                    notifyDeferredNoSupplement = true,
+                )
+            }
+            else ->
+                scheduleDelayed(MEMBERSHIP_HEAD_FAST_RECOVERY_DELAY_MS) {
+                    runMembershipHeadFastRecoveryTick(sessionId, sessionBinding, attempt + 1)
+                }
+        }
+    }
+
+    private fun attemptPeerMembershipWiringReplay(sessionId: String): PeerMembershipWiringReplayOutcome? =
+        peerMembershipWiringReplay?.replayAfterMembershipWireApplied(sessionId)
+
+    private fun finalizeMembershipReplay(
+        sessionId: String,
+        sessionBinding: MeetingProfile01ConferenceSessionIndex.Binding,
+        replayOutcome: PeerMembershipWiringReplayOutcome?,
+        notifyDeferredNoSupplement: Boolean,
+    ) {
+        if (notifyDeferredNoSupplement && replayOutcome == PeerMembershipWiringReplayOutcome.DEFERRED_NO_SUPPLEMENT) {
+            val conferenceId = sessionIndex.conferenceIdForSession(sessionId)
+            val mediaKeyEpoch = conferenceId?.let { ingress.currentMembershipGeneration(it)?.mediaKeyEpoch }
+            if (conferenceId != null && mediaKeyEpoch != null) {
+                observability.recordPeerReplayDeferredNoSupplement(sessionId, mediaKeyEpoch)
+                onPeerMembershipReplayDeferredNoSupplement?.invoke(sessionId, conferenceId, mediaKeyEpoch)
+            }
+        }
+        when (replayOutcome) {
+            PeerMembershipWiringReplayOutcome.APPLIED,
+            null,
+            -> Unit
+            else -> {
+                replaySessionStarted(sessionId, sessionBinding, sessionBinding.rosterEpoch)
+                sessionBinding.mediaConnectedModules.forEach { moduleId ->
+                    memberBindingMaterializer?.onSourceDeclarationWireApplied(sessionId, moduleId)
+                        ?: ConferenceSessionMediaCoordinatorDelegate.onConferenceMemberMediaReady(
+                            sessionId,
+                            moduleId,
+                        )
+                }
+                memberBindingMaterializer?.materializeLocalIfReady(sessionId)
+            }
+        }
     }
 
     private fun replayAfterPublish(
@@ -564,6 +872,7 @@ class MeetingProfile01FactWireIngress(
         sessionBinding: MeetingProfile01ConferenceSessionIndex.Binding,
         moduleId: String?,
         publishedMembershipVersion: Long? = null,
+        publishOutcome: ControlFactPublishOutcome? = null,
     ) {
         when (factType) {
             Profile01WireConstants.FACT_TYPE_CREATION -> {
@@ -571,6 +880,11 @@ class MeetingProfile01FactWireIngress(
                     publishedMembershipVersion
                         ?: error("CREATION replay requires published membershipVersion")
                 replaySessionStarted(sessionId, sessionBinding, membershipVersionForRead)
+                replayPendingMembershipAwaitingCreation(sessionId, sessionBinding)
+                advanceMembershipHeadAfterCreationApplied(sessionId, sessionBinding)
+                // After CREATION head is live: drain retained PACKAGE; SOURCE via mediaKeyEpoch alignment.
+                drainRetainedAfterSessionBind(sessionId, PRE_BIND_DRAIN_MEMBERSHIP_HEAD_FACT_TYPES)
+                finalizePeerMediaKeyEpochConsumption(sessionId)
                 memberBindingMaterializer?.onCreationWireApplied(sessionId)
             }
             Profile01WireConstants.FACT_TYPE_SOURCE_DECLARATION ->
@@ -582,7 +896,10 @@ class MeetingProfile01FactWireIngress(
                         } else {
                             Unit
                         }
-                    if (id != localModuleId()) {
+                    if (
+                        id != localModuleId() &&
+                        publishOutcome == ControlFactPublishOutcome.ACCEPTED
+                    ) {
                         onPeerSourceDeclarationWireApplied?.invoke(sessionId, id)
                     }
                 }
@@ -608,7 +925,25 @@ class MeetingProfile01FactWireIngress(
             val bytes = Base64.getDecoder().decode(trimmed)
             if (bytes.isEmpty() || bytes.size > Profile01WireConstants.MAX_SIGNED_FACT_BYTES) null else bytes
         }.getOrNull()
+
+    fun currentMembershipGenerationForSession(sessionId: String): Profile01MembershipGeneration? {
+        val conferenceId = sessionIndex.conferenceIdForSession(sessionId) ?: return null
+        return ingress.currentMembershipGeneration(conferenceId)
+    }
+
 }
+
+private val PRE_BIND_DRAIN_SESSION_BIND_FACT_TYPES: Set<Int> =
+    setOf(
+        Profile01WireConstants.FACT_TYPE_CREATION,
+        Profile01WireConstants.FACT_TYPE_MEMBERSHIP,
+    )
+
+private val PRE_BIND_DRAIN_MEMBERSHIP_HEAD_FACT_TYPES: Set<Int> =
+    setOf(Profile01WireConstants.FACT_TYPE_MEDIA_KEY_PACKAGE)
+
+private val PRE_BIND_DRAIN_SOURCE_FACT_TYPES: Set<Int> =
+    setOf(Profile01WireConstants.FACT_TYPE_SOURCE_DECLARATION)
 
 enum class WireIngressOutcome {
     APPLIED,
@@ -651,6 +986,84 @@ class MeetingProfile01FactWireObservability {
                 outcome.name
             }
         logInfo("WIRE_INGRESS session=$sessionId factType=$factType outcome=$outcome detail=$detail")
+    }
+
+    fun recordMediaKeyAwaitingMembership(
+        sessionId: String,
+        reason: String,
+    ) {
+        logInfo(
+            "PROFILE01_MEDIA_KEY_PENDING_QUEUED session=$sessionId reason=$reason",
+        )
+    }
+
+    fun recordMediaKeyPendingRetry(
+        sessionId: String,
+        attempt: Int,
+    ) {
+        logInfo("PROFILE01_MEDIA_KEY_PENDING_RETRY session=$sessionId attempt=$attempt")
+    }
+
+    fun recordMediaKeyPendingApplied(sessionId: String) {
+        logInfo("PROFILE01_MEDIA_KEY_PENDING_APPLIED session=$sessionId")
+    }
+
+    fun recordMediaKeyPendingDropped(
+        sessionId: String,
+        reason: String,
+    ) {
+        logInfo("PROFILE01_MEDIA_KEY_PENDING_DROPPED session=$sessionId reason=$reason")
+    }
+
+    fun recordMembershipPendingQueued(
+        sessionId: String,
+        factType: Int,
+    ) {
+        logInfo(
+            "PROFILE01_MEMBERSHIP_PENDING_QUEUED session=$sessionId factType=$factType " +
+                "reason=AWAIT_CREATION",
+        )
+    }
+
+    fun recordMembershipPendingReplay(
+        sessionId: String,
+        count: Int,
+    ) {
+        logInfo("PROFILE01_MEMBERSHIP_PENDING_REPLAY session=$sessionId count=$count")
+    }
+
+    fun recordMembershipPendingDropped(
+        sessionId: String,
+        reason: String,
+    ) {
+        logInfo("PROFILE01_MEMBERSHIP_PENDING_DROPPED session=$sessionId reason=$reason")
+    }
+
+    fun recordPeerReplayDeferredNoSupplement(
+        sessionId: String,
+        mediaKeyEpoch: Long,
+    ) {
+        logInfo(
+            "PROFILE01_PEER_REPLAY_DEFERRED_NO_SUPPLEMENT session=$sessionId mediaKeyEpoch=$mediaKeyEpoch",
+        )
+    }
+
+    fun recordMembershipHeadFastRecoveryScheduled(
+        sessionId: String,
+        attempt: Int,
+    ) {
+        logInfo(
+            "PROFILE01_MEMBERSHIP_HEAD_FAST_RECOVERY_SCHEDULED session=$sessionId attempt=$attempt",
+        )
+    }
+
+    fun recordMembershipHeadFastRecoveryTick(
+        sessionId: String,
+        attempt: Int,
+    ) {
+        logInfo(
+            "PROFILE01_MEMBERSHIP_HEAD_FAST_RECOVERY_TICK session=$sessionId attempt=$attempt",
+        )
     }
 
     fun recordPreBindNotRetained(

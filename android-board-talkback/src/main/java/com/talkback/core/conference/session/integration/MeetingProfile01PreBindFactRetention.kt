@@ -1,13 +1,16 @@
 package com.talkback.core.conference.session.integration
 
+import com.talkback.core.conference.session.profile01.wire.Profile01WireCborDecoder
 import com.talkback.core.model.SignalEnvelope
 import java.util.ArrayDeque
+import java.util.Base64
 import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Bounded pre-bind mailbox for Profile01 wire facts awaiting Meeting session bridge bind.
  *
- * Retains CREATION + MEMBERSHIP (factType 1/2). Not authoritative registry storage.
+ * Retains CREATION / MEMBERSHIP / SOURCE / MEDIA_KEY_PACKAGE (1/2/9/11).
+ * Not authoritative registry storage.
  */
 class MeetingProfile01PreBindFactRetention(
     private val clock: () -> Long = { System.currentTimeMillis() },
@@ -64,17 +67,27 @@ class MeetingProfile01PreBindFactRetention(
         return RetainOutcome.RETAINED
     }
 
-    /** Detach (consume) eligible entries for conferenceId; does not apply facts. */
+    /**
+     * Detach (consume) eligible entries for conferenceId; does not apply facts.
+     * When [onlyFactTypes] is non-null, entries of other types remain queued.
+     */
     fun detachForDrain(
         conferenceIdHex: String,
+        onlyFactTypes: Set<Int>? = null,
         nowMs: Long = clock(),
     ): List<DetachedRetainedFact> {
         purgeExpired(nowMs)
         val queue = byConferenceId[conferenceIdHex] ?: return emptyList()
         val detached = mutableListOf<DetachedRetainedFact>()
         synchronized(queue) {
-            while (queue.isNotEmpty()) {
-                val entry = queue.removeFirst()
+            val iterator = queue.iterator()
+            while (iterator.hasNext()) {
+                val entry = iterator.next()
+                if (onlyFactTypes != null) {
+                    val factType = routingFactType(entry.signal) ?: continue
+                    if (factType !in onlyFactTypes) continue
+                }
+                iterator.remove()
                 dedupeKeys.remove(dedupeKey(entry.conferenceIdHex, entry.factDigestHex))
                 detached.add(
                     DetachedRetainedFact(
@@ -89,6 +102,14 @@ class MeetingProfile01PreBindFactRetention(
             }
         }
         return detached
+    }
+
+    private fun routingFactType(signal: SignalEnvelope): Int? {
+        val signedBytes =
+            runCatching {
+                Base64.getDecoder().decode(signal.payload.trim())
+            }.getOrNull() ?: return null
+        return Profile01WireCborDecoder.readRoutingIdentity(signedBytes)?.factType
     }
 
     fun discardForConference(

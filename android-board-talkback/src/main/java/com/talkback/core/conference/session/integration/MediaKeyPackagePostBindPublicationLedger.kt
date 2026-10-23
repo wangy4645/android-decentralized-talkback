@@ -27,6 +27,14 @@ class MediaKeyPackagePostBindPublicationLedger {
     fun deliveredIdentities(sessionId: String): Set<MediaKeyPackagePublicationIdentity> =
         deliveredBySession[sessionId]?.toSet() ?: emptySet()
 
+    fun clearPostBindDelivered(
+        sessionId: String,
+        identity: MediaKeyPackagePublicationIdentity,
+    ): Boolean {
+        val set = deliveredBySession[sessionId] ?: return false
+        return set.remove(identity)
+    }
+
     fun clearSession(sessionId: String) {
         deliveredBySession.remove(sessionId)
     }

@@ -4,6 +4,7 @@ import com.talkback.core.conference.runtime.ConcentusOpusEncoderSeam
 import com.talkback.core.conference.runtime.OpusCodecConstants
 import com.talkback.core.conference.session.ConferenceSessionMediaBridge
 import com.talkback.core.conference.session.ConferenceSessionMediaControlFactRegistry
+import com.talkback.core.conference.session.ConferenceSessionMediaFactAdapter
 import com.talkback.core.conference.session.ConferenceSessionMediaFactPort
 import com.talkback.core.conference.runtime.MediaGroupEndpointBinding
 import com.talkback.core.conference.transport.Phase1MediaHarness
@@ -264,9 +265,18 @@ class Profile01ShadowMulticastTransmitSeam(
         val memberBinding =
             factPort.memberBinding(sessionId, moduleId)
                 ?: return fence(sessionId, "NO_MEMBER_BINDING")
-        val registryMember =
+        var registryMember =
             registry.member(conferenceId, moduleId)
                 ?: return fence(sessionId, "NO_REGISTRY_MEMBER")
+        if (!ConferenceSessionMediaFactAdapter.memberMatchesSession(sessionControl, registryMember)) {
+            if (moduleId == localModuleId()) {
+                hostProjection.maybeProjectHostLocalSourceMember(sessionId)
+                registryMember = registry.member(conferenceId, moduleId) ?: return fence(sessionId, "NO_REGISTRY_MEMBER")
+            }
+            if (!ConferenceSessionMediaFactAdapter.memberMatchesSession(sessionControl, registryMember)) {
+                return fence(sessionId, "REGISTRY_MEMBER_STALE")
+            }
+        }
         val commitment =
             localSourceAuthority.currentCommitment(sessionId, moduleId)
                 ?: return fence(sessionId, "NO_LOCAL_SOURCE")
@@ -278,7 +288,20 @@ class Profile01ShadowMulticastTransmitSeam(
             return fence(sessionId, "REGISTRY_EPOCH_MISMATCH")
         }
         if (registryMember.membershipIncarnationId != commitment.sourceGeneration) {
-            return fence(sessionId, "SOURCE_GENERATION_MISMATCH")
+            if (moduleId == localModuleId()) {
+                hostProjection.maybeProjectHostLocalSourceMember(sessionId)
+                val refreshed = registry.member(conferenceId, moduleId)
+                if (refreshed != null &&
+                    ConferenceSessionMediaFactAdapter.memberMatchesSession(sessionControl, refreshed) &&
+                    refreshed.membershipIncarnationId == commitment.sourceGeneration
+                ) {
+                    registryMember = refreshed
+                } else {
+                    return fence(sessionId, "SOURCE_GENERATION_MISMATCH")
+                }
+            } else {
+                return fence(sessionId, "SOURCE_GENERATION_MISMATCH")
+            }
         }
         if (!armed.containsKey(sessionId)) {
             return null

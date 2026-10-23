@@ -51,6 +51,23 @@ class ConferenceSameSessionRejoinAcceptanceTest {
     }
 
     @Test
+    fun hostSdp_sameSession_iceNotConnected_admitsReconnectEvenWithoutRejoinFlag() {
+        assertTrue(
+            ConferenceSameSessionRejoinAcceptance.shouldAcceptReconnect(
+                existingType = SessionType.CONFERENCE,
+                existingSessionId = sessionId,
+                existingHostModuleId = host,
+                inviteSessionId = sessionId,
+                callerModuleId = host,
+                payloadRejoin = false,
+                payloadSdpBlank = false,
+                payloadInitiatorModuleId = host,
+                iceConnectedToCaller = false
+            )
+        )
+    }
+
+    @Test
     fun rejoinWithoutSdp_keepsBusy() {
         assertFalse(
             ConferenceSameSessionRejoinAcceptance.shouldAcceptReconnect(

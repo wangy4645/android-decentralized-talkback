@@ -125,6 +125,17 @@ object MediaObservabilityLog {
         )
     }
 
+    fun mediaConferenceProvisionSuperseded(
+        moduleId: String,
+        supersededCount: Int,
+        winnerOrigin: String,
+    ) {
+        TalkbackLog.i(
+            "MEDIA_CONFERENCE_PROVISION_SUPERSEDED module=$moduleId superseded=$supersededCount " +
+                "winnerOrigin=$winnerOrigin"
+        )
+    }
+
     fun mediaReleaseDeferredCreate(
         moduleId: String,
         requestedScope: MediaBearerScope,

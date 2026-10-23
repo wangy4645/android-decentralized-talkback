@@ -217,7 +217,7 @@ class MeetingProfile01FactWireIngressTest {
     }
 
     @Test
-    fun b1_5_preBindSource_notRetained() {
+    fun b1_5_preBindSource_retainedUntilSessionBind() {
         val isolatedIndex = MeetingProfile01ConferenceSessionIndex()
         val isolatedIngress = newWireIngress(isolatedIndex, MeetingProfile01PreBindFactRetention())
         val outcome =
@@ -227,7 +227,87 @@ class MeetingProfile01FactWireIngressTest {
                     sessionId = "unknown-session",
                 ),
             )
-        assertEquals(WireIngressOutcome.PRE_BIND_NOT_RETAINED, outcome)
+        assertEquals(WireIngressOutcome.DEFERRED_NO_SESSION_RETAINED, outcome)
+    }
+
+    @Test
+    fun incompleteCreation_retainsSourceUntilMediaKeyAlignedDrain() {
+        val isolatedIndex = MeetingProfile01ConferenceSessionIndex()
+        val isolatedRetention = MeetingProfile01PreBindFactRetention()
+        val isolatedIngress =
+            MeetingProfile01FactWireIngress(
+                ingress = ingress,
+                supplementRegistry =
+                    com.talkback.core.conference.session.profile01.Profile01SessionMediaSupplementRegistry(),
+                sessionIndex = isolatedIndex,
+                preBindRetention = isolatedRetention,
+                networkInterfaceName = { Slice4MulticastNetworkConstants.DEFAULT_IFACE },
+                localModuleId = { Profile01Q5EmbeddedVectors.RECIPIENT_MODULE_ID },
+                localEstablishmentKeyVersion = { Profile01Q5EmbeddedVectors.RECIPIENT_KEY_VERSION },
+            )
+        assertEquals(
+            WireIngressOutcome.DEFERRED_NO_SESSION_RETAINED,
+            isolatedIngress.onConferenceSignedFact(
+                signedFactEnvelope(Profile01DirectedWireFixtures.creationSignedFactBytes),
+            ),
+        )
+        assertEquals(
+            WireIngressOutcome.DEFERRED_NO_SESSION_RETAINED,
+            isolatedIngress.onConferenceSignedFact(
+                signedFactEnvelope(Profile01DirectedWireFixtures.sourceDeclarationSignedFactBytes),
+            ),
+        )
+        isolatedIndex.registerSession(sessionId, channelId, rosterEpoch = 0L)
+        isolatedIndex.bindConferenceId(sessionId, Profile01DirectedWireFixtures.CONFERENCE_ID)
+        val drain = isolatedIngress.drainRetainedAfterSessionBind(sessionId)
+        assertTrue(drain.applied + drain.rejected >= 1)
+        assertEquals(
+            1,
+            isolatedRetention
+                .detachForDrain(
+                    Profile01DirectedWireFixtures.CONFERENCE_ID,
+                    setOf(
+                        com.talkback.core.conference.session.profile01.wire.Profile01WireConstants
+                            .FACT_TYPE_SOURCE_DECLARATION,
+                    ),
+                ).size,
+        )
+    }
+
+    @Test
+    fun rejoinCatchUp_membershipBeforeCreation_replaysAfterCreationApplied() {
+        val creationOutcome =
+            wireIngress.onConferenceSignedFact(
+                signedFactEnvelope(Profile01DirectedWireFixtures.creationSignedFactBytes),
+            )
+        assertEquals(WireIngressOutcome.APPLIED, creationOutcome)
+        val membershipOutcome =
+            wireIngress.onConferenceSignedFact(
+                signedFactEnvelope(Profile01DirectedWireFixtures.membershipSignedFactBytes),
+            )
+        assertEquals(WireIngressOutcome.APPLIED, membershipOutcome)
+
+        wireIngress.onSessionUnregistered(sessionId)
+        sessionIndex.registerSession(sessionId, channelId, rosterEpoch = 0L)
+        sessionIndex.bindConferenceId(sessionId, Profile01DirectedWireFixtures.CONFERENCE_ID)
+
+        val membershipBeforeCreation =
+            wireIngress.onConferenceSignedFact(
+                signedFactEnvelope(Profile01DirectedWireFixtures.membershipSignedFactBytes),
+            )
+        assertEquals(WireIngressOutcome.DEFERRED_NO_SESSION, membershipBeforeCreation)
+
+        val creationReplay =
+            wireIngress.onConferenceSignedFact(
+                signedFactEnvelope(Profile01DirectedWireFixtures.creationSignedFactBytes),
+            )
+        assertEquals(WireIngressOutcome.APPLIED, creationReplay)
+
+        val membershipReplay =
+            wireIngress.onConferenceSignedFact(
+                signedFactEnvelope(Profile01DirectedWireFixtures.membershipSignedFactBytes),
+            )
+        assertEquals(WireIngressOutcome.APPLIED, membershipReplay)
     }
 
     @Test

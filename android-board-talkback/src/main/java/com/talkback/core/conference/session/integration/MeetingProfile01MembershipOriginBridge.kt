@@ -1,5 +1,6 @@
 package com.talkback.core.conference.session.integration
 
+import com.talkback.core.conference.session.profile01.Profile01AuthoritativeMembershipChain
 import com.talkback.core.conference.session.profile01.Profile01MembershipApplyResult
 import com.talkback.core.conference.session.profile01.Profile01MembershipConvergenceRegistry
 import com.talkback.core.conference.session.profile01.Profile01WireMembershipMember
@@ -30,6 +31,8 @@ class MeetingProfile01MembershipOriginBridge(
     private val publisher: MeetingProfile01MembershipOriginPublisher?,
     private val hostLocalSupplementMaterializer: Profile01HostLocalMediaSupplementMaterializer? = null,
     private val onHostMembershipAuthoritativeCommit: ((sessionId: String) -> Unit)? = null,
+    /** After MEMBERSHIP wire fanout — host may publish MEDIA_KEY_PACKAGE bound to the new head. */
+    private val onMembershipWireFanoutComplete: ((sessionId: String) -> Unit)? = null,
     private val onLog: (String) -> Unit = {},
 ) {
     private data class MembershipPublicationState(
@@ -37,7 +40,14 @@ class MeetingProfile01MembershipOriginBridge(
         val membershipVersion: Long,
         val memberModuleIds: Set<String>,
         val publishedToPeers: MutableSet<String> = ConcurrentHashMap.newKeySet(),
+        val membershipFactChain: MutableList<ByteArray> = mutableListOf(),
     )
+
+    sealed class RejoinCatchUpReplayOutcome {
+        data object Success : RejoinCatchUpReplayOutcome()
+
+        data class Failed(val reason: String) : RejoinCatchUpReplayOutcome()
+    }
 
     private val membershipStateBySession = ConcurrentHashMap<String, MembershipPublicationState>()
 
@@ -111,6 +121,11 @@ class MeetingProfile01MembershipOriginBridge(
                 replayLog = createdThisCall,
             )
 
+        // New head OR replay to peers that just became reachable — package after MEMBERSHIP wire.
+        if (createdThisCall || publishedCount > 0) {
+            onMembershipWireFanoutComplete?.invoke(sessionId)
+        }
+
         return when {
             createdThisCall -> OriginEmitOutcome.EMITTED
             publishedCount > 0 -> OriginEmitOutcome.REPLAYED
@@ -123,6 +138,47 @@ class MeetingProfile01MembershipOriginBridge(
 
     fun clearSession(sessionId: String) {
         membershipStateBySession.remove(sessionId)
+    }
+
+    fun replayAuthoritativeMembershipChainToPeer(
+        sessionId: String,
+        conferenceIdHex: String,
+        peerModuleId: String,
+        creationSignedFactBytes: ByteArray,
+        publishToPeer: (moduleId: String, signedFactBytes: ByteArray) -> Boolean,
+    ): RejoinCatchUpReplayOutcome {
+        val head =
+            membershipConvergence.current(conferenceIdHex)
+                ?: return RejoinCatchUpReplayOutcome.Failed("MEMBERSHIP_NOT_CONVERGED")
+        val state = membershipStateBySession[sessionId]
+        val chainBytes = state?.membershipFactChain?.map { it.copyOf() } ?: emptyList()
+        when (
+            val validation =
+                Profile01AuthoritativeMembershipChain.validateAgainstCreationAndHead(
+                    creationSignedFactBytes = creationSignedFactBytes,
+                    chainSignedFacts = chainBytes,
+                    expectedHead = head,
+                )
+        ) {
+            is Profile01AuthoritativeMembershipChain.Validation.Invalid ->
+                return RejoinCatchUpReplayOutcome.Failed(validation.reason)
+            is Profile01AuthoritativeMembershipChain.Validation.Valid -> {
+                state?.publishedToPeers?.remove(peerModuleId)
+                validation.links.forEach { link ->
+                    if (!publishToPeer(peerModuleId, link.signedFactBytes)) {
+                        return RejoinCatchUpReplayOutcome.Failed(
+                            "MEMBERSHIP_SEND_FAILED_V${link.membershipVersion}",
+                        )
+                    }
+                    onLog(
+                        "PROFILE01_REJOIN_CATCHUP session=$sessionId factType=" +
+                            "${Profile01WireConstants.FACT_TYPE_MEMBERSHIP} target=$peerModuleId " +
+                            "membershipVersion=${link.membershipVersion}",
+                    )
+                }
+                return RejoinCatchUpReplayOutcome.Success
+            }
+        }
     }
 
     private sealed interface MembershipFactResult {
@@ -201,11 +257,17 @@ class MeetingProfile01MembershipOriginBridge(
                 Profile01FactDigest.computeFactDigest(envelope.fullCanonicalBytes).toHexLower()
             } ?: "unknown"
 
+        val priorChain =
+            membershipStateBySession[sessionId]?.membershipFactChain?.map { it.copyOf() }
+                ?: emptyList()
+        val nextChain = priorChain.toMutableList()
+        nextChain.add(signedFactBytes.copyOf())
         membershipStateBySession[sessionId] =
             MembershipPublicationState(
                 signedFactBytes = signedFactBytes.copyOf(),
                 membershipVersion = membershipVersion,
                 memberModuleIds = authoritativeMemberIds.toSet(),
+                membershipFactChain = nextChain,
             )
         sessionIndex.updateRosterEpoch(sessionId, membershipVersion)
 

@@ -284,4 +284,71 @@ class MediaSessionManagerCreateContinuationTest {
         assertEquals(1, readyCount.get())
         assertFalse(manager.releaseInFlightModules().contains("M02"))
     }
+
+    @Test
+    fun conferencePendingDrain_coalescesStackedRejoinProvisionCallbacks() {
+        val releaseHold = CountDownLatch(1)
+        val releaseStarted = CountDownLatch(1)
+        val manager = newManager()
+        val sessionId = "sess-rejoin-coalesce"
+        manager.installAsyncMeshMediaRelease(
+            MeshMediaAsyncRelease { _, _, origin, releaseAction, onReleased ->
+                if (origin == "mediaSessionProvision") {
+                    releaseStarted.countDown()
+                    Thread {
+                        releaseHold.await(5, TimeUnit.SECONDS)
+                        releaseAction()
+                        coordinator.execute { onReleased(true) }
+                    }.apply { isDaemon = true }.start()
+                } else {
+                    Thread {
+                        releaseAction()
+                        coordinator.execute { onReleased(true) }
+                    }.apply { isDaemon = true }.start()
+                }
+            }
+        )
+        val provisioned = CountDownLatch(1)
+        coordinator.execute {
+            manager.requestEngine(
+                moduleId = "M02",
+                scope = MediaBearerScope.CONFERENCE,
+                sessionId = sessionId,
+                onReady = { provisioned.countDown() },
+            )
+        }
+        assertTrue(provisioned.await(2, TimeUnit.SECONDS))
+        coordinator.execute {
+            manager.admitConferenceRelease("M02", sessionId, "releasePeerMediaOnly")
+        }
+        assertTrue(releaseStarted.await(2, TimeUnit.SECONDS))
+
+        val readyCount = AtomicInteger(0)
+        val failedCount = AtomicInteger(0)
+        val queued = CountDownLatch(1)
+        coordinator.execute {
+            repeat(3) {
+                manager.requestEngine(
+                    moduleId = "M02",
+                    scope = MediaBearerScope.CONFERENCE,
+                    sessionId = sessionId,
+                    onReady = { readyCount.incrementAndGet() },
+                    onFailed = { failedCount.incrementAndGet() },
+                )
+            }
+            queued.countDown()
+        }
+        assertTrue(queued.await(2, TimeUnit.SECONDS))
+        assertTrue(manager.releaseInFlightModules().contains("M02"))
+
+        val drained = CountDownLatch(1)
+        coordinator.execute {
+            releaseHold.countDown()
+            drained.countDown()
+        }
+        assertTrue(drained.await(2, TimeUnit.SECONDS))
+        Thread.sleep(300)
+        assertEquals(1, readyCount.get())
+        assertEquals(2, failedCount.get())
+    }
 }

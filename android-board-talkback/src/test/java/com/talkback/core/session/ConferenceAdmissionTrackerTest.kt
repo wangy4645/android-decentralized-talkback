@@ -110,4 +110,14 @@ class ConferenceAdmissionTrackerTest {
         assertFalse(tracker.canRestartConferenceEdge(key))
         assertFalse(tracker.allowsRecovery(key))
     }
+
+    @Test
+    fun clearEdge_removesPhaseAndHandoff_noTerminatedTombstone() {
+        tracker.transition(key, ConferenceAdmissionPhase.READY, ConferenceAdmissionTransitionReason.ANSWER_COMMITTED)
+        tracker.beginAdmissionHandoff(key)
+        tracker.clearEdge(key)
+        assertEquals(null, tracker.phase(key))
+        assertFalse(tracker.isAdmissionHandoffActive(key))
+        assertFalse(tracker.allowsRecovery(key))
+    }
 }

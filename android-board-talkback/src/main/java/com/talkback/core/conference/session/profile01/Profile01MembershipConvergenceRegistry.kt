@@ -95,6 +95,15 @@ class Profile01MembershipConvergenceRegistry {
         branchConflicts.clear()
     }
 
+    /**
+     * Rejoin catch-up: drop local head for one conference only (not [clear]).
+     */
+    fun fenceConferenceForAuthoritativeCatchUp(conferenceId: String) {
+        generations.remove(conferenceId)
+        pending.remove(conferenceId)
+        branchConflicts.remove(conferenceId)
+    }
+
     private fun queuePending(wire: Profile01WireMembershipFact) {
         val list = pending.getOrPut(wire.conferenceId) { mutableListOf() }
         if (list.none { it.factDigest.contentEquals(wire.factDigest) }) {

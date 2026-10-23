@@ -4,6 +4,7 @@ import com.talkback.core.conference.session.ConferenceSessionMediaBridge
 import com.talkback.core.conference.session.ConferenceSessionMediaCoordinatorDelegate
 import com.talkback.core.conference.session.integration.cutover.MulticastAudibleAutomaticCutover
 import com.talkback.core.conference.session.ConferenceSessionMediaControlFactRegistry
+import com.talkback.core.conference.session.ConferenceSessionMediaFactAdapter
 import com.talkback.core.conference.session.ControlFactPublishOutcome
 import com.talkback.core.conference.session.profile01.Profile01ConferenceMediaFactIngress
 import com.talkback.core.conference.session.profile01.Profile01MembershipIngressResult
@@ -260,13 +261,26 @@ class Profile01HostLocalSessionFactProjection(
         val conferenceId =
             sessionIndex.conferenceIdForSession(sessionId)
                 ?: return HostSourceProjectionOutcome.DEFERRED_NO_CONFERENCE
-        val localModuleId = readLocalModuleIdFromSourceState(sessionId)
-        if (localModuleId != null && registry.memberModuleIdsAtHead(conferenceId).contains(localModuleId)) {
-            return HostSourceProjectionOutcome.ALREADY_PRESENT
-        }
         val signedBytes =
             readSignedSourceFact(sessionId)
                 ?: return HostSourceProjectionOutcome.DEFERRED_NO_SOURCE
+        val localModuleId = readLocalModuleIdFromSourceState(sessionId)
+        val wireGeneration =
+            when (val decoded = Profile01WireCborDecoder.decodeSourceDeclarationMember(signedBytes)) {
+                is Profile01WireCborDecoder.DecodeResult.Ready -> decoded.value.sourceGeneration
+                is Profile01WireCborDecoder.DecodeResult.Rejected -> null
+            }
+        if (localModuleId != null && wireGeneration != null) {
+            val sessionControl = registry.session(conferenceId)
+            val registryMember = registry.member(conferenceId, localModuleId)
+            if (sessionControl != null &&
+                registryMember != null &&
+                ConferenceSessionMediaFactAdapter.memberMatchesSession(sessionControl, registryMember) &&
+                registryMember.membershipIncarnationId >= wireGeneration
+            ) {
+                return HostSourceProjectionOutcome.ALREADY_PRESENT
+            }
+        }
         val result = ingress.ingestSourceDeclarationSignedFact(signedBytes)
         if (result.decode !is Profile01SignedFactDecodeResult.Ready) {
             return HostSourceProjectionOutcome.DEFERRED_DECODE
@@ -276,6 +290,10 @@ class Profile01HostLocalSessionFactProjection(
             publishOutcome != ControlFactPublishOutcome.IDEMPOTENT
         ) {
             return HostSourceProjectionOutcome.DEFERRED_PUBLISH
+        }
+        localModuleId?.let { moduleId ->
+            ConferenceSessionMediaCoordinatorDelegate.onConferenceMemberReplaced(sessionId, moduleId)
+            ConferenceSessionMediaCoordinatorDelegate.onConferenceMemberMediaReady(sessionId, moduleId)
         }
         return HostSourceProjectionOutcome.APPLIED
     }

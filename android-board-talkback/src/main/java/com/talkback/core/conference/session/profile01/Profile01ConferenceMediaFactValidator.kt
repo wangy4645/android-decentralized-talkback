@@ -34,6 +34,17 @@ class Profile01ConferenceMediaFactValidator(
 
     fun membershipRegistry(): Profile01MembershipConvergenceRegistry = membershipConvergence
 
+    /**
+     * Rejoin catch-up: drop conference-scoped session/member convergence (not [clear]).
+     * Must align with [Profile01MembershipConvergenceRegistry.fenceConferenceForAuthoritativeCatchUp]
+     * so authoritative CREATION can re-seed after leave.
+     */
+    fun fenceConferenceForAuthoritativeCatchUp(conferenceId: String) {
+        sessions.remove(conferenceId)
+        members.remove(conferenceId)
+        lastSessionDeclarations.remove(conferenceId)
+    }
+
     fun validateSession(
         wire: Profile01WireSessionFact,
         networkInterfaceName: String,

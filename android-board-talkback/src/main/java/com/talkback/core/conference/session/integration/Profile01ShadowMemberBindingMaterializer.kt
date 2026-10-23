@@ -4,6 +4,8 @@ import com.talkback.core.conference.session.ConferenceSessionMediaCoordinatorDel
 import com.talkback.core.conference.session.ConferenceSessionMediaFactPort
 import com.talkback.core.conference.session.ControlFactPublishOutcome
 import com.talkback.core.conference.session.profile01.Profile01ConferenceMediaFactIngress
+import com.talkback.core.conference.session.profile01.wire.Profile01WireCborDecoder
+import com.talkback.core.conference.session.profile01.Profile01WireMemberSourceFact
 
 /**
  * Materializes Profile01 member bindings into shadow multicast wiring after registry
@@ -52,7 +54,10 @@ class Profile01ShadowMemberBindingMaterializer(
         moduleId: String,
         signedFactBytes: ByteArray,
     ) {
-        if (factPort.memberBinding(sessionId, moduleId) != null) return
+        val wire = decodeSourceWire(signedFactBytes) ?: return
+        if (!needsRegistryIngest(sessionId, moduleId, wire)) {
+            return
+        }
         val result = ingress.ingestSourceDeclarationSignedFact(signedFactBytes)
         val publishOutcome = result.ingress?.publishOutcome
         if (
@@ -61,6 +66,33 @@ class Profile01ShadowMemberBindingMaterializer(
         ) {
             return
         }
+        if (moduleId == localModuleId()) {
+            completeLocalSuccessionBeforeMediaReady(sessionId, moduleId)
+        }
+    }
+
+    /**
+     * Head binding present but stale generation is not enough — membership epoch advances require
+     * a successor SOURCE in the registry before TX can align authority with [factPort] reads.
+     */
+    private fun needsRegistryIngest(
+        sessionId: String,
+        moduleId: String,
+        wire: Profile01WireMemberSourceFact,
+    ): Boolean {
+        val headBinding = factPort.memberBinding(sessionId, moduleId)
+        if (headBinding == null) {
+            return true
+        }
+        return wire.sourceGeneration > headBinding.incarnationId ||
+            wire.mediaKeyEpoch > headBinding.mediaKeyEpoch
+    }
+
+    private fun completeLocalSuccessionBeforeMediaReady(
+        sessionId: String,
+        moduleId: String,
+    ) {
+        ConferenceSessionMediaCoordinatorDelegate.onConferenceMemberReplaced(sessionId, moduleId)
     }
 
     private fun replayIntoShadowWiring(
@@ -68,9 +100,18 @@ class Profile01ShadowMemberBindingMaterializer(
         moduleId: String,
     ) {
         if (factPort.memberBinding(sessionId, moduleId) == null) return
+        if (moduleId == localModuleId()) {
+            completeLocalSuccessionBeforeMediaReady(sessionId, moduleId)
+        }
         ConferenceSessionMediaCoordinatorDelegate.onConferenceMemberMediaReady(sessionId, moduleId)
         if (moduleId == localModuleId()) {
             Profile01ShadowRuntimeObservability.logShadowTxBindingInstalled(sessionId, moduleId)
         }
     }
+
+    private fun decodeSourceWire(signedFactBytes: ByteArray): Profile01WireMemberSourceFact? =
+        when (val decoded = Profile01WireCborDecoder.decodeSourceDeclarationMember(signedFactBytes)) {
+            is Profile01WireCborDecoder.DecodeResult.Ready -> decoded.value
+            is Profile01WireCborDecoder.DecodeResult.Rejected -> null
+        }
 }

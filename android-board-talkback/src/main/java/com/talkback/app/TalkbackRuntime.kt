@@ -816,6 +816,23 @@ class TalkbackRuntime(
     fun debugD1ClearIngressMissInjection(): Boolean =
         coordinator.debugD1ClearIngressMissInjection()
 
+    internal fun testProfile01HeadSourceAbsentPeers(sessionId: String): Set<String> =
+        coordinator.testProfile01HeadSourceAbsentPeers(sessionId)
+
+    internal fun testMarkProfile01HeadSourceAbsent(sessionId: String, moduleId: String) =
+        coordinator.testMarkProfile01HeadSourceAbsent(sessionId, moduleId)
+
+    internal fun testMaybePublishHeadSourceToRejoinedPeer(
+        sessionId: String,
+        remoteModuleId: String,
+        reason: String,
+    ) = coordinator.testMaybePublishHeadSourceToRejoinedPeer(sessionId, remoteModuleId, reason)
+
+    internal fun testOnMeetingProfile01LocalShadowWireConsumptionReady(
+        sessionId: String,
+        reason: String,
+    ) = coordinator.onMeetingProfile01LocalShadowWireConsumptionReady(sessionId, reason)
+
     fun debugP1cRepublishMediaKeyPackageAfterPeerBind(remoteModuleId: String): Boolean =
         coordinator.debugP1cRepublishMediaKeyPackageAfterPeerBind(remoteModuleId)
 

@@ -31,6 +31,10 @@ class Profile01ConferenceMediaFactIngress(
 
     fun membershipRegistry(): Profile01MembershipConvergenceRegistry = validator.membershipRegistry()
 
+    fun fenceConferenceValidatorForAuthoritativeCatchUp(conferenceId: String) {
+        validator.fenceConferenceForAuthoritativeCatchUp(conferenceId)
+    }
+
     fun currentMembershipGeneration(conferenceId: String): Profile01MembershipGeneration? =
         validator.membershipRegistry().current(conferenceId)
 
@@ -82,9 +86,12 @@ class Profile01ConferenceMediaFactIngress(
         val derived =
             registry.lookup(conferenceId, generation.mediaKeyEpoch)
                 ?: return MembershipHeadMaterializationOutcome.NO_SUPPLEMENT
-        val creationWire =
-            decodeCreationWireForEndpoint(creationSignedBytesForEndpoint, channelId)
-                ?: return MembershipHeadMaterializationOutcome.NO_CREATION_CONTEXT
+        val endpoint =
+            resolveEndpointForMembershipHeadSync(
+                conferenceId = conferenceId,
+                channelId = channelId,
+                creationSignedBytesForEndpoint = creationSignedBytesForEndpoint,
+            ) ?: return MembershipHeadMaterializationOutcome.NO_CREATION_CONTEXT
         val declaration =
             AuthoritativeConferenceMediaSessionDeclaration(
                 conferenceId = conferenceId,
@@ -92,7 +99,7 @@ class Profile01ConferenceMediaFactIngress(
                 conferenceEpoch = generation.conferenceEpoch,
                 membershipVersion = generation.membershipVersion,
                 mediaKeyEpoch = generation.mediaKeyEpoch,
-                endpoint = creationWire.endpoint,
+                endpoint = endpoint,
                 networkInterfaceName = networkInterfaceName,
                 masterKey = derived.masterKey.copyOf(),
                 masterSalt = derived.masterSalt.copyOf(),
@@ -149,9 +156,12 @@ class Profile01ConferenceMediaFactIngress(
         if (!needsSync) {
             return SessionHeadSyncOutcome.ALREADY_SYNCED
         }
-        val creationWire =
-            decodeCreationWireForEndpoint(creationSignedBytesForEndpoint, channelId)
-                ?: return SessionHeadSyncOutcome.NO_CREATION_CONTEXT
+        val endpoint =
+            resolveEndpointForMembershipHeadSync(
+                conferenceId = conferenceId,
+                channelId = channelId,
+                creationSignedBytesForEndpoint = creationSignedBytesForEndpoint,
+            ) ?: return SessionHeadSyncOutcome.NO_CREATION_CONTEXT
         val declaration =
             AuthoritativeConferenceMediaSessionDeclaration(
                 conferenceId = conferenceId,
@@ -159,7 +169,7 @@ class Profile01ConferenceMediaFactIngress(
                 conferenceEpoch = generation.conferenceEpoch,
                 membershipVersion = generation.membershipVersion,
                 mediaKeyEpoch = generation.mediaKeyEpoch,
-                endpoint = creationWire.endpoint,
+                endpoint = endpoint,
                 networkInterfaceName = networkInterfaceName,
                 masterKey = derived.masterKey.copyOf(),
                 masterSalt = derived.masterSalt.copyOf(),
@@ -177,6 +187,23 @@ class Profile01ConferenceMediaFactIngress(
             -> SessionHeadSyncOutcome.APPLIED
             else -> SessionHeadSyncOutcome.REJECTED_PUBLISH
         }
+    }
+
+    /**
+     * Peers may lack origin CREATION signed bytes; reuse endpoint from an already-published
+     * session declaration at the same channel (keys still come from membership-head supplement).
+     */
+    private fun resolveEndpointForMembershipHeadSync(
+        conferenceId: String,
+        channelId: String,
+        creationSignedBytesForEndpoint: ByteArray?,
+    ): com.talkback.core.conference.runtime.MediaGroupEndpointBinding? {
+        decodeCreationWireForEndpoint(creationSignedBytesForEndpoint, channelId)?.endpoint?.let { return it }
+        val published = publisherBridge.publishedSession(conferenceId)
+        if (published != null && published.channelId == channelId) {
+            return published.endpoint
+        }
+        return null
     }
 
     private fun decodeCreationWireForEndpoint(

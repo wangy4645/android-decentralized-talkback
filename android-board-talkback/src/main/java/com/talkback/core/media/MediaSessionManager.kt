@@ -513,8 +513,25 @@ class MediaSessionManager(
         moduleId: String,
         pending: List<PendingEngineRequest>,
     ) {
+        val (toProvision, supersededConference) = coalesceConferenceProvisionPending(pending)
+        if (supersededConference.isNotEmpty()) {
+            MediaObservabilityLog.mediaConferenceProvisionSuperseded(
+                moduleId = moduleId,
+                supersededCount = supersededConference.size,
+                winnerOrigin = toProvision.lastOrNull { it.scope == MediaBearerScope.CONFERENCE }?.origin
+                    ?: "NONE",
+            )
+            supersededConference.forEach { request ->
+                MediaObservabilityLog.mediaProvisionFailed(
+                    moduleId,
+                    request.scope,
+                    request.origin,
+                )
+                request.onFailed?.invoke()
+            }
+        }
         val provision = {
-            pending.forEach { request ->
+            toProvision.forEach { request ->
                 MediaObservabilityLog.mediaProvisionRequested(
                     moduleId,
                     request.scope,
@@ -614,6 +631,31 @@ class MediaSessionManager(
             )
             request.onFailed?.invoke()
         }
+    }
+
+    /**
+     * Rejoin release can stack multiple CONFERENCE [requestEngine] callbacks on one drain.
+     * Only the last callback may emit an outbound offer; earlier ones are superseded.
+     */
+    private fun coalesceConferenceProvisionPending(
+        pending: List<PendingEngineRequest>,
+    ): Pair<List<PendingEngineRequest>, List<PendingEngineRequest>> {
+        val conference = pending.filter { it.scope == MediaBearerScope.CONFERENCE }
+        if (conference.size <= 1) {
+            return pending to emptyList()
+        }
+        val winner = conference.last()
+        val superseded = conference.dropLast(1)
+        val nonConference = pending.filter { it.scope != MediaBearerScope.CONFERENCE }
+        val merged = buildList {
+            pending.forEach { request ->
+                when {
+                    request.scope != MediaBearerScope.CONFERENCE -> add(request)
+                    request === winner -> add(request)
+                }
+            }
+        }
+        return merged to superseded
     }
 
     private fun queuePendingEngineRequest(

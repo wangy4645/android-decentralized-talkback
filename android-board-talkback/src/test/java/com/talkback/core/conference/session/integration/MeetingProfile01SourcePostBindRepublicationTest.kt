@@ -191,6 +191,30 @@ class MeetingProfile01SourcePostBindRepublicationTest {
     }
 
     @Test
+    fun r2_5b_peerSourceWireApplied_clearsLedgerAndRepublishes() {
+        val harness = SourcePostBindTestSupport.newHarness("r2-5b")
+        SourcePostBindTestSupport.seedCreation(harness)
+        SourcePostBindTestSupport.buildAndPublishPreBind(harness, peer = PEER)
+        invokePostBind(harness, mutableListOf())
+
+        var sendCount = 0
+        val outcome =
+            harness.sourceBridge.onPeerSourceConsumptionEligible(
+                sessionId = harness.sessionId,
+                snapshot = harness.duoSnapshot(),
+                localModuleId = HOST,
+                targetModuleId = PEER,
+                reason = "peer_source_declaration_wire_applied",
+                publishToPeer = { _, _ ->
+                    sendCount++
+                    true
+                },
+            )
+        assertEquals(SourcePostBindRepublishOutcome.EMITTED, outcome)
+        assertEquals(1, sendCount)
+    }
+
+    @Test
     fun r2_5_alreadyPostBindSatisfied_noDuplicateReplay() {
         val harness = SourcePostBindTestSupport.newHarness("r2-5")
         SourcePostBindTestSupport.seedCreation(harness)
@@ -279,8 +303,108 @@ class MeetingProfile01SourcePostBindRepublicationTest {
 
         val republish = logs.filter { it.startsWith("PROFILE01_SOURCE_POST_BIND_REPUBLISH ") }
         assertTrue(republish.any { it.contains("outcome=ATTEMPTED") })
-        assertTrue(republish.any { it.contains("outcome=EMITTED") })
+        assertTrue(republish.any { it.contains("outcome=EMITTED_POST_BIND_CONSUMABLE") })
         assertTrue(republish.any { it.contains("reason=$REASON") })
+    }
+
+    @Test
+    fun r2_preBindFanoutReason_doesNotCloseObligation_consumptionEligibleReplays() {
+        val harness = SourcePostBindTestSupport.newHarness("r2-prebind-fanout")
+        SourcePostBindTestSupport.seedCreation(harness)
+        SourcePostBindTestSupport.buildAndPublishPreBind(harness, peer = PEER)
+
+        var sendCount = 0
+        val fanout =
+            harness.sourceBridge.onPeerSourceConsumptionEligible(
+                sessionId = harness.sessionId,
+                snapshot = harness.duoSnapshot(),
+                localModuleId = HOST,
+                targetModuleId = PEER,
+                reason = "r1c_creation_wire_applied",
+                publishToPeer = { _, _ ->
+                    sendCount++
+                    true
+                },
+            )
+        assertEquals(SourcePostBindRepublishOutcome.EMITTED, fanout)
+        assertTrue(harness.sourceBridge.postBindLedger().satisfiedIdentities(harness.sessionId).isEmpty())
+
+        val replaySends = mutableListOf<ByteArray>()
+        val consumable = invokePostBind(harness, replaySends)
+        assertEquals(SourcePostBindRepublishOutcome.EMITTED, consumable)
+        assertEquals(2, sendCount)
+        assertEquals(1, replaySends.size)
+        assertTrue(harness.sourceBridge.postBindLedger().satisfiedIdentities(harness.sessionId).isNotEmpty())
+
+        val duplicate = invokePostBind(harness, mutableListOf())
+        assertEquals(SourcePostBindRepublishOutcome.ALREADY_SATISFIED, duplicate)
+        assertEquals(2, sendCount)
+    }
+
+    @Test
+    fun p14_rejoin_peer_receives_new_head_generation_after_prior_publish() {
+        val logs = mutableListOf<String>()
+        val harness = SourcePostBindTestSupport.newHarness("p14-rejoin-head", logs)
+        SourcePostBindTestSupport.seedCreation(harness)
+        val firstCommit =
+            harness.localSourceAuthority.commitLocalSource(
+                sessionId = harness.sessionId,
+                moduleId = HOST,
+                mediaKeyEpoch = 2L,
+            )
+        harness.sourceBridge.onLocalConferenceSourceCommitted(
+            sessionId = harness.sessionId,
+            localModuleId = HOST,
+            authoritySourceGeneration = firstCommit.sourceGeneration,
+            ssrc = firstCommit.ssrc,
+            sourceInstanceId = firstCommit.sourceInstanceId,
+            mediaGroupDescriptorDigest = firstCommit.mediaGroupDescriptorDigest,
+        )
+        harness.sourceBridge.onEligiblePeers(
+            sessionId = harness.sessionId,
+            snapshot = harness.duoSnapshot(),
+            localModuleId = HOST,
+            eligiblePeerModuleIds = setOf(PEER),
+            publishToPeer = { _, _ -> true },
+        )
+        val headCommit =
+            harness.localSourceAuthority.commitLocalSource(
+                sessionId = harness.sessionId,
+                moduleId = HOST,
+                mediaKeyEpoch = 4L,
+            )
+        harness.sourceBridge.onLocalConferenceSourceCommitted(
+            sessionId = harness.sessionId,
+            localModuleId = HOST,
+            authoritySourceGeneration = headCommit.sourceGeneration,
+            ssrc = headCommit.ssrc,
+            sourceInstanceId = headCommit.sourceInstanceId,
+            mediaGroupDescriptorDigest = headCommit.mediaGroupDescriptorDigest,
+        )
+        val outcome =
+            harness.sourceBridge.onEligiblePeers(
+                sessionId = harness.sessionId,
+                snapshot = harness.duoSnapshot(),
+                localModuleId = HOST,
+                eligiblePeerModuleIds = setOf(PEER),
+                publishToPeer = { _, _ -> true },
+            )
+        assertEquals(SourceOriginPublishOutcome.EMITTED, outcome)
+        assertTrue(
+            logs.any {
+                it.contains("target=$PEER") &&
+                    it.contains("sourceGeneration=${headCommit.sourceGeneration}")
+            },
+        )
+        val repeat =
+            harness.sourceBridge.onEligiblePeers(
+                sessionId = harness.sessionId,
+                snapshot = harness.duoSnapshot(),
+                localModuleId = HOST,
+                eligiblePeerModuleIds = setOf(PEER),
+                publishToPeer = { _, _ -> true },
+            )
+        assertEquals(SourceOriginPublishOutcome.SKIPPED_NO_PENDING_PUBLICATION, repeat)
     }
 
     private fun invokePostBind(
@@ -512,6 +636,13 @@ internal object MeetingProfile01FactWireIngressTestSupport {
     fun newWireIngress(
         sessionIndex: MeetingProfile01ConferenceSessionIndex,
         preBindRetention: MeetingProfile01PreBindFactRetention,
+    ): MeetingProfile01FactWireIngress =
+        newWireIngress(sessionIndex, preBindRetention, scheduleDelayed = { _, block -> block() })
+
+    fun newWireIngress(
+        sessionIndex: MeetingProfile01ConferenceSessionIndex,
+        preBindRetention: MeetingProfile01PreBindFactRetention,
+        scheduleDelayed: (Long, () -> Unit) -> Unit = { _, block -> block() },
     ): MeetingProfile01FactWireIngress {
         val supplementRegistry = Profile01SessionMediaSupplementRegistry()
         val registry = com.talkback.core.conference.session.ConferenceSessionMediaControlFactRegistry()
@@ -548,6 +679,7 @@ internal object MeetingProfile01FactWireIngressTestSupport {
             networkInterfaceName = { Slice4MulticastNetworkConstants.DEFAULT_IFACE },
             localModuleId = { "M02" },
             localEstablishmentKeyVersion = { 1L },
+            scheduleDelayed = scheduleDelayed,
         )
     }
 }

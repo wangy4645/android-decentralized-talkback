@@ -177,6 +177,23 @@ class MeetingProfile01CreationOriginBridge(
     fun readSignedCreationFact(sessionId: String): ByteArray? =
         creationStateBySession[sessionId]?.signedFactBytes?.copyOf()
 
+    fun replayCreationToPeerForRejoinCatchUp(
+        sessionId: String,
+        peerModuleId: String,
+        publishToPeer: (moduleId: String, signedFactBytes: ByteArray) -> Boolean,
+    ): Boolean {
+        val signedFactBytes = readSignedCreationFact(sessionId) ?: return false
+        creationStateBySession[sessionId]?.publishedToPeers?.remove(peerModuleId)
+        if (!publishToPeer(peerModuleId, signedFactBytes)) {
+            return false
+        }
+        onLog(
+            "PROFILE01_REJOIN_CATCHUP session=$sessionId factType=" +
+                "${Profile01WireConstants.FACT_TYPE_CREATION} target=$peerModuleId",
+        )
+        return true
+    }
+
     fun clearSession(sessionId: String) {
 
         creationStateBySession.remove(sessionId)
