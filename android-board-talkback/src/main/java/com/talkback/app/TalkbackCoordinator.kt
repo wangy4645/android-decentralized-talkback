@@ -119,6 +119,7 @@ import com.talkback.core.session.ConferenceHostEndpointResolver
 import com.talkback.core.session.ConferenceIceConnectedSideEffects
 import com.talkback.core.session.ConferenceBarrierDiagnostics
 import com.talkback.core.session.ConferenceMediaTransmitGate
+import com.talkback.core.session.ConferenceAnchorTransmitCapturePolicy
 import com.talkback.core.session.ConferenceReceivePlaybackPolicy
 import com.talkback.core.session.ConferenceParticipantManager
 import com.talkback.core.session.EdgeReachabilitySnapshot
@@ -380,6 +381,7 @@ import com.talkback.core.conference.session.integration.MediaKeyPackagePostBindR
 import com.talkback.core.conference.session.integration.SourceOriginPublishOutcome
 import com.talkback.core.conference.session.integration.SourcePostBindRepublishOutcome
 import com.talkback.core.webrtc.ProgramAudioBus
+import com.talkback.core.webrtc.ProgramRelayMode
 import com.talkback.core.webrtc.WebRtcAudioEngine
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -14094,6 +14096,28 @@ class TalkbackCoordinator(
 
     private fun dispatchConferenceCaptureControl(session: TalkbackSession, start: Boolean) {
         val origin = if (start) "startCapture" else "stopCapture"
+        val deferPeerCapture =
+            start &&
+                ConferenceAnchorTransmitCapturePolicy.deferPeerWebRtcCapture(session, localModuleId)
+        if (deferPeerCapture) {
+            log(
+                "${sessionTag(session)} CONFERENCE_ANCHOR_DEFER_PEER_CAPTURE " +
+                    "reason=anchor_multicast_listen_uplink_via_program_inject"
+            )
+            val peers = conferenceAudioLevelPeers(session)
+            val engines =
+                if (peers.isEmpty()) {
+                    sessionMediaEngines(session).map { ConferenceMediaJniAffinity.RELAY_FANOUT_PEER to it }
+                } else {
+                    peers
+                }
+            engines.forEach { (peerId, engine) ->
+                dispatchConferenceMediaJni(session, peerId, "ensureProgramRelay") {
+                    engine.setProgramRelayMode(ProgramRelayMode.PROGRAM)
+                }
+            }
+            return
+        }
         val peers = conferenceAudioLevelPeers(session)
         if (peers.isEmpty()) {
             dispatchConferenceMediaJni(
