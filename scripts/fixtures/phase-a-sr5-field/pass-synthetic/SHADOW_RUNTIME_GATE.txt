@@ -1,0 +1,4 @@
+﻿captureG1=1
+driverLeavePhase=SKIPPED
+driverRejoinPhase=SKIPPED
+sr5Window=C

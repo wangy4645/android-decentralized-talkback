@@ -93,6 +93,17 @@ class ConferenceSessionMediaControlFactRegistry {
     ): ConferenceMediaMemberControlFact? =
         sessions[conferenceId]?.members?.get(moduleId)?.current
 
+    /** Present (not superseded) members — L1b denominator; may lack current-epoch SOURCE. */
+    fun memberModuleIdsPresent(conferenceId: String): Set<String> {
+        val slot = sessions[conferenceId] ?: return emptySet()
+        return slot.members
+            .filter { (_, memberSlot) ->
+                val member = memberSlot.current
+                member != null && !member.superseded
+            }
+            .keys
+    }
+
     /** Module ids with a member fact matching the current session head. */
     fun memberModuleIdsAtHead(conferenceId: String): Set<String> {
         val session = sessions[conferenceId]?.current ?: return emptySet()

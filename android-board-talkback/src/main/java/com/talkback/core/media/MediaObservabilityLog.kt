@@ -103,6 +103,20 @@ object MediaObservabilityLog {
         )
     }
 
+    fun mediaProvisionCoalesced(
+        moduleId: String,
+        scope: MediaBearerScope,
+        origin: String,
+        generation: Long,
+        pcHash: Int?,
+    ) {
+        val hashField = pcHash?.let { " pcHash=$it" }.orEmpty()
+        TalkbackLog.i(
+            "MEDIA_PROVISION_COALESCED module=$moduleId scope=$scope origin=$origin " +
+                "generation=$generation$hashField"
+        )
+    }
+
     fun mediaProvisioned(
         moduleId: String,
         scope: MediaBearerScope,

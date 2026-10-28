@@ -45,40 +45,23 @@ class AudibleOwnershipController(
             return CutoverOutcome.REJECTED_PREREQUISITE
         }
 
-        multicastPort.fenceProductionPlayout(sessionId)
-        ReplacementCutoverObservability.logHandoff(
-            sessionId,
-            "CUTOVER_FENCE_MULTICAST",
-            CutoverOutcome.APPLIED,
-        )
-
-        if (!anchorPort.releaseAnchorOwnership(sessionId)) {
-            rollbackInternal(sessionId, RollbackTrigger.OWNERSHIP_INVARIANT_VIOLATION)
-            return CutoverOutcome.REJECTED_HANDOFF_FAILURE
-        }
-        ReplacementCutoverObservability.logHandoff(
-            sessionId,
-            "CUTOVER_RELEASE_ANCHOR",
-            CutoverOutcome.APPLIED,
-        )
-
         if (!multicastPort.acquireProductionAudioTrack(sessionId)) {
-            anchorPort.acquireAnchorOwnership(sessionId)
             state = AudibleOwnershipState.ANCHOR_ACTIVE
             ReplacementCutoverObservability.logRc1Field(
                 "CUTOVER_FAILED",
                 sessionId,
                 "production_audiotrack_acquire_failure",
             )
+            probeOwnership(sessionId)
+            return CutoverOutcome.REJECTED_HANDOFF_FAILURE
+        }
+        if (!multicastPort.isProductionAudioTrackActive(sessionId)) {
+            multicastPort.releaseProductionAudioTrack(sessionId)
+            state = AudibleOwnershipState.ANCHOR_ACTIVE
             ReplacementCutoverObservability.logRc1Field(
-                "AUTO_ROLLBACK_SUCCEEDED",
+                "CUTOVER_FAILED",
                 sessionId,
-                "after_acquire_failure",
-            )
-            ReplacementCutoverObservability.logRollback(
-                sessionId,
-                RollbackTrigger.PRODUCTION_AUDIOTRACK_ACQUIRE_FAILURE,
-                CutoverOutcome.REJECTED_HANDOFF_FAILURE,
+                "production_audiotrack_probe_inactive",
             )
             probeOwnership(sessionId)
             return CutoverOutcome.REJECTED_HANDOFF_FAILURE
@@ -86,6 +69,26 @@ class AudibleOwnershipController(
         ReplacementCutoverObservability.logHandoff(
             sessionId,
             "CUTOVER_ACQUIRE_MULTICAST",
+            CutoverOutcome.APPLIED,
+        )
+
+        if (!anchorPort.releaseAnchorOwnership(sessionId)) {
+            multicastPort.releaseProductionAudioTrack(sessionId)
+            if (!anchorPort.isAnchorAudibleActive(sessionId)) {
+                anchorPort.acquireAnchorOwnership(sessionId)
+            }
+            state = AudibleOwnershipState.ANCHOR_ACTIVE
+            ReplacementCutoverObservability.logRc1Field(
+                "CUTOVER_FAILED",
+                sessionId,
+                "anchor_release_failure",
+            )
+            probeOwnership(sessionId)
+            return CutoverOutcome.REJECTED_HANDOFF_FAILURE
+        }
+        ReplacementCutoverObservability.logHandoff(
+            sessionId,
+            "CUTOVER_RELEASE_ANCHOR",
             CutoverOutcome.APPLIED,
         )
 

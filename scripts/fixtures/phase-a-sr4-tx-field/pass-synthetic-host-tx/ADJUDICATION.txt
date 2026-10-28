@@ -1,0 +1,60 @@
+﻿PA-SR4-TX FIELD ADJUDICATION (Host Shadow Multicast Transmit Gate)
+log_dir=D:\workspace\project\talkback\talkback\scripts\fixtures\phase-a-sr4-tx-field\pass-synthetic-host-tx
+run_card=meeting-product-integration-phase-a-sr4-tx-field-run-card.md
+authorization=meeting-product-integration-phase-a-shadow-runtime-pr-pa-sr4-tx-implementation-authorization.md
+PA-SR4_full=NOT_CLOSED_BY_THIS_GATE
+RX=NOT_AUTHORIZED
+PLAY=HOLD
+
+GROUP_GATE status=PASS verdict=PASS
+INVITE_JOIN_GATE status=PASS hostSessionId=b23edb10-5855-4252-9495-4cefd9f196df
+JOIN_GATE status=PASS hostSessionId=b23edb10-5855-4252-9495-4cefd9f196df
+identity hostSessionId=b23edb10-5855-4252-9495-4cefd9f196df conferenceId=c6b73689f63d5f33e17925e2ef0d0c83 hostModuleId=M01 peerModuleId=M02
+
+observe_only_file=PA_SR4_TX_OBSERVE_ONLY.txt
+
+PREREQUISITE_SAME_SESSION
+J0_CREATION_APPLIED=True
+HOST_SESSION_PROJECTED=True deferred_lines=0
+HOST_SHADOW_SESSION_LIVE=True
+SR1_SESSION_STARTED_HOOK=True
+SR2_WIRING_LIVE=True
+SR3_MEMBER_MEDIA_READY_HOST=True_SOFT
+
+PA-SR4-TX CHAIN
+TX-ESTABLISH_HOST_SESSION_PROJECTED=True
+TX-ESTABLISH_SHADOW_SESSION_LIVE=True
+TX-STIMULUS_PTT_CAPTURE_ON=True lines=1
+TX-SEND_SHADOW_TX_ACTIVITY=True packetsSent_max=12
+note=TX-ESTABLISH_is_necessary_prereq_NOT_packets_evidence
+
+FENCE_BREAKDOWN_DIAGNOSTIC_ONLY
+shadowSessionLive=True
+localMemberBinding=True
+localSourceCurrent=True
+mediaKeyEpochAligned=True
+sourceGenerationCurrent=True
+productionCaptureArmed=True
+SHADOW_TX_FENCED_lines=0
+SHADOW_TX_FAILED_lines=0
+fenceReason=NONE
+
+identity_file=PA_SR4_TX_IDENTITY.txt
+sessionId=b23edb10-5855-4252-9495-4cefd9f196df
+conferenceId=c6b73689f63d5f33e17925e2ef0d0c83
+hostModuleId=M01
+peerModuleId=M02
+hostSessionProjected=True
+hostShadowSessionLive=True
+pttCaptureOn=True
+txActivityPacketsSentMax=12
+txEvidence=09-09 16:40:21.000 I MEETING_MEDIA_SHADOW: PROFILE01_SHADOW_RUNTIME phase=SHADOW_TX_ACTIVITY sessionId=b23edb10-5855-4252-9495-4cefd9f196df moduleId=M01 packetsSent=12 protectedSent=12 sendErrors=0 audioTrackOwner=SHADOW_METRICS_ONLY
+
+VERDICT=PASS_PA_SR4_TX
+PA-SR4-TX=CLOSED / UNIT+FIELD-PROVEN
+PA-SR4=VALID_FAIL / RX_NEXT
+PR-PA-SR4-RX=DESIGN_NEXT / NOT_AUTHORIZED
+PLAY=HOLD
+ADR-0056=KEEP
+Meeting_media_cutover=NOT_AUTHORIZED
+Next=PR_PA_SR4_RX_AUTHORIZATION_SEPARATE

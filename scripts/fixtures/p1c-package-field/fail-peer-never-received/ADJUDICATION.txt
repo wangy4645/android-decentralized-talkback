@@ -1,0 +1,33 @@
+﻿P1-C PACKAGE FIELD ADJUDICATION
+log_dir=D:\workspace\project\talkback\talkback\scripts\fixtures\p1c-package-field\fail-peer-never-received
+expectedRecipientModuleId=M02
+expectedEstablishmentKeyVersion=1
+join_keys=conferenceId,mediaKeyEpoch,recipientModuleId,recipientEstablishmentKeyVersion,membershipFactDigest
+r1_gate=product_post_bind_republish_required
+
+DELIVERY_STAGE initialDelivery=EMITTED_NO_PEER_APPLY_YET postBindRepublish=ABSENT postBindIngress=ABSENT supplement=ABSENT
+R1_PATH productAuto=False harnessOnly=False productCoordHits=0 harnessCoordHits=0
+
+IDENTITY conferenceId=aabbccddeeff00112233445566778899 mediaKeyEpoch=3 recipientModuleId=M02 recipientEstablishmentKeyVersion=1 membershipFactDigest=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+ORIGIN_LINE=09-08 17:00:01.100  1000  1001 I Talkback: PROFILE01_MEDIA_KEY_PACKAGE_ORIGIN conferenceId=aabbccddeeff00112233445566778899 mediaKeyEpoch=3 recipientModuleId=M02 recipientEstablishmentKeyVersion=1 membershipFactDigest=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef publicationOutcome=EMITTED
+POST_BIND_LINE=
+APPLIED_LINE=
+READY_LINE=
+
+C-F1 PASS  origin recipient/version exact initialDelivery=EMITTED_NO_PEER_APPLY_YET
+C-F2 PASS  creation digest + epoch exact digest=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef epoch=3
+C-F3 FAIL  origin_emitted_but_peer_never_received_factType=11
+C-F4 FAIL  matching_INGEST_APPLIED_absent
+C-F5 FAIL  no_APPLIED_for_decrypt_path_evidence
+C-F6 FAIL  no_APPLIED_to_pair_with_READY
+C-F7 FAIL  expected_REJECTED_RECIPIENT_KEY_VERSION_MISMATCH_absent_after_injected_OBS
+
+POSITIVE LEG NOT_PASS
+CREATION_APPLIED observed=NO|UNKNOWN   (informational only 鈥?not gate input)
+INCOMPLETE_DRAIN observed=NO|UNKNOWN   (informational only 鈥?not gate input)
+
+R1_FIELD=FAIL reason=product_POST_BIND_EMITTED_absent
+
+VERDICT=FAIL
+reason=C-F3_peer_never_received,C-F4_applied_absent,C-F5_no_applied,C-F6_no_applied,C-F7_reject_absent,r1_product_post_bind_absent,C-F7_expected_REJECTED_RECIPIENT_KEY_VERSION_MISMATCH_absent_after_injected_OBS,C-F4_matching_INGEST_APPLIED_absent,C-F3_origin_emitted_but_peer_never_received_factType=11,C-F6_no_APPLIED_to_pair_with_READY,C-F5_no_APPLIED_for_decrypt_path_evidence
+Next=RCA_PACKAGE_OR_R1_HOOK_HOLD_J0

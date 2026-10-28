@@ -211,12 +211,19 @@ class ConferenceMulticastMediaPipeline(
         slotMediaTimeMs: Long,
         perSourceSlots: Map<String, Long> = emptyMap(),
         mixSessionKey: String = DEFAULT_MIX_SESSION_KEY,
+        writePlayout: Boolean = true,
     ): PipelinePlayoutResult {
         val cycleStartNs = System.nanoTime()
         val underrunBefore = playoutMetrics?.underrunCount ?: 0L
         val timedMix = executeTimedMixCycle(nowMs, slot, slotMediaTimeMs, perSourceSlots, mixSessionKey)
-        val playoutObserved = orchestrator.playout(timedMix.mixCycle.mixedBlock, nowMs)
-        val playoutWriteDurationUs = playoutMetrics?.lastWriteDurationUs ?: 0L
+        val playoutObserved =
+            if (writePlayout) {
+                orchestrator.playout(timedMix.mixCycle.mixedBlock, nowMs)
+            } else {
+                false
+            }
+        val playoutWriteDurationUs =
+            if (writePlayout) playoutMetrics?.lastWriteDurationUs ?: 0L else 0L
         val underrunAfter = playoutMetrics?.underrunCount ?: 0L
         val underrunDelta = (underrunAfter - underrunBefore).coerceAtLeast(0L)
         val budgetUs = (System.nanoTime() - cycleStartNs) / 1_000L

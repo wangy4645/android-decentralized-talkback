@@ -35,6 +35,9 @@ class MeetingProfile01MediaKeyPackageOriginBridge(
     private val publicationLedger: MediaKeyPackagePublicationLedger = MediaKeyPackagePublicationLedger(),
     private val postBindPublicationLedger: MediaKeyPackagePostBindPublicationLedger =
         MediaKeyPackagePostBindPublicationLedger(),
+    private val recordPublicationOnSendSuccess:
+        (sessionId: String, identity: MediaKeyPackagePublicationIdentity) -> Unit =
+        { sessionId, identity -> publicationLedger.markPublished(sessionId, identity) },
     private val onLog: (String) -> Unit = {},
 ) {
     fun onEligiblePeers(
@@ -73,101 +76,272 @@ class MeetingProfile01MediaKeyPackageOriginBridge(
             .filter { it != localModuleId }
             .sorted()
             .forEach { peerModuleId ->
-                when (val lookup = establishmentLookup.activeEstablishmentKey(peerModuleId)) {
-                    is Profile01EstablishmentKeyLookupResult.Found -> {
-                        val identity =
-                            MediaKeyPackagePublicationIdentity(
-                                conferenceIdHex = conferenceIdHex,
-                                mediaKeyEpoch = creationContext.mediaKeyEpoch,
-                                recipientModuleId = peerModuleId,
-                                recipientEstablishmentKeyVersion = lookup.ref.establishmentKeyVersion,
-                                membershipFactDigestHex = creationDigestHex,
-                            )
-                        if (publicationLedger.isPublished(sessionId, identity)) {
-                            return@forEach
-                        }
-                        val recipient =
-                            Profile01PackageRecipientBinding(
-                                recipientModuleId = lookup.ref.recipientModuleId,
-                                establishmentKeyVersion = lookup.ref.establishmentKeyVersion,
-                                establishmentPublicKeySpki = lookup.ref.establishmentPublicKeySpki.copyOf(),
-                            )
-                        val buildRequest =
-                            Profile01MediaKeyPackageBuildRequest(
-                                material =
-                                    Profile01ConferenceKeyMaterial(
-                                        conferenceId = conferenceIdHex.hexToId128Bytes(),
-                                        conferenceEpoch = creationContext.conferenceEpoch,
-                                        ownerModuleId = creationContext.ownerModuleId,
-                                        membershipVersion = creationContext.membershipVersion,
-                                        mediaKeyEpoch = creationContext.mediaKeyEpoch,
-                                        conferenceMediaSecret = material.conferenceMediaSecret.copyOf(),
-                                        membershipKeyContextDigest = material.membershipKeyContextDigest.copyOf(),
-                                        mediaKeyCommitment = material.mediaKeyCommitment.copyOf(),
-                                    ),
-                                creationFactDigest = creationContext.creationFactDigest.copyOf(),
-                                recipient = recipient,
-                            )
-                        when (val built = builder.build(buildRequest)) {
-                            is Profile01MediaKeyPackageBuildResult.Rejected -> {
-                                logGap(sessionId, peerModuleId, "BUILD_${built.reason}")
-                            }
-                            is Profile01MediaKeyPackageBuildResult.Ready -> {
-                                if (publishToPeer(peerModuleId, built.signedFactBytes)) {
-                                    publicationLedger.markPublished(sessionId, identity)
-                                    publishedThisCall++
-                                    onLog(
-                                        "PROFILE01_ORIGIN_EMIT session=$sessionId " +
-                                            "factType=${Profile01WireConstants.FACT_TYPE_MEDIA_KEY_PACKAGE} " +
-                                            "target=$peerModuleId outcome=EMITTED " +
-                                            "conferenceId=$conferenceIdHex establishmentKeyVersion=" +
-                                            "${identity.recipientEstablishmentKeyVersion} " +
-                                            "membershipFactDigest=$creationDigestHex",
-                                    )
-                                    logPackageOrigin(
-                                        conferenceIdHex = conferenceIdHex,
-                                        mediaKeyEpoch = identity.mediaKeyEpoch,
-                                        recipientModuleId = identity.recipientModuleId,
-                                        recipientEstablishmentKeyVersion =
-                                            identity.recipientEstablishmentKeyVersion,
-                                        membershipFactDigest = identity.membershipFactDigestHex,
-                                        publicationOutcome = "EMITTED",
-                                    )
-                                } else {
-                                    onLog(
-                                        "PROFILE01_ORIGIN_EMIT session=$sessionId " +
-                                            "factType=${Profile01WireConstants.FACT_TYPE_MEDIA_KEY_PACKAGE} " +
-                                            "target=$peerModuleId outcome=SEND_FAILED " +
-                                            "obligation=OPEN",
-                                    )
-                                    logPackageOrigin(
-                                        conferenceIdHex = conferenceIdHex,
-                                        mediaKeyEpoch = identity.mediaKeyEpoch,
-                                        recipientModuleId = identity.recipientModuleId,
-                                        recipientEstablishmentKeyVersion =
-                                            identity.recipientEstablishmentKeyVersion,
-                                        membershipFactDigest = identity.membershipFactDigestHex,
-                                        publicationOutcome = "SEND_FAILED",
-                                    )
-                                }
-                            }
-                        }
-                    }
-                    is Profile01EstablishmentKeyLookupResult.UnknownModule -> {
-                        logGap(sessionId, peerModuleId, "UNKNOWN_ESTABLISHMENT_MODULE")
-                    }
-                    is Profile01EstablishmentKeyLookupResult.UnknownKeyVersion -> {
-                        logGap(sessionId, peerModuleId, "UNKNOWN_ESTABLISHMENT_KEY_VERSION")
-                    }
-                    is Profile01EstablishmentKeyLookupResult.KeyNotUsable -> {
-                        logGap(sessionId, peerModuleId, "ESTABLISHMENT_KEY_NOT_USABLE")
-                    }
+                when (
+                    val outcome =
+                        publishMediaKeyPackageToPeer(
+                            sessionId = sessionId,
+                            snapshot = snapshot,
+                            localModuleId = localModuleId,
+                            isMembershipAuthority = isMembershipAuthority,
+                            peerModuleId = peerModuleId,
+                            publishToPeer = publishToPeer,
+                            recordPublicationOnSuccess = recordPublicationOnSendSuccess,
+                        )
+                ) {
+                    is MediaKeyPackagePeerPublishOutcome.Sent -> publishedThisCall++
+                    else -> Unit
                 }
             }
         return when {
             publishedThisCall == 0 -> MediaKeyPackageOriginOutcome.SKIPPED_NO_PENDING_PUBLICATION
             priorPublishedCount > 0 -> MediaKeyPackageOriginOutcome.REPLAYED
             else -> MediaKeyPackageOriginOutcome.EMITTED
+        }
+    }
+
+    /**
+     * Late establishment binding wake-up: republish only for peers that newly materialized.
+     */
+    fun onEstablishmentModulesMaterialized(
+        sessionId: String,
+        snapshot: ConferenceTopologySnapshot,
+        localModuleId: String,
+        isMembershipAuthority: Boolean,
+        materializedPeerModuleIds: Set<String>,
+        publishToPeer: (moduleId: String, signedFactBytes: ByteArray) -> Boolean,
+    ): MediaKeyPackageOriginOutcome =
+        onEligiblePeers(
+            sessionId = sessionId,
+            snapshot = snapshot,
+            localModuleId = localModuleId,
+            isMembershipAuthority = isMembershipAuthority,
+            eligiblePeerModuleIds = materializedPeerModuleIds,
+            publishToPeer = publishToPeer,
+        )
+
+    fun peekMediaKeyPackagePeerPublish(
+        sessionId: String,
+        snapshot: ConferenceTopologySnapshot,
+        localModuleId: String,
+        isMembershipAuthority: Boolean,
+        peerModuleId: String,
+    ): MediaKeyPackagePeerPublishOutcome =
+        resolveMediaKeyPackagePeerPublishPlan(
+            sessionId = sessionId,
+            snapshot = snapshot,
+            localModuleId = localModuleId,
+            isMembershipAuthority = isMembershipAuthority,
+            peerModuleId = peerModuleId,
+            expectedIdentity = null,
+        )
+
+    fun publishMediaKeyPackageToPeer(
+        sessionId: String,
+        snapshot: ConferenceTopologySnapshot,
+        localModuleId: String,
+        isMembershipAuthority: Boolean,
+        peerModuleId: String,
+        publishToPeer: (moduleId: String, signedFactBytes: ByteArray) -> Boolean,
+        recordPublicationOnSuccess:
+            (sessionId: String, identity: MediaKeyPackagePublicationIdentity) -> Unit =
+            recordPublicationOnSendSuccess,
+        expectedIdentity: MediaKeyPackagePublicationIdentity? = null,
+    ): MediaKeyPackagePeerPublishOutcome {
+        val plan =
+            resolveMediaKeyPackagePeerPublishPlan(
+                sessionId = sessionId,
+                snapshot = snapshot,
+                localModuleId = localModuleId,
+                isMembershipAuthority = isMembershipAuthority,
+                peerModuleId = peerModuleId,
+                expectedIdentity = expectedIdentity,
+            )
+        if (plan !is MediaKeyPackagePeerPublishOutcome.ReadyToSend) {
+            return plan
+        }
+        val identity = plan.identity
+        return executeMediaKeyPackagePeerPublish(
+            sessionId = sessionId,
+            peerModuleId = peerModuleId,
+            identity = identity,
+            creationContext = resolveActivePackageContext(sessionId, snapshot.hostModuleId)!!,
+            conferenceIdHex = sessionIndex.ensureConferenceIdHex(sessionId),
+            publishToPeer = publishToPeer,
+            recordPublicationOnSuccess = recordPublicationOnSuccess,
+        )
+    }
+
+    private fun resolveMediaKeyPackagePeerPublishPlan(
+        sessionId: String,
+        snapshot: ConferenceTopologySnapshot,
+        localModuleId: String,
+        isMembershipAuthority: Boolean,
+        peerModuleId: String,
+        expectedIdentity: MediaKeyPackagePublicationIdentity?,
+    ): MediaKeyPackagePeerPublishOutcome {
+        if (!isMembershipAuthority) {
+            return MediaKeyPackagePeerPublishOutcome.Skipped("NOT_MEMBERSHIP_AUTHORITY")
+        }
+        if (localModuleId != snapshot.hostModuleId) {
+            return MediaKeyPackagePeerPublishOutcome.Skipped("NOT_HOST_OWNER")
+        }
+        if (peerModuleId == localModuleId) {
+            return MediaKeyPackagePeerPublishOutcome.Skipped("LOCAL_PEER")
+        }
+        val builder = packageBuilder
+            ?: return MediaKeyPackagePeerPublishOutcome.Skipped("NO_BUILDER")
+        val creationContext =
+            resolveActivePackageContext(sessionId, snapshot.hostModuleId)
+                ?: return MediaKeyPackagePeerPublishOutcome.Skipped("NO_CREATION")
+        val material =
+            mediaKeyAuthority.materialForSession(sessionId)
+                ?: return MediaKeyPackagePeerPublishOutcome.Skipped("NO_MATERIAL")
+        val creationDigestHex = creationContext.membershipFactDigestHex
+        val conferenceIdHex = sessionIndex.ensureConferenceIdHex(sessionId)
+
+        when (val lookup = establishmentLookup.activeEstablishmentKey(peerModuleId)) {
+            is Profile01EstablishmentKeyLookupResult.Found -> {
+                val identity =
+                    MediaKeyPackagePublicationIdentity(
+                        conferenceIdHex = conferenceIdHex,
+                        mediaKeyEpoch = creationContext.mediaKeyEpoch,
+                        recipientModuleId = peerModuleId,
+                        recipientEstablishmentKeyVersion = lookup.ref.establishmentKeyVersion,
+                        membershipFactDigestHex = creationDigestHex,
+                    )
+                if (expectedIdentity != null && expectedIdentity != identity) {
+                    return MediaKeyPackagePeerPublishOutcome.PendingIdentity(
+                        recipientModuleId = peerModuleId,
+                        reason = "ESTABLISHMENT_KEY_VERSION_DRIFT",
+                    )
+                }
+                if (publicationLedger.isPublished(sessionId, identity)) {
+                    return MediaKeyPackagePeerPublishOutcome.Skipped("ALREADY_PUBLISHED")
+                }
+                return MediaKeyPackagePeerPublishOutcome.ReadyToSend(identity)
+            }
+            is Profile01EstablishmentKeyLookupResult.UnknownModule -> {
+                logGap(sessionId, peerModuleId, "UNKNOWN_ESTABLISHMENT_MODULE")
+                return MediaKeyPackagePeerPublishOutcome.PendingIdentity(
+                    recipientModuleId = peerModuleId,
+                    reason = "UNKNOWN_ESTABLISHMENT_MODULE",
+                )
+            }
+            is Profile01EstablishmentKeyLookupResult.UnknownKeyVersion -> {
+                logGap(sessionId, peerModuleId, "UNKNOWN_ESTABLISHMENT_KEY_VERSION")
+                return MediaKeyPackagePeerPublishOutcome.PendingIdentity(
+                    recipientModuleId = peerModuleId,
+                    reason = "UNKNOWN_ESTABLISHMENT_KEY_VERSION",
+                )
+            }
+            is Profile01EstablishmentKeyLookupResult.KeyNotUsable -> {
+                logGap(sessionId, peerModuleId, "ESTABLISHMENT_KEY_NOT_USABLE")
+                return MediaKeyPackagePeerPublishOutcome.PendingIdentity(
+                    recipientModuleId = peerModuleId,
+                    reason = "ESTABLISHMENT_KEY_NOT_USABLE",
+                )
+            }
+        }
+    }
+
+    private fun executeMediaKeyPackagePeerPublish(
+        sessionId: String,
+        peerModuleId: String,
+        identity: MediaKeyPackagePublicationIdentity,
+        creationContext: CreationWireContext,
+        conferenceIdHex: String,
+        publishToPeer: (moduleId: String, signedFactBytes: ByteArray) -> Boolean,
+        recordPublicationOnSuccess:
+            (sessionId: String, identity: MediaKeyPackagePublicationIdentity) -> Unit,
+    ): MediaKeyPackagePeerPublishOutcome {
+        val builder = packageBuilder
+            ?: return MediaKeyPackagePeerPublishOutcome.Skipped("NO_BUILDER")
+        val material =
+            mediaKeyAuthority.materialForSession(sessionId)
+                ?: return MediaKeyPackagePeerPublishOutcome.Skipped("NO_MATERIAL")
+        val lookup =
+            when (val result = establishmentLookup.activeEstablishmentKey(peerModuleId)) {
+                is Profile01EstablishmentKeyLookupResult.Found -> result
+                else ->
+                    return MediaKeyPackagePeerPublishOutcome.PendingIdentity(
+                        recipientModuleId = peerModuleId,
+                        reason = "ESTABLISHMENT_DRIFT_AT_SEND",
+                    )
+            }
+        if (lookup.ref.establishmentKeyVersion != identity.recipientEstablishmentKeyVersion) {
+            return MediaKeyPackagePeerPublishOutcome.PendingIdentity(
+                recipientModuleId = peerModuleId,
+                reason = "ESTABLISHMENT_KEY_VERSION_DRIFT",
+            )
+        }
+        val creationDigestHex = creationContext.membershipFactDigestHex
+        val recipient =
+            Profile01PackageRecipientBinding(
+                recipientModuleId = lookup.ref.recipientModuleId,
+                establishmentKeyVersion = lookup.ref.establishmentKeyVersion,
+                establishmentPublicKeySpki = lookup.ref.establishmentPublicKeySpki.copyOf(),
+            )
+        val buildRequest =
+            Profile01MediaKeyPackageBuildRequest(
+                material =
+                    Profile01ConferenceKeyMaterial(
+                        conferenceId = conferenceIdHex.hexToId128Bytes(),
+                        conferenceEpoch = creationContext.conferenceEpoch,
+                        ownerModuleId = creationContext.ownerModuleId,
+                        membershipVersion = creationContext.membershipVersion,
+                        mediaKeyEpoch = creationContext.mediaKeyEpoch,
+                        conferenceMediaSecret = material.conferenceMediaSecret.copyOf(),
+                        membershipKeyContextDigest = material.membershipKeyContextDigest.copyOf(),
+                        mediaKeyCommitment = material.mediaKeyCommitment.copyOf(),
+                    ),
+                creationFactDigest = creationContext.creationFactDigest.copyOf(),
+                recipient = recipient,
+            )
+        return when (val built = builder.build(buildRequest)) {
+            is Profile01MediaKeyPackageBuildResult.Rejected -> {
+                logGap(sessionId, peerModuleId, "BUILD_${built.reason}")
+                MediaKeyPackagePeerPublishOutcome.BuildFailed(peerModuleId, built.reason)
+            }
+            is Profile01MediaKeyPackageBuildResult.Ready -> {
+                if (publishToPeer(peerModuleId, built.signedFactBytes)) {
+                    recordPublicationOnSuccess(sessionId, identity)
+                    onLog(
+                        "PROFILE01_ORIGIN_EMIT session=$sessionId " +
+                            "factType=${Profile01WireConstants.FACT_TYPE_MEDIA_KEY_PACKAGE} " +
+                            "target=$peerModuleId outcome=EMITTED " +
+                            "conferenceId=$conferenceIdHex establishmentKeyVersion=" +
+                            "${identity.recipientEstablishmentKeyVersion} " +
+                            "membershipFactDigest=$creationDigestHex",
+                    )
+                    logPackageOrigin(
+                        conferenceIdHex = conferenceIdHex,
+                        mediaKeyEpoch = identity.mediaKeyEpoch,
+                        recipientModuleId = identity.recipientModuleId,
+                        recipientEstablishmentKeyVersion =
+                            identity.recipientEstablishmentKeyVersion,
+                        membershipFactDigest = identity.membershipFactDigestHex,
+                        publicationOutcome = "EMITTED",
+                    )
+                    MediaKeyPackagePeerPublishOutcome.Sent(identity)
+                } else {
+                    onLog(
+                        "PROFILE01_ORIGIN_EMIT session=$sessionId " +
+                            "factType=${Profile01WireConstants.FACT_TYPE_MEDIA_KEY_PACKAGE} " +
+                            "target=$peerModuleId outcome=SEND_FAILED " +
+                            "obligation=OPEN",
+                    )
+                    logPackageOrigin(
+                        conferenceIdHex = conferenceIdHex,
+                        mediaKeyEpoch = identity.mediaKeyEpoch,
+                        recipientModuleId = identity.recipientModuleId,
+                        recipientEstablishmentKeyVersion =
+                            identity.recipientEstablishmentKeyVersion,
+                        membershipFactDigest = identity.membershipFactDigestHex,
+                        publicationOutcome = "SEND_FAILED",
+                    )
+                    MediaKeyPackagePeerPublishOutcome.SendFailed(identity)
+                }
+            }
         }
     }
 

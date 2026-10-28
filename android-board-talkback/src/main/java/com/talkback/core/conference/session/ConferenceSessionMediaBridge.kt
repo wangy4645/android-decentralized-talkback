@@ -24,6 +24,12 @@ object ConferenceSessionMediaBridge {
         binding: MemberBindingFact,
     ): Boolean = wiring?.installMember(sessionId, binding) == true
 
+    fun expectPresentMembers(
+        sessionId: String,
+        moduleIds: Collection<String>,
+        pendingReason: String,
+    ): Boolean = wiring?.expectPresentMembers(sessionId, moduleIds, pendingReason) == true
+
     fun removeMember(
         sessionId: String,
         moduleId: String,

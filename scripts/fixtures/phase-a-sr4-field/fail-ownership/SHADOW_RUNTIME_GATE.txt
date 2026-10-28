@@ -1,0 +1,4 @@
+﻿driverLeavePhase=SKIPPED
+driverRejoinPhase=SKIPPED
+driverEndPhase=SKIPPED
+driverObservationPhase=COMPLETE

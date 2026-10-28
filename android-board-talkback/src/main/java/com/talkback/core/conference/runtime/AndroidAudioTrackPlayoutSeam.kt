@@ -5,6 +5,7 @@ import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioTrack
 import android.os.Build
+import android.os.SystemClock
 import com.talkback.core.conference.session.D1EmptyTickPlayoutFill
 import com.talkback.core.conference.session.integration.Profile01ShadowRuntimeObservability
 import com.talkback.core.conference.session.integration.cutover.ReplacementCutoverObservability
@@ -36,6 +37,9 @@ class AndroidAudioTrackPlayoutSeam(
         private set
 
     private var lastReportedUnderrunCount: Int = 0
+    private var lastWriteNs: Long = 0L
+    private var audioSessionId: Int = 0
+    private var bufferFrames: Int = 0
     private val emptyTickFillState = D1EmptyTickPlayoutFill.State()
     private val digitalSilenceFrame = ShortArray(D1EmptyTickPlayoutFill.silenceFrameSamples)
 
@@ -68,8 +72,22 @@ class AndroidAudioTrackPlayoutSeam(
                 .setBufferSizeInBytes(minBufferBytes)
                 .build()
         track?.play()
+        audioSessionId = track?.audioSessionId ?: 0
+        bufferFrames =
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                track?.bufferSizeInFrames ?: 0
+            } else {
+                0
+            }
+        lastWriteNs = 0L
+        ProductionPlayoutWriteTelemetry.bindTrackIdentity(audioSessionId, bufferFrames)
+        ProductionPlayoutWriteTelemetry.logTrackIdentity()
         refreshUnderrunCount()
-        Profile01ShadowRuntimeObservability.logProductionAudioTrackFence("PRODUCTION_ACTIVE")
+        Profile01ShadowRuntimeObservability.logProductionAudioTrackFence(
+            owner = "PRODUCTION_ACTIVE",
+            audioSessionId = audioSessionId,
+            bufferFrames = bufferFrames,
+        )
         ReplacementCutoverObservability.logMulticastAudibleProbe(
             sessionId = "-",
             active = true,
@@ -87,6 +105,8 @@ class AndroidAudioTrackPlayoutSeam(
             current.release()
         }
         track = null
+        lastWriteNs = 0L
+        ProductionPlayoutWriteTelemetry.flush()
         D1EmptyTickPlayoutFill.reset(emptyTickFillState)
         ReplacementCutoverObservability.logMulticastAudibleProbe(
             sessionId = "-",
@@ -110,24 +130,39 @@ class AndroidAudioTrackPlayoutSeam(
                 D1EmptyTickPlayoutFill.PlayoutWriteAction.WRITE_DIGITAL_SILENCE -> digitalSilenceFrame
                 D1EmptyTickPlayoutFill.PlayoutWriteAction.SKIP -> return false
             }
+        val requestedSamples = pcm.size
         val startNs = System.nanoTime()
         val written =
             current.write(
                 pcm,
                 0,
-                pcm.size,
+                requestedSamples,
                 AudioTrack.WRITE_BLOCKING,
             )
         lastWriteDurationUs = (System.nanoTime() - startNs) / 1_000L
+        val intervalValid = lastWriteNs != 0L
+        val mixCycleIntervalMs =
+            if (intervalValid) (startNs - lastWriteNs) / 1_000_000L else 0L
+        lastWriteNs = startNs
         refreshUnderrunCount()
-        return if (written > 0) {
+        val ok = written > 0
+        if (ok) {
             D1EmptyTickPlayoutFill.onSuccessfulWrite(action, emptyTickFillState)
             successfulWrites += 1
-            true
         } else {
             failedWrites += 1
-            false
         }
+        ProductionPlayoutWriteTelemetry.record(
+            elapsedMs = SystemClock.elapsedRealtime(),
+            requestedSamples = requestedSamples,
+            writtenSamples = written,
+            writeDurationUs = lastWriteDurationUs,
+            mixCycleIntervalMs = mixCycleIntervalMs,
+            failedWrites = failedWrites,
+            appUnderrunCount = underrunCount,
+            intervalValid = intervalValid,
+        )
+        return ok
     }
 
     private fun refreshUnderrunCount() {

@@ -108,6 +108,12 @@ class Profile01PeerMembershipWiringReplay(
             localModuleId = localModuleId(),
         )
         memberBindingMaterializer?.materializeLocalIfReady(sessionId)
+        logCatalogExpectation(
+            sessionId = sessionId,
+            conferenceId = conferenceId,
+            mediaKeyEpoch = sessionControl.mediaKeyEpoch,
+            replayOutcome = "APPLIED",
+        )
 
         Profile01ShadowRuntimeObservability.logHostSessionProjected(
             sessionId = sessionId,
@@ -146,6 +152,12 @@ class Profile01PeerMembershipWiringReplay(
             localModuleId = localModuleId(),
         )
         memberBindingMaterializer?.materializeLocalIfReady(sessionId)
+        logCatalogExpectation(
+            sessionId = sessionId,
+            conferenceId = conferenceId,
+            mediaKeyEpoch = sessionControl.mediaKeyEpoch,
+            replayOutcome = "POST_EPOCH_REPLAY",
+        )
         MulticastAudibleAutomaticCutover.maybeAttempt(sessionId, localModuleId())
     }
 
@@ -168,11 +180,46 @@ class Profile01PeerMembershipWiringReplay(
      * Only modules with a registry member fact coherent at session head (matching mediaKeyEpoch).
      * Roster-only ids without a current-epoch SOURCE are not driven — they wait on wire/materializer.
      */
+    private fun logCatalogExpectation(
+        sessionId: String,
+        conferenceId: String,
+        mediaKeyEpoch: Long,
+        replayOutcome: String,
+    ) {
+        val expected = ConferenceSessionMediaBridge.wiring?.expectedCatalog(sessionId)
+        val snap = ConferenceSessionMediaBridge.wiring?.runtimeSnapshot(sessionId)
+        Profile01ShadowRuntimeObservability.logPhase(
+            phase = "CATALOG_L1B",
+            sessionId = sessionId,
+            conferenceId = conferenceId,
+            mediaKeyEpoch = mediaKeyEpoch,
+            fields =
+                mapOf(
+                    "replayOutcome" to replayOutcome,
+                    "catalogEntries" to (snap?.catalogEntries ?: 0).toString(),
+                    "expectedMembers" to (snap?.expectedMembers ?: expected?.size() ?: 0).toString(),
+                    "pendingSourceMembers" to
+                        (snap?.pendingSourceMembers ?: expected?.pendingCount() ?: 0).toString(),
+                    "pendingModuleIds" to
+                        (expected?.pendingModuleIds()?.joinToString(",") ?: "none").ifEmpty { "none" },
+                ),
+        )
+    }
+
     private fun replayAuthoritativeMemberBindingsAtHead(
         sessionId: String,
         conferenceId: String,
         localModuleId: String,
     ) {
+        val present = linkedSetOf<String>()
+        registry.memberModuleIdsPresent(conferenceId).forEach { present.add(it) }
+        present.add(localModuleId)
+        ConferenceSessionMediaBridge.expectPresentMembers(
+            sessionId,
+            present,
+            pendingReason = "MEMBERSHIP_PRESENT",
+        )
+
         val moduleIds = linkedSetOf<String>()
         registry.memberModuleIdsAtHead(conferenceId).forEach { moduleIds.add(it) }
         moduleIds.add(localModuleId)

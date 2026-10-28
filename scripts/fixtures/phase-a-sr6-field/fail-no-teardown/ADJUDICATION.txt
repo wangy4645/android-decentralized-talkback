@@ -1,0 +1,16 @@
+﻿PA-SR6 FIELD ADJUDICATION (M01 Host Meeting End Teardown)
+log_dir=D:\workspace\project\talkback\talkback\scripts\fixtures\phase-a-sr6-field\fail-no-teardown
+run_card=meeting-product-integration-phase-a-sr6-field-run-card.md
+stimulus=M01_host_Meeting_end_product_path
+adjudication_plane=M02_peer_primary_M01_corroboration
+
+hostSessionId=a1b2c3d4-e5f6-7890-abcd-ef1234567890
+WINDOW_A tx_packetsSent_max=100 ingress_packetsReceived_max=500 playout_writes_max=10 peerWiring_lines=1 conferenceId=CONF-01
+WINDOW_B sessionStopped_M01=1 sessionStopped_M02=1 sessionStoppedFailed_M01=0 sessionStoppedFailed_M02=0 playoutDisarmed=2 teardownEmpty_ok=0 teardownEmpty_M01=0 teardownEmpty_M02=0 memberRevoked=0
+
+VERDICT=FAIL_PA_SR6
+PA-SR6=FAIL
+reason=window_B_peer_teardown_empty_missing
+ADR-0056=KEEP
+Meeting_media_cutover=NOT_AUTHORIZED
+Next=FIX_SR6_REGRESSION_RERUN

@@ -1,0 +1,3 @@
+stamp=20261009-163649
+apk_sha=0CB41D959D3FE1917632A5C99F4B60F778611851674CB2A1A2E73EC73821B43E
+purpose=four devices complete silence after cutover-hook rebuild

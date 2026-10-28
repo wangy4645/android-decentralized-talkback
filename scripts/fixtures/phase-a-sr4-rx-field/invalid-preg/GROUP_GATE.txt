@@ -1,0 +1,4 @@
+status=FAIL
+verdict=INVALID_GROUP_PRECONDITION
+PRE_G4_createAllowed=false
+reason=group_still_active

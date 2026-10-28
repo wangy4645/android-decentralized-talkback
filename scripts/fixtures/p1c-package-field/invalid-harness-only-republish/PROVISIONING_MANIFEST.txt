@@ -1,0 +1,2 @@
+M02.establishmentKeyVersion=1
+M02.publicKeyFingerprint=6d50d17b87d67bafea27bc2d7ba86efe74ff0e8dde452828760a63a9be2314eb

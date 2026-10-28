@@ -86,4 +86,7 @@ data class SessionMediaRuntimeSnapshot(
     val activeJitterSources: Int,
     val liveDecoders: Int,
     val jitterBufferCount: Int,
+    /** L1b: present-member slots. Not installMember count. */
+    val expectedMembers: Int = 0,
+    val pendingSourceMembers: Int = 0,
 )

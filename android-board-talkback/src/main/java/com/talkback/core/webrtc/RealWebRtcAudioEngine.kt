@@ -201,6 +201,9 @@ class RealWebRtcAudioEngine(
             "op=ROLE role=OFFERER reason=createOffer iceRestart=$iceRestart " +
                 before.formatFields()
         )
+        if (iceRestart && isGroupMeshEdge() && !prepareIceRestartNegotiation(before)) {
+            return ""
+        }
         val constraints = MediaConstraints().apply {
             mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "true"))
             mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "false"))
@@ -309,6 +312,58 @@ class RealWebRtcAudioEngine(
         op = SignalingOp.ROLLBACK,
         onRejected = { },
     ) { rollbackNegotiationInTransaction() }
+
+    private fun isGroupMeshEdge(): Boolean =
+        playbackDiagnosticTag?.startsWith("grp:") == true
+
+    /**
+     * ICE-restart offers must not be built on leftover remote SDP. Rollback only when native
+     * signaling state allows it; otherwise abort instead of clearing app-layer flags alone.
+     */
+    private fun prepareIceRestartNegotiation(before: NegotiationPcSnapshot): Boolean {
+        val action = IceRestartPrepareDecision.evaluate(
+            before.signalingState,
+            before.remoteDescriptionType,
+        )
+        TalkbackLog.i(
+            "ICE_RESTART_PREPARE action=$action " +
+                "signalingState=${before.signalingState} " +
+                "remoteDesc=${before.remoteDescriptionType ?: "NONE"} " +
+                "edgeKey=${diagnosticEdgeKey()}"
+        )
+        when (action) {
+            IceRestartPrepareDecision.Action.ABORT_ROLLBACK_ILLEGAL -> {
+                TalkbackLog.w(
+                    "ICE_RESTART_PREPARE_ABORT reason=ROLLBACK_ILLEGAL_STABLE_REMOTE " +
+                        "signalingState=${before.signalingState} " +
+                        "remoteDesc=${before.remoteDescriptionType ?: "NONE"} " +
+                        "edgeKey=${diagnosticEdgeKey()}"
+                )
+                return false
+            }
+            IceRestartPrepareDecision.Action.ROLLBACK_THEN_RESET -> {
+                rollbackNegotiationInTransaction()
+            }
+            IceRestartPrepareDecision.Action.RESET_FACTS_ONLY -> Unit
+        }
+        val after = negotiationSnapshot()
+        if (after.remoteDescriptionType != null) {
+            TalkbackLog.w(
+                "ICE_RESTART_PREPARE_ABORT reason=REMOTE_DESC_REMAINING " +
+                    "signalingState=${after.signalingState} " +
+                    "remoteDesc=${after.remoteDescriptionType} " +
+                    "edgeKey=${diagnosticEdgeKey()}"
+            )
+            return false
+        }
+        clearRemoteDescriptionFacts()
+        return true
+    }
+
+    private fun clearRemoteDescriptionFacts() {
+        remoteDescriptionApplied = false
+        lastAppliedRemoteIceUfrag = null
+    }
 
     private fun rollbackNegotiationInTransaction() {
         warnJni("rollbackNegotiation")

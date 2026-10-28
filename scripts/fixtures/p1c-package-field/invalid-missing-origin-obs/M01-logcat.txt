@@ -1,0 +1,1 @@
+﻿09-08 17:00:01.100  1000  1001 I Talkback: PROFILE01_ORIGIN_EMIT session=s1 factType=11 target=M02 outcome=EMITTED

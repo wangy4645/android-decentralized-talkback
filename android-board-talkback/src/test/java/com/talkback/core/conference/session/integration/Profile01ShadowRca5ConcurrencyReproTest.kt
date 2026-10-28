@@ -67,9 +67,9 @@ class Profile01ShadowRca5ConcurrencyReproTest {
                         throw t
                     }
                 },
-                runMixPlayoutCycle = { w, sid, nowMs, slot, slotMediaTimeMs ->
+                runMixPlayoutCycle = { w, sid, nowMs, slot, slotMediaTimeMs, perSourceSlots ->
                     try {
-                        w.runMixPlayoutCycle(sid, nowMs, slot, slotMediaTimeMs)
+                        w.prepareMixPlayoutCycle(sid, nowMs, slot, slotMediaTimeMs, perSourceSlots)
                     } catch (t: Throwable) {
                         recordCme(cmeStacks, t)
                         throw t

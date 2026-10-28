@@ -1,0 +1,12 @@
+﻿sessionId=c6cb896d-588b-49bb-bc4e-a4a06366d15a
+conferenceId=c6b73689f63d5f33e17925e2ef0d0c83
+hostModuleId=M01
+peerModuleId=M02
+txPrerequisitePacketsSentMax=2000
+ingressPacketsMax=50
+ingressAcceptedMax=25
+activeJitterSourcesMax=1
+liveDecodersMax=1
+playoutWritesMax=1
+audioTrackIsolationOk=True
+playoutEvidence=09-10 09:24:59.100 I MEETING_MEDIA_SHADOW: PROFILE01_SHADOW_RUNTIME phase=PLAYOUT_ACTIVITY sessionId=c6cb896d-588b-49bb-bc4e-a4a06366d15a successfulPlayoutWrites=1 audioTrackOwner=SHADOW_METRICS_ONLY

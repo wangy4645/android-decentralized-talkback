@@ -95,23 +95,60 @@ class MulticastAudibleAutomaticCutoverTest {
         assertEquals(AudibleOwnershipState.MULTICAST_ACTIVE, ReplacementCutoverRc1.currentState())
         assertFalse(anchor.isAnchorAudibleActive(SESSION))
         assertTrue(wiring.audiblePlayoutSeam(SESSION)?.isProductionAudioTrackActive() == true)
+        assertEquals(1, anchor.releaseCount)
     }
 
-    private fun armLocalSoloHostPath() {
+    @Test
+    fun mediaKeyEpochRotated_resetsOwnershipAndAllowsCutoverRetry() {
+        armCutoverEligiblePath()
+        MulticastAudibleAutomaticCutover.maybeAttempt(SESSION, LOCAL)
+        assertEquals(AudibleOwnershipState.MULTICAST_ACTIVE, ReplacementCutoverRc1.currentState())
+
+        val rotated =
+            SessionMediaWiringHarness.sessionFact(SESSION).copy(
+                mediaKeyEpoch = 2L,
+                generation = 2L,
+            )
+        assertTrue(wiring.rotateMediaKeyEpoch(SESSION, rotated))
+
+        assertEquals(AudibleOwnershipState.ANCHOR_ACTIVE, ReplacementCutoverRc1.currentState())
+        assertFalse(wiring.audiblePlayoutSeam(SESSION)?.isProductionAudioTrackActive() == true)
+
+        armCutoverEligiblePath(mediaKeyEpoch = 2L)
+        MulticastAudibleAutomaticCutover.maybeAttempt(SESSION, LOCAL)
+        assertEquals(AudibleOwnershipState.MULTICAST_ACTIVE, ReplacementCutoverRc1.currentState())
+    }
+
+    private fun armLocalSoloHostPath(mediaKeyEpoch: Long = 1L) {
         playoutSeam.onShadowSessionStarted(SESSION)
         receiveSeam.onShadowSessionStarted(SESSION)
-        assertTrue(wiring.installMember(SESSION, SessionMediaWiringHarness.memberBinding(LOCAL)))
+        assertTrue(
+            wiring.installMember(
+                SESSION,
+                SessionMediaWiringHarness.memberBinding(LOCAL, mediaKeyEpoch = mediaKeyEpoch),
+            ),
+        )
     }
 
-    private fun armCutoverEligiblePath() {
-        armLocalSoloHostPath()
-        assertTrue(wiring.installMember(SESSION, SessionMediaWiringHarness.memberBinding(REMOTE)))
+    private fun armCutoverEligiblePath(mediaKeyEpoch: Long = 1L) {
+        armLocalSoloHostPath(mediaKeyEpoch)
+        assertTrue(
+            wiring.installMember(
+                SESSION,
+                SessionMediaWiringHarness.memberBinding(REMOTE, mediaKeyEpoch = mediaKeyEpoch),
+            ),
+        )
     }
 
-    private class FakeAnchorAudiblePort(
+    private inner class FakeAnchorAudiblePort(
         private var anchorActive: Boolean,
     ) : AnchorAudiblePort {
+        var releaseCount: Int = 0
+            private set
+
         override fun releaseAnchorOwnership(sessionId: String): Boolean {
+            assertTrue(wiring.audiblePlayoutSeam(SESSION)?.isProductionAudioTrackActive() == true)
+            releaseCount++
             anchorActive = false
             return true
         }

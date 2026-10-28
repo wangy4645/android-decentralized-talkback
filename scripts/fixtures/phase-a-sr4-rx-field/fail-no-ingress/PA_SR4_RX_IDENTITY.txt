@@ -1,0 +1,11 @@
+﻿sessionId=b23edb10-5855-4252-9495-4cefd9f196df
+conferenceId=c6b73689f63d5f33e17925e2ef0d0c83
+hostModuleId=M01
+peerModuleId=M02
+txPrerequisitePacketsSentMax=33
+peerWiringSessionLive=True
+rxDatagramsMax=0
+rxAdmissionAdmitted=0
+rxAdmissionRejected=0
+ingressPacketsMax=0
+ingressEvidence=NONE

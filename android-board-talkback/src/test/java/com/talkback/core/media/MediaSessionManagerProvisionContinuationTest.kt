@@ -2,9 +2,11 @@ package com.talkback.core.media
 
 import com.talkback.core.webrtc.MediaBearerScope
 import com.talkback.core.webrtc.ModuleMediaEngineFactory
+import com.talkback.core.webrtc.WebRtcAudioEngine
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -16,6 +18,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [28])
@@ -114,5 +117,99 @@ class MediaSessionManagerProvisionContinuationTest {
 
         assertTrue(failed.await(2, TimeUnit.SECONDS))
         assertFalse(provisioned.get())
+    }
+
+    @Test
+    fun requestEngine_groupDuplicatePendingDrain_keepsOneGenerationAndSamePc() {
+        val manager = newManager()
+        val releaseHold = CountDownLatch(1)
+        manager.installAsyncMeshMediaRelease(
+            MeshMediaAsyncRelease { _, _, origin, releaseAction, onReleased ->
+                if (origin == "mediaSessionProvision") {
+                    Thread {
+                        releaseHold.await(5, TimeUnit.SECONDS)
+                        releaseAction()
+                        coordinator.execute { onReleased(true) }
+                    }.apply { isDaemon = true }.start()
+                } else {
+                    coordinator.execute {
+                        releaseAction()
+                        onReleased(true)
+                    }
+                }
+            }
+        )
+
+        val engines = mutableListOf<WebRtcAudioEngine>()
+        val generations = mutableListOf<Long>()
+        val ready = CountDownLatch(2)
+        coordinator.execute {
+            val onReady: (WebRtcAudioEngine) -> Unit = { engine ->
+                engines.add(engine)
+                generations.add(manager.getState("M04")!!.generation)
+                ready.countDown()
+            }
+            manager.requestEngine(
+                "M04",
+                MediaBearerScope.GROUP,
+                sessionId = "grp:CH-01",
+                onReady = onReady,
+            )
+            manager.requestEngine(
+                "M04",
+                MediaBearerScope.GROUP,
+                sessionId = "grp:CH-01",
+                onReady = onReady,
+            )
+        }
+
+        assertFalse(ready.await(200, TimeUnit.MILLISECONDS))
+        releaseHold.countDown()
+        assertTrue(ready.await(2, TimeUnit.SECONDS))
+        assertEquals(2, engines.size)
+        assertSame(engines[0], engines[1])
+        assertEquals(listOf(1L, 1L), generations)
+        assertEquals(0, manager.mediaSessionReuseCount())
+        assertEquals(1L, manager.getState("M04")!!.generation)
+    }
+
+    @Test
+    fun requestEngine_groupLiveChecking_doesNotEnterReuseRelease() {
+        val manager = newManager()
+        val reuseReleaseAttempted = AtomicBoolean(false)
+        manager.installAsyncMeshMediaRelease(
+            MeshMediaAsyncRelease { _, _, origin, releaseAction, onReleased ->
+                if (origin == "mediaSessionReuse") {
+                    reuseReleaseAttempted.set(true)
+                }
+                coordinator.execute {
+                    releaseAction()
+                    onReleased(true)
+                }
+            }
+        )
+
+        val firstReady = CountDownLatch(1)
+        val secondReady = CountDownLatch(1)
+        val firstGen = AtomicLong()
+        val secondGen = AtomicLong(-1L)
+        coordinator.execute {
+            manager.requestEngine("M04", MediaBearerScope.GROUP, sessionId = "grp:CH-01", onReady = {
+                firstReady.countDown()
+            })
+        }
+        assertTrue(firstReady.await(2, TimeUnit.SECONDS))
+        coordinator.execute {
+            manager.onIceStateChanged("M04", "CHECKING")
+            firstGen.set(manager.getState("M04")!!.generation)
+            manager.requestEngine("M04", MediaBearerScope.GROUP, sessionId = "grp:CH-01", onReady = {
+                secondGen.set(manager.getState("M04")!!.generation)
+                secondReady.countDown()
+            })
+        }
+        assertTrue(secondReady.await(2, TimeUnit.SECONDS))
+        assertFalse(reuseReleaseAttempted.get())
+        assertEquals(firstGen.get(), secondGen.get())
+        assertEquals(0, manager.mediaSessionReuseCount())
     }
 }

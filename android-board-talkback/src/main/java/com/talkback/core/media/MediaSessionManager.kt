@@ -10,9 +10,11 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 /**
- * RO-M2a: session-bound mesh media lifecycle. One PeerConnection generation per scope transition.
- * GROUP → MEETING must not reuse a live GROUP PeerConnection (ADR-0017 / KPI MEDIA_SESSION_REUSE=0).
- * CONFERENCE → CONFERENCE reuses a live PC for CONNECTED/CHECKING/DISCONNECTED/FAILED (ADR-0018).
+ * RO-M2a: session-bound mesh media lifecycle. Generation names one PC identity, not a
+ * monotonic counter of requestEngine calls.
+ * GROUP → GROUP and CONFERENCE → CONFERENCE reuse a live PC without a generation bump.
+ * GROUP → CONFERENCE must not reuse a live GROUP PeerConnection (ADR-0017 / KPI MEDIA_SESSION_REUSE=0).
+ * CONFERENCE → CONFERENCE also covers CONNECTED/CHECKING/DISCONNECTED/FAILED (ADR-0018).
  */
 class MediaSessionManager(
     private val factory: ModuleMediaEngineFactory,
@@ -104,7 +106,7 @@ class MediaSessionManager(
         intent: EngineRequestIntent = EngineRequestIntent.DEFAULT,
     ) {
         val existing = entries[moduleId]
-        if (existing != null && shouldReuseConferenceSession(existing, scope)) {
+        if (existing != null && shouldReuseLivePeerConnection(existing, scope)) {
             onReady(existing.engine)
             return
         }
@@ -531,14 +533,7 @@ class MediaSessionManager(
             }
         }
         val provision = {
-            toProvision.forEach { request ->
-                MediaObservabilityLog.mediaProvisionRequested(
-                    moduleId,
-                    request.scope,
-                    request.origin
-                )
-                deliverProvisionedEngine(moduleId, request.scope, request.origin, request.onReady)
-            }
+            deliverCoalescedProvisions(moduleId, toProvision)
         }
         val deferral = coordinatorDeferral
         if (deferral != null) {
@@ -681,6 +676,41 @@ class MediaSessionManager(
         MediaObservabilityLog.mediaReleaseDeferredCreate(moduleId, scope, intent, sessionId)
     }
 
+    /**
+     * Multiple GROUP waiters after one release must share one provision.
+     * Double [deliverProvisionedEngine] on the same factory engine used to bump generation
+     * (factoryHit=REUSE) while GPLB stayed on the previous lineage.
+     */
+    private fun deliverCoalescedProvisions(
+        moduleId: String,
+        pending: List<PendingEngineRequest>,
+    ) {
+        var groupEngine: WebRtcAudioEngine? = null
+        pending.forEach { request ->
+            if (request.scope == MediaBearerScope.GROUP && groupEngine != null) {
+                val live = getState(moduleId)
+                MediaObservabilityLog.mediaProvisionCoalesced(
+                    moduleId = moduleId,
+                    scope = request.scope,
+                    origin = request.origin,
+                    generation = live?.generation ?: -1L,
+                    pcHash = groupEngine?.diagnosticPeerConnectionHash(),
+                )
+                request.onReady(groupEngine!!)
+                return@forEach
+            }
+            MediaObservabilityLog.mediaProvisionRequested(
+                moduleId,
+                request.scope,
+                request.origin
+            )
+            deliverProvisionedEngine(moduleId, request.scope, request.origin, request.onReady)
+            if (request.scope == MediaBearerScope.GROUP) {
+                groupEngine = getEngine(moduleId)
+            }
+        }
+    }
+
     private fun deliverProvisionedEngine(
         moduleId: String,
         scope: MediaBearerScope,
@@ -706,9 +736,27 @@ class MediaSessionManager(
     )
 
     private fun provisionNew(moduleId: String, scope: MediaBearerScope): ProvisionedEngine {
-        val generation = (generationByModule[moduleId] ?: 0L) + 1L
-        generationByModule[moduleId] = generation
         val created = factory.getOrCreateDetailed(moduleId)
+        val existing = entries[moduleId]
+        if (created.factoryHit == FactoryHit.REUSE &&
+            existing != null &&
+            existing.engine === created.engine
+        ) {
+            if (existing.scope != scope) {
+                val updated = existing.copy(scope = scope)
+                entries[moduleId] = updated
+                logLifecycle(updated)
+                return ProvisionedEngine(updated.engine, updated.generation, created.factoryHit)
+            }
+            return ProvisionedEngine(existing.engine, existing.generation, created.factoryHit)
+        }
+        val generation =
+            if (created.factoryHit == FactoryHit.REUSE) {
+                generationByModule[moduleId] ?: 1L
+            } else {
+                (generationByModule[moduleId] ?: 0L) + 1L
+            }
+        generationByModule[moduleId] = generation
         val engine = created.engine
         val entry = Entry(
             moduleId = moduleId,
@@ -762,9 +810,15 @@ class MediaSessionManager(
         else -> current
     }
 
-    private fun shouldReuseConferenceSession(existing: Entry, requestedScope: MediaBearerScope): Boolean =
-        requestedScope == MediaBearerScope.CONFERENCE &&
-            existing.scope == MediaBearerScope.CONFERENCE &&
+    private fun shouldReuseLivePeerConnection(
+        existing: Entry,
+        requestedScope: MediaBearerScope,
+    ): Boolean =
+        requestedScope == existing.scope &&
+            (
+                requestedScope == MediaBearerScope.CONFERENCE ||
+                    requestedScope == MediaBearerScope.GROUP
+                ) &&
             !IceConnectivity.isClosed(existing.iceState)
 
     private fun logLifecycle(entry: Entry) {

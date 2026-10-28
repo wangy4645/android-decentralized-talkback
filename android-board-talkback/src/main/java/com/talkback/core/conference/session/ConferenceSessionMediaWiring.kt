@@ -8,6 +8,7 @@ import com.talkback.core.conference.runtime.ConferenceMediaExecutionOrchestrator
 import com.talkback.core.conference.runtime.FrameAdmitDisposition
 import com.talkback.core.conference.runtime.MediaGroupEndpointBinding
 import com.talkback.core.conference.runtime.MediaJitterConstants
+import com.talkback.core.conference.runtime.MixedBlock
 import com.talkback.core.conference.transport.MulticastLockPolicy
 import com.talkback.core.conference.runtime.TransportHandle
 import com.talkback.core.conference.transport.ConferenceMulticastNetworkBinding
@@ -44,6 +45,7 @@ class ConferenceSessionMediaWiring(
         var fact: ConferenceSessionMediaFact,
         val assembly: ConferenceMulticastRealMediaAssembly,
         val catalog: SourceBindingCatalog,
+        val expected: ExpectedMemberCatalog,
         val mediaTimeline: RelativeMediaTimeline,
         val ingressTimeline: PerIncarnationIngressTimelineRegistry,
         var ingressBlocked: Boolean,
@@ -258,12 +260,39 @@ class ConferenceSessionMediaWiring(
         }
     }
 
+    fun writeMixedBlock(
+        sessionId: String,
+        block: MixedBlock,
+        nowMs: Long,
+    ): Boolean {
+        val state = sessions[sessionId] ?: return false
+        if (state.ingressBlocked) return false
+        return state.assembly.orchestrator.playout(block, nowMs)
+    }
+
+    fun prepareMixPlayoutCycle(
+        sessionId: String,
+        nowMs: Long,
+        slot: Long,
+        slotMediaTimeMs: Long,
+        perSourceSlots: Map<String, Long> = emptyMap(),
+    ): PipelinePlayoutResult? =
+        runMixPlayoutCycle(
+            sessionId = sessionId,
+            nowMs = nowMs,
+            slot = slot,
+            slotMediaTimeMs = slotMediaTimeMs,
+            perSourceSlots = perSourceSlots,
+            writePlayout = false,
+        )
+
     fun runMixPlayoutCycle(
         sessionId: String,
         nowMs: Long,
         slot: Long,
         slotMediaTimeMs: Long,
         perSourceSlots: Map<String, Long> = emptyMap(),
+        writePlayout: Boolean = true,
     ): PipelinePlayoutResult? {
         val state = sessions[sessionId] ?: return null
         if (state.ingressBlocked) return null
@@ -273,6 +302,7 @@ class ConferenceSessionMediaWiring(
             slotMediaTimeMs = slotMediaTimeMs,
             perSourceSlots = perSourceSlots,
             mixSessionKey = sessionId,
+            writePlayout = writePlayout,
         ).also { result ->
             val mixProducedPcm =
                 result.mixCycle.mixParticipantIdentities.isNotEmpty() &&
@@ -377,6 +407,7 @@ class ConferenceSessionMediaWiring(
                 fact = fact,
                 assembly = assembly,
                 catalog = SourceBindingCatalog(),
+                expected = ExpectedMemberCatalog(),
                 mediaTimeline = RelativeMediaTimeline(),
                 ingressTimeline = PerIncarnationIngressTimelineRegistry(),
                 ingressBlocked = false,
@@ -432,6 +463,7 @@ class ConferenceSessionMediaWiring(
                 )
             }
             state.catalog.clear()
+            state.expected.markAllPending("EPOCH_ROTATED")
             state.ingressTimeline.clearAll()
             authority.retireMediaKeyEpoch(oldEpoch)
             pipeline.drainAllForSessionWiring()
@@ -461,7 +493,7 @@ class ConferenceSessionMediaWiring(
                         mapOf(
                             "previousMediaKeyEpoch" to oldEpoch.toString(),
                             "generation" to newFact.generation.toString(),
-                        ),
+                        ) + state.expected.snapshotFields(),
                 )
             }
             MulticastAudibleAutomaticCutover.onMediaKeyEpochRotated(sessionId)
@@ -526,6 +558,7 @@ class ConferenceSessionMediaWiring(
         authority.store.acceptVerifiedSource(source)
         authority.syncAdmittedToRuntime(binding.sourceIdentity)
         state.catalog.install(binding)
+        state.expected.markBound(binding.moduleId)
         ensurePlayoutStarted(state)
         runtimeSnapshot(sessionId)?.let { snap ->
             Profile01ShadowRuntimeObservability.logRuntimeSnapshot(
@@ -566,6 +599,7 @@ class ConferenceSessionMediaWiring(
             }
         revokeAndDrain(state, moduleId, incarnationId)
         state.catalog.remove(moduleId)
+        state.expected.drop(moduleId)
         runtimeSnapshot(sessionId)?.let { snap ->
             Profile01ShadowRuntimeObservability.logRuntimeSnapshot(
                 phase = "WIRING_MEMBER_REVOKED",
@@ -643,6 +677,7 @@ class ConferenceSessionMediaWiring(
                 )
             }
             state.catalog.clear()
+            state.expected.clear()
             state.assembly.stopPlayout()
             authority.retireMediaKeyEpoch(state.fact.mediaKeyEpoch)
             pipeline.drainAllForSessionWiring()
@@ -973,6 +1008,22 @@ class ConferenceSessionMediaWiring(
 
     fun catalog(sessionId: String): SourceBindingCatalog? = sessions[sessionId]?.catalog
 
+    fun expectedCatalog(sessionId: String): ExpectedMemberCatalog? = sessions[sessionId]?.expected
+
+    /** L1b: track present members without installing SOURCE bindings. */
+    fun expectPresentMembers(
+        sessionId: String,
+        moduleIds: Collection<String>,
+        pendingReason: String,
+    ): Boolean {
+        val state = sessions[sessionId] ?: return false
+        state.expected.expectPresent(moduleIds, pendingReason)
+        for (entry in state.catalog.all()) {
+            state.expected.markBound(entry.moduleId)
+        }
+        return true
+    }
+
     fun runtimeSnapshot(sessionId: String): SessionMediaRuntimeSnapshot? {
         val state = sessions[sessionId] ?: return null
         val authority = state.assembly.orchestrator.authority
@@ -983,6 +1034,8 @@ class ConferenceSessionMediaWiring(
             ingressBlocked = state.ingressBlocked,
             transportScopeActive = state.assembly.pipeline.transport.isScopeActive(),
             catalogEntries = state.catalog.size(),
+            expectedMembers = state.expected.size(),
+            pendingSourceMembers = state.expected.pendingCount(),
             admittedCount = authority.store.currentAdmitted().size,
             activeJitterSources = pipeline.activeJitterSourceCount(),
             liveDecoders = state.assembly.orchestrator.decodeMix.decoderPool.liveCount(),

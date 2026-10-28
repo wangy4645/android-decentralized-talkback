@@ -1,0 +1,2 @@
+captureG1=1
+driverLeavePhase=SKIPPED

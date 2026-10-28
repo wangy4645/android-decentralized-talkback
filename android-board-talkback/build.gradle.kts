@@ -76,11 +76,112 @@ android {
         }
         logger.lifecycle("b1DeskOnly: unit test sources limited to src/test-b1-observe")
     }
+    if (project.hasProperty("groupIceChannelSyncOnly")) {
+        sourceSets.getByName("test") {
+            java.setSrcDirs(listOf("src/test-group-ice-channel-sync/java"))
+        }
+        logger.lifecycle("groupIceChannelSyncOnly: unit test sources limited to src/test-group-ice-channel-sync")
+    }
     if (project.hasProperty("profile01RejoinDeskOnly")) {
         sourceSets.getByName("test") {
             java.setSrcDirs(listOf("src/test-profile01-rejoin/java"))
         }
         logger.lifecycle("profile01RejoinDeskOnly: unit test sources limited to src/test-profile01-rejoin")
+    }
+    // Profile01 supplement delivery gate: PR-2 coordinator tests + desk + bridge (no stale unit tests).
+    // ./gradlew :android-board-talkback:testDebugUnitTest -Pprofile01SupplementDeliveryGate --tests "com.talkback.core.conference.session.integration.*"
+    if (
+        project.hasProperty("profile01SupplementDeliveryGate") ||
+            project.hasProperty("profile01SupplementPr2Only")
+    ) {
+        sourceSets.getByName("test") {
+            java.setSrcDirs(
+                listOf(
+                    "src/test-profile01-supplement-pr2/java",
+                    "src/test-profile01-supplement-delivery-gate/java",
+                ),
+            )
+        }
+        logger.lifecycle(
+            "profile01SupplementDeliveryGate: PR-2 + desk + bridge + establishment fixtures only",
+        )
+    }
+    if (project.hasProperty("catalogL1bDeskOnly")) {
+        sourceSets.getByName("test") {
+            java.setSrcDirs(listOf("src/test-catalog-l1b/java"))
+        }
+        logger.lifecycle("catalogL1bDeskOnly: unit test sources limited to src/test-catalog-l1b")
+    }
+    if (project.hasProperty("mediaLifecycleDeskOnly")) {
+        sourceSets.getByName("test") {
+            java.setSrcDirs(
+                listOf(
+                    "src/test/java/com/talkback/core/media",
+                    "src/test-gplb-hold/java",
+                ),
+            )
+        }
+        logger.lifecycle("mediaLifecycleDeskOnly: unit test sources limited to media + gplb-hold")
+    }
+    // EP operator authority batch (field helper): compile only the establishment harness + signing fixtures,
+    // skipping unrelated stale unit tests. Used by scripts/ep-establishment-operator-authority-batch.ps1.
+    // Kotlin compile does not honour include/exclude filters on Android source sets, so named gates stage
+    // the exact files they need into an isolated source root (unrelated stale unit tests are skipped).
+    val unitTestFileGates: Map<String, List<String>> =
+        mapOf(
+            // scripts/ep-establishment-operator-authority-batch.ps1
+            "epAuthorityOnly" to
+                listOf(
+                    "com/talkback/core/session/gbc/trust/profile/OperationalProfileTestSigning.kt",
+                    "com/talkback/core/session/gbc/trust/profile/establishment/EstablishmentProfileRevisionFixtureSupport.kt",
+                    "com/talkback/core/session/gbc/trust/profile/establishment/EstablishmentOperatorAuthorityFieldHarness.kt",
+                    "com/talkback/core/session/gbc/trust/profile/establishment/EstablishmentOperatorAuthorityFieldHarnessTest.kt",
+                ),
+            "linkQualificationDeskOnly" to
+                listOf(
+                    "com/talkback/core/signaling/link/LinkQualificationTrackerTest.kt",
+                ),
+            "groupL0IceRestartDeskOnly" to
+                listOf(
+                    "com/talkback/core/session/GroupL0IceRestartAdmissionTest.kt",
+                    "com/talkback/core/webrtc/IceRestartPrepareDecisionTest.kt",
+                    "com/talkback/core/webrtc/SrdAdmissionDecisionTest.kt",
+                ),
+            "cutoverOwnershipDeskOnly" to
+                listOf(
+                    "com/talkback/core/conference/session/integration/cutover/AudibleOwnershipControllerTest.kt",
+                    "com/talkback/core/conference/session/integration/cutover/MulticastAudibleAutomaticCutoverTest.kt",
+                    "com/talkback/core/conference/session/integration/cutover/MulticastAudibleCutoverReevaluationTest.kt",
+                ),
+            "productionPlayoutWriteDeskOnly" to
+                listOf(
+                    "com/talkback/core/conference/runtime/ProductionPlayoutWriteTelemetryDeskTest.kt",
+                ),
+            "productionPlayoutTickDeskOnly" to
+                listOf(
+                    "com/talkback/core/conference/runtime/ProductionPlayoutTickTelemetryDeskTest.kt",
+                ),
+            "productionPlayoutDeadlineDeskOnly" to
+                listOf(
+                    "com/talkback/core/conference/session/integration/ProductionPlayoutDeadlinePumpTest.kt",
+                    "com/talkback/core/conference/session/integration/ProductionPlayoutDeadlineIsolationDeskTest.kt",
+                    "com/talkback/core/conference/session/integration/Profile01ShadowSr4PlayTest.kt",
+                    "com/talkback/core/conference/runtime/ProductionPlayoutTickTelemetryDeskTest.kt",
+                ),
+        )
+    unitTestFileGates.forEach { (gate, files) ->
+        if (project.hasProperty(gate)) {
+            val staging = layout.buildDirectory.dir("unit-test-gate-src/$gate").get().asFile
+            staging.deleteRecursively()
+            copy {
+                from("src/test/java") { include(files) }
+                into(staging)
+            }
+            sourceSets.getByName("test") {
+                java.setSrcDirs(listOf(staging))
+            }
+            logger.lifecycle("$gate: unit test sources limited to ${files.size} staged file(s)")
+        }
     }
 
     testOptions {

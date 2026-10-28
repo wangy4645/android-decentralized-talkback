@@ -26,8 +26,15 @@ object BrightScreenMeetingMixPolicy {
     @Volatile
     var productionMixInputHeadroomDb: Double = DEFAULT_PRODUCTION_MIX_INPUT_HEADROOM_DB
 
+    /**
+     * Production default (2026-10-27, five-device field): ACTIVE_SPEECH_EQUAL_WEIGHT. EQUAL_WEIGHT_AVERAGE
+     * divided by every source with a frame (silent members included), costing a lone speaker ~12 dB.
+     * Rollback without rebuild: `files/mix_combine_field.flag` = `AVG` ([MixCombineModeFieldExperiment]).
+     */
+    val DEFAULT_PRODUCTION_MIX_COMBINE_MODE: MixCombineMode = MixCombineMode.ACTIVE_SPEECH_EQUAL_WEIGHT
+
     @Volatile
-    var productionMixCombineMode: MixCombineMode = MixCombineMode.EQUAL_WEIGHT_AVERAGE
+    var productionMixCombineMode: MixCombineMode = DEFAULT_PRODUCTION_MIX_COMBINE_MODE
 
     /** Narrow Top-K fallback when ranked Top-K has no pullable frame but V=1 sources do. */
     @Volatile
@@ -40,7 +47,7 @@ object BrightScreenMeetingMixPolicy {
     fun resetForTest() {
         productionMixInputHeadroomEnabled = true
         productionMixInputHeadroomDb = DEFAULT_PRODUCTION_MIX_INPUT_HEADROOM_DB
-        productionMixCombineMode = MixCombineMode.EQUAL_WEIGHT_AVERAGE
+        productionMixCombineMode = DEFAULT_PRODUCTION_MIX_COMBINE_MODE
         playableTopKFallbackEnabled = true
         playableTopKDeferralEnabled = true
     }

@@ -1,0 +1,14 @@
+﻿PA-SR5 FIELD ADJUDICATION (M01 SOURCE Generation Replace)
+log_dir=D:\workspace\project\talkback\talkback\scripts\fixtures\phase-a-sr5-field\invalid-legacy-leave
+run_card=meeting-product-integration-phase-a-sr5-field-run-card.md
+stimulus=M01_SOURCE_generation_replace_MEMBER_REPLACED
+adjudication_plane=M02_peer
+
+hostSessionId=8b12b21a-37d1-4fc5-ae52-850e2442f4c6
+
+VERDICT=INVALID_STIMULUS
+PA-SR5=NOT_TESTED
+reason=legacy_M02_leave_rejoin_detected_not_authorized_for_SR5
+ADR-0056=KEEP
+Meeting_media_cutover=NOT_AUTHORIZED
+Next=RERUN_WITH_PaSr5_DRIVER

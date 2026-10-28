@@ -1,5 +1,6 @@
 package com.talkback.core.conference.transport
 
+import android.os.Process
 import com.talkback.core.conference.runtime.MediaJitterConstants
 
 /**
@@ -37,6 +38,7 @@ class AbsoluteMediaPlayoutClock(
         thread =
             Thread(
                 {
+                    runCatching { Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO) }
                     while (running) {
                         val now = System.currentTimeMillis()
                         val dueIndex = ((now - anchorMs) / slotMs).coerceAtLeast(0L)

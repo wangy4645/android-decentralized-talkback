@@ -1,0 +1,7 @@
+hostSessionId=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee
+obsShadowTxActivity=observed
+obsPeerIngressActivity=observed
+obsPlayoutActivity=observed
+obsPeerIngressActivity=missing
+obsShadowTxActivity=missing
+obsPlayoutActivity=missing

@@ -14,6 +14,22 @@ object MulticastAudibleAutomaticCutover {
         sessionId: String,
         localModuleId: String,
     ) {
+        val entryState = ReplacementCutoverRc1.currentState()
+        val entryDetail =
+            "shadowEnabled=${MeetingProductMediaShadow.enabled} " +
+                "terminal=${terminalSessions.contains(sessionId)} " +
+                "audibleEnabled=${ReplacementCutoverRc1.multicastAudibleEnabled} " +
+                "controllerInstalled=${ReplacementCutoverRc1.controller() != null} " +
+                "state=${entryState?.name ?: "null"} module=$localModuleId"
+        ReplacementCutoverObservability.logRc1Field(
+            outcome = "AUTO_CUTOVER_ENTRY",
+            sessionId = sessionId,
+            detail = entryDetail,
+        )
+        android.util.Log.i(
+            MeetingProductMediaShadow.LOG_TAG,
+            "AUTO_CUTOVER_ENTRY session=$sessionId $entryDetail",
+        )
         if (!MeetingProductMediaShadow.enabled) return
         if (terminalSessions.contains(sessionId)) return
 
@@ -41,10 +57,15 @@ object MulticastAudibleAutomaticCutover {
 
         val readiness = MulticastAudibleCutoverReadiness.evaluate(sessionId, localModuleId)
         if (!readiness.ready) {
+            val missing = readiness.missing.joinToString(",")
             ReplacementCutoverObservability.logRc1Field(
                 outcome = "AUTO_CUTOVER_DEFERRED",
                 sessionId = sessionId,
-                detail = readiness.missing.joinToString(","),
+                detail = missing,
+            )
+            android.util.Log.i(
+                MeetingProductMediaShadow.LOG_TAG,
+                "AUTO_CUTOVER_DEFERRED session=$sessionId missing=$missing",
             )
             return
         }

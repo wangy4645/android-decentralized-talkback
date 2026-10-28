@@ -127,6 +127,33 @@ class MediaSessionManagerTest {
         assertEquals("CHECKING", manager.getState("M02")!!.iceState)
     }
 
+    @Test
+    fun create_groupChecking_reusesSameGenerationWithoutRelease() {
+        val first = manager.create("M04", MediaBearerScope.GROUP)
+        manager.onIceStateChanged("M04", "CHECKING")
+        val firstGen = manager.getState("M04")!!.generation
+
+        val second = manager.create("M04", MediaBearerScope.GROUP)
+
+        assertEquals(first, second)
+        assertEquals(firstGen, manager.getState("M04")!!.generation)
+        assertEquals(0, manager.mediaSessionReuseCount())
+        assertEquals("CHECKING", manager.getState("M04")!!.iceState)
+    }
+
+    @Test
+    fun create_groupConnected_reusesSameGenerationWithoutViolation() {
+        val first = manager.create("M04", MediaBearerScope.GROUP)
+        manager.onIceStateChanged("M04", "CONNECTED")
+        val firstGen = manager.getState("M04")!!.generation
+
+        val second = manager.create("M04", MediaBearerScope.GROUP)
+
+        assertEquals(first, second)
+        assertEquals(firstGen, manager.getState("M04")!!.generation)
+        assertEquals(0, manager.mediaSessionReuseCount())
+    }
+
     private fun provisionConferenceOnCoordinator(
         manager: MediaSessionManager,
         coordinator: java.util.concurrent.ExecutorService,

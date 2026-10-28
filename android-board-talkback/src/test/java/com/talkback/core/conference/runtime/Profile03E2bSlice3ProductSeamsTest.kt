@@ -25,8 +25,10 @@ class Profile03E2bSlice3ProductSeamsTest {
     fun slice3_productFactory_doesNotInstallFakeSeams() {
         val rt = AndroidRuntimeResources.forAndroidProduct(appContext())
         assertTrue(rt.multicastLock is AndroidWifiMulticastLockSeam)
+        assertTrue(rt.wifiLock is AndroidWifiLockSeam)
         assertTrue(rt.rebindSeam is MulticastSocketTransportRebindSeam)
         assertFalse(rt.multicastLock is FakeMulticastLockSeam)
+        assertFalse(rt.wifiLock is FakeWifiLockSeam)
         assertFalse(rt.rebindSeam is FakeTransportRebindSeam)
     }
 
@@ -35,15 +37,19 @@ class Profile03E2bSlice3ProductSeamsTest {
         val rt = AndroidRuntimeResources.forAndroidProduct(appContext())
         assertTrue(rt.beginTransportScope(mediaHandle("sock-1"), 0L))
         assertTrue(rt.multicastLock.isHeld())
+        assertTrue(rt.wifiLock.isHeld())
         assertTrue(rt.rebindSeam.isSocketOpen())
-        val releasesBefore = rt.multicastLock.releaseCount()
+        val multicastReleasesBefore = rt.multicastLock.releaseCount()
+        val wifiReleasesBefore = rt.wifiLock.releaseCount()
 
         rt.onSilenceOrEmptyTopKOrSoftReclaim()
         rt.decoderPool.release("any")
         rt.selectTopK(1L)
 
         assertTrue(rt.multicastLock.isHeld())
-        assertEquals(releasesBefore, rt.multicastLock.releaseCount())
+        assertTrue(rt.wifiLock.isHeld())
+        assertEquals(multicastReleasesBefore, rt.multicastLock.releaseCount())
+        assertEquals(wifiReleasesBefore, rt.wifiLock.releaseCount())
         assertTrue(rt.rebindSeam.isSocketOpen())
         assertTrue(rt.transportState().active)
     }
@@ -53,12 +59,15 @@ class Profile03E2bSlice3ProductSeamsTest {
         val rt = AndroidRuntimeResources.forAndroidProduct(appContext())
         assertTrue(rt.beginTransportScope(mediaHandle("sock-1"), 0L))
         assertTrue(rt.multicastLock.isHeld())
+        assertTrue(rt.wifiLock.isHeld())
         assertTrue(rt.rebindSeam.isSocketOpen())
 
         rt.endTransportScope()
 
         assertFalse(rt.multicastLock.isHeld())
+        assertFalse(rt.wifiLock.isHeld())
         assertEquals(1, rt.multicastLock.releaseCount())
+        assertEquals(1, rt.wifiLock.releaseCount())
         assertFalse(rt.rebindSeam.isSocketOpen())
         assertFalse(rt.transportState().active)
     }
@@ -92,9 +101,11 @@ class Profile03E2bSlice3ProductSeamsTest {
         assertNotEquals(firstId, newHandle.id)
         assertNotEquals("sock-old", rt.transportState().handle?.id)
 
-        // Rebind is transport-only: lock remains held (not a transport-scope end).
+        // Rebind is transport-only: locks remain held (not a transport-scope end).
         assertTrue(rt.multicastLock.isHeld())
+        assertTrue(rt.wifiLock.isHeld())
         assertEquals(0, rt.multicastLock.releaseCount())
+        assertEquals(0, rt.wifiLock.releaseCount())
 
         val after = rt.authoritySnapshot()
         assertEquals(before, after)

@@ -93,6 +93,7 @@ class Profile01ShadowSr4TxTest {
 
     @After
     fun tearDown() {
+        transmitSeam.onProductionCaptureStop(sessionId)
         ConferenceSessionMediaCoordinatorDelegate.factPort = null
         ConferenceSessionMediaBridge.wiring = null
     }
@@ -131,6 +132,7 @@ class Profile01ShadowSr4TxTest {
         assertTrue(transmitSeam.isArmed(sessionId))
         testMic.emitCanonicalFrame(pcmFrame10ms())
         testMic.emitCanonicalFrame(pcmFrame10ms())
+        assertTrue(transmitSeam.awaitPendingEncode(sessionId))
         transmitSeam.onProductionCaptureStop(sessionId)
         assertEquals(0L, wiring.transport(sessionId)?.observability?.packetsSent ?: 0L)
     }
@@ -146,6 +148,7 @@ class Profile01ShadowSr4TxTest {
 
         testMic.emitCanonicalFrame(pcmFrame10ms())
         testMic.emitCanonicalFrame(pcmFrame10ms())
+        assertTrue(transmitSeam.awaitPendingEncode(sessionId))
 
         transmitSeam.onProductionCaptureStop(sessionId)
         assertFalse(transmitSeam.isArmed(sessionId))
@@ -168,6 +171,7 @@ class Profile01ShadowSr4TxTest {
         transmitSeam.onProductionCaptureStart(sessionId)
         testMic.emitCanonicalFrame(pcmFrame10ms())
         testMic.emitCanonicalFrame(pcmFrame10ms())
+        assertTrue(transmitSeam.awaitPendingEncode(sessionId))
         assertEquals(0L, wiring.transport(sessionId)!!.observability.packetsSent)
     }
 
@@ -189,6 +193,7 @@ class Profile01ShadowSr4TxTest {
         transmitSeam.onProductionCaptureStart(sessionId)
         testMic.emitCanonicalFrame(pcmFrame10ms())
         testMic.emitCanonicalFrame(pcmFrame10ms())
+        assertTrue(transmitSeam.awaitPendingEncode(sessionId))
         assertEquals(0L, wiring.transport(sessionId)!!.observability.packetsSent)
     }
 
@@ -201,6 +206,7 @@ class Profile01ShadowSr4TxTest {
             transmitSeam.onProductionCaptureStart(sessionId)
             testMic.emitCanonicalFrame(pcmFrame10ms())
             testMic.emitCanonicalFrame(pcmFrame10ms())
+            transmitSeam.awaitPendingEncode(sessionId)
         } catch (_: Throwable) {
             failed = true
         }

@@ -1,5 +1,6 @@
 package com.talkback.core.model
 
+import com.talkback.core.session.gbc.trust.mesh.MeshPeerTrustHelloDigest
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -94,7 +95,9 @@ data class HelloPayload(
     /** PRR re-announce only: local transport epoch at send time. */
     val transportEpoch: Long = 0L,
     /** CPP per-edge media facts; producer is [moduleId], edge is (primary, spoke). */
-    val starMediaFacts: List<StarMediaFactDigest> = emptyList()
+    val starMediaFacts: List<StarMediaFactDigest> = emptyList(),
+    /** Optional Profile01 signing / establishment SPKI for late mesh peers. */
+    val meshTrust: MeshPeerTrustHelloDigest? = null,
 ) {
     fun encode(): String {
         val arr = JSONArray()
@@ -145,6 +148,7 @@ data class HelloPayload(
             }
             json.put("starMediaFacts", arrFacts)
         }
+        meshTrust?.let { json.put("meshTrust", it.encodeJson()) }
         return json.toString()
     }
 
@@ -172,7 +176,8 @@ data class HelloPayload(
                     FloorSnapshotDigest.decodeJson(it)
                 },
                 transportEpoch = json.optLong("transportEpoch", 0L),
-                starMediaFacts = decodeStarMediaFacts(json.optJSONArray("starMediaFacts"))
+                starMediaFacts = decodeStarMediaFacts(json.optJSONArray("starMediaFacts")),
+                meshTrust = MeshPeerTrustHelloDigest.decodeJson(json.optJSONObject("meshTrust")),
             )
         }.getOrNull()
 

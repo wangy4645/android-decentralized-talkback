@@ -1,0 +1,11 @@
+﻿sessionId=b23edb10-5855-4252-9495-4cefd9f196df
+conferenceId=c6b73689f63d5f33e17925e2ef0d0c83
+hostModuleId=M01
+peerModuleId=M02
+txPrerequisitePacketsSentMax=48
+peerWiringSessionLive=True
+rxDatagramsMax=25
+rxAdmissionAdmitted=1
+rxAdmissionRejected=0
+ingressPacketsMax=7
+ingressEvidence=09-09 17:10:22.000 I MEETING_MEDIA_SHADOW: PROFILE01_SHADOW_RUNTIME phase=INGRESS_ACTIVITY sessionId=b23edb10-5855-4252-9495-4cefd9f196df moduleId=M01 packetsReceived=7 ingressAccepted=7 activeJitterSources=1 liveDecoders=1 successfulPlayoutWrites=0 audioTrackOwner=SHADOW_METRICS_ONLY

@@ -26,6 +26,11 @@ object GroupPcLineageBindingSupport {
         pcLineage: Long,
         issuedAtMs: Long = System.currentTimeMillis(),
     ): GroupOfferBinding {
+        binding(session, remoteModuleId, offerLineageId)?.let { existing ->
+            if (existing.state != GroupOfferBinding.BindingState.LIVE) {
+                return existing
+            }
+        }
         fenceLiveBindingsForPeer(
             session = session,
             remoteModuleId = remoteModuleId,
@@ -53,6 +58,11 @@ object GroupPcLineageBindingSupport {
         pcLineage: Long,
         issuedAtMs: Long = System.currentTimeMillis(),
     ): GroupOfferBinding {
+        binding(session, remoteModuleId, offerLineageId)?.let { existing ->
+            if (existing.state != GroupOfferBinding.BindingState.LIVE) {
+                return existing
+            }
+        }
         fenceLiveBindingsForPeer(
             session = session,
             remoteModuleId = remoteModuleId,

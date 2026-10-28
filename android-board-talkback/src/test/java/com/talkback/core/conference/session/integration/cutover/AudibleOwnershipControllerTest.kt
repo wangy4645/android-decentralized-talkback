@@ -25,11 +25,17 @@ class AudibleOwnershipControllerTest {
     }
 
     @Test
-    fun cutoverHandoff_enforcesSingleOwner() {
+    fun cutoverHandoff_acquiresMulticastBeforeReleasingAnchor() {
+        multicast.onAcquire = {
+            assertTrue(anchor.anchorActive)
+            assertEquals(0, anchor.releaseCount)
+        }
         assertEquals(CutoverOutcome.APPLIED, controller.armCutover(SESSION))
         assertEquals(CutoverOutcome.APPLIED, controller.executeCutover(SESSION))
         assertEquals(AudibleOwnershipState.MULTICAST_ACTIVE, controller.state)
         assertFalse(anchor.anchorActive)
+        assertEquals(1, anchor.releaseCount)
+        assertEquals(0, multicast.fenceCount)
         assertTrue(multicast.productionActive)
         assertTrue(controller.verifySingleOwner(SESSION))
     }
@@ -64,6 +70,31 @@ class AudibleOwnershipControllerTest {
         assertEquals(CutoverOutcome.REJECTED_HANDOFF_FAILURE, controller.executeCutover(SESSION))
         assertEquals(AudibleOwnershipState.ANCHOR_ACTIVE, controller.state)
         assertTrue(anchor.anchorActive)
+        assertEquals(0, anchor.releaseCount)
+        assertEquals(0, multicast.fenceCount)
+        assertFalse(multicast.productionActive)
+    }
+
+    @Test
+    fun cutover_probeInactiveDoesNotReleaseAnchor() {
+        multicast.probeShouldFail = true
+        controller.armCutover(SESSION)
+        assertEquals(CutoverOutcome.REJECTED_HANDOFF_FAILURE, controller.executeCutover(SESSION))
+        assertEquals(AudibleOwnershipState.ANCHOR_ACTIVE, controller.state)
+        assertTrue(anchor.anchorActive)
+        assertEquals(0, anchor.releaseCount)
+        assertEquals(1, multicast.releaseCount)
+        assertFalse(multicast.productionActive)
+    }
+
+    @Test
+    fun cutover_anchorReleaseFailureCleansMulticastAndKeepsAnchor() {
+        anchor.releaseShouldFail = true
+        controller.armCutover(SESSION)
+        assertEquals(CutoverOutcome.REJECTED_HANDOFF_FAILURE, controller.executeCutover(SESSION))
+        assertEquals(AudibleOwnershipState.ANCHOR_ACTIVE, controller.state)
+        assertTrue(anchor.anchorActive)
+        assertEquals(1, multicast.releaseCount)
         assertFalse(multicast.productionActive)
     }
 
@@ -91,7 +122,12 @@ class AudibleOwnershipControllerTest {
     private class FakeAnchorAudiblePort(
         var anchorActive: Boolean,
     ) : AnchorAudiblePort {
+        var releaseCount: Int = 0
+        var releaseShouldFail: Boolean = false
+
         override fun releaseAnchorOwnership(sessionId: String): Boolean {
+            releaseCount++
+            if (releaseShouldFail) return false
             anchorActive = false
             return true
         }
@@ -107,18 +143,25 @@ class AudibleOwnershipControllerTest {
     private class FakeMulticastAudiblePort : MulticastAudiblePort {
         var productionActive: Boolean = false
         var acquireShouldFail: Boolean = false
+        var probeShouldFail: Boolean = false
+        var fenceCount: Int = 0
+        var releaseCount: Int = 0
+        var onAcquire: (() -> Unit)? = null
 
         override fun fenceProductionPlayout(sessionId: String) {
+            fenceCount++
             productionActive = false
         }
 
         override fun acquireProductionAudioTrack(sessionId: String): Boolean {
+            onAcquire?.invoke()
             if (acquireShouldFail) return false
-            productionActive = true
+            productionActive = !probeShouldFail
             return true
         }
 
         override fun releaseProductionAudioTrack(sessionId: String) {
+            releaseCount++
             productionActive = false
         }
 

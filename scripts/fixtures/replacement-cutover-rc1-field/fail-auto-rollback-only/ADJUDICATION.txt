@@ -1,0 +1,17 @@
+﻿REPLACEMENT CUTOVER RC1 FIELD ADJUDICATION
+log_dir=D:\workspace\project\talkback\talkback\scripts\fixtures\replacement-cutover-rc1-field\fail-auto-rollback-only
+run_card=replacement-cutover-rc1-field-run-card.md
+adr=0062-replacement-cutover-rc1-audible-ownership-transition.md
+adjudication_plane=M02
+hostSessionId=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee
+cutoverSucceededLog=False cutoverFailedLog=True autoRollbackLog=True rollbackSucceededLog=True
+
+VERDICT=FAIL_RC1
+RC1=FAIL
+reason=auto_rollback_without_cutover_success
+CUTOVER_SUCCEEDED=false
+ROLLBACK_SUCCEEDED=true
+AUTO_ROLLBACK_ONLY=true
+ADR-0056=KEEP
+Replacement_readiness=NOT_READY
+Next=FIX_RC1_CUTOVER_HANDOFF_RERUN

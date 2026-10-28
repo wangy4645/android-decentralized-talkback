@@ -148,6 +148,30 @@ class PeerEdgeSignalingReadiness(
         )
     }
 
+    /**
+     * Local link just became [LinkQualificationState.BIDIRECTIONAL_READY].
+     * Re-evaluate stored inbound facts; do not invent readiness without a current-gen inbound.
+     */
+    fun onLocalBecameBidirectionalReady() {
+        val local = localSnapshot()
+        if (local.linkQualification != LinkQualificationState.BIDIRECTIONAL_READY) return
+        facts.keys.toList().forEach { peer ->
+            val previousReady = lastReadyEmitted[peer] == true
+            val nowReady = isReady(peer)
+            if (nowReady && !previousReady) {
+                val fact = facts[peer] ?: return@forEach
+                emitReadyTransition(
+                    remoteModuleId = peer,
+                    generation = local.rebindGeneration,
+                    previous = previousReady,
+                    reason = "LOCAL_BIDIRECTIONAL_READY",
+                    observedSignal = "QUALIFICATION_PROMOTED",
+                    lastInboundAtMs = fact.lastPeerInboundObservedAtMs
+                )
+            }
+        }
+    }
+
     /** Soft-expire scan within current epoch (Q5). Does not advance generation. */
     fun evaluateFreshness() {
         val local = localSnapshot()

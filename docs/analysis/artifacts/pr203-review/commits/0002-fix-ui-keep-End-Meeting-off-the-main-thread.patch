@@ -1,0 +1,404 @@
+From cd066fea446624b281ccd9cdb11e14fc54392671 Mon Sep 17 00:00:00 2001
+From: happy <happy@local>
+Date: Wed, 19 Aug 2026 16:33:34 +0800
+Subject: [PATCH 2/8] fix(ui): keep End Meeting off the main thread
+
+Leave updates UI immediately and posts leaveConference without waiting for SDP. Join/PTT/mute coordinator reads run on Default so setRemoteDescription cannot ANR.
+
+Co-authored-by: Cursor <cursoragent@cursor.com>
+---
+ .../appprod/runtime/TalkbackRuntimeManager.kt |  13 ++-
+ .../talkback/appprod/ui/MeetingFragment.kt    |   3 +-
+ .../com/talkback/appprod/ui/TalkFragment.kt   | 103 +++++++++--------
+ .../com/talkback/appprod/ui/TalkViewModel.kt  | 109 +++++++++++++-----
+ 4 files changed, 152 insertions(+), 76 deletions(-)
+
+diff --git a/talkback-app/src/main/java/com/talkback/appprod/runtime/TalkbackRuntimeManager.kt b/talkback-app/src/main/java/com/talkback/appprod/runtime/TalkbackRuntimeManager.kt
+index cabad22..d84121e 100644
+--- a/talkback-app/src/main/java/com/talkback/appprod/runtime/TalkbackRuntimeManager.kt
++++ b/talkback-app/src/main/java/com/talkback/appprod/runtime/TalkbackRuntimeManager.kt
+@@ -583,8 +583,19 @@ class TalkbackRuntimeManager(private val appContext: Context) {
+     fun leaveChannelSession(
+         config: AppConfig,
+         reason: String = "USER_LEAVE",
+-        caller: String = "TalkbackRuntimeManager.leaveChannelSession"
++        caller: String = "TalkbackRuntimeManager.leaveChannelSession",
++        sessionId: String? = null,
++        conference: Boolean? = null
+     ) {
++        val knownId = sessionId?.takeIf { it.isNotBlank() }
++        if (knownId != null) {
++            if (conference != false) {
++                runCatching { runtime?.leaveConference(knownId, reason, caller) }
++            } else {
++                hangupCall(knownId)
++            }
++            return
++        }
+         val session = activeChannelSession(config) ?: return
+         if (session.type == SessionType.CONFERENCE) {
+             runCatching { runtime?.leaveConference(session.sessionId, reason, caller) }
+diff --git a/talkback-app/src/main/java/com/talkback/appprod/ui/MeetingFragment.kt b/talkback-app/src/main/java/com/talkback/appprod/ui/MeetingFragment.kt
+index e1d1f26..dbe994a 100644
+--- a/talkback-app/src/main/java/com/talkback/appprod/ui/MeetingFragment.kt
++++ b/talkback-app/src/main/java/com/talkback/appprod/ui/MeetingFragment.kt
+@@ -16,6 +16,7 @@ import androidx.lifecycle.Lifecycle
+ import androidx.lifecycle.lifecycleScope
+ import androidx.lifecycle.repeatOnLifecycle
+ import com.talkback.appprod.R
++import kotlinx.coroutines.Dispatchers
+ import kotlinx.coroutines.Job
+ import kotlinx.coroutines.delay
+ import kotlinx.coroutines.isActive
+@@ -50,7 +51,7 @@ class MeetingFragment : Fragment() {
+             R.drawable.ic_mic_ptt,
+             getString(R.string.call_control_mute)
+         ) {
+-            lifecycleScope.launch { viewModel.toggleMeetingMute() }
++            lifecycleScope.launch(Dispatchers.Default) { viewModel.toggleMeetingMute() }
+         }
+         val speakerControl = view.findViewById<View>(R.id.btnMeetingSpeaker)
+         val headsetControl = view.findViewById<View>(R.id.btnMeetingHeadset)
+diff --git a/talkback-app/src/main/java/com/talkback/appprod/ui/TalkFragment.kt b/talkback-app/src/main/java/com/talkback/appprod/ui/TalkFragment.kt
+index 70153a9..5d9a419 100644
+--- a/talkback-app/src/main/java/com/talkback/appprod/ui/TalkFragment.kt
++++ b/talkback-app/src/main/java/com/talkback/appprod/ui/TalkFragment.kt
+@@ -24,7 +24,9 @@ import com.talkback.appprod.R
+ import com.talkback.appprod.conference.JoinMeetingIntent
+ import com.talkback.core.model.EndpointPriority
+ import com.talkback.core.session.ChannelReadiness
++import kotlinx.coroutines.Dispatchers
+ import kotlinx.coroutines.launch
++import kotlinx.coroutines.withContext
+ 
+ class TalkFragment : Fragment() {
+     private val viewModel: TalkViewModel by activityViewModels { TalkViewModelFactory(requireContext()) }
+@@ -446,16 +448,17 @@ class TalkFragment : Fragment() {
+             txtEmergency.text = getString(R.string.meeting_control_members)
+             txtRecord.text = getString(R.string.meeting_control_more)
+             broadcast.setOnClickListener {
+-                lifecycleScope.launch {
+-                    when (viewModel.toggleMeetingMute()) {
+-                        is PttDownResult.ServiceStopped -> {
++                lifecycleScope.launch(Dispatchers.Default) {
++                    val result = viewModel.toggleMeetingMute()
++                    if (result is PttDownResult.ServiceStopped) {
++                        withContext(Dispatchers.Main) {
++                            if (!isAdded) return@withContext
+                             Toast.makeText(
+                                 requireContext(),
+                                 R.string.service_not_running,
+                                 Toast.LENGTH_SHORT
+                             ).show()
+                         }
+-                        else -> Unit
+                     }
+                 }
+             }
+@@ -534,8 +537,11 @@ class TalkFragment : Fragment() {
+     }
+ 
+     private fun startMeeting(intent: JoinMeetingIntent, target: MeetingNavigation = MeetingNavigation.MAIN) {
+-        lifecycleScope.launch {
+-            when (val result = viewModel.joinMeeting(intent)) {
++        lifecycleScope.launch(Dispatchers.Default) {
++            val result = viewModel.joinMeeting(intent)
++            withContext(Dispatchers.Main) {
++                if (!isAdded) return@withContext
++                when (result) {
+                 is PttDownResult.Ok, is PttDownResult.Connecting -> {
+                     (activity as? MainActivity)?.showMeetingScreen(target)
+                 }
+@@ -563,6 +569,7 @@ class TalkFragment : Fragment() {
+                 is PttDownResult.MeetingActive -> {
+                     (activity as? MainActivity)?.showMeetingScreen(target)
+                 }
++                }
+             }
+         }
+     }
+@@ -570,52 +577,58 @@ class TalkFragment : Fragment() {
+     private fun pressPtt(btnPtt: FrameLayout? = null) {
+         pttHeld = true
+         btnPtt?.setBackgroundResource(R.drawable.bg_ptt_button_active)
+-        lifecycleScope.launch {
+-            when (val result = viewModel.onPttDown()) {
+-                is PttDownResult.Ok -> Unit
+-                is PttDownResult.Connecting -> {
+-                    if (pttHeld) {
++        lifecycleScope.launch(Dispatchers.Default) {
++            val result = viewModel.onPttDown()
++            withContext(Dispatchers.Main) {
++                if (!isAdded) return@withContext
++                when (result) {
++                    is PttDownResult.Ok -> Unit
++                    is PttDownResult.Connecting -> {
++                        if (pttHeld) {
++                            Toast.makeText(
++                                requireContext(),
++                                R.string.ptt_setting_up_channel,
++                                Toast.LENGTH_SHORT
++                            ).show()
++                        }
++                    }
++                    is PttDownResult.NoPeers, is PttDownResult.NoTeammates -> {
+                         Toast.makeText(
+                             requireContext(),
+-                            R.string.ptt_setting_up_channel,
++                            R.string.ptt_no_teammates,
++                            Toast.LENGTH_SHORT
++                        ).show()
++                    }
++                    is PttDownResult.ServiceStopped -> {
++                        Toast.makeText(
++                            requireContext(),
++                            R.string.service_not_running,
++                            Toast.LENGTH_SHORT
++                        ).show()
++                    }
++                    is PttDownResult.FloorBusy -> {
++                        btnPtt?.setBackgroundResource(R.drawable.bg_ptt_button)
++                        Toast.makeText(
++                            requireContext(),
++                            getString(R.string.ptt_floor_busy, result.speaker),
++                            Toast.LENGTH_SHORT
++                        ).show()
++                    }
++                    is PttDownResult.MeetingActive -> {
++                        btnPtt?.setBackgroundResource(R.drawable.bg_ptt_button)
++                        Toast.makeText(
++                            requireContext(),
++                            R.string.ptt_meeting_active,
+                             Toast.LENGTH_SHORT
+                         ).show()
+                     }
+-                }
+-                is PttDownResult.NoPeers, is PttDownResult.NoTeammates -> {
+-                    Toast.makeText(
+-                        requireContext(),
+-                        R.string.ptt_no_teammates,
+-                        Toast.LENGTH_SHORT
+-                    ).show()
+-                }
+-                is PttDownResult.ServiceStopped -> {
+-                    Toast.makeText(
+-                        requireContext(),
+-                        R.string.service_not_running,
+-                        Toast.LENGTH_SHORT
+-                    ).show()
+-                }
+-                is PttDownResult.FloorBusy -> {
+-                    btnPtt?.setBackgroundResource(R.drawable.bg_ptt_button)
+-                    Toast.makeText(
+-                        requireContext(),
+-                        getString(R.string.ptt_floor_busy, result.speaker),
+-                        Toast.LENGTH_SHORT
+-                    ).show()
+-                }
+-                is PttDownResult.MeetingActive -> {
+-                    btnPtt?.setBackgroundResource(R.drawable.bg_ptt_button)
+-                    Toast.makeText(
+-                        requireContext(),
+-                        R.string.ptt_meeting_active,
+-                        Toast.LENGTH_SHORT
+-                    ).show()
+                 }
+             }
+             if (!pttHeld) {
+                 viewModel.onPttUp()
+-                btnPtt?.setBackgroundResource(R.drawable.bg_ptt_button)
++                withContext(Dispatchers.Main) {
++                    btnPtt?.setBackgroundResource(R.drawable.bg_ptt_button)
++                }
+             }
+         }
+     }
+@@ -623,9 +636,9 @@ class TalkFragment : Fragment() {
+     private fun releasePtt(btnPtt: FrameLayout? = null) {
+         if (!pttHeld) return
+         pttHeld = false
+-        lifecycleScope.launch {
++        btnPtt?.setBackgroundResource(R.drawable.bg_ptt_button)
++        lifecycleScope.launch(Dispatchers.Default) {
+             viewModel.onPttUp()
+-            btnPtt?.setBackgroundResource(R.drawable.bg_ptt_button)
+         }
+     }
+ 
+diff --git a/talkback-app/src/main/java/com/talkback/appprod/ui/TalkViewModel.kt b/talkback-app/src/main/java/com/talkback/appprod/ui/TalkViewModel.kt
+index 8178442..4dfae97 100644
+--- a/talkback-app/src/main/java/com/talkback/appprod/ui/TalkViewModel.kt
++++ b/talkback-app/src/main/java/com/talkback/appprod/ui/TalkViewModel.kt
+@@ -77,6 +77,12 @@ class TalkViewModel(
+     private var conferenceEndReason: ConferenceEndReason = ConferenceEndReason.NONE
+     @Volatile
+     private var lastSyncedMeetingPreferred: Boolean? = null
++    @Volatile
++    private var lastKnownConferenceSessionId: String? = null
++    @Volatile
++    private var lastKnownConferenceHost: Boolean = false
++    @Volatile
++    private var meetingLeaveInFlight: Boolean = false
+     /** Talk page PTT/Meeting tab selection — navigation only; does not drive input binding. */
+     @Volatile
+     private var userSelectedTab: UserSelectedTab = UserSelectedTab.PTT
+@@ -262,11 +268,21 @@ class TalkViewModel(
+                 _toastMessageRes.emit(R.string.floor_acquire_timeout)
+             }
+         }
+-        val state = buildState(config)
+-        val endReason = if (wasConferenceActive && !state.conferenceActive) {
++        val raw = buildState(config)
++        if (meetingLeaveInFlight && !raw.conferenceActive) {
++            meetingLeaveInFlight = false
++        }
++        val state = if (meetingLeaveInFlight && raw.conferenceActive) {
++            overlayMeetingEnding(raw)
++        } else {
++            raw
++        }
++        val endReason = if (wasConferenceActive && !raw.conferenceActive) {
+             val reason = conferenceEndReason
+             conferenceEndReason = ConferenceEndReason.NONE
+             if (reason != ConferenceEndReason.NONE) reason else ConferenceEndReason.REMOTE_ENDED
++        } else if (meetingLeaveInFlight) {
++            ConferenceEndReason.USER_LEFT
+         } else {
+             ConferenceEndReason.NONE
+         }
+@@ -276,18 +292,14 @@ class TalkViewModel(
+         } else {
+             state
+         }
+-        if (state.conferenceActive && !wasConferenceActive && config.meetingAutoJoin) {
++        if (raw.conferenceActive && !wasConferenceActive && !meetingLeaveInFlight && config.meetingAutoJoin) {
+             _openMeetingEvents.emit(MeetingNavigation.MAIN)
+         }
+-        wasConferenceActive = state.conferenceActive
++        wasConferenceActive = raw.conferenceActive
+         _uiState.value = displayState.copy(conferenceEndReason = endReason)
+     }
+ 
+-    fun isConferenceHost(): Boolean {
+-        syncServiceState()
+-        if (!serviceRunning || manager.getRuntime() == null) return false
+-        return manager.isConferenceHost(configStore.load())
+-    }
++    fun isConferenceHost(): Boolean = lastKnownConferenceHost
+ 
+     suspend fun onPttDown(): PttDownResult = pttMutex.withLock {
+         syncServiceState()
+@@ -622,20 +634,12 @@ class TalkViewModel(
+     }
+ 
+     fun leaveMeeting() {
+-        conferenceEndReason = ConferenceEndReason.USER_LEFT
++        beginLocalMeetingLeave("USER_LEAVE_MEETING")
+         viewModelScope.launch(Dispatchers.Default) {
+-            val config = configStore.load()
+-            manager.leaveChannelSession(
+-                config,
++            completeMeetingLeave(
+                 reason = "USER_LEAVE_MEETING",
+                 caller = "TalkViewModel.leaveMeeting"
+             )
+-            manager.clearConferencePttCooldown(config.defaultChannelId)
+-            lastSyncedMeetingPreferred = false
+-            manager.setMeetingPreferred(false, config.defaultChannelId)
+-            manager.prioritizeNextMeshCall()
+-            runCatching { manager.ensureChannelSession(config) }
+-            refreshInternal()
+         }
+     }
+ 
+@@ -686,23 +690,64 @@ class TalkViewModel(
+     }
+ 
+     fun endMeetingForAll() {
+-        conferenceEndReason = ConferenceEndReason.USER_LEFT
++        beginLocalMeetingLeave("HOST_END_FOR_ALL")
+         viewModelScope.launch(Dispatchers.Default) {
+-            val config = configStore.load()
+-            manager.leaveChannelSession(
+-                config,
++            completeMeetingLeave(
+                 reason = "HOST_END_FOR_ALL",
+                 caller = "TalkViewModel.endMeetingForAll"
+             )
+-            manager.clearConferencePttCooldown(config.defaultChannelId)
+-            lastSyncedMeetingPreferred = false
+-            manager.setMeetingPreferred(false, config.defaultChannelId)
+-            manager.prioritizeNextMeshCall()
+-            runCatching { manager.ensureChannelSession(config) }
+-            refreshInternal()
+         }
+     }
+ 
++    private fun beginLocalMeetingLeave(reason: String) {
++        val sessionId = _uiState.value.meeting.sessionId ?: lastKnownConferenceSessionId
++        if (sessionId != null) {
++            lastKnownConferenceSessionId = sessionId
++        }
++        conferenceEndReason = ConferenceEndReason.USER_LEFT
++        meetingLeaveInFlight = true
++        TalkbackLog.i("MEETING_LEAVE_UI_ACCEPTED session=${sessionId ?: "none"} reason=$reason")
++        _uiState.value = overlayMeetingEnding(_uiState.value)
++    }
++
++    private suspend fun completeMeetingLeave(reason: String, caller: String) {
++        val config = configStore.load()
++        manager.leaveChannelSession(
++            config,
++            reason = reason,
++            caller = caller,
++            sessionId = lastKnownConferenceSessionId,
++            conference = true
++        )
++        manager.clearConferencePttCooldown(config.defaultChannelId)
++        lastSyncedMeetingPreferred = false
++        manager.setMeetingPreferred(false, config.defaultChannelId)
++        manager.prioritizeNextMeshCall()
++        runCatching { manager.ensureChannelSession(config) }
++        refreshInternal()
++    }
++
++    private fun overlayMeetingEnding(current: TalkUiState): TalkUiState {
++        val endingDisplay = ConferenceDisplayStateResolver.resolve(
++            lifecycle = ConferenceLifecycleFacts(
++                conferenceActive = false,
++                conferenceMode = current.conferenceMode,
++                sessionActive = false,
++                runtimePhase = null
++            ),
++            connectivity = ConferenceConnectivityFacts(channelReady = false)
++        )
++        return current.copy(
++            conferenceActive = false,
++            sessionActive = false,
++            conferenceEndReason = ConferenceEndReason.USER_LEFT,
++            conferenceReconnecting = false,
++            conferenceReconnectFailed = false,
++            conferenceDisplay = endingDisplay,
++            meeting = current.meeting.copy(sessionId = lastKnownConferenceSessionId)
++        )
++    }
++
+     fun inviteMeetingMembers(moduleIds: List<String>): Result<Int> {
+         val config = configStore.load()
+         val result = manager.invitePeersToMeeting(config, moduleIds)
+@@ -1088,6 +1133,12 @@ class TalkViewModel(
+ 
+         val session = manager.activeChannelSession(config)
+         val conferenceActive = session?.type == SessionType.CONFERENCE
++        if (conferenceActive && session != null) {
++            lastKnownConferenceSessionId = session.sessionId
++            lastKnownConferenceHost = manager.isConferenceHost(config)
++        } else if (!meetingLeaveInFlight) {
++            lastKnownConferenceHost = false
++        }
+         val conferenceMode = userSelectedTab == UserSelectedTab.MEETING
+         val conferenceMuted = session?.muted == true
+         val localRawKey = EndpointAddress(
+-- 
+2.54.0.windows.1
+

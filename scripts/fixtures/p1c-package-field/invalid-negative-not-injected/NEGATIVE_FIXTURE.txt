@@ -1,0 +1,3 @@
+﻿injected=false
+status=pending_operator
+expectedRejectReason=RECIPIENT_KEY_VERSION_MISMATCH

@@ -1,0 +1,17 @@
+﻿PA-SR4-RX FIELD ADJUDICATION (Peer Shadow Multicast Receive Gate)
+log_dir=D:\workspace\project\talkback\talkback\scripts\fixtures\phase-a-sr4-rx-field\invalid-preg
+run_card=meeting-product-integration-phase-a-sr4-rx-field-run-card.md
+authorization=meeting-product-integration-phase-a-shadow-runtime-pr-pa-sr4-rx-implementation-authorization.md
+PA-SR4_full=NOT_CLOSED_BY_THIS_GATE
+PLAY=OBSERVE_ONLY_NOT_PASS
+
+GROUP_GATE status=FAIL verdict=INVALID_GROUP_PRECONDITION
+
+VERDICT=INVALID_GROUP_PRECONDITION
+PA-SR4-RX=NOT_TESTED
+PA-SR4=VALID_FAIL_UNCHANGED
+reason=group_still_active
+PR-PA-SR4-PLAY=HOLD
+ADR-0056=KEEP
+Meeting_media_cutover=NOT_AUTHORIZED
+Next=FIX_FIELD_GROUP_RERUN_PA_SR4_RX

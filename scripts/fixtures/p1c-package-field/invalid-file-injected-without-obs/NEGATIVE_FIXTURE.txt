@@ -1,0 +1,3 @@
+﻿injected=true
+status=forged_file_only
+expectedRejectReason=RECIPIENT_KEY_VERSION_MISMATCH

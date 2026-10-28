@@ -39,7 +39,10 @@ import com.talkback.core.conference.session.integration.MeetingProfile01Membersh
 import com.talkback.core.conference.session.integration.MeetingProfile01CreationOriginPublisher
 import com.talkback.core.conference.session.integration.MeetingProfile01FactWireIngress
 import com.talkback.core.conference.session.integration.MeetingProfile01IncompleteApplyContinuation
+import com.talkback.core.conference.session.integration.MediaKeyPackagePublicationLedger
 import com.talkback.core.conference.session.integration.MeetingProfile01MediaKeyPackageOriginBridge
+import com.talkback.core.conference.session.integration.Profile01SupplementDeliveryCoordinator
+import com.talkback.core.session.gbc.trust.profile.establishment.AcceptedEstablishmentTrustStateListener
 import com.talkback.core.conference.session.integration.MeetingProfile01PreBindFactRetention
 import com.talkback.core.conference.session.integration.MeetingProfile01SourceOriginBridge
 import com.talkback.core.conference.session.integration.MeetingProfile01SourceOriginPublisher
@@ -68,6 +71,7 @@ import com.talkback.core.session.gbc.issuance.GbcFieldEstablishedSignerSupport
 import com.talkback.core.session.gbc.issuance.GenerationFactSignerPersistenceState
 import com.talkback.core.conference.transport.Slice4MulticastNetworkConstants
 import com.talkback.core.session.gbc.trust.GenerationFactKeyState
+import com.talkback.core.session.gbc.trust.mesh.MeshHelloPeerTrustSupplement
 import com.talkback.core.session.gbc.trust.profile.AcceptedLocalTrustStateStore
 import com.talkback.core.signaling.prr.LocalEndpointSnapshot
 import com.talkback.core.signaling.prr.PeerReachabilityReannounceController
@@ -332,11 +336,6 @@ object TalkbackRuntimeFactory {
             gbcTrustWiring = resolvedGbcTrustWiring,
             onLog = onLog
         )
-        transportManager.onLinkQualificationStateChanged { _, newState ->
-            if (newState == LinkQualificationState.BIDIRECTIONAL_READY) {
-                coordinator.onLinkQualificationStateChanged()
-            }
-        }
         if (peerEdgeSignalingReadiness != null) {
             peerEdgeSignalingReadiness.onPeerEdgeSignalingReady = { moduleId ->
                 coordinator.onPeerEdgeSignalingReady(moduleId)
@@ -345,6 +344,12 @@ object TalkbackRuntimeFactory {
             peerEdgeSignalingReadiness.onPeerEdgeSignalingLost = { event ->
                 prrLostHandler?.invoke(event)
                 coordinator.onPeerEdgeSignalingLost(event)
+            }
+        }
+        transportManager.onLinkQualificationStateChanged { _, newState ->
+            if (newState == LinkQualificationState.BIDIRECTIONAL_READY) {
+                peerEdgeSignalingReadiness?.onLocalBecameBidirectionalReady()
+                coordinator.onLinkQualificationStateChanged()
             }
         }
         coordinator.updateStaticPeers(staticPeers)
@@ -366,6 +371,21 @@ object TalkbackRuntimeFactory {
                 config = config,
                 gbcTrustWiring = resolvedGbcTrustWiring,
             )
+        val deploymentTrustDomainId =
+            config.deploymentTrustDomainId.ifBlank {
+                GbcProductionTrustComposition.DEFAULT_DEPLOYMENT_TRUST_DOMAIN
+            }
+        if (resolvedGbcTrustWiring is ProductionGbcTrustWiring) {
+            coordinator.attachMeshHelloPeerTrustSupplement(
+                MeshHelloPeerTrustSupplement(
+                    signingTrustStore = profile01TrustStore,
+                    establishmentTrustStore = profile01EstablishmentAuthority.establishmentTrustStore,
+                    localModuleId = config.localModuleId.value,
+                    deploymentTrustDomainId = deploymentTrustDomainId,
+                    onLog = { message -> onLog?.invoke(message) },
+                ),
+            )
+        }
         val profile01MediaKeyDecrypt =
             Profile01ProductionMediaKeyDecryptComposition.compose(profile01EstablishmentAuthority)
         val profile01ConferenceMediaFactIngress =
@@ -441,6 +461,7 @@ object TalkbackRuntimeFactory {
         coordinator.attachMeetingProfile01MembershipOriginBridge(profile01MembershipOriginBridge)
         val profile01PackageBuilder =
             profile01CreationSigner?.let { Profile01MediaKeyPackageBuilder(signer = it) }
+        val profile01MediaKeyPackagePublicationLedger = MediaKeyPackagePublicationLedger()
         val profile01MediaKeyPackageOriginBridge =
             MeetingProfile01MediaKeyPackageOriginBridge(
                 sessionIndex = meetingProfile01SessionIndex,
@@ -449,9 +470,31 @@ object TalkbackRuntimeFactory {
                 establishmentLookup = profile01EstablishmentAuthority.recipientEstablishmentKeyLookup,
                 packageBuilder = profile01PackageBuilder,
                 membershipConvergence = profile01ConferenceMediaFactIngress.membershipRegistry(),
+                publicationLedger = profile01MediaKeyPackagePublicationLedger,
+                recordPublicationOnSendSuccess = { _, _ -> },
                 onLog = { message -> onLog?.invoke(message) },
             )
         coordinator.attachMeetingProfile01MediaKeyPackageOriginBridge(profile01MediaKeyPackageOriginBridge)
+        val profile01SupplementDeliveryCoordinator =
+            Profile01SupplementDeliveryCoordinator(
+                publicationLedger = profile01MediaKeyPackagePublicationLedger,
+                packageBridge = profile01MediaKeyPackageOriginBridge,
+                schedule = { delayMs, block ->
+                    android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(block, delayMs)
+                },
+                resolveDrainContext = { sessionId ->
+                    coordinator.resolveProfile01SupplementDrainContext(sessionId)
+                },
+                onLog = { message -> onLog?.invoke(message) },
+            )
+        coordinator.attachProfile01SupplementDeliveryCoordinator(profile01SupplementDeliveryCoordinator)
+        val establishmentMaterializationListener =
+            AcceptedEstablishmentTrustStateListener { _, _, newlyMaterializedPeerModuleIds ->
+                coordinator.onEstablishmentTrustSnapshotMaterialized(newlyMaterializedPeerModuleIds)
+            }
+        profile01EstablishmentAuthority.establishmentTrustStore.addListener(
+            establishmentMaterializationListener,
+        )
         val profile01LocalConferenceSourceIdentityAuthority = Profile01LocalConferenceSourceIdentityAuthority()
         val profile01SourceOriginPublisher =
             profile01CreationSigner?.let { MeetingProfile01SourceOriginPublisher(it) }

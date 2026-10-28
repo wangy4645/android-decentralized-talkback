@@ -1,8 +1,10 @@
 package com.talkback.core.model
 
+import com.talkback.core.session.gbc.trust.mesh.MeshPeerTrustHelloDigest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -127,5 +129,26 @@ class HelloPayloadTest {
         assertEquals("M04", decoded.starMediaFacts[0].spokeModuleId)
         assertEquals(false, decoded.starMediaFacts[0].usable)
         assertEquals(true, decoded.starMediaFacts[1].usable)
+    }
+
+    @Test
+    fun encodeDecode_meshTrust_roundTrip() {
+        val digest =
+            MeshPeerTrustHelloDigest(
+                signingPublicKeySpki = byteArrayOf(1, 2, 3),
+                signingKeyVersion = 1L,
+                establishmentPublicKeySpki = byteArrayOf(4, 5),
+                establishmentKeyVersion = 2L,
+            )
+        val payload =
+            HelloPayload(
+                moduleId = "M05",
+                endpoints = emptyList(),
+                meshTrust = digest,
+            )
+        val decoded = HelloPayload.decode(payload.encode())
+        assertNotNull(decoded?.meshTrust)
+        assertTrue(decoded!!.meshTrust!!.hasSigningMaterial())
+        assertTrue(decoded.meshTrust!!.hasEstablishmentMaterial())
     }
 }

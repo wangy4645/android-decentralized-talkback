@@ -1,0 +1,5 @@
+captureG1=1
+driverRotatePhase=COMPLETE
+driverLeavePhase=SKIPPED
+driverRejoinPhase=SKIPPED
+sr5Window=B

@@ -1,0 +1,12 @@
+﻿sessionId=c6cb896d-588b-49bb-bc4e-a4a06366d15a
+conferenceId=c6b73689f63d5f33e17925e2ef0d0c83
+hostModuleId=M01
+peerModuleId=M02
+txPrerequisitePacketsSentMax=100
+ingressPacketsMax=50
+ingressAcceptedMax=25
+activeJitterSourcesMax=1
+liveDecodersMax=0
+playoutWritesMax=0
+audioTrackIsolationOk=True
+playoutEvidence=NONE

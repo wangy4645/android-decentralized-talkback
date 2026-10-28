@@ -194,6 +194,13 @@ object Profile01ShadowRuntimeObservability {
         aqcTxMetricCounters.remove(sessionId)
         aqcFallbackCounters.remove(sessionId)
         shadowTxEncodePcmLevelCounters.remove(sessionId)
+        shadowTxCapturePcmCounters.remove(sessionId)
+        shadowTxCaptureLastWallMs.remove(sessionId)
+        shadowTxCaptureLastLogWallMs.remove(sessionId)
+        shadowTxCaptureCostWindows.remove(sessionId)
+        shadowTxCaptureEnterNs.remove(sessionId)
+        shadowTxEncodeQueueCounters.remove(sessionId)
+        shadowTxEncodeDequeueCounters.remove(sessionId)
         m01GatedTxEncodeCounters.remove(sessionId)
         M01GatedTxEncodeLevelProcessor.clearSession(sessionId)
     }
@@ -642,6 +649,20 @@ object Profile01ShadowRuntimeObservability {
         java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicLong>()
     private val shadowTxEncodePcmLevelCounters =
         java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicLong>()
+    private val shadowTxCapturePcmCounters =
+        java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicLong>()
+    private val shadowTxCaptureLastWallMs =
+        java.util.concurrent.ConcurrentHashMap<String, Long>()
+    private val shadowTxCaptureLastLogWallMs =
+        java.util.concurrent.ConcurrentHashMap<String, Long>()
+    private val shadowTxCaptureEnterNs =
+        java.util.concurrent.ConcurrentHashMap<String, Long>()
+    private val shadowTxCaptureCostWindows =
+        java.util.concurrent.ConcurrentHashMap<String, CaptureCallbackCostWindow>()
+    private val shadowTxEncodeQueueCounters =
+        java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicLong>()
+    private val shadowTxEncodeDequeueCounters =
+        java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicLong>()
     private val shadowTxPcmS1LevelCounters =
         java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicLong>()
     private val d2SendChainTickCounters =
@@ -770,6 +791,179 @@ object Profile01ShadowRuntimeObservability {
                     "wallTimeMs" to System.currentTimeMillis().toString(),
                 ),
         )
+    }
+
+    /**
+     * Capture callback cadence (pre-assembler). Frame 1 and every 25th callback per session.
+     * Does not infer capture clock from send counts.
+     */
+    fun maybeLogShadowTxCapturePcm(
+        sessionId: String,
+        moduleId: String,
+        bitsPerSample: Int,
+        sampleRate: Int,
+        numberOfChannels: Int,
+        numberOfFrames: Int,
+    ) {
+        val n =
+            shadowTxCapturePcmCounters
+                .getOrPut(sessionId) { java.util.concurrent.atomic.AtomicLong(0) }
+                .incrementAndGet()
+        val nowMs = System.currentTimeMillis()
+        val lastCallbackMs = shadowTxCaptureLastWallMs.put(sessionId, nowMs)
+        if (n != 1L && n % 25L != 0L) return
+        val lastLogMs = shadowTxCaptureLastLogWallMs.put(sessionId, nowMs)
+        val formatAccepted =
+            bitsPerSample == 16 && sampleRate == 48_000 && numberOfChannels == 1
+        logPhase(
+            phase = "SHADOW_TX_CAPTURE_PCM",
+            sessionId = sessionId,
+            moduleId = moduleId,
+            fields =
+                mapOf(
+                    "callbackOrdinal" to n.toString(),
+                    "sampleRate" to sampleRate.toString(),
+                    "channels" to numberOfChannels.toString(),
+                    "bits" to bitsPerSample.toString(),
+                    "numberOfFrames" to numberOfFrames.toString(),
+                    "intervalMs" to (if (lastCallbackMs == null) -1L else nowMs - lastCallbackMs).toString(),
+                    "spanMs" to (if (lastLogMs == null) -1L else nowMs - lastLogMs).toString(),
+                    "formatAccepted" to formatAccepted.toString(),
+                    "wallTimeMs" to nowMs.toString(),
+                ),
+        )
+    }
+
+    /**
+     * Per-callback costs aggregated in-memory; emit 1-in-25.
+     * Does not change capture/encode/send behavior.
+     */
+    fun recordShadowTxCaptureCallbackCost(
+        sessionId: String,
+        moduleId: String,
+        intervalNs: Long,
+        preUs: Long,
+        assembleUs: Long,
+        encodeUs: Long,
+        sendUs: Long,
+        totalUs: Long,
+        encoded: Boolean,
+    ) {
+        val window =
+            shadowTxCaptureCostWindows.getOrPut(sessionId) { CaptureCallbackCostWindow() }
+        val n = window.add(intervalNs, preUs, assembleUs, encodeUs, sendUs, totalUs, encoded)
+        if (n != 1L && n % 25L != 0L) return
+        val snap = window.snapshot()
+        logPhase(
+            phase = "SHADOW_TX_CAPTURE_CALLBACK_COST",
+            sessionId = sessionId,
+            moduleId = moduleId,
+            fields =
+                mapOf(
+                    "callbackOrdinal" to n.toString(),
+                    "winN" to snap.winN.toString(),
+                    "encodedN" to snap.encodedN.toString(),
+                    "intervalP50Us" to snap.intervalP50Us.toString(),
+                    "intervalP95Us" to snap.intervalP95Us.toString(),
+                    "preP50Us" to snap.preP50Us.toString(),
+                    "assembleP50Us" to snap.assembleP50Us.toString(),
+                    "assembleP95Us" to snap.assembleP95Us.toString(),
+                    "encodeP50Us" to snap.encodeP50Us.toString(),
+                    "encodeP95Us" to snap.encodeP95Us.toString(),
+                    "encodeMaxUs" to snap.encodeMaxUs.toString(),
+                    "sendP50Us" to snap.sendP50Us.toString(),
+                    "sendP95Us" to snap.sendP95Us.toString(),
+                    "sendMaxUs" to snap.sendMaxUs.toString(),
+                    "totalP50Us" to snap.totalP50Us.toString(),
+                    "totalP95Us" to snap.totalP95Us.toString(),
+                    "totalMaxUs" to snap.totalMaxUs.toString(),
+                    "over10ms" to snap.over10ms.toString(),
+                    "longThenGap" to snap.longThenGap.toString(),
+                    "thisTotalUs" to totalUs.toString(),
+                    "thisEncodeUs" to encodeUs.toString(),
+                    "thisSendUs" to sendUs.toString(),
+                    "thisIntervalUs" to (intervalNs / 1000L).toString(),
+                    "wallTimeMs" to System.currentTimeMillis().toString(),
+                ),
+        )
+        window.resetWindowCounters()
+    }
+
+    fun maybeLogShadowTxEncodeQueue(
+        sessionId: String,
+        moduleId: String,
+        depth: Int,
+        maxDepth: Int,
+        overflow: Long,
+        overflowDropOldest: Long,
+        droppedOnStop: Long,
+        queuedUs: Long,
+        accepted: Boolean,
+        droppedOldest: Boolean,
+    ) {
+        val n =
+            shadowTxEncodeQueueCounters
+                .getOrPut(sessionId) { java.util.concurrent.atomic.AtomicLong(0) }
+                .incrementAndGet()
+        if (accepted && !droppedOldest && n != 1L && n % 25L != 0L) return
+        logPhase(
+            phase = "SHADOW_TX_ENCODE_QUEUE",
+            sessionId = sessionId,
+            moduleId = moduleId,
+            fields =
+                mapOf(
+                    "offerOrdinal" to n.toString(),
+                    "depth" to depth.toString(),
+                    "maxDepth" to maxDepth.toString(),
+                    "overflow" to overflow.toString(),
+                    "overflowDropOldest" to overflowDropOldest.toString(),
+                    "droppedOnStop" to droppedOnStop.toString(),
+                    "queuedUs" to queuedUs.toString(),
+                    "accepted" to accepted.toString(),
+                    "droppedOldest" to droppedOldest.toString(),
+                    "capacity" to "4",
+                    "wallTimeMs" to System.currentTimeMillis().toString(),
+                ),
+        )
+    }
+
+    fun maybeLogShadowTxEncodeDequeued(
+        sessionId: String,
+        moduleId: String,
+        queuedUs: Long,
+        depth: Int,
+        overflow: Long,
+    ) {
+        val n =
+            shadowTxEncodeDequeueCounters
+                .getOrPut(sessionId) { java.util.concurrent.atomic.AtomicLong(0) }
+                .incrementAndGet()
+        if (n != 1L && n % 25L != 0L) return
+        logPhase(
+            phase = "SHADOW_TX_ENCODE_QUEUE",
+            sessionId = sessionId,
+            moduleId = moduleId,
+            fields =
+                mapOf(
+                    "dequeueOrdinal" to n.toString(),
+                    "queuedUs" to queuedUs.toString(),
+                    "depth" to depth.toString(),
+                    "overflow" to overflow.toString(),
+                    "wallTimeMs" to System.currentTimeMillis().toString(),
+                ),
+        )
+    }
+
+    fun markShadowTxCaptureEnterNs(sessionId: String): Long {
+        val nowNs = System.nanoTime()
+        val prev = shadowTxCaptureEnterNs.put(sessionId, nowNs)
+        return if (prev == null) -1L else nowNs - prev
+    }
+
+    internal fun percentileUs(sortedAsc: LongArray, p: Int): Long {
+        if (sortedAsc.isEmpty()) return -1L
+        val rank = ((p / 100.0) * (sortedAsc.size - 1)).toInt().coerceIn(0, sortedAsc.lastIndex)
+        return sortedAsc[rank]
     }
 
     /**
@@ -970,6 +1164,8 @@ object Profile01ShadowRuntimeObservability {
                 "ingressBlocked" to snapshot.ingressBlocked.toString(),
                 "transportScopeActive" to snapshot.transportScopeActive.toString(),
                 "catalogEntries" to snapshot.catalogEntries.toString(),
+                "expectedMembers" to snapshot.expectedMembers.toString(),
+                "pendingSourceMembers" to snapshot.pendingSourceMembers.toString(),
                 "admittedCount" to snapshot.admittedCount.toString(),
                 "activeJitterSources" to snapshot.activeJitterSources.toString(),
                 "liveDecoders" to snapshot.liveDecoders.toString(),
@@ -1066,12 +1262,18 @@ object Profile01ShadowRuntimeObservability {
     fun logProductionAudioTrackFence(
         owner: String,
         sessionHint: String? = null,
+        audioSessionId: Int? = null,
+        bufferFrames: Int? = null,
     ) {
         val parts = mutableListOf<String>()
         parts += "PROFILE01_SHADOW_RUNTIME"
         parts += "phase=AUDIO_TRACK_OWNERSHIP"
         parts += "owner=$owner"
+        parts += "playoutOwner=PRODUCTION"
         sessionHint?.let { parts += "sessionHint=$it" }
+        audioSessionId?.let { parts += "audioSessionId=$it" }
+        bufferFrames?.let { parts += "bufferFrames=$it" }
+        parts += "trackId=na"
         emit(parts.joinToString(" "))
     }
 
@@ -1082,5 +1284,129 @@ object Profile01ShadowRuntimeObservability {
         }
     }
 
+    private data class CaptureCallbackCostSnapshot(
+        val winN: Int,
+        val encodedN: Int,
+        val intervalP50Us: Long,
+        val intervalP95Us: Long,
+        val preP50Us: Long,
+        val assembleP50Us: Long,
+        val assembleP95Us: Long,
+        val encodeP50Us: Long,
+        val encodeP95Us: Long,
+        val encodeMaxUs: Long,
+        val sendP50Us: Long,
+        val sendP95Us: Long,
+        val sendMaxUs: Long,
+        val totalP50Us: Long,
+        val totalP95Us: Long,
+        val totalMaxUs: Long,
+        val over10ms: Int,
+        val longThenGap: Int,
+    )
+
+    private class CaptureCallbackCostWindow {
+        private val totals = LongArray(RING)
+        private val intervals = LongArray(RING)
+        private val pres = LongArray(RING)
+        private val assembles = LongArray(RING)
+        private val encodes = LongArray(RING)
+        private var encodeFill = 0
+        private val sends = LongArray(RING)
+        private var sendFill = 0
+        private var write = 0
+        private var filled = 0
+        private var ordinal = 0L
+        private var prevTotalUs = -1L
+        private var over10ms = 0
+        private var longThenGap = 0
+        private var encodedN = 0
+
+        fun add(
+            intervalNs: Long,
+            preUs: Long,
+            assembleUs: Long,
+            encodeUs: Long,
+            sendUs: Long,
+            totalUs: Long,
+            encoded: Boolean,
+        ): Long {
+            val idx = write
+            totals[idx] = totalUs
+            intervals[idx] = if (intervalNs < 0L) -1L else intervalNs / 1000L
+            pres[idx] = preUs
+            assembles[idx] = assembleUs
+            write = (write + 1) % RING
+            if (filled < RING) filled++
+            if (encoded) {
+                encodes[encodeFill % RING] = encodeUs
+                encodeFill++
+                sends[sendFill % RING] = sendUs
+                sendFill++
+                encodedN++
+            }
+            if (totalUs >= 10_000L) over10ms++
+            if (prevTotalUs >= 8_000L && intervalNs >= 15_000_000L) longThenGap++
+            prevTotalUs = totalUs
+            ordinal++
+            return ordinal
+        }
+
+        fun snapshot(): CaptureCallbackCostSnapshot {
+            val totalSorted = copyFilled(totals, filled)
+            val intervalSorted = copyFilled(intervals, filled).filter { it >= 0L }.toLongArray()
+            val preSorted = copyFilled(pres, filled)
+            val assembleSorted = copyFilled(assembles, filled)
+            val encodeCount = encodeFill.coerceAtMost(RING)
+            val sendCount = sendFill.coerceAtMost(RING)
+            val encodeSorted = copyFilled(encodes, encodeCount)
+            val sendSorted = copyFilled(sends, sendCount)
+            totalSorted.sort()
+            intervalSorted.sort()
+            preSorted.sort()
+            assembleSorted.sort()
+            encodeSorted.sort()
+            sendSorted.sort()
+            return CaptureCallbackCostSnapshot(
+                winN = filled,
+                encodedN = encodedN,
+                intervalP50Us = percentile(intervalSorted, 50),
+                intervalP95Us = percentile(intervalSorted, 95),
+                preP50Us = percentile(preSorted, 50),
+                assembleP50Us = percentile(assembleSorted, 50),
+                assembleP95Us = percentile(assembleSorted, 95),
+                encodeP50Us = percentile(encodeSorted, 50),
+                encodeP95Us = percentile(encodeSorted, 95),
+                encodeMaxUs = encodeSorted.lastOrNull() ?: -1L,
+                sendP50Us = percentile(sendSorted, 50),
+                sendP95Us = percentile(sendSorted, 95),
+                sendMaxUs = sendSorted.lastOrNull() ?: -1L,
+                totalP50Us = percentile(totalSorted, 50),
+                totalP95Us = percentile(totalSorted, 95),
+                totalMaxUs = totalSorted.lastOrNull() ?: -1L,
+                over10ms = over10ms,
+                longThenGap = longThenGap,
+            )
+        }
+
+        fun resetWindowCounters() {
+            over10ms = 0
+            longThenGap = 0
+            encodedN = 0
+        }
+
+        private fun copyFilled(src: LongArray, count: Int): LongArray {
+            if (count <= 0) return LongArray(0)
+            return src.copyOf(count)
+        }
+
+        private fun percentile(sortedAsc: LongArray, p: Int): Long {
+            if (sortedAsc.isEmpty()) return -1L
+            val rank = ((p / 100.0) * (sortedAsc.lastIndex)).toInt().coerceIn(0, sortedAsc.lastIndex)
+            return sortedAsc[rank]
+        }
+    }
+
+    private const val RING = 128
     private const val RX_ADMISSION_SUMMARY_WINDOW_MS = 1_000L
 }

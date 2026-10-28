@@ -46,9 +46,9 @@ class Profile01ShadowSr4PlayTest {
                 wiringProvider = { wiring },
                 hasSession = { wiring.hasSession(sessionId) },
                 sessionAnchorMs = { anchorMs },
-                runMixPlayoutCycle = { w, sid, nowMs, slot, slotMediaTimeMs ->
+                runMixPlayoutCycle = { w, sid, nowMs, slot, slotMediaTimeMs, perSourceSlots ->
                     mixCalls.incrementAndGet()
-                    w.runMixPlayoutCycle(sid, nowMs, slot, slotMediaTimeMs)
+                    w.prepareMixPlayoutCycle(sid, nowMs, slot, slotMediaTimeMs, perSourceSlots)
                 },
             )
         playoutSeam.onShadowSessionStarted(sessionId)
@@ -122,7 +122,7 @@ class Profile01ShadowSr4PlayTest {
                 wiringProvider = { wiring },
                 hasSession = { wiring.hasSession(sessionId) },
                 sessionAnchorMs = { anchorMs },
-                runMixPlayoutCycle = { _, _, _, _, _ ->
+                runMixPlayoutCycle = { _, _, _, _, _, _ ->
                     calls += 1
                     if (calls == 1) throw IllegalStateException("play-boom")
                     null
@@ -145,9 +145,9 @@ class Profile01ShadowSr4PlayTest {
                 wiringProvider = { wiring },
                 hasSession = { wiring.hasSession(sessionId) },
                 sessionAnchorMs = { anchorMs },
-                runMixPlayoutCycle = { w, sid, nowMs, slot, slotMediaTimeMs ->
+                runMixPlayoutCycle = { w, sid, nowMs, slot, slotMediaTimeMs, perSourceSlots ->
                     mixCalls.incrementAndGet()
-                    w.runMixPlayoutCycle(sid, nowMs, slot, slotMediaTimeMs)
+                    w.prepareMixPlayoutCycle(sid, nowMs, slot, slotMediaTimeMs, perSourceSlots)
                 },
             )
         playoutSeam.onShadowSessionStarted(sessionId)
@@ -224,7 +224,7 @@ class Profile01ShadowSr4PlayTest {
                 wiringProvider = { wiring },
                 hasSession = { wiring.hasSession(sessionId) },
                 sessionAnchorMs = { anchorMs },
-                runMixPlayoutCycle = { _, _, _, _, _ -> throw IllegalStateException("play-boom") },
+                runMixPlayoutCycle = { _, _, _, _, _, _ -> throw IllegalStateException("play-boom") },
             )
         ConferenceSessionMediaCoordinatorDelegate.profile01ShadowPlayoutClockSeam = playoutSeam
         startHarnessSession()

@@ -1,0 +1,117 @@
+From 14b9bfe358166fddb8fa092dd75cbfafbdb6b8ca Mon Sep 17 00:00:00 2001
+From: happy <happy@local>
+Date: Wed, 19 Aug 2026 17:05:45 +0800
+Subject: [PATCH 4/8] fix(conference): freeze peer admission lineage during
+ ACCEPT handoff
+
+INVITE until ICE_CONNECTED owns offerLineage. Restart/resend must ask canRestartConferenceEdge.
+
+Co-authored-by: Cursor <cursoragent@cursor.com>
+---
+ .../session/ConferenceAdmissionTracker.kt     | 32 +++++++++++++++++++
+ .../session/ConferenceAdmissionTrackerTest.kt | 26 +++++++++++++++
+ 2 files changed, 58 insertions(+)
+
+diff --git a/android-board-talkback/src/main/java/com/talkback/core/session/ConferenceAdmissionTracker.kt b/android-board-talkback/src/main/java/com/talkback/core/session/ConferenceAdmissionTracker.kt
+index 39dcc54..bcd212d 100644
+--- a/android-board-talkback/src/main/java/com/talkback/core/session/ConferenceAdmissionTracker.kt
++++ b/android-board-talkback/src/main/java/com/talkback/core/session/ConferenceAdmissionTracker.kt
+@@ -10,12 +10,41 @@ class ConferenceAdmissionTracker(
+     }
+ ) {
+     private val phases = linkedMapOf<ConferenceAdmissionKey, ConferenceAdmissionPhase>()
++    private val admissionHandoffActive = linkedMapOf<ConferenceAdmissionKey, Boolean>()
+ 
+     fun phase(key: ConferenceAdmissionKey): ConferenceAdmissionPhase? = phases[key]
+ 
+     fun allowsRecovery(key: ConferenceAdmissionKey): Boolean =
+         phases[key] == ConferenceAdmissionPhase.READY
+ 
++    fun isAdmissionHandoffActive(key: ConferenceAdmissionKey): Boolean =
++        admissionHandoffActive[key] == true
++
++    /**
++     * Invite resend / ICE restart / recovery reattach must not change offer lineage
++     * while ACCEPT→ICE_CONNECTED is in progress.
++     */
++    fun canRestartConferenceEdge(key: ConferenceAdmissionKey): Boolean =
++        allowsRecovery(key) && !isAdmissionHandoffActive(key)
++
++    fun beginAdmissionHandoff(key: ConferenceAdmissionKey) {
++        if (admissionHandoffActive[key] == true) return
++        admissionHandoffActive[key] = true
++        logSink(
++            "CONFERENCE_ADMISSION_HANDOFF session=${key.sessionId} peer=${key.peerId} " +
++                "active=true scope=CONFERENCE"
++        )
++    }
++
++    fun completeAdmissionHandoff(key: ConferenceAdmissionKey) {
++        if (admissionHandoffActive[key] != true) return
++        admissionHandoffActive[key] = false
++        logSink(
++            "CONFERENCE_ADMISSION_HANDOFF session=${key.sessionId} peer=${key.peerId} " +
++                "active=false scope=CONFERENCE"
++        )
++    }
++
+     /**
+      * ADR-0052: symmetric offerer/Answerer initial-admission READY commit.
+      * Idempotent — does not emit a duplicate transition when already READY.
+@@ -45,15 +74,18 @@ class ConferenceAdmissionTracker(
+         reason: ConferenceAdmissionTransitionReason = ConferenceAdmissionTransitionReason.SESSION_TERMINATED
+     ) {
+         phases.keys.filter { it.sessionId == sessionId }.forEach { key ->
++            admissionHandoffActive.remove(key)
+             transition(key, ConferenceAdmissionPhase.TERMINATED, reason)
+         }
+     }
+ 
+     fun removeSession(sessionId: String) {
+         phases.keys.removeIf { it.sessionId == sessionId }
++        admissionHandoffActive.keys.removeIf { it.sessionId == sessionId }
+     }
+ 
+     internal fun resetForTest() {
+         phases.clear()
++        admissionHandoffActive.clear()
+     }
+ }
+diff --git a/android-board-talkback/src/test/java/com/talkback/core/session/ConferenceAdmissionTrackerTest.kt b/android-board-talkback/src/test/java/com/talkback/core/session/ConferenceAdmissionTrackerTest.kt
+index 5f3f5fc..9482184 100644
+--- a/android-board-talkback/src/test/java/com/talkback/core/session/ConferenceAdmissionTrackerTest.kt
++++ b/android-board-talkback/src/test/java/com/talkback/core/session/ConferenceAdmissionTrackerTest.kt
+@@ -84,4 +84,30 @@ class ConferenceAdmissionTrackerTest {
+         assertTrue(tracker.allowsRecovery(key))
+         assertEquals(readyLogsAfterFirst, logs.count { it.contains("phase=READY") })
+     }
++
++    @Test
++    fun admissionHandoff_blocksRestartUntilIceConnected() {
++        tracker.beginAdmissionHandoff(key)
++        tracker.markReadyIfAbsent(key)
++
++        assertTrue(tracker.allowsRecovery(key))
++        assertTrue(tracker.isAdmissionHandoffActive(key))
++        assertFalse(tracker.canRestartConferenceEdge(key))
++
++        tracker.completeAdmissionHandoff(key)
++
++        assertTrue(tracker.canRestartConferenceEdge(key))
++        assertTrue(logs.any { it.contains("CONFERENCE_ADMISSION_HANDOFF") && it.contains("active=true") })
++        assertTrue(logs.any { it.contains("CONFERENCE_ADMISSION_HANDOFF") && it.contains("active=false") })
++    }
++
++    @Test
++    fun admissionHandoff_inviteResendBlockedBeforeReady() {
++        tracker.beginAdmissionHandoff(key)
++        tracker.transition(key, ConferenceAdmissionPhase.INVITED, ConferenceAdmissionTransitionReason.INVITE_RECEIVED)
++
++        assertTrue(tracker.isAdmissionHandoffActive(key))
++        assertFalse(tracker.canRestartConferenceEdge(key))
++        assertFalse(tracker.allowsRecovery(key))
++    }
+ }
+-- 
+2.54.0.windows.1
+

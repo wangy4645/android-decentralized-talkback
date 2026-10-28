@@ -40,13 +40,70 @@ object EstablishmentOperatorAuthorityFieldHarness {
 
         val m01 = loadEvidence(File(batchDir, "M01-evidence.txt"))
         val m02 = loadEvidence(File(batchDir, "M02-evidence.txt"))
-        val thirdPeerFile = resolveThirdPeerEvidenceFile(batchDir)
-        return if (thirdPeerFile != null) {
-            val thirdPeer = loadEvidence(thirdPeerFile)
-            runTrio(batchDir, m01, m02, thirdPeer, taskProfileRevision, domain)
-        } else {
-            runDuo(batchDir, m01, m02, taskProfileRevision, domain)
+        val extraPeers = resolveExtraPeerEvidenceFiles(batchDir).map(::loadEvidence)
+        return when (extraPeers.size) {
+            0 -> runDuo(batchDir, m01, m02, taskProfileRevision, domain)
+            1 -> runTrio(batchDir, m01, m02, extraPeers.single(), taskProfileRevision, domain)
+            else -> runN(batchDir, listOf(m01, m02) + extraPeers, taskProfileRevision, domain)
         }
+    }
+
+    /**
+     * N-member provisioning (N >= 4): chained operator enrollment on M01's view, shared bindings,
+     * one signed delivery per participant. Revisions are `R-(N-1) .. R` in participant order.
+     */
+    private fun runN(
+        batchDir: File,
+        members: List<Evidence>,
+        taskProfileRevision: Long,
+        domain: String,
+    ): AuthorityResult {
+        val n = members.size
+        require(taskProfileRevision > n.toLong() - 1L) {
+            "taskProfileRevision must be > ${n - 1} for $n-member provisioning"
+        }
+        var state: AcceptedLocalEstablishmentTrustState? = null
+        var lastDraft: EstablishmentEnrollmentRevisionDraft? = null
+        members.forEachIndexed { index, member ->
+            val revision = taskProfileRevision - (n - 1 - index).toLong()
+            val draft =
+                approvePeer(
+                    toEnrollmentEvidence(member),
+                    currentState = state,
+                    taskProfileRevision = revision,
+                    domain = domain,
+                    localModuleId = "M01",
+                )
+            state = syntheticStateFromDraft(draft)
+            lastDraft = draft
+        }
+        val finalDraft = checkNotNull(lastDraft)
+        val sharedBindings = finalDraft.establishmentBindings
+        val drafts =
+            members.map { member ->
+                member.moduleId to
+                    finalDraft.copy(
+                        localModuleId = member.moduleId,
+                        establishmentBindings = sharedBindings,
+                    )
+            }
+        val outputs = writeSignedDeliveries(batchDir, drafts)
+        File(batchDir, "PROVISIONING_MANIFEST.txt").writeText(
+            buildManifest(
+                domain = domain,
+                taskProfileRevision = taskProfileRevision,
+                modules =
+                    members.map { member ->
+                        ManifestModule(
+                            member.moduleId,
+                            bindingVersion(sharedBindings, member.moduleId),
+                            member.publicKeyFingerprintSha256Hex,
+                            member.keyAlias,
+                        )
+                    },
+            ),
+        )
+        return AuthorityResult(true, "signed $n-member deliveries written", outputs)
     }
 
     private fun runDuo(
@@ -180,13 +237,15 @@ object EstablishmentOperatorAuthorityFieldHarness {
         return AuthorityResult(true, "signed trio deliveries written", outputs)
     }
 
-    private fun resolveThirdPeerEvidenceFile(batchDir: File): File? {
-        val m03 = File(batchDir, "M03-evidence.txt")
-        if (m03.exists()) return m03
-        val m04 = File(batchDir, "M04-evidence.txt")
-        if (m04.exists()) return m04
-        return null
-    }
+    private val evidenceFileName = Regex("^(M\\d{2})-evidence\\.txt$")
+
+    /** All `Mxx-evidence.txt` except M01/M02, sorted by module id. */
+    private fun resolveExtraPeerEvidenceFiles(batchDir: File): List<File> =
+        (batchDir.listFiles() ?: emptyArray())
+            .filter { file ->
+                val id = evidenceFileName.matchEntire(file.name)?.groupValues?.get(1)
+                id != null && id != "M01" && id != "M02"
+            }.sortedBy { it.name }
 
     private data class ManifestModule(
         val moduleId: String,
@@ -212,7 +271,14 @@ object EstablishmentOperatorAuthorityFieldHarness {
             appendLine("deploymentTrustDomainId=$domain")
             appendLine("taskProfileRevision=$taskProfileRevision")
             appendLine("signerKeyVersion=1")
-            appendLine("provisioning_topology=${if (modules.size == 3) "trio" else "duo"}")
+            val topology =
+                when (modules.size) {
+                    2 -> "duo"
+                    3 -> "trio"
+                    else -> "n${modules.size}"
+                }
+            appendLine("provisioning_topology=$topology")
+            appendLine("participant_modules=${modules.joinToString(",") { it.moduleId }}")
             modules.forEach { module ->
                 appendLine("${module.moduleId}.establishmentKeyVersion=${module.establishmentKeyVersion}")
                 appendLine("${module.moduleId}.publicKeyFingerprint=${module.publicKeyFingerprint}")

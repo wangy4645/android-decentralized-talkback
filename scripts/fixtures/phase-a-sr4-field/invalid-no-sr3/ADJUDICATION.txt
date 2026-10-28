@@ -1,0 +1,22 @@
+﻿PA-SR4 FIELD ADJUDICATION (Real Shadow Media Activity Gate)
+log_dir=d:\workspace\project\talkback\talkback\scripts\fixtures\phase-a-sr4-field\invalid-no-sr3
+criteria=meeting-product-integration-phase-a-shadow-runtime-adjudication-criteria.md#PA-SR4
+authorization=meeting-product-integration-phase-a-sr4-field-authorization.md
+PA-SR5_to_SR6=OBSERVE_ONLY
+
+GROUP_GATE status=PASS verdict=PASS
+INVITE_JOIN_GATE status=PASS hostSessionId=b23edb10-5855-4252-9495-4cefd9f196df
+JOIN_GATE status=PASS hostSessionId=b23edb10-5855-4252-9495-4cefd9f196df
+identity hostSessionId=b23edb10-5855-4252-9495-4cefd9f196df conferenceId=c6b73689f63d5f33e17925e2ef0d0c83 hostModuleId=M01 peerModuleId=M02
+
+observe_only_file=PA_SR4_OBSERVE_ONLY.txt
+
+
+VERDICT=INVALID_PREREQUISITE
+PA-SR4=NOT_TESTED
+reason=sr3_member_media_ready_host_module_not_observed
+PA-SR3=UNCHANGED_CLOSED
+B1-R2=UNCHANGED_CLOSED
+ADR-0056=KEEP
+Meeting_media_cutover=NOT_AUTHORIZED
+Next=RERUN_AFTER_SR3_SAME_SESSION

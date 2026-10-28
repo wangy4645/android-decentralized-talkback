@@ -1,0 +1,16 @@
+﻿PA-SR5 FIELD ADJUDICATION (M01 SOURCE Generation Replace)
+log_dir=D:\workspace\project\talkback\talkback\scripts\fixtures\phase-a-sr5-field\fail-no-revoke
+run_card=meeting-product-integration-phase-a-sr5-field-run-card.md
+stimulus=M01_SOURCE_generation_replace_MEMBER_REPLACED
+adjudication_plane=M02_peer
+
+hostSessionId=8b12b21a-37d1-4fc5-ae52-850e2442f4c6
+WINDOW_A tx_packetsSent_max=100 ingress_packetsReceived_max=100 playout_writes_max=5 captureG1=1
+WINDOW_B revokedG1_lines=0 memberReplaced=0
+
+VERDICT=FAIL_PA_SR5
+PA-SR5=FAIL
+reason=window_B_revoke_or_member_replaced_missing
+ADR-0056=KEEP
+Meeting_media_cutover=NOT_AUTHORIZED
+Next=FIX_SR5_REGRESSION_RERUN

@@ -1,0 +1,17 @@
+﻿REPLACEMENT CUTOVER RC1 FIELD ADJUDICATION
+log_dir=D:\workspace\project\talkback\talkback\scripts\fixtures\replacement-cutover-rc1-field\invalid-baseline
+run_card=replacement-cutover-rc1-field-run-card.md
+adr=0062-replacement-cutover-rc1-audible-ownership-transition.md
+adjudication_plane=M02
+hostSessionId=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee
+cutoverSucceededLog=False cutoverFailedLog=False autoRollbackLog=False rollbackSucceededLog=False
+
+VERDICT=INVALID_BASELINE
+RC1=NOT_TESTED
+reason=window_A_not_operational
+CUTOVER_SUCCEEDED=false
+ROLLBACK_SUCCEEDED=false
+AUTO_ROLLBACK_ONLY=false
+ADR-0056=KEEP
+Replacement_readiness=NOT_READY
+Next=RERUN_RC1_WINDOW_A

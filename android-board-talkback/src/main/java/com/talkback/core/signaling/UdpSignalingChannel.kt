@@ -292,14 +292,23 @@ class UdpSignalingChannel(
         }
         val boundNetworkId = socketBinder?.bindSocket(newSocket)
             ?: SignalingTransportManager.BOUND_NETWORK_UNBOUND
-        socketRef.set(newSocket)
-        socketId = newSocketId
         val now = System.currentTimeMillis()
         qualificationRebindGeneration = signalingGeneration?.advanceRebindGeneration() ?: run {
             rebindGeneration += 1L
             rebindGeneration
         }
         rebindGeneration = qualificationRebindGeneration
+        TransportCapabilityTrace.socketBound(
+            socketId = newSocketId,
+            networkId = networkId,
+            localAddress = localIp(newSocket),
+            boundNetworkId = boundNetworkId,
+            rebindGeneration = qualificationRebindGeneration
+        )
+        // Epoch handoff ordering (2026-10-27 field, M01 "LOCAL_NOT_BIDIRECTIONAL" lock-up): the tracker
+        // MUST learn (socketId, generation) before any sender/receiver thread can touch the new socket.
+        // Otherwise FIRST_OUTBOUND/INBOUND_AFTER_REBIND for the new epoch is rejected and never re-emitted.
+        linkQualificationFacts?.onSocketBound(newSocketId, qualificationRebindGeneration, networkId)
         socketBoundAtMs = now
         rebindAtMs = now
         lastInboundOnCurrentSocketMs = 0L
@@ -310,14 +319,8 @@ class UdpSignalingChannel(
         bidirectionalConfirmedGeneration = null
         lastBlockingSocketId = 0L
         lastBlockingLogMs = 0L
-        TransportCapabilityTrace.socketBound(
-            socketId = newSocketId,
-            networkId = networkId,
-            localAddress = localIp(newSocket),
-            boundNetworkId = boundNetworkId,
-            rebindGeneration = qualificationRebindGeneration
-        )
-        linkQualificationFacts?.onSocketBound(newSocketId, qualificationRebindGeneration, networkId)
+        socketId = newSocketId
+        socketRef.set(newSocket)
         if (reason == "qualification_repair") {
             LinkQualificationTrace.linkRepairSocketContext(
                 phase = "AFTER_REBIND_SOCKET",

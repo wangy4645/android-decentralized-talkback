@@ -1,0 +1,9 @@
+﻿pass-full=PASS
+fail-peer-never-received=FAIL
+fail-applied-without-ready=FAIL
+fail-ready-after-applied=FAIL
+fail-negative-ready-after-reject=FAIL
+invalid-negative-not-injected=INVALID
+invalid-missing-origin-obs=INVALID
+invalid-file-injected-without-obs=INVALID
+invalid-harness-only-republish=INVALID

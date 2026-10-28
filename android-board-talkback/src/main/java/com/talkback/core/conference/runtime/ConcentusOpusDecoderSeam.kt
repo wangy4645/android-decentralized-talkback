@@ -1,10 +1,7 @@
 package com.talkback.core.conference.runtime
 
 import com.talkback.core.conference.wire.ConferenceWireConstants
-import io.github.jaredmdobson.concentus.OpusApplication
 import io.github.jaredmdobson.concentus.OpusDecoder
-import io.github.jaredmdobson.concentus.OpusEncoder
-import io.github.jaredmdobson.concentus.OpusSignal
 import kotlin.math.PI
 import kotlin.math.sin
 
@@ -174,15 +171,7 @@ object OpusTestVectors {
 
     fun encodePcm(pcm: ShortArray): ByteArray {
         require(pcm.size == OpusCodecConstants.FRAME_SAMPLES_20MS)
-        val encoder =
-            OpusEncoder(
-                OpusCodecConstants.SAMPLE_RATE_HZ,
-                OpusCodecConstants.CHANNELS,
-                OpusApplication.OPUS_APPLICATION_VOIP,
-            )
-        encoder.setSignalType(OpusSignal.OPUS_SIGNAL_VOICE)
-        encoder.bitrate = 16_000
-        encoder.complexity = 5
+        val encoder = ConcentusOpusEncoderSeam.newProductionEncoder()
         val packet = ByteArray(OpusCodecConstants.MAX_PACKET_BYTES)
         val encoded =
             encoder.encode(

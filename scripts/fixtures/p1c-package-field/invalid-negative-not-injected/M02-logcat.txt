@@ -1,0 +1,4 @@
+09-08 17:00:01.200  2000  2001 I Talkback: WIRE_INGRESS session=s1 factType=11 outcome=APPLIED detail=
+09-08 17:00:01.210  2000  2001 I Talkback: PROFILE01_MEDIA_SUPPLEMENT conferenceId=aabbccddeeff00112233445566778899 mediaKeyEpoch=3 state=READY
+09-08 17:00:01.220  2000  2001 I Talkback: PROFILE01_MEDIA_KEY_INGEST conferenceId=aabbccddeeff00112233445566778899 mediaKeyEpoch=3 recipientModuleId=M02 establishmentKeyVersion=1 outcome=APPLIED
+09-08 17:00:02.500  2000  2001 I Talkback: PROFILE01_MEDIA_KEY_INGEST conferenceId=aabbccddeeff00112233445566778899 mediaKeyEpoch=3 recipientModuleId=M02 establishmentKeyVersion=2 outcome=REJECTED_RECIPIENT_KEY_VERSION_MISMATCH

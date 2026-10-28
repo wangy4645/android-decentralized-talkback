@@ -1,0 +1,3 @@
+captureG1=1
+driverLeavePhase=COMPLETE
+driverRejoinPhase=SKIPPED

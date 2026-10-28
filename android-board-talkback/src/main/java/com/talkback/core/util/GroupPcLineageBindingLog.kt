@@ -79,4 +79,27 @@ object GroupPcLineageBindingLog {
         reason: String,
     ): String =
         "GPLB_ICE_FENCED sid=$sessionId peer=$peer offerLineageId=$offerLineageId reason=$reason"
+
+    fun joinBindSkipped(
+        sessionId: String,
+        peer: String,
+        reason: String,
+        pcGeneration: Long?,
+        pcHash: Int?,
+    ): String =
+        "GPLB_JOIN_BIND_SKIPPED sid=$sessionId peer=$peer reason=$reason " +
+            "pcGeneration=${pcGeneration ?: "NONE"} pcHash=${pcHash ?: "NONE"}"
+
+    fun iceHold(
+        disposition: String,
+        sessionId: String,
+        peer: String,
+        pcGeneration: Long?,
+        pcHash: Int?,
+        detail: String? = null,
+    ): String {
+        val extra = detail?.let { " $it" }.orEmpty()
+        return "GPLB_ICE_HOLD disposition=$disposition sid=$sessionId peer=$peer " +
+            "pcGeneration=${pcGeneration ?: "NONE"} pcHash=${pcHash ?: "NONE"}$extra"
+    }
 }

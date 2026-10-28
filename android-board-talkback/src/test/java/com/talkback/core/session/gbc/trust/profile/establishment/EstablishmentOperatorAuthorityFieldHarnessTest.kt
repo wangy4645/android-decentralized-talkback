@@ -25,10 +25,31 @@ class EstablishmentOperatorAuthorityFieldHarnessTest {
         assertTrue(result.outputs.containsKey("M01"))
         assertTrue(result.outputs.containsKey("M02"))
         assertTrue(File(batchDir, "PROVISIONING_MANIFEST.txt").exists())
-        val thirdPeer =
-            listOf("M03", "M04").firstOrNull { File(batchDir, "$it-evidence.txt").exists() }
-        if (thirdPeer != null) {
-            assertTrue(result.outputs.containsKey(thirdPeer))
+        val evidenceIds =
+            (batchDir.listFiles() ?: emptyArray())
+                .mapNotNull { Regex("^(M\\d{2})-evidence\\.txt$").matchEntire(it.name)?.groupValues?.get(1) }
+                .toSet()
+        assertEquals(evidenceIds, result.outputs.keys)
+        evidenceIds.forEach { moduleId ->
+            assertTrue(File(batchDir, "establishment-signed-$moduleId.bin").exists())
+        }
+    }
+
+    @Test
+    fun fiveMemberProvisioning_writesSignedDeliveriesForAllPeers() {
+        val batchDir = File.createTempFile("ep-n5-batch", null).apply { delete(); mkdirs() }
+        val members = listOf("M01", "M02", "M03", "M04", "M05")
+        members.forEach { writeEvidence(batchDir, it, 1L) }
+
+        val result = EstablishmentOperatorAuthorityFieldHarness.run(batchDir)
+        assertTrue(result.message, result.success)
+        assertEquals(members.toSet(), result.outputs.keys)
+        val manifest = File(batchDir, "PROVISIONING_MANIFEST.txt").readText()
+        assertTrue(manifest.contains("provisioning_topology=n5"))
+        assertTrue(manifest.contains("participant_modules=M01,M02,M03,M04,M05"))
+        members.forEach { moduleId ->
+            assertTrue(manifest.contains("$moduleId.establishmentKeyVersion="))
+            assertTrue(File(batchDir, "establishment-signed-$moduleId.bin").exists())
         }
     }
 

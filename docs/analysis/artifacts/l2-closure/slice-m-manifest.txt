@@ -1,0 +1,2 @@
+# Slice-M materialized paths (worktree state at probe stop) — see slice-m-probe-log.md for reasons
+# 3 L2 @ faf8884 + 63 GA @ 1ab10ae = 66 total

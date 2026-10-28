@@ -1,12 +1,19 @@
 package com.talkback.core.conference.session.integration
 
+import android.os.Process
+import android.os.SystemClock
+import com.talkback.core.conference.runtime.MixedBlock
+import com.talkback.core.conference.runtime.ProductionPlayoutTickTelemetry
 import com.talkback.core.conference.session.ConferenceSessionMediaBridge
 import com.talkback.core.conference.session.ConferenceSessionMediaWiring
 import com.talkback.core.conference.transport.AbsoluteMediaPlayoutClock
 import com.talkback.core.conference.session.integration.cutover.AudibleOwnershipState
 import com.talkback.core.conference.session.integration.cutover.ReplacementCutoverRc1
 import com.talkback.core.conference.transport.PipelinePlayoutResult
+import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
 /**
@@ -36,7 +43,15 @@ class Profile01ShadowPlayoutClockSeam(
         Long,
         Map<String, Long>,
     ) -> PipelinePlayoutResult? = { wiring, sessionId, nowMs, slot, slotMediaTimeMs, perSourceSlots ->
-        wiring.runMixPlayoutCycle(sessionId, nowMs, slot, slotMediaTimeMs, perSourceSlots)
+        wiring.prepareMixPlayoutCycle(sessionId, nowMs, slot, slotMediaTimeMs, perSourceSlots)
+    },
+    private val writeMixedBlock: (
+        ConferenceSessionMediaWiring,
+        String,
+        MixedBlock,
+        Long,
+    ) -> Boolean = { wiring, sessionId, block, nowMs ->
+        wiring.writeMixedBlock(sessionId, block, nowMs)
     },
     private val clockFactory: (
         anchorMs: Long,
@@ -57,6 +72,12 @@ class Profile01ShadowPlayoutClockSeam(
         val clock: AbsoluteMediaPlayoutClock,
         val mixCyclesExecuted: AtomicLong,
         val tickFailures: AtomicLong,
+        val mixRunning: AtomicBoolean = AtomicBoolean(true),
+        val mixBusy: AtomicBoolean = AtomicBoolean(false),
+        val mixJobs: ArrayBlockingQueue<Long> = ArrayBlockingQueue(1),
+        val deadlinePump: ProductionPlayoutDeadlinePump = ProductionPlayoutDeadlinePump(),
+        var mixThread: Thread? = null,
+        var lastTickStartNs: Long = 0L,
     )
 
     private val armed = ConcurrentHashMap<String, ArmedSession>()
@@ -111,6 +132,14 @@ class Profile01ShadowPlayoutClockSeam(
                 return
             }
             clock.start()
+            armedSession.mixThread =
+                Thread(
+                    { mixLoop(armedSession) },
+                    "tb-playout-mix-${sessionId.take(8)}",
+                ).apply {
+                    isDaemon = true
+                    start()
+                }
             Profile01ShadowRuntimeObservability.logShadowPlayoutArmed(
                 sessionId = sessionId,
                 outcome = "APPLIED",
@@ -143,7 +172,15 @@ class Profile01ShadowPlayoutClockSeam(
 
     private fun disarmSession(sessionId: String) {
         val session = armed.remove(sessionId) ?: return
+        session.mixRunning.set(false)
         session.clock.stop()
+        session.mixThread?.interrupt()
+        try {
+            session.mixThread?.join(disarmJoinTimeoutMs)
+        } catch (_: InterruptedException) {
+            // best-effort shutdown
+        }
+        ProductionPlayoutTickTelemetry.flush()
         Profile01ShadowRuntimeObservability.logShadowPlayoutDisarmed(
             sessionId = sessionId,
             mixCyclesExecuted = session.mixCyclesExecuted.get(),
@@ -151,11 +188,104 @@ class Profile01ShadowPlayoutClockSeam(
         )
     }
 
+    private fun mixLoop(session: ArmedSession) {
+        runCatching { Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO) }
+        while (session.mixRunning.get()) {
+            val tickMediaTimeMs =
+                try {
+                    session.mixJobs.poll(20L, TimeUnit.MILLISECONDS)
+                } catch (_: InterruptedException) {
+                    break
+                } ?: continue
+            try {
+                runMixPrepare(session, tickMediaTimeMs)
+            } finally {
+                session.mixBusy.set(false)
+            }
+        }
+    }
+
     private fun onPlayoutTick(
         session: ArmedSession,
         tickMediaTimeMs: Long,
     ) {
-        if (!armed.containsKey(session.sessionId)) return
+        val tickStartNs = System.nanoTime()
+        val intervalValid = session.lastTickStartNs != 0L
+        val tickIntervalUs =
+            if (intervalValid) (tickStartNs - session.lastTickStartNs) / 1_000L else 0L
+        session.lastTickStartNs = tickStartNs
+        var writeUs = 0L
+        var skipReason = "na"
+        var writtenSamples = 0
+        val production = rc1AudioTrackOwnerLabel() == "MULTICAST_PRODUCTION"
+        try {
+            if (!armed.containsKey(session.sessionId)) {
+                skipReason = "NOT_ARMED"
+                return
+            }
+            if (!hasSession(session.sessionId)) {
+                skipReason = "NO_SESSION"
+                return
+            }
+            val wiring = wiringProvider()
+            if (wiring == null) {
+                skipReason = "NO_WIRING"
+                return
+            }
+            if (wiring.isIngressBlocked(session.sessionId)) {
+                skipReason = "INGRESS_BLOCKED"
+                return
+            }
+            val deadlineBlock = session.deadlinePump.blockForDeadlineWrite()
+            val writeStartNs = System.nanoTime()
+            val wrote = writeMixedBlock(wiring, session.sessionId, deadlineBlock, System.currentTimeMillis())
+            writeUs = (System.nanoTime() - writeStartNs) / 1_000L
+            if (wrote) {
+                writtenSamples = deadlineBlock.samples.size
+                skipReason = if (deadlineBlock.samples.isEmpty()) "DEADLINE_SILENCE" else "DEADLINE_WRITE"
+            } else {
+                skipReason = if (deadlineBlock.samples.isEmpty()) "DEADLINE_EMPTY" else "WRITE_NOT_OBSERVED"
+            }
+            if (session.mixBusy.compareAndSet(false, true)) {
+                if (!session.mixJobs.offer(tickMediaTimeMs)) {
+                    session.mixBusy.set(false)
+                }
+            }
+        } catch (t: Throwable) {
+            session.tickFailures.incrementAndGet()
+            skipReason = "TICK_FAILED"
+            Profile01ShadowRuntimeObservability.logShadowPlayoutTickFailed(
+                sessionId = session.sessionId,
+                reason = t.javaClass.simpleName,
+                detail = t.message,
+                stackTrace = t.stackTraceToString(),
+            )
+        } finally {
+            if (production) {
+                ProductionPlayoutTickTelemetry.record(
+                    elapsedMs = SystemClock.elapsedRealtime(),
+                    tickIntervalUs = tickIntervalUs,
+                    intervalValid = intervalValid,
+                    lockWaitUs = 0L,
+                    resolveUs = 0L,
+                    decodeUs = 0L,
+                    mixUs = 0L,
+                    writeUs = writeUs,
+                    tickTotalUs = (System.nanoTime() - tickStartNs) / 1_000L,
+                    skipReason = skipReason,
+                    writtenSamples = writtenSamples,
+                    ticksFired = session.clock.ticksFired,
+                    ticksSkipped = session.clock.ticksSkipped,
+                )
+            }
+        }
+    }
+
+    private fun runMixPrepare(
+        session: ArmedSession,
+        tickMediaTimeMs: Long,
+    ) {
+        if (!session.mixRunning.get() || !armed.containsKey(session.sessionId)) return
         if (!hasSession(session.sessionId)) return
         val wiring = wiringProvider() ?: return
         if (wiring.isIngressBlocked(session.sessionId)) return
@@ -200,6 +330,7 @@ class Profile01ShadowPlayoutClockSeam(
                         buffered.perSourceSlots,
                     )
                 if (result != null) {
+                    session.deadlinePump.publishPrepared(result.mixCycle.mixedBlock)
                     session.mixCyclesExecuted.incrementAndGet()
                     val liveDecoders = wiring.runtimeSnapshot(session.sessionId)?.liveDecoders ?: 0
                     val successfulPlayoutWrites =

@@ -81,4 +81,14 @@ object OpusCodecConstants {
     /** 20 ms @ 48 kHz mono. */
     const val FRAME_SAMPLES_20MS: Int = 960
     const val MAX_PACKET_BYTES: Int = 400
+
+    /**
+     * Production TX bitrate (2026-10-27 five-device field: 16 kbps SILK-WB sounded hollow).
+     * 24 kbps puts Opus VOIP in hybrid mode (SILK + CELT above 8 kHz). CBR so every 20 ms payload is
+     * exactly 60 B, inside the ADR-0058 frozen wire cap (`MAX_OPUS_PAYLOAD_OCTETS` = 72) — VBR peaks would
+     * not be. Must satisfy TX_BITRATE_BPS * 0.020 / 8 <= 72.
+     */
+    const val TX_BITRATE_BPS: Int = 24_000
+    const val TX_COMPLEXITY: Int = 5
+    const val TX_USE_CBR: Boolean = true
 }
