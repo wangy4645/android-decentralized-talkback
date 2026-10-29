@@ -85,6 +85,20 @@ object MeetingPresenceDisplay {
         if (facts.membership.toMembershipState() == LocalReachability.MembershipState.LEFT) {
             return null
         }
+        when (facts.displayState) {
+            ConferenceParticipantDisplayState.VISIBLE_CONNECTED -> {
+                if (
+                    !facts.isRecoveringPeer &&
+                    !facts.mediaUnavailablePeer &&
+                    !facts.controlDegraded &&
+                    !facts.controlSyncPending
+                ) {
+                    return UserVisibleConnectivityState.CONNECTED
+                }
+            }
+            ConferenceParticipantDisplayState.VISIBLE_CONNECTING -> return null
+            else -> Unit
+        }
         val receivePathLive = receivePathLivenessProvider.receivePathLive(
             facts.sessionId,
             facts.moduleId

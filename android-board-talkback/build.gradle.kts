@@ -168,6 +168,16 @@ android {
                     "com/talkback/core/conference/session/integration/Profile01ShadowSr4PlayTest.kt",
                     "com/talkback/core/conference/runtime/ProductionPlayoutTickTelemetryDeskTest.kt",
                 ),
+            "conferenceUiRosterDeskOnly" to
+                listOf(
+                    "com/talkback/core/session/ConferenceParticipantManagerTest.kt",
+                    "com/talkback/core/session/ConferenceParticipantProjectorTest.kt",
+                    "com/talkback/core/session/ConferenceRuntimeProjectorTest.kt",
+                ),
+            "profile01SourceMembershipDeskOnly" to
+                listOf(
+                    "com/talkback/core/conference/session/integration/MeetingProfile01SourceMembershipContextRepublicationTest.kt",
+                ),
         )
     unitTestFileGates.forEach { (gate, files) ->
         if (project.hasProperty(gate)) {

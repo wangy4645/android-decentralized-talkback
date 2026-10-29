@@ -551,6 +551,9 @@ class TalkbackCoordinator(
         com.talkback.core.session.gbc.trust.mesh.MeshHelloPeerTrustSupplement? = null
     private val profile01MediaKeyHeadRepublishRequestDedup =
         java.util.concurrent.ConcurrentHashMap<String, Long>()
+    /** Guards [onMeetingProfile01LocalShadowWireConsumptionReady] against sync re-entry. */
+    private val profile01LocalShadowWireReadySessions =
+        ConcurrentHashMap.newKeySet<String>()
     /**
      * P14: peers removed from conference remotePeers (leave) that still need one head-SOURCE
      * republish when they re-enter. First join never marks here, so first-join paths stay no-op.
@@ -757,10 +760,33 @@ class TalkbackCoordinator(
     ) {
         val session = sessions[sessionId] ?: return
         if (session.type != SessionType.CONFERENCE) return
-        maybeCommitAndPublishLocalConferenceSource(session, reason)
-        publishSourceDeclarationToEligiblePeers(session, reason)
-        republishSourceDeclarationPostBindToAllPeers(session, reason)
-        maybeRepublishHeadSourceToAbsentPeersOnMembershipHead(session, reason)
+        if (!profile01LocalShadowWireReadySessions.add(sessionId)) {
+            log(
+                "${sessionTag(session)} PROFILE01_SOURCE_SHADOW_WIRE_READY_REENTRANT_SKIP " +
+                    "reason=$reason",
+            )
+            return
+        }
+        try {
+            maybeCommitAndPublishLocalConferenceSource(session, reason)
+            publishSourceDeclarationToEligiblePeers(session, reason)
+            republishSourceDeclarationPostBindToAllPeers(session, reason)
+            maybeRepublishHeadSourceToAbsentPeersOnMembershipHead(session, reason)
+        } finally {
+            profile01LocalShadowWireReadySessions.remove(sessionId)
+        }
+    }
+
+    /**
+     * Stale SOURCE membership context rebuild only: commit + pre-bind publish.
+     * Must not call post-bind fanout — that path invokes [MeetingProfile01SourceOriginBridge.onPeerSourceConsumptionEligible]
+     * which requests this rebuild (field StackOverflow on M03).
+     */
+    fun rebuildMeetingProfile01LocalSourceAtMembershipHead(sessionId: String) {
+        val session = sessions[sessionId] ?: return
+        if (session.type != SessionType.CONFERENCE) return
+        maybeCommitAndPublishLocalConferenceSource(session, "peer_stale_membership_context_rebuild")
+        publishSourceDeclarationToEligiblePeers(session, "peer_stale_membership_context_rebuild")
     }
 
     /**
@@ -5146,14 +5172,17 @@ class TalkbackCoordinator(
     fun isChannelMediaReady(channelId: String): Boolean = runOnCoordinatorSync {
         val session = meshSessionForChannel(channelId) ?: return@runOnCoordinatorSync false
         if (session.type == SessionType.CONFERENCE) {
-            return@runOnCoordinatorSync isConferenceProductionMediaReady(session)
+            return@runOnCoordinatorSync isConferenceUiReady(session) ||
+                isConferenceProductionMediaReady(session)
         }
         isSessionTransmitReady(session)
     }
 
     fun isChannelConnecting(channelId: String): Boolean = runOnCoordinatorSync {
         val session = meshSessionForChannel(channelId) ?: return@runOnCoordinatorSync false
-        if (session.type == SessionType.CONFERENCE && isConferenceProductionMediaReady(session)) {
+        if (session.type == SessionType.CONFERENCE &&
+            (isConferenceUiReady(session) || isConferenceProductionMediaReady(session))
+        ) {
             return@runOnCoordinatorSync false
         }
         isSessionMediaNegotiating(session)
@@ -5188,9 +5217,16 @@ class TalkbackCoordinator(
         val readiness = when {
             session != null && (
                 isSessionTransmitReady(session) ||
-                    (session.type == SessionType.CONFERENCE && isConferenceProductionMediaReady(session))
+                    (
+                        session.type == SessionType.CONFERENCE &&
+                            (
+                                isConferenceUiReady(session) ||
+                                    isConferenceProductionMediaReady(session)
+                                )
+                        )
                 ) -> ChannelReadiness.READY
             session != null && session.type == SessionType.CONFERENCE &&
+                !isConferenceUiReady(session) &&
                 !isConferenceProductionMediaReady(session) &&
                 isSessionMediaNegotiating(session) -> ChannelReadiness.CONNECTING
             session != null && session.type != SessionType.CONFERENCE &&
@@ -12212,6 +12248,11 @@ class TalkbackCoordinator(
         updateSessionReceivePlayback(session)
         exitReason = "GROUP_SYNC_SDP"
         } finally {
+            sessions[sessionId]?.takeIf {
+                it.type == SessionType.CONFERENCE &&
+                    isConferenceHostSession(it) &&
+                    shouldPublishConferenceMembershipAfterGroupAccept(exitReason)
+            }?.let(::publishConferenceAdmittedMembershipToPeers)
             logGroupAcceptExec(
                 stage = "EXIT",
                 sessionId = sessionId,
@@ -13615,6 +13656,22 @@ class TalkbackCoordinator(
         releaseSessionMedia(session)
         session.ptt.onEvent(PttEvent.RemoteHangup)
         log("[${session.traceId}] Left conference locally notified=${remainingMemberKeys.size}")
+    }
+
+    /** UI / admitted-list projection only. Must not release invite ICE or PeerConnections. */
+    private fun syncConferenceUiRosterFromMembership(
+        session: TalkbackSession,
+        members: List<EndpointAddress>,
+    ) {
+        if (session.type != SessionType.CONFERENCE) return
+        conferenceParticipantManager.applyCanonicalMembershipRoster(
+            session.id,
+            members,
+            localModuleId,
+        )
+        members.forEach { session.memberModules.add(it.moduleId) }
+        session.memberModules.add(localModuleId)
+        session.touch()
     }
 
     private fun applyConferenceRoster(session: TalkbackSession, members: List<EndpointAddress>) {
@@ -15239,14 +15296,41 @@ class TalkbackCoordinator(
     }
 
     private fun broadcastMembershipSnapshot(session: TalkbackSession) {
-        GroupMembershipSupport.canonicalRosterEndpoints(session)
-            .filter { it.moduleId != session.local.moduleId }
-            .forEach { remote ->
-                if (sendMembershipSnapshotInvite(session, remote)) {
-                    log("${sessionTag(session)} MEMBERSHIP_SNAPSHOT -> ${remote.moduleId.value}")
-                }
+        membershipSnapshotRecipients(session).forEach { remote ->
+            if (sendMembershipSnapshotInvite(session, remote)) {
+                log("${sessionTag(session)} MEMBERSHIP_SNAPSHOT -> ${remote.moduleId.value}")
             }
+        }
     }
+
+    private fun membershipSnapshotRecipients(session: TalkbackSession): List<EndpointAddress> =
+        when (session.type) {
+            SessionType.CONFERENCE ->
+                admittedConferenceEndpoints(session).filter { it.moduleId != session.local.moduleId }
+            else ->
+                GroupMembershipSupport.canonicalRosterEndpoints(session)
+                    .filter { it.moduleId != session.local.moduleId }
+        }
+
+    /**
+     * After a peer accepts, push admitted-only roster to every in-meeting device (no rosterEpoch bump).
+     */
+    private fun publishConferenceAdmittedMembershipToPeers(session: TalkbackSession) {
+        if (session.type != SessionType.CONFERENCE || !isConferenceHostSession(session)) return
+        val admitted = admittedConferenceEndpoints(session)
+        if (admitted.size <= 1) return
+        syncConferenceUiRosterFromMembership(session, admitted)
+        broadcastMembershipSnapshot(session)
+    }
+
+    private fun shouldPublishConferenceMembershipAfterGroupAccept(exitReason: String): Boolean =
+        when (exitReason) {
+            "NO_SESSION",
+            "AWAITING_E4_INVITE",
+            "BLANK_ACCEPT_DEFERRED_PENDING_HOST_OFFER",
+            "LATE_SPOKE_MEMBERSHIP_FACT" -> false
+            else -> !exitReason.startsWith("GPLB_")
+        }
 
     private fun scheduleReconcile(reason: String) {
         sessions.values
@@ -15727,7 +15811,7 @@ class TalkbackCoordinator(
     }
 
     private fun membershipSnapshotForSession(session: TalkbackSession): MembershipSnapshot {
-        val members = rosterMembersForPayload(session).map { it.key }
+        val members = admittedConferenceMemberKeys(session)
         return MembershipSnapshot(
             rosterEpoch = session.rosterEpoch,
             anchorEpoch = session.anchorEpoch,
@@ -15741,7 +15825,8 @@ class TalkbackCoordinator(
         val payload = groupPayloadBase(session).copy(
             sdp = "",
             rejoin = true,
-            membershipSnapshot = membershipSnapshotForSession(session)
+            membershipSnapshot = membershipSnapshotForSession(session),
+            members = admittedConferenceMemberKeys(session),
         )
         sendSignal(
             peer,
@@ -15809,6 +15894,7 @@ class TalkbackCoordinator(
                         if (forceAlign) " forceAlign localWas=$localEpochBefore" else ""
                 )
                 if (session.type == SessionType.CONFERENCE) {
+                    syncConferenceUiRosterFromMembership(session, members)
                     logMembershipEpochTransition(
                         session = session,
                         channelId = channelId,
@@ -15923,6 +16009,7 @@ class TalkbackCoordinator(
                     )
                 ) {
                     GroupMembershipSupport.MembershipSnapshotApplyResult.APPLIED -> {
+                        syncConferenceUiRosterFromMembership(conference, members)
                         log(
                             "${sessionTag(conference)} conferenceMembershipAligned rosterEpoch=" +
                                 "${snapshot.rosterEpoch} authority=$authorityId"
@@ -16047,6 +16134,21 @@ class TalkbackCoordinator(
             ?: session.leftMemberEndpoints.forEach { (id, endpoint) -> byModule.putIfAbsent(id, endpoint) }
         return byModule.values.toList()
     }
+
+    /** Accepted conference members only — excludes ringing / not-yet-answered invitees. */
+    private fun admittedConferenceEndpoints(session: TalkbackSession): List<EndpointAddress> {
+        if (session.type != SessionType.CONFERENCE) {
+            return rosterMembersForPayload(session)
+        }
+        val remotes = fullConferenceRoster(session).filter { endpoint ->
+            conferenceParticipantManager.participant(session.id, endpoint.moduleId.value).invite ==
+                InviteState.ACCEPTED
+        }
+        return listOf(session.local) + remotes
+    }
+
+    private fun admittedConferenceMemberKeys(session: TalkbackSession): List<String> =
+        admittedConferenceEndpoints(session).map { it.key }
 
     private fun conferenceUnconnectedInviteTargets(session: TalkbackSession): List<EndpointAddress> =
         fullConferenceRoster(session).filter { remote ->

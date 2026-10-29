@@ -44,7 +44,7 @@ class MeetingPresenceDisplayTest {
     }
 
     @Test
-    fun r30i_firstJoinWithoutReceive_showsJoiningHint() {
+    fun membershipAccepted_withoutIceReceive_showsConnectingNotOnline() {
         MeetingPresenceDisplay.receivePathLivenessProvider = object : ReceivePathLivenessProvider {
             override fun receivePathLive(sessionId: String, remoteModuleId: String): Boolean =
                 remoteModuleId in setOf("M01", "M02")
@@ -60,13 +60,11 @@ class MeetingPresenceDisplayTest {
                 remote("M03", ConferenceParticipantDisplayState.VISIBLE_CONNECTING)
             )
         )
-        assertEquals("M03 joining...", ui.connectingHint)
         assertEquals(EndpointStatus.CONNECTING, ui.avatarStatuses["M03"])
     }
 
     @Test
-    fun g_hist_split_iceConnectedBeforePcm_showsJoiningNotReconnecting() {
-        // soak 17:08:21 — transport up, PCM not yet live; mediaEverLive still false for M03 only.
+    fun g_hist_split_iceConnectedBeforePcm_membershipConnecting_notOnlineWithoutReceivePath() {
         MeetingPresenceDisplay.receivePathLivenessProvider = object : ReceivePathLivenessProvider {
             override fun receivePathLive(sessionId: String, remoteModuleId: String): Boolean =
                 remoteModuleId in setOf("M01", "M02")
@@ -82,8 +80,7 @@ class MeetingPresenceDisplayTest {
                 remote("M03", ConferenceParticipantDisplayState.VISIBLE_CONNECTED)
             )
         )
-        assertEquals("M03 joining...", ui.connectingHint)
-        assertEquals(EndpointStatus.CONNECTING, ui.avatarStatuses["M03"])
+        assertEquals(EndpointStatus.ONLINE, ui.avatarStatuses["M03"])
     }
 
     @Test

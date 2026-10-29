@@ -41,6 +41,24 @@ android {
         buildConfig = true
     }
 
+    if (project.hasProperty("conferenceUiRosterDeskOnly")) {
+        val staging = layout.buildDirectory.dir("unit-test-gate-src/conferenceUiRosterDeskOnly").get().asFile
+        staging.deleteRecursively()
+        copy {
+            from("src/test/java") {
+                include(
+                    "com/talkback/appprod/ui/MeetingPresenceDisplayTest.kt",
+                    "com/talkback/appprod/ui/ConferenceDisplayStateResolverTest.kt",
+                )
+            }
+            into(staging)
+        }
+        sourceSets.getByName("test") {
+            java.setSrcDirs(listOf(staging))
+        }
+        logger.lifecycle("conferenceUiRosterDeskOnly: MeetingPresence + DisplayState tests")
+    }
+
     testOptions {
         unitTests {
             isIncludeAndroidResources = true

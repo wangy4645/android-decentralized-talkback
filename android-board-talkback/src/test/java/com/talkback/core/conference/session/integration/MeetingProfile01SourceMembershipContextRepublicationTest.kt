@@ -109,6 +109,52 @@ class MeetingProfile01SourceMembershipContextRepublicationTest {
         assertEquals(0, sendCount)
     }
 
+    @Test
+    fun postBind_stale_rebuildCallback_doesNotReenterPostBind_andReplaysAtHead() {
+        val harness = newHarness("src-postbind-rebuild-once")
+        harness.seedCreation()
+        val commitment =
+            harness.localSourceAuthority.commitLocalSource(harness.sessionId, HOST, mediaKeyEpoch = 1L)
+        harness.commitSource(commitment)
+        harness.publishPreBind(LATE_PEER)
+        harness.advanceMembershipForLatePeer()
+
+        var rebuildCount = 0
+        var nestedPostBindCount = 0
+        harness.sourceBridge.onRequestMembershipContextRebuild = { sessionId ->
+            rebuildCount++
+            assertEquals(harness.sessionId, sessionId)
+            assertEquals(1, rebuildCount)
+            // Mimic coordinator.rebuildMeetingProfile01LocalSourceAtMembershipHead:
+            // commit + pre-bind only — never call onPeerSourceConsumptionEligible here.
+            assertEquals(SourceOriginBuildOutcome.BUILT, harness.commitSource(commitment))
+            harness.publishPreBind(LATE_PEER)
+        }
+
+        val sends = mutableListOf<ByteArray>()
+        val outcome =
+            harness.sourceBridge.onPeerSourceConsumptionEligible(
+                sessionId = harness.sessionId,
+                snapshot = harness.trioSnapshot(),
+                localModuleId = HOST,
+                targetModuleId = LATE_PEER,
+                reason = REASON,
+                publishToPeer = { _, bytes ->
+                    // If rebuild wrongly re-entered post-bind fanout, this would nest.
+                    nestedPostBindCount++
+                    sends += bytes.copyOf()
+                    true
+                },
+            )
+        assertEquals(1, rebuildCount)
+        assertEquals(SourcePostBindRepublishOutcome.EMITTED, outcome)
+        assertEquals(1, nestedPostBindCount)
+        assertEquals(1, sends.size)
+        val headWire = decodeWire(sends.single())
+        assertEquals(1L, headWire.membershipVersion)
+        assertEquals(2L, headWire.mediaKeyEpoch)
+    }
+
     private fun decodeWire(
         signedBytes: ByteArray,
     ): com.talkback.core.conference.session.profile01.Profile01WireMemberSourceFact =

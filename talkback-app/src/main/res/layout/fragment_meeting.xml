@@ -148,13 +148,21 @@
                     android:layout_weight="1" />
             </LinearLayout>
 
+            <androidx.core.widget.NestedScrollView
+                android:id="@+id/scrollMeetingLive"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:fillViewport="true"
+                android:overScrollMode="ifContentScrolls"
+                android:visibility="gone">
+
             <LinearLayout
                 android:id="@+id/panelMeetingLive"
                 android:layout_width="match_parent"
-                android:layout_height="match_parent"
+                android:layout_height="wrap_content"
                 android:gravity="center_horizontal"
                 android:orientation="vertical"
-                android:visibility="gone">
+                android:paddingBottom="8dp">
 
                 <TextView
                     android:id="@+id/txtMeetingPoorNetwork"
@@ -300,6 +308,7 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="16dp"
+                    android:nestedScrollingEnabled="false"
                     android:scrollbars="none">
 
                     <LinearLayout
@@ -309,6 +318,7 @@
                         android:orientation="horizontal" />
                 </HorizontalScrollView>
             </LinearLayout>
+            </androidx.core.widget.NestedScrollView>
         </FrameLayout>
 
         <com.google.android.material.button.MaterialButton

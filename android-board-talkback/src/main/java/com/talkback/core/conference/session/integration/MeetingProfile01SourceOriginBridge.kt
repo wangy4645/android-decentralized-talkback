@@ -527,10 +527,10 @@ class MeetingProfile01SourceOriginBridge(
         reason: String,
         publishToPeer: (moduleId: String, signedFactBytes: ByteArray) -> Boolean,
     ): SourcePostBindRepublishOutcome {
-        val state = sourceStateBySession[sessionId]
+        var state = sourceStateBySession[sessionId]
             ?: return SourcePostBindRepublishOutcome.SKIPPED_NO_BUILT_SOURCE
 
-        val committed = committedIdentityBySession[sessionId]
+        var committed = committedIdentityBySession[sessionId]
             ?: return SourcePostBindRepublishOutcome.SKIPPED_STALE_IDENTITY
 
         val pub = publisher
@@ -545,8 +545,8 @@ class MeetingProfile01SourceOriginBridge(
         val conferenceIdHex = sessionIndex.conferenceIdForSession(sessionId)
             ?: return SourcePostBindRepublishOutcome.SKIPPED_STALE_IDENTITY
 
-        val cachedBytes = state.signedFactBytes.copyOf()
-        val wire =
+        var cachedBytes = state.signedFactBytes.copyOf()
+        var wire =
             when (val decoded = Profile01WireCborDecoder.decodeSourceDeclarationMember(cachedBytes)) {
                 is Profile01WireCborDecoder.DecodeResult.Ready -> decoded.value
                 else -> return SourcePostBindRepublishOutcome.SKIPPED_STALE_IDENTITY
@@ -563,24 +563,108 @@ class MeetingProfile01SourceOriginBridge(
                     wire.mediaKeyEpoch != convergence.mediaKeyEpoch
             )
         ) {
+            // Rebuild SOURCE at membership head only — must not re-enter post-bind fanout
+            // (that path called us and would StackOverflow).
             onRequestMembershipContextRebuild?.invoke(sessionId)
-            logPostBindRepublish(
-                sessionId = sessionId,
-                identity =
-                    SourcePostBindPublicationIdentity(
-                        conferenceId = conferenceIdHex,
-                        sourceModuleId = localModuleId,
-                        sourceGeneration = state.publishedAuthorityGeneration,
-                        sourceInstanceIdHex = committed.sourceInstanceId.toHexLower(),
-                        targetModuleId = targetModuleId,
-                        factDigest = state.factDigestHex,
-                        membershipVersion = wire.membershipVersion,
-                        mediaKeyEpoch = wire.mediaKeyEpoch,
-                    ),
-                reason = reason,
-                outcome = "SKIPPED_STALE_MEMBERSHIP_CONTEXT",
-            )
-            return SourcePostBindRepublishOutcome.SKIPPED_STALE_MEMBERSHIP_CONTEXT
+            val rebuiltState = sourceStateBySession[sessionId]
+            val rebuiltCommitted = committedIdentityBySession[sessionId]
+            if (rebuiltState == null || rebuiltCommitted == null) {
+                logPostBindRepublish(
+                    sessionId = sessionId,
+                    identity =
+                        SourcePostBindPublicationIdentity(
+                            conferenceId = conferenceIdHex,
+                            sourceModuleId = localModuleId,
+                            sourceGeneration = state.publishedAuthorityGeneration,
+                            sourceInstanceIdHex = committed.sourceInstanceId.toHexLower(),
+                            targetModuleId = targetModuleId,
+                            factDigest = state.factDigestHex,
+                            membershipVersion = wire.membershipVersion,
+                            mediaKeyEpoch = wire.mediaKeyEpoch,
+                        ),
+                    reason = reason,
+                    outcome = "SKIPPED_STALE_MEMBERSHIP_CONTEXT",
+                )
+                return SourcePostBindRepublishOutcome.SKIPPED_STALE_MEMBERSHIP_CONTEXT
+            }
+            val rebuiltBytes = rebuiltState.signedFactBytes.copyOf()
+            val rebuiltWire =
+                when (val decoded = Profile01WireCborDecoder.decodeSourceDeclarationMember(rebuiltBytes)) {
+                    is Profile01WireCborDecoder.DecodeResult.Ready -> decoded.value
+                    else -> {
+                        logPostBindRepublish(
+                            sessionId = sessionId,
+                            identity =
+                                SourcePostBindPublicationIdentity(
+                                    conferenceId = conferenceIdHex,
+                                    sourceModuleId = localModuleId,
+                                    sourceGeneration = rebuiltState.publishedAuthorityGeneration,
+                                    sourceInstanceIdHex = rebuiltCommitted.sourceInstanceId.toHexLower(),
+                                    targetModuleId = targetModuleId,
+                                    factDigest = rebuiltState.factDigestHex,
+                                    membershipVersion = wire.membershipVersion,
+                                    mediaKeyEpoch = wire.mediaKeyEpoch,
+                                ),
+                            reason = reason,
+                            outcome = "SKIPPED_STALE_MEMBERSHIP_CONTEXT",
+                        )
+                        return SourcePostBindRepublishOutcome.SKIPPED_STALE_MEMBERSHIP_CONTEXT
+                    }
+                }
+            if (!verifyAuthoritativeSourceTuple(
+                    rebuiltState,
+                    rebuiltCommitted,
+                    rebuiltWire,
+                    localModuleId,
+                )
+            ) {
+                logPostBindRepublish(
+                    sessionId = sessionId,
+                    identity =
+                        SourcePostBindPublicationIdentity(
+                            conferenceId = conferenceIdHex,
+                            sourceModuleId = localModuleId,
+                            sourceGeneration = rebuiltState.publishedAuthorityGeneration,
+                            sourceInstanceIdHex = rebuiltCommitted.sourceInstanceId.toHexLower(),
+                            targetModuleId = targetModuleId,
+                            factDigest = rebuiltState.factDigestHex,
+                            membershipVersion = rebuiltWire.membershipVersion,
+                            mediaKeyEpoch = rebuiltWire.mediaKeyEpoch,
+                        ),
+                    reason = reason,
+                    outcome = "SKIPPED_STALE_MEMBERSHIP_CONTEXT",
+                )
+                return SourcePostBindRepublishOutcome.SKIPPED_STALE_MEMBERSHIP_CONTEXT
+            }
+            val rebuiltConvergence = membershipConvergence.current(conferenceIdHex)
+            if (rebuiltConvergence != null &&
+                (
+                    rebuiltWire.membershipVersion != rebuiltConvergence.membershipVersion ||
+                        rebuiltWire.mediaKeyEpoch != rebuiltConvergence.mediaKeyEpoch
+                )
+            ) {
+                logPostBindRepublish(
+                    sessionId = sessionId,
+                    identity =
+                        SourcePostBindPublicationIdentity(
+                            conferenceId = conferenceIdHex,
+                            sourceModuleId = localModuleId,
+                            sourceGeneration = rebuiltState.publishedAuthorityGeneration,
+                            sourceInstanceIdHex = rebuiltCommitted.sourceInstanceId.toHexLower(),
+                            targetModuleId = targetModuleId,
+                            factDigest = rebuiltState.factDigestHex,
+                            membershipVersion = rebuiltWire.membershipVersion,
+                            mediaKeyEpoch = rebuiltWire.mediaKeyEpoch,
+                        ),
+                    reason = reason,
+                    outcome = "SKIPPED_STALE_MEMBERSHIP_CONTEXT",
+                )
+                return SourcePostBindRepublishOutcome.SKIPPED_STALE_MEMBERSHIP_CONTEXT
+            }
+            state = rebuiltState
+            committed = rebuiltCommitted
+            cachedBytes = rebuiltBytes
+            wire = rebuiltWire
         }
 
         val transportIdentity =

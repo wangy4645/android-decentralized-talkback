@@ -93,6 +93,36 @@ class ConferenceParticipantManager {
         syncParticipantsFromMembers(sessionId, state.local.moduleId)
     }
 
+    /**
+     * Membership-authority roster: every listed remote is in-meeting.
+     *
+     * Fills [MediaState.NONE] as [MediaState.CONNECTED] so UI can show the peer as
+     * conference-present. This is membership presence, not local WebRTC health:
+     * a missing spoke-spoke PC must not be projected as [MediaState.CONNECTING].
+     * Existing CONNECTING / RECONNECTING / FAILED / CONNECTED are left unchanged
+     * so Host↔member media facts are not overwritten.
+     */
+    fun applyCanonicalMembershipRoster(
+        sessionId: String,
+        members: List<EndpointAddress>,
+        localModuleId: ModuleId,
+    ) {
+        replaceRoster(sessionId, members)
+        members.forEach { endpoint ->
+            val id = endpoint.moduleId.value
+            if (id == localModuleId.value) return@forEach
+            participant(sessionId, id).apply {
+                if (invite != InviteState.ACCEPTED) {
+                    invite = InviteState.ACCEPTED
+                }
+                if (media == MediaState.NONE) {
+                    media = MediaState.CONNECTED
+                    lastMediaChangeMs = System.currentTimeMillis()
+                }
+            }
+        }
+    }
+
     fun leftMemberEndpoints(sessionId: String): MutableMap<String, EndpointAddress>? =
         sessions[sessionId]?.leftMemberEndpoints
 

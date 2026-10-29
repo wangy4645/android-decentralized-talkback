@@ -526,10 +526,9 @@ object TalkbackRuntimeFactory {
             )
         profile01SourceOriginBridge.memberBindingMaterializer = profile01ShadowMemberBindingMaterializer
         profile01SourceOriginBridge.onRequestMembershipContextRebuild = { sessionId ->
-            coordinator.onMeetingProfile01LocalShadowWireConsumptionReady(
-                sessionId,
-                "peer_stale_membership_context_rebuild",
-            )
+            // Commit/pre-bind only — full LocalShadowWireConsumptionReady includes post-bind
+            // fanout that calls back into onPeerSourceConsumptionEligible (StackOverflow).
+            coordinator.rebuildMeetingProfile01LocalSourceAtMembershipHead(sessionId)
         }
         val meetingProfile01FactWireIngress =
             MeetingProfile01FactWireIngress(

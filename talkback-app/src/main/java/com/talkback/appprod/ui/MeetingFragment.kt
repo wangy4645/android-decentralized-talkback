@@ -228,6 +228,7 @@ class MeetingFragment : Fragment() {
         view.findViewById<TextView>(R.id.txtMeetingTimer).isVisible = !navigationOnly
 
         view.findViewById<View>(R.id.panelMeetingConnecting).isVisible = connecting
+        view.findViewById<View>(R.id.scrollMeetingLive).isVisible = live
         view.findViewById<View>(R.id.panelMeetingLive).isVisible = live
         view.findViewById<View>(R.id.rowMeetingControls).isVisible = live
         view.findViewById<View>(R.id.btnMeetingLeave).isVisible = live

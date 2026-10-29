@@ -33,9 +33,16 @@ data class ConferenceProductionMediaReadiness(
             }
             val catalog = ConferenceSessionMediaBridge.wiring?.catalog(sessionId)?.all().orEmpty()
             if (catalog.isEmpty()) {
+                // Host UI live is membership/session, not catalog completeness (8-10 solo start).
+                if (isHost) {
+                    return ConferenceProductionMediaReadiness(true, NONE)
+                }
                 return ConferenceProductionMediaReadiness(false, CATALOG_EMPTY)
             }
             if (catalog.none { it.moduleId != localModuleId }) {
+                if (isHost) {
+                    return ConferenceProductionMediaReadiness(true, NONE)
+                }
                 return ConferenceProductionMediaReadiness(false, REMOTE_CATALOG_MEMBER_MISSING)
             }
             val owner = ReplacementCutoverRc1.currentState()
