@@ -30,6 +30,13 @@ object ConferenceSessionMediaBridge {
         pendingReason: String,
     ): Boolean = wiring?.expectPresentMembers(sessionId, moduleIds, pendingReason) == true
 
+    fun pruneCatalogOutsideCommit(
+        sessionId: String,
+        keepModuleIds: Set<String>,
+    ) {
+        wiring?.pruneCatalogOutsideCommit(sessionId, keepModuleIds)
+    }
+
     fun removeMember(
         sessionId: String,
         moduleId: String,

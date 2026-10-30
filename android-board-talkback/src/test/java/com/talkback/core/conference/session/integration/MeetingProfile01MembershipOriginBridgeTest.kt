@@ -152,6 +152,37 @@ class MeetingProfile01MembershipOriginBridgeTest {
     }
 
     @Test
+    fun lateJoiner_receivesFullMembershipChainNotOnlyHead() {
+        seedCreation(hostOnlySnapshot())
+        publishMembership(hostAndPeerSnapshot("M02"), setOf("M02"))
+        val versionsToM04 = mutableListOf<Long>()
+        val outcome =
+            membershipBridge.onTopologyPublished(
+                sessionId = sessionId,
+                snapshot = fourMemberSnapshot(),
+                localModuleId = hostModuleId,
+                isMembershipAuthority = true,
+                eligiblePeerModuleIds = setOf("M02", "M04"),
+                publishToPeer = { moduleId, bytes ->
+                    if (moduleId == "M04") {
+                        val decoded =
+                            (
+                                Profile01WireCborDecoder.decodeMembership(bytes)
+                                    as Profile01WireCborDecoder.DecodeResult.Ready
+                            ).value
+                        versionsToM04.add(decoded.membershipVersion)
+                    }
+                    true
+                },
+            )
+        assertEquals(OriginEmitOutcome.EMITTED, outcome)
+        assertEquals(listOf(1L, 2L), versionsToM04)
+        val generation = membershipConvergence.current(sessionIndex.conferenceIdForSession(sessionId)!!)!!
+        assertEquals(2L, generation.membershipVersion)
+        assertEquals(setOf("M01", "M02", "M04"), generation.members.map { it.moduleId }.toSet())
+    }
+
+    @Test
     fun peerReceivesMembership_materializesLocalBinding() {
         MeetingProductMediaShadow.enabled = true
         seedCreation(hostOnlySnapshot())
@@ -239,6 +270,7 @@ class MeetingProfile01MembershipOriginBridgeTest {
         assertEquals(WireIngressOutcome.APPLIED, outcome)
         val generation = ingress.membershipRegistry().current(conferenceIdHex)!!
         assertTrue(generation.hasMember("M03"))
+        materializer.materializeLocalIfReady(peerSessionId)
         assertTrue(retryCount > 0)
     }
 
@@ -336,6 +368,19 @@ class MeetingProfile01MembershipOriginBridgeTest {
         y.copyInto(normalizedY, 32 - (y.size - yStart), yStart)
         return byteArrayOf(0x04) + normalizedX + normalizedY
     }
+
+    private fun fourMemberSnapshot(): ConferenceTopologySnapshot =
+        ConferenceTopologySnapshot(
+            conferenceId = sessionId,
+            rosterEpoch = 4L,
+            anchorEpoch = 100L,
+            anchorId = hostModuleId,
+            meshGeneration = 4L,
+            topologyMode = ConferenceTopologyMode.ANCHOR,
+            hostModuleId = hostModuleId,
+            members = listOf(hostModuleId, "M02", "M04"),
+            actualMediaEdges = emptySet(),
+        )
 
     private fun threePeerSnapshot(): ConferenceTopologySnapshot =
         ConferenceTopologySnapshot(

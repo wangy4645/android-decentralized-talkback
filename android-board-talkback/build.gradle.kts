@@ -194,6 +194,14 @@ android {
                 listOf(
                     "com/talkback/core/conference/session/integration/Profile01HeadSupplementObligationTest.kt",
                 ),
+            "profile01CommitDeskOnly" to
+                listOf(
+                    "com/talkback/core/conference/session/integration/Profile01CommitConvergenceDeskTest.kt",
+                    "com/talkback/core/conference/session/integration/Profile01HeadSupplementObligationTest.kt",
+                    "com/talkback/core/conference/session/integration/MeetingProfile01MembershipOriginBridgeTest.kt",
+                    "com/talkback/core/conference/session/CatalogExpectationL1bDeskTest.kt",
+                    "com/talkback/core/conference/session/integration/cutover/MulticastAudibleCutoverReadinessTest.kt",
+                ),
             "meetingOriginAuthorityDeskOnly" to
                 listOf(
                     "com/talkback/core/session/MeetingOriginAuthorityTest.kt",

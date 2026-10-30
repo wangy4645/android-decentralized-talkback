@@ -245,10 +245,22 @@ class Profile01HostLocalSessionFactProjection(
         ingress.currentMembershipGeneration(conferenceId)?.members?.forEach { member ->
             moduleIds.add(member.moduleId)
         }
-        registry.memberModuleIdsAtHead(conferenceId).forEach { moduleIds.add(it) }
-        sessionIndex.bindingForSession(sessionId)?.mediaConnectedModules?.forEach { moduleIds.add(it) }
         localModuleId?.let { moduleIds.add(it) }
-        for (moduleId in moduleIds.sorted()) {
+        ConferenceSessionMediaBridge.expectPresentMembers(
+            sessionId,
+            moduleIds,
+            pendingReason = "MEMBERSHIP_COMMIT",
+        )
+        ConferenceSessionMediaBridge.pruneCatalogOutsideCommit(sessionId, moduleIds)
+        val drive = linkedSetOf<String>()
+        registry.memberModuleIdsAtHead(conferenceId).forEach { id ->
+            if (id in moduleIds) drive.add(id)
+        }
+        sessionIndex.bindingForSession(sessionId)?.mediaConnectedModules?.forEach { id ->
+            if (id in moduleIds) drive.add(id)
+        }
+        localModuleId?.let { drive.add(it) }
+        for (moduleId in drive.sorted()) {
             ConferenceSessionMediaCoordinatorDelegate.onConferenceMemberReplaced(sessionId, moduleId)
             ConferenceSessionMediaCoordinatorDelegate.onConferenceMemberMediaReady(sessionId, moduleId)
         }

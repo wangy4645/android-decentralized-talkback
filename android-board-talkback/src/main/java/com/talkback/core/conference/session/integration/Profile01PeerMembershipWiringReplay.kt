@@ -114,6 +114,7 @@ class Profile01PeerMembershipWiringReplay(
             mediaKeyEpoch = sessionControl.mediaKeyEpoch,
             replayOutcome = "APPLIED",
         )
+        logCommitReadiness(sessionId, conferenceId)
 
         Profile01ShadowRuntimeObservability.logHostSessionProjected(
             sessionId = sessionId,
@@ -158,6 +159,7 @@ class Profile01PeerMembershipWiringReplay(
             mediaKeyEpoch = sessionControl.mediaKeyEpoch,
             replayOutcome = "POST_EPOCH_REPLAY",
         )
+        logCommitReadiness(sessionId, conferenceId)
         MulticastAudibleAutomaticCutover.maybeAttempt(sessionId, localModuleId())
     }
 
@@ -176,9 +178,47 @@ class Profile01PeerMembershipWiringReplay(
         return outcome
     }
 
+    private fun logCommitReadiness(
+        sessionId: String,
+        conferenceId: String,
+    ) {
+        val generation = ingress.currentMembershipGeneration(conferenceId) ?: return
+        val commit = ConferenceMediaCommit.from(generation, sessionId)
+        val expectedModuleIds =
+            ConferenceSessionMediaBridge.wiring?.expectedCatalog(sessionId)?.moduleIds()
+                ?: emptySet()
+        val bound =
+            ConferenceSessionMediaBridge.wiring?.catalog(sessionId)?.all()?.map { it.moduleId }?.toSet()
+                ?: emptySet()
+        val result =
+            Profile01CommitReadiness.evaluate(
+                commit = commit,
+                localModuleId = localModuleId(),
+                localHeadDigest = Profile01HeadDigest.fromGeneration(generation),
+                currentHeadSupplementInstalled =
+                    ConferenceSessionMediaBridge.currentMediaKeyEpoch(sessionId) == commit.mediaKeyEpoch,
+                expectedModuleIds = expectedModuleIds,
+                boundCatalogModuleIds = bound,
+            )
+        Profile01ShadowRuntimeObservability.logPhase(
+            phase = "COMMIT_READY",
+            sessionId = sessionId,
+            conferenceId = conferenceId,
+            mediaKeyEpoch = commit.mediaKeyEpoch,
+            fields =
+                mapOf(
+                    "ready" to result.ready.toString(),
+                    "headDigest" to result.headDigest,
+                    "missing" to result.missing.joinToString(",").ifEmpty { "none" },
+                    "expectedMembers" to result.expectedMembers.sorted().joinToString(","),
+                    "boundCatalog" to bound.sorted().joinToString(",").ifEmpty { "none" },
+                ),
+        )
+    }
+
     /**
-     * Only modules with a registry member fact coherent at session head (matching mediaKeyEpoch).
-     * Roster-only ids without a current-epoch SOURCE are not driven — they wait on wire/materializer.
+     * Expected set is the committed membership snapshot. SOURCE/registry facts only
+     * bind wiring; they do not define who must be present.
      */
     private fun logCatalogExpectation(
         sessionId: String,
@@ -188,6 +228,8 @@ class Profile01PeerMembershipWiringReplay(
     ) {
         val expected = ConferenceSessionMediaBridge.wiring?.expectedCatalog(sessionId)
         val snap = ConferenceSessionMediaBridge.wiring?.runtimeSnapshot(sessionId)
+        val generation = ingress.currentMembershipGeneration(conferenceId)
+        val commit = generation?.let { ConferenceMediaCommit.from(it, sessionId) }
         Profile01ShadowRuntimeObservability.logPhase(
             phase = "CATALOG_L1B",
             sessionId = sessionId,
@@ -202,6 +244,9 @@ class Profile01PeerMembershipWiringReplay(
                         (snap?.pendingSourceMembers ?: expected?.pendingCount() ?: 0).toString(),
                     "pendingModuleIds" to
                         (expected?.pendingModuleIds()?.joinToString(",") ?: "none").ifEmpty { "none" },
+                    "commitHeadDigest" to (commit?.headDigest ?: "none"),
+                    "commitMembers" to
+                        (commit?.members?.sorted()?.joinToString(",") ?: "none"),
                 ),
         )
     }
@@ -211,17 +256,23 @@ class Profile01PeerMembershipWiringReplay(
         conferenceId: String,
         localModuleId: String,
     ) {
+        val generation = ingress.currentMembershipGeneration(conferenceId)
         val present = linkedSetOf<String>()
-        registry.memberModuleIdsPresent(conferenceId).forEach { present.add(it) }
+        if (generation != null) {
+            generation.members.forEach { present.add(it.moduleId) }
+        }
         present.add(localModuleId)
         ConferenceSessionMediaBridge.expectPresentMembers(
             sessionId,
             present,
-            pendingReason = "MEMBERSHIP_PRESENT",
+            pendingReason = "MEMBERSHIP_COMMIT",
         )
+        ConferenceSessionMediaBridge.pruneCatalogOutsideCommit(sessionId, present)
 
         val moduleIds = linkedSetOf<String>()
-        registry.memberModuleIdsAtHead(conferenceId).forEach { moduleIds.add(it) }
+        registry.memberModuleIdsAtHead(conferenceId).forEach { id ->
+            if (id in present) moduleIds.add(id)
+        }
         moduleIds.add(localModuleId)
 
         for (moduleId in moduleIds.sorted()) {

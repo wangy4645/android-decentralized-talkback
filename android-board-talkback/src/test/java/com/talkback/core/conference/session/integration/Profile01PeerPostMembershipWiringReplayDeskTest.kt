@@ -256,6 +256,20 @@ class Profile01PeerPostMembershipWiringReplayDeskTest {
     }
 
     @Test
+    fun peerReplay_expectedMembersFollowsMembershipCommitNotRegistrySources() {
+        applyMembershipHead()
+        seedSupplement(mediaKeyEpoch = 2L, membershipVersion = 1L)
+        localSignedSource = Profile01GoldenVectorWireFixtures.sourceDeclarationSignedFactBytes
+        assertEquals(
+            PeerMembershipWiringReplayOutcome.APPLIED,
+            peerReplay.replayAfterMembershipWireApplied(sessionId),
+        )
+        val generation = ingress.currentMembershipGeneration(conferenceId)!!
+        val commit = ConferenceMediaCommit.from(generation, sessionId)
+        assertEquals(commit.memberSet(), wiring.expectedCatalog(sessionId)!!.moduleIds())
+    }
+
+    @Test
     fun peerReplay_withoutAuthoritativeLocalSource_keepsCatalogEmpty() {
         applyMembershipHead()
         seedSupplement(mediaKeyEpoch = 2L, membershipVersion = 1L)

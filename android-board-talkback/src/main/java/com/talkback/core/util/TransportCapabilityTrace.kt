@@ -201,7 +201,8 @@ object TransportCapabilityTrace {
         val noncePart = nonce?.let { " nonce=$it" }.orEmpty()
         TalkbackLog.i(
             "TransportCapabilityTrace SIGNAL_DATAGRAM_SENT socketId=$socketId localIp=$localIp dstIp=$dstIp " +
-                "dstPort=$dstPort signalType=$signalType bytes=$bytes networkId=$networkId$sessionPart$noncePart"
+                "dstPort=$dstPort signalType=$signalType bytes=$bytes networkId=$networkId$sessionPart$noncePart " +
+                "udpOutcome=UDP_SENT"
         )
     }
 

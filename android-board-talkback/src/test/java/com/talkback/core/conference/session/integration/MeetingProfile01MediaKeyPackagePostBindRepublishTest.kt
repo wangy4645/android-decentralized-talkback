@@ -312,8 +312,8 @@ class MeetingProfile01MediaKeyPackagePostBindRepublishTest {
         )
         val republish =
             logs.single { it.startsWith("PROFILE01_MEDIA_KEY_PACKAGE_POST_BIND_REPUBLISH ") }
-        assertTrue(republish.contains("publicationOutcome=EMITTED"))
-        val origin = logs.single { it.contains("publicationOutcome=POST_BIND_EMITTED") }
+        assertTrue(republish.contains("publicationOutcome=UDP_SENT"))
+        val origin = logs.single { it.contains("publicationOutcome=POST_BIND_UDP_SENT") }
         assertTrue(origin.contains("recipientModuleId=M02"))
     }
 

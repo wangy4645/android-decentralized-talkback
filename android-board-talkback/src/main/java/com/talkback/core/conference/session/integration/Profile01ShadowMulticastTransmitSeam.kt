@@ -334,8 +334,17 @@ class Profile01ShadowMulticastTransmitSeam(
         state: ArmedSession,
         job: EncodeJob,
     ) {
+        val jobStartNs = System.nanoTime()
+        var preEncodeUs = -1L
+        var opusUs = -1L
+        var protectSendUs = -1L
+        var outcome = "ARMED_MISMATCH"
+        var sent = false
         try {
-            if (armed[sessionId] !== state) return
+            if (armed[sessionId] !== state) {
+                outcome = "ARMED_MISMATCH"
+                return
+            }
             val queuedUs = (System.nanoTime() - job.enqueuedNs) / 1000L
             Profile01ShadowRuntimeObservability.maybeLogShadowTxEncodeDequeued(
                 sessionId = sessionId,
@@ -344,12 +353,34 @@ class Profile01ShadowMulticastTransmitSeam(
                 depth = state.queue.size,
                 overflow = state.overflow.get(),
             )
-            val context = resolveEgressContext(sessionId) ?: return
-            if (job.sourceGeneration != 0L && job.sourceGeneration != context.sourceGeneration) return
-            val transport = ConferenceSessionMediaBridge.wiring?.transport(sessionId) ?: return
+            val preStartNs = System.nanoTime()
+            val context = resolveEgressContext(sessionId)
+            if (context == null) {
+                outcome = "NO_EGRESS_CONTEXT"
+                preEncodeUs = (System.nanoTime() - preStartNs) / 1000L
+                return
+            }
+            if (job.sourceGeneration != 0L && job.sourceGeneration != context.sourceGeneration) {
+                outcome = "GENERATION_MISMATCH"
+                preEncodeUs = (System.nanoTime() - preStartNs) / 1000L
+                return
+            }
+            val transport = ConferenceSessionMediaBridge.wiring?.transport(sessionId)
+            if (transport == null) {
+                outcome = "NO_TRANSPORT"
+                preEncodeUs = (System.nanoTime() - preStartNs) / 1000L
+                return
+            }
             val pcmForEncode = processTxPcmForEncode(sessionId, job.pcm)
+            preEncodeUs = (System.nanoTime() - preStartNs) / 1000L
+            val opusStartNs = System.nanoTime()
             val opusPayload = state.opusEncoder.encode(pcmForEncode, context.sourceGeneration)
-            if (transport.sendFromSource(context.egress, opusPayload, context.endpoint)) {
+            opusUs = (System.nanoTime() - opusStartNs) / 1000L
+            val sendStartNs = System.nanoTime()
+            sent = transport.sendFromSource(context.egress, opusPayload, context.endpoint)
+            protectSendUs = (System.nanoTime() - sendStartNs) / 1000L
+            outcome = if (sent) "SENT" else "SEND_FAIL"
+            if (sent) {
                 val snap = transport.observability.snapshot()
                 Profile01ShadowRuntimeObservability.maybeLogShadowTxActivity(
                     sessionId = sessionId,
@@ -360,12 +391,23 @@ class Profile01ShadowMulticastTransmitSeam(
                 )
             }
         } catch (t: Throwable) {
+            outcome = "FAILED"
             Profile01ShadowRuntimeObservability.logShadowTxFailed(
                 sessionId = sessionId,
                 reason = t.javaClass.simpleName,
                 detail = t.message,
             )
         } finally {
+            Profile01ShadowRuntimeObservability.maybeLogShadowTxEncodeJobCost(
+                sessionId = sessionId,
+                moduleId = localModuleId(),
+                outcome = outcome,
+                preEncodeUs = preEncodeUs,
+                opusUs = opusUs,
+                protectSendUs = protectSendUs,
+                jobUs = (System.nanoTime() - jobStartNs) / 1000L,
+                sent = sent,
+            )
             state.pending.updateAndGet { value -> if (value > 0) value - 1 else 0 }
         }
     }

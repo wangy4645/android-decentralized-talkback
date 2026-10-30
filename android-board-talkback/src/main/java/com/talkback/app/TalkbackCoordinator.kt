@@ -384,6 +384,7 @@ import com.talkback.core.conference.session.integration.Profile01HeadSupplementO
 import com.talkback.core.conference.session.integration.Profile01HeadSupplementReadyAck
 import com.talkback.core.conference.session.integration.Profile01MediaKeyHeadRepublishRequest
 import com.talkback.core.conference.session.integration.Profile01PeerHeadSupplementAckPending
+import com.talkback.core.conference.session.integration.Profile01CommitResyncReason
 import com.talkback.core.conference.session.integration.Profile01LocalConferenceSourceIdentityAuthority
 import com.talkback.core.conference.session.integration.Profile01ShadowMulticastTransmitSeam
 import com.talkback.core.conference.session.profile01.Profile01RejoinCatchUpHostDispatchGate
@@ -1932,6 +1933,7 @@ class TalkbackCoordinator(
      * (host observes GROUP_ACCEPT). Key = sessionId|peerModuleId.
      */
     private val deferredProfile01RejoinCatchUpByPeer = ConcurrentHashMap<String, EndpointAddress>()
+    private val lastProfile01CommitResyncAtMs = ConcurrentHashMap<String, Long>()
     private val conferenceRejoinStartedAtByChannel = ConcurrentHashMap<String, Long>()
     private val pendingIceBySession = ConcurrentHashMap<String, ConcurrentHashMap<String, MutableList<String>>>()
     private val groupOutboundIceHold = GroupOutboundIceHold()
@@ -2471,6 +2473,24 @@ class TalkbackCoordinator(
             TimeUnit.MILLISECONDS
         )
         log("Coordinator started port=$localSignalingPort trace=boot")
+    }
+
+    internal fun scheduleProfile01Control(delayMs: Long, block: () -> Unit) {
+        if (stopped) return
+        scheduler.schedule(
+            {
+                try {
+                    block()
+                } catch (error: Throwable) {
+                    log(
+                        "PROFILE01_CONTROL_SCHEDULE_FAILED " +
+                            "err=${error.javaClass.simpleName}:${error.message ?: "null"}",
+                    )
+                }
+            },
+            delayMs.coerceAtLeast(0L),
+            TimeUnit.MILLISECONDS,
+        )
     }
 
     fun stop() {
@@ -14879,7 +14899,12 @@ class TalkbackCoordinator(
         if (session.initiatorModuleId != localModuleId) return false
         val key = profile01RejoinCatchUpDeferralKey(session.id, peerModuleId)
         val remote = deferredProfile01RejoinCatchUpByPeer[key] ?: return false
-        val ok = replayProfile01AuthoritativeCatchUpToRejoiner(session, remote)
+        val ok =
+            maybeDeliverProfile01CommitBundleToPeer(
+                session = session,
+                peerModuleId = peerModuleId,
+                reason = Profile01CommitResyncReason.REJOIN,
+            )
         if (ok) {
             deferredProfile01RejoinCatchUpByPeer.remove(key)
             log(
@@ -14917,36 +14942,72 @@ class TalkbackCoordinator(
     private fun replayProfile01AuthoritativeCatchUpToRejoiner(
         session: TalkbackSession,
         remote: EndpointAddress,
+    ): Boolean =
+        maybeDeliverProfile01CommitBundleToPeer(
+            session = session,
+            peerModuleId = remote.moduleId.value,
+            reason = Profile01CommitResyncReason.REJOIN,
+        )
+
+    private fun maybeDeliverProfile01CommitBundleToPeer(
+        session: TalkbackSession,
+        peerModuleId: String,
+        reason: Profile01CommitResyncReason,
     ): Boolean {
         if (session.type != SessionType.CONFERENCE) return false
-        val rejoinerId = remote.moduleId.value
+        if (peerModuleId == localModuleId.value) return false
+        val nowMs = System.currentTimeMillis()
+        val resyncKey = "${session.id}|$peerModuleId"
+        val last = lastProfile01CommitResyncAtMs[resyncKey]
+        if (last != null && nowMs - last < PROFILE01_COMMIT_RESYNC_MIN_INTERVAL_MS) {
+            log(
+                "${sessionTag(session)} PROFILE01_COMMIT_BUNDLE reason=${reason.name} " +
+                    "peer=$peerModuleId outcome=RATE_LIMITED",
+            )
+            return false
+        }
         val snapshot = conferenceTopologyAuthority.currentSnapshot(session.id)
         if (snapshot == null) {
-            log("${sessionTag(session)} PROFILE01_REJOIN_CATCHUP_FAILED reason=NO_TOPOLOGY_SNAPSHOT peer=$rejoinerId")
+            log("${sessionTag(session)} PROFILE01_COMMIT_BUNDLE_FAILED reason=NO_TOPOLOGY_SNAPSHOT peer=$peerModuleId")
+            if (reason == Profile01CommitResyncReason.REJOIN) {
+                log("${sessionTag(session)} PROFILE01_REJOIN_CATCHUP_FAILED reason=NO_TOPOLOGY_SNAPSHOT peer=$peerModuleId")
+            }
             return false
         }
         val conferenceIdHex = meetingProfile01SessionIndex?.conferenceIdForSession(session.id)
         if (conferenceIdHex == null) {
-            log("${sessionTag(session)} PROFILE01_REJOIN_CATCHUP_FAILED reason=NO_CONFERENCE_ID peer=$rejoinerId")
+            log("${sessionTag(session)} PROFILE01_COMMIT_BUNDLE_FAILED reason=NO_CONFERENCE_ID peer=$peerModuleId")
+            if (reason == Profile01CommitResyncReason.REJOIN) {
+                log("${sessionTag(session)} PROFILE01_REJOIN_CATCHUP_FAILED reason=NO_CONFERENCE_ID peer=$peerModuleId")
+            }
             return false
         }
         val creationBridge = meetingProfile01CreationOriginBridge
         val membershipBridge = meetingProfile01MembershipOriginBridge
         val packageBridge = meetingProfile01MediaKeyPackageOriginBridge
         if (creationBridge == null || membershipBridge == null || packageBridge == null) {
-            log("${sessionTag(session)} PROFILE01_REJOIN_CATCHUP_FAILED reason=NO_PROFILE01_BRIDGE peer=$rejoinerId")
+            log("${sessionTag(session)} PROFILE01_COMMIT_BUNDLE_FAILED reason=NO_PROFILE01_BRIDGE peer=$peerModuleId")
+            if (reason == Profile01CommitResyncReason.REJOIN) {
+                log("${sessionTag(session)} PROFILE01_REJOIN_CATCHUP_FAILED reason=NO_PROFILE01_BRIDGE peer=$peerModuleId")
+            }
             return false
         }
         val creationBytes = creationBridge.readSignedCreationFact(session.id)
         if (creationBytes == null) {
-            log("${sessionTag(session)} PROFILE01_REJOIN_CATCHUP_FAILED reason=NO_CREATION peer=$rejoinerId")
+            log("${sessionTag(session)} PROFILE01_COMMIT_BUNDLE_FAILED reason=NO_CREATION peer=$peerModuleId")
+            if (reason == Profile01CommitResyncReason.REJOIN) {
+                log("${sessionTag(session)} PROFILE01_REJOIN_CATCHUP_FAILED reason=NO_CREATION peer=$peerModuleId")
+            }
             return false
         }
         val publish: (String, ByteArray) -> Boolean = { moduleId, bytes ->
             sendConferenceSignedFactToPeer(session, moduleId, bytes)
         }
-        if (!creationBridge.replayCreationToPeerForRejoinCatchUp(session.id, rejoinerId, publish)) {
-            log("${sessionTag(session)} PROFILE01_REJOIN_CATCHUP_FAILED reason=CREATION_SEND_FAILED peer=$rejoinerId")
+        if (!creationBridge.replayCreationToPeerForRejoinCatchUp(session.id, peerModuleId, publish)) {
+            log("${sessionTag(session)} PROFILE01_COMMIT_BUNDLE_FAILED reason=CREATION_SEND_FAILED peer=$peerModuleId")
+            if (reason == Profile01CommitResyncReason.REJOIN) {
+                log("${sessionTag(session)} PROFILE01_REJOIN_CATCHUP_FAILED reason=CREATION_SEND_FAILED peer=$peerModuleId")
+            }
             return false
         }
         when (
@@ -14954,16 +15015,23 @@ class TalkbackCoordinator(
                 membershipBridge.replayAuthoritativeMembershipChainToPeer(
                     sessionId = session.id,
                     conferenceIdHex = conferenceIdHex,
-                    peerModuleId = rejoinerId,
+                    peerModuleId = peerModuleId,
                     creationSignedFactBytes = creationBytes,
                     publishToPeer = publish,
+                    reason = reason,
                 )
         ) {
             is MeetingProfile01MembershipOriginBridge.RejoinCatchUpReplayOutcome.Failed -> {
                 log(
-                    "${sessionTag(session)} PROFILE01_REJOIN_CATCHUP_FAILED " +
-                        "reason=${membershipReplay.reason} peer=$rejoinerId",
+                    "${sessionTag(session)} PROFILE01_COMMIT_BUNDLE_FAILED " +
+                        "reason=${membershipReplay.reason} peer=$peerModuleId",
                 )
+                if (reason == Profile01CommitResyncReason.REJOIN) {
+                    log(
+                        "${sessionTag(session)} PROFILE01_REJOIN_CATCHUP_FAILED " +
+                            "reason=${membershipReplay.reason} peer=$peerModuleId",
+                    )
+                }
                 return false
             }
             MeetingProfile01MembershipOriginBridge.RejoinCatchUpReplayOutcome.Success -> Unit
@@ -14974,14 +15042,23 @@ class TalkbackCoordinator(
                 snapshot = snapshot,
                 localModuleId = localModuleId.value,
                 isMembershipAuthority = isMeetingOriginAuthority(session),
-                peerModuleId = rejoinerId,
+                peerModuleId = peerModuleId,
                 publishToPeer = publish,
             )
         if (!packageOk) {
-            log("${sessionTag(session)} PROFILE01_REJOIN_CATCHUP_FAILED reason=MEDIA_KEY_PACKAGE_FAILED peer=$rejoinerId")
+            log("${sessionTag(session)} PROFILE01_COMMIT_BUNDLE_FAILED reason=MEDIA_KEY_PACKAGE_FAILED peer=$peerModuleId")
+            if (reason == Profile01CommitResyncReason.REJOIN) {
+                log("${sessionTag(session)} PROFILE01_REJOIN_CATCHUP_FAILED reason=MEDIA_KEY_PACKAGE_FAILED peer=$peerModuleId")
+            }
             return false
         }
-        log("${sessionTag(session)} PROFILE01_REJOIN_CATCHUP_SENT peer=$rejoinerId")
+        lastProfile01CommitResyncAtMs[resyncKey] = nowMs
+        log(
+            "${sessionTag(session)} PROFILE01_COMMIT_BUNDLE_SENT reason=${reason.name} peer=$peerModuleId",
+        )
+        if (reason == Profile01CommitResyncReason.REJOIN) {
+            log("${sessionTag(session)} PROFILE01_REJOIN_CATCHUP_SENT peer=$peerModuleId")
+        }
         return true
     }
 
@@ -15134,6 +15211,16 @@ class TalkbackCoordinator(
             log(
                 "PROFILE01_HEAD_ACK rejected session=${decoded.sessionId} reason=STALE_HEAD " +
                     "from=$from ackHead=${decoded.headDigest} liveHead=${live.headDigest}",
+            )
+            profile01HeadObligationDriver?.onStaleHeadAck(
+                sessionId = decoded.sessionId,
+                peerModuleId = from,
+                ackHeadDigest = decoded.headDigest,
+            )
+            maybeDeliverProfile01CommitBundleToPeer(
+                session = session,
+                peerModuleId = from,
+                reason = Profile01CommitResyncReason.STALE_HEAD,
             )
             return true
         }
@@ -21293,6 +21380,7 @@ class TalkbackCoordinator(
         private const val PAIRWISE_MESH_ADMISSION_ACTIVATION_COOLDOWN_MS = 5_000L
         private const val GROUP_MESH_INVITE_PENDING_TIMEOUT_MS = 10_000L
         private const val BLOCKED_GROUP_ACCEPT_RETRY_BUDGET_MS = 60_000L
+        private const val PROFILE01_COMMIT_RESYNC_MIN_INTERVAL_MS = 1_000L
     }
 
     private fun sessionTag(session: TalkbackSession): String =
@@ -21587,11 +21675,15 @@ class TalkbackCoordinator(
             )
             return false
         }
-        val sent = runCatching {
-            signalingChannel.send(target, envelope)
-        }.onFailure {
-            log("Signal send failed type=${envelope.type} err=${it.message}")
-        }.isSuccess
+        val sent =
+            runCatching {
+                signalingChannel.sendReportingSubmission(target, envelope)
+            }.onFailure {
+                log(
+                    "Signal send failed type=${envelope.type} " +
+                        "err=${it.javaClass.simpleName}:${it.message ?: "null"} udpOutcome=UDP_FAILED",
+                )
+            }.getOrDefault(false)
         if (sent && envelope.type == SignalType.GROUP_INVITE) {
             val peerId = envelope.to?.moduleId?.value
             GroupSessionPayload.decode(envelope.payload)?.let { payload ->

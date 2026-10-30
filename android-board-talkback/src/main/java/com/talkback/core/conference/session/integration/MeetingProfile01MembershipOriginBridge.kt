@@ -112,17 +112,16 @@ class MeetingProfile01MembershipOriginBridge(
 
         val channelId = sessionIndex.bindingForSession(sessionId)?.channelId ?: "-"
         val publishedCount =
-            publishToEligiblePeers(
+            publishCommitChainToEligiblePeers(
                 sessionId = sessionId,
                 conferenceIdHex = conferenceIdHex,
                 channelId = channelId,
-                mediaKeyEpoch = converged.mediaKeyEpoch,
+                mediaKeyEpoch = membershipConvergence.current(conferenceIdHex)?.mediaKeyEpoch
+                    ?: converged.mediaKeyEpoch,
                 localModuleId = localModuleId,
                 eligiblePeerModuleIds = eligiblePeerModuleIds,
-                signedFactBytes = state.signedFactBytes,
                 publishedToPeers = state.publishedToPeers,
                 publishToPeer = publishToPeer,
-                replayLog = createdThisCall,
             )
 
         // New head OR replay to peers that just became reachable — package after MEMBERSHIP wire.
@@ -150,6 +149,7 @@ class MeetingProfile01MembershipOriginBridge(
         peerModuleId: String,
         creationSignedFactBytes: ByteArray,
         publishToPeer: (moduleId: String, signedFactBytes: ByteArray) -> Boolean,
+        reason: Profile01CommitResyncReason = Profile01CommitResyncReason.REJOIN,
     ): RejoinCatchUpReplayOutcome {
         val head =
             membershipConvergence.current(conferenceIdHex)
@@ -175,10 +175,17 @@ class MeetingProfile01MembershipOriginBridge(
                         )
                     }
                     onLog(
-                        "PROFILE01_REJOIN_CATCHUP session=$sessionId factType=" +
-                            "${Profile01WireConstants.FACT_TYPE_MEMBERSHIP} target=$peerModuleId " +
-                            "membershipVersion=${link.membershipVersion}",
+                        "PROFILE01_COMMIT_BUNDLE session=$sessionId reason=${reason.name} " +
+                            "factType=${Profile01WireConstants.FACT_TYPE_MEMBERSHIP} " +
+                            "target=$peerModuleId membershipVersion=${link.membershipVersion}",
                     )
+                    if (reason == Profile01CommitResyncReason.REJOIN) {
+                        onLog(
+                            "PROFILE01_REJOIN_CATCHUP session=$sessionId factType=" +
+                                "${Profile01WireConstants.FACT_TYPE_MEMBERSHIP} target=$peerModuleId " +
+                                "membershipVersion=${link.membershipVersion}",
+                        )
+                    }
                 }
                 return RejoinCatchUpReplayOutcome.Success
             }
@@ -312,18 +319,22 @@ class MeetingProfile01MembershipOriginBridge(
         }
     }
 
-    private fun publishToEligiblePeers(
+    /**
+     * Steady-state membership fanout is the commit bundle chain, not only the
+     * latest MEMBERSHIP fact. Late joiners must receive predecessors or they
+     * stall at CREATION head ([PREDECESSOR_NOT_CURRENT_HEAD]).
+     */
+    private fun publishCommitChainToEligiblePeers(
         sessionId: String,
         conferenceIdHex: String,
         channelId: String,
         mediaKeyEpoch: Long,
         localModuleId: String,
         eligiblePeerModuleIds: Set<String>,
-        signedFactBytes: ByteArray,
         publishedToPeers: MutableSet<String>,
         publishToPeer: (moduleId: String, signedFactBytes: ByteArray) -> Boolean,
-        replayLog: Boolean,
     ): Int {
+        val creationBytes = creationOriginBridge.readSignedCreationFact(sessionId) ?: return 0
         var publishedCount = 0
         eligiblePeerModuleIds
             .filter { it != localModuleId }
@@ -342,34 +353,50 @@ class MeetingProfile01MembershipOriginBridge(
                     )
                     return@forEach
                 }
-                if (publishToPeer(peerModuleId, signedFactBytes)) {
-                    publishedCount++
-                    Profile01ControlPlaneDiagnosticTrace.recordMembershipOriginPeer(
-                        sessionId = sessionId,
-                        conferenceIdHex = conferenceIdHex,
-                        channelId = channelId,
-                        mediaKeyEpoch = mediaKeyEpoch,
-                        peerModuleId = peerModuleId,
-                        disposition =
-                            Profile01ControlPlaneDiagnosticTrace.MembershipOriginPeerDisposition.SENT,
-                    )
-                    if (!replayLog) {
+                when (
+                    val replay =
+                        replayAuthoritativeMembershipChainToPeer(
+                            sessionId = sessionId,
+                            conferenceIdHex = conferenceIdHex,
+                            peerModuleId = peerModuleId,
+                            creationSignedFactBytes = creationBytes,
+                            publishToPeer = publishToPeer,
+                            reason = Profile01CommitResyncReason.LATE_JOIN,
+                        )
+                ) {
+                    is RejoinCatchUpReplayOutcome.Success -> {
+                        publishedToPeers.add(peerModuleId)
+                        publishedCount++
+                        Profile01ControlPlaneDiagnosticTrace.recordMembershipOriginPeer(
+                            sessionId = sessionId,
+                            conferenceIdHex = conferenceIdHex,
+                            channelId = channelId,
+                            mediaKeyEpoch = mediaKeyEpoch,
+                            peerModuleId = peerModuleId,
+                            disposition =
+                                Profile01ControlPlaneDiagnosticTrace.MembershipOriginPeerDisposition.SENT,
+                        )
                         onLog(
                             "PROFILE01_ORIGIN_REPLAY session=$sessionId factType=" +
                                 "${Profile01WireConstants.FACT_TYPE_MEMBERSHIP} target=$peerModuleId",
                         )
                     }
-                } else {
-                    publishedToPeers.remove(peerModuleId)
-                    Profile01ControlPlaneDiagnosticTrace.recordMembershipOriginPeer(
-                        sessionId = sessionId,
-                        conferenceIdHex = conferenceIdHex,
-                        channelId = channelId,
-                        mediaKeyEpoch = mediaKeyEpoch,
-                        peerModuleId = peerModuleId,
-                        disposition =
-                            Profile01ControlPlaneDiagnosticTrace.MembershipOriginPeerDisposition.SEND_FAILED,
-                    )
+                    is RejoinCatchUpReplayOutcome.Failed -> {
+                        publishedToPeers.remove(peerModuleId)
+                        Profile01ControlPlaneDiagnosticTrace.recordMembershipOriginPeer(
+                            sessionId = sessionId,
+                            conferenceIdHex = conferenceIdHex,
+                            channelId = channelId,
+                            mediaKeyEpoch = mediaKeyEpoch,
+                            peerModuleId = peerModuleId,
+                            disposition =
+                                Profile01ControlPlaneDiagnosticTrace.MembershipOriginPeerDisposition.SEND_FAILED,
+                        )
+                        onLog(
+                            "PROFILE01_COMMIT_BUNDLE session=$sessionId reason=LATE_JOIN " +
+                                "outcome=FAILED peer=$peerModuleId detail=${replay.reason}",
+                        )
+                    }
                 }
             }
         return publishedCount

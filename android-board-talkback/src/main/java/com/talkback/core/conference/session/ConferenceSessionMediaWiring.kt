@@ -1024,6 +1024,18 @@ class ConferenceSessionMediaWiring(
         return true
     }
 
+    fun pruneCatalogOutsideCommit(
+        sessionId: String,
+        keepModuleIds: Set<String>,
+    ) {
+        val state = sessions[sessionId] ?: return
+        for (entry in state.catalog.all().toList()) {
+            if (entry.moduleId !in keepModuleIds) {
+                removeMember(sessionId, entry.moduleId, entry.incarnationId)
+            }
+        }
+    }
+
     fun runtimeSnapshot(sessionId: String): SessionMediaRuntimeSnapshot? {
         val state = sessions[sessionId] ?: return null
         val authority = state.assembly.orchestrator.authority

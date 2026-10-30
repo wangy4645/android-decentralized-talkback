@@ -2,6 +2,8 @@ package com.talkback.core.conference.session.integration.cutover
 
 import com.talkback.core.conference.session.ConferenceSessionMediaBridge
 import com.talkback.core.conference.session.ConferenceSessionMediaCoordinatorDelegate
+import com.talkback.core.conference.session.integration.ConferenceMediaCommit
+import com.talkback.core.conference.session.integration.Profile01CommitReadiness
 import com.talkback.core.conference.session.integration.Profile01ShadowMulticastReceiveSeam
 import com.talkback.core.conference.session.integration.Profile01ShadowPlayoutClockSeam
 
@@ -21,6 +23,9 @@ data class MulticastAudibleCutoverReadiness(
                 ConferenceSessionMediaCoordinatorDelegate.profile01ShadowPlayoutClockSeam,
             receiveSeam: Profile01ShadowMulticastReceiveSeam? =
                 ConferenceSessionMediaCoordinatorDelegate.profile01ShadowReceiveSeam,
+            commit: ConferenceMediaCommit? = null,
+            localHeadDigest: String? = null,
+            currentHeadSupplementInstalled: Boolean = true,
         ): MulticastAudibleCutoverReadiness {
             val missing = mutableListOf<String>()
             val wiring = ConferenceSessionMediaBridge.wiring
@@ -49,6 +54,22 @@ data class MulticastAudibleCutoverReadiness(
             val ownership = ReplacementCutoverRc1.currentState()
             if (ownership != null && ownership != AudibleOwnershipState.ANCHOR_ACTIVE) {
                 missing += "OWNERSHIP_NOT_ANCHOR_ACTIVE"
+            }
+            if (commit != null) {
+                val expected =
+                    wiring?.expectedCatalog(sessionId)?.moduleIds() ?: emptySet()
+                val bound =
+                    wiring?.catalog(sessionId)?.all()?.map { it.moduleId }?.toSet() ?: emptySet()
+                val commitReady =
+                    Profile01CommitReadiness.evaluate(
+                        commit = commit,
+                        localModuleId = localModuleId,
+                        localHeadDigest = localHeadDigest,
+                        currentHeadSupplementInstalled = currentHeadSupplementInstalled,
+                        expectedModuleIds = expected,
+                        boundCatalogModuleIds = bound,
+                    )
+                missing += commitReady.missing
             }
 
             return MulticastAudibleCutoverReadiness(

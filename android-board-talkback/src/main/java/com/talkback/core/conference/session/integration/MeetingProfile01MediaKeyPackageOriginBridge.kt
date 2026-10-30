@@ -354,41 +354,31 @@ class MeetingProfile01MediaKeyPackageOriginBridge(
                 MediaKeyPackagePeerPublishOutcome.BuildFailed(peerModuleId, built.reason)
             }
             is Profile01MediaKeyPackageBuildResult.Ready -> {
+                onLog(
+                    "PROFILE01_ORIGIN_EMIT session=$sessionId " +
+                        "factType=${Profile01WireConstants.FACT_TYPE_MEDIA_KEY_PACKAGE} " +
+                        "target=$peerModuleId outcome=EMITTED " +
+                        "conferenceId=$conferenceIdHex establishmentKeyVersion=" +
+                        "${identity.recipientEstablishmentKeyVersion} " +
+                        "membershipFactDigest=$creationDigestHex",
+                )
                 if (publishToPeer(peerModuleId, built.signedFactBytes)) {
                     recordPublicationOnSuccess(sessionId, identity)
-                    onLog(
-                        "PROFILE01_ORIGIN_EMIT session=$sessionId " +
-                            "factType=${Profile01WireConstants.FACT_TYPE_MEDIA_KEY_PACKAGE} " +
-                            "target=$peerModuleId outcome=EMITTED " +
-                            "conferenceId=$conferenceIdHex establishmentKeyVersion=" +
-                            "${identity.recipientEstablishmentKeyVersion} " +
-                            "membershipFactDigest=$creationDigestHex",
-                    )
-                    logPackageOrigin(
+                    logPackageUdpOutcome(
+                        sessionId = sessionId,
+                        peerModuleId = peerModuleId,
                         conferenceIdHex = conferenceIdHex,
-                        mediaKeyEpoch = identity.mediaKeyEpoch,
-                        recipientModuleId = identity.recipientModuleId,
-                        recipientEstablishmentKeyVersion =
-                            identity.recipientEstablishmentKeyVersion,
-                        membershipFactDigest = identity.membershipFactDigestHex,
-                        publicationOutcome = "EMITTED",
+                        identity = identity,
+                        udpSent = true,
                     )
                     MediaKeyPackagePeerPublishOutcome.Sent(identity)
                 } else {
-                    onLog(
-                        "PROFILE01_ORIGIN_EMIT session=$sessionId " +
-                            "factType=${Profile01WireConstants.FACT_TYPE_MEDIA_KEY_PACKAGE} " +
-                            "target=$peerModuleId outcome=SEND_FAILED " +
-                            "obligation=OPEN",
-                    )
-                    logPackageOrigin(
+                    logPackageUdpOutcome(
+                        sessionId = sessionId,
+                        peerModuleId = peerModuleId,
                         conferenceIdHex = conferenceIdHex,
-                        mediaKeyEpoch = identity.mediaKeyEpoch,
-                        recipientModuleId = identity.recipientModuleId,
-                        recipientEstablishmentKeyVersion =
-                            identity.recipientEstablishmentKeyVersion,
-                        membershipFactDigest = identity.membershipFactDigestHex,
-                        publicationOutcome = "SEND_FAILED",
+                        identity = identity,
+                        udpSent = false,
                     )
                     MediaKeyPackagePeerPublishOutcome.SendFailed(identity)
                 }
@@ -484,7 +474,7 @@ class MeetingProfile01MediaKeyPackageOriginBridge(
                     logPostBindRepublish(
                         conferenceIdHex = conferenceIdHex,
                         identity = identity,
-                        publicationOutcome = "EMITTED",
+                        publicationOutcome = "UDP_SENT",
                     )
                     logPackageOrigin(
                         conferenceIdHex = conferenceIdHex,
@@ -492,14 +482,14 @@ class MeetingProfile01MediaKeyPackageOriginBridge(
                         recipientModuleId = identity.recipientModuleId,
                         recipientEstablishmentKeyVersion = identity.recipientEstablishmentKeyVersion,
                         membershipFactDigest = identity.membershipFactDigestHex,
-                        publicationOutcome = "POST_BIND_EMITTED",
+                        publicationOutcome = "POST_BIND_UDP_SENT",
                     )
                     MediaKeyPackagePostBindRepublishOutcome.EMITTED
                 } else {
                     logPostBindRepublish(
                         conferenceIdHex = conferenceIdHex,
                         identity = identity,
-                        publicationOutcome = "SEND_FAILED",
+                        publicationOutcome = "UDP_FAILED",
                     )
                     logPackageOrigin(
                         conferenceIdHex = conferenceIdHex,
@@ -507,7 +497,7 @@ class MeetingProfile01MediaKeyPackageOriginBridge(
                         recipientModuleId = identity.recipientModuleId,
                         recipientEstablishmentKeyVersion = identity.recipientEstablishmentKeyVersion,
                         membershipFactDigest = identity.membershipFactDigestHex,
-                        publicationOutcome = "POST_BIND_SEND_FAILED",
+                        publicationOutcome = "POST_BIND_UDP_FAILED",
                     )
                     MediaKeyPackagePostBindRepublishOutcome.SEND_FAILED
                 }
@@ -631,7 +621,7 @@ class MeetingProfile01MediaKeyPackageOriginBridge(
             }
 
         val sent = publishToPeer(recipientModuleId, overridden.signedFactBytes)
-        val publicationOutcome = if (sent) "EMITTED" else "SEND_FAILED"
+        val publicationOutcome = if (sent) "UDP_SENT" else "UDP_FAILED"
         onLog(
             "PROFILE01_MEDIA_KEY_PACKAGE_NEGATIVE_FIXTURE " +
                 "fixtureType=RECIPIENT_KEY_VERSION_MISMATCH " +
@@ -836,6 +826,30 @@ class MeetingProfile01MediaKeyPackageOriginBridge(
             "PROFILE01_ORIGIN_EMIT session=$sessionId$target " +
                 "factType=${Profile01WireConstants.FACT_TYPE_MEDIA_KEY_PACKAGE} " +
                 "outcome=ORIGIN_SOURCE_GAP reason=$reason",
+        )
+    }
+
+    private fun logPackageUdpOutcome(
+        sessionId: String,
+        peerModuleId: String,
+        conferenceIdHex: String,
+        identity: MediaKeyPackagePublicationIdentity,
+        udpSent: Boolean,
+    ) {
+        val udpOutcome = if (udpSent) "UDP_SENT" else "UDP_FAILED"
+        onLog(
+            "PROFILE01_ORIGIN_EMIT session=$sessionId " +
+                "factType=${Profile01WireConstants.FACT_TYPE_MEDIA_KEY_PACKAGE} " +
+                "target=$peerModuleId udpOutcome=$udpOutcome " +
+                "conferenceId=$conferenceIdHex",
+        )
+        logPackageOrigin(
+            conferenceIdHex = conferenceIdHex,
+            mediaKeyEpoch = identity.mediaKeyEpoch,
+            recipientModuleId = identity.recipientModuleId,
+            recipientEstablishmentKeyVersion = identity.recipientEstablishmentKeyVersion,
+            membershipFactDigest = identity.membershipFactDigestHex,
+            publicationOutcome = udpOutcome,
         )
     }
 

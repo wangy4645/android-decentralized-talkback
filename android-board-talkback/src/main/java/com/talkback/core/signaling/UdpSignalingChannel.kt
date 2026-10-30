@@ -22,6 +22,8 @@ import java.net.DatagramSocket
 import java.net.InetAddress
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
@@ -37,7 +39,12 @@ class UdpSignalingChannel(
     private val socketRef = AtomicReference<DatagramSocket?>(null)
     private var listener: ((SignalEnvelope, PeerTarget) -> Unit)? = null
     private val running = AtomicBoolean(false)
-    private val io = Executors.newSingleThreadExecutor()
+    private val io = Executors.newSingleThreadExecutor { r ->
+        Thread(r, "talkback-udp-receive").apply { isDaemon = true }
+    }
+    private val sendExecutor = Executors.newSingleThreadExecutor { r ->
+        Thread(r, "talkback-udp-send").apply { isDaemon = true }
+    }
     private var localPort: Int = -1
     @Volatile
     private var socketId: Long = 0L
@@ -74,6 +81,21 @@ class UdpSignalingChannel(
         private const val PATH_SILENCE_THRESHOLD_MS = 10_000L
         private const val PATH_ASYMMETRY_LOG_INTERVAL_MS = 30_000L
         private const val RECEIVE_LOOP_BLOCKING_LOG_INTERVAL_MS = 30_000L
+        private const val SEND_HOP_TIMEOUT_MS = 2_000L
+
+        internal fun formatDatagramSendErr(error: Throwable): String {
+            val name = error.javaClass.simpleName.ifBlank { error.javaClass.name }
+            return "$name:${error.message ?: "null"}"
+        }
+
+        internal fun isMainLooperThread(): Boolean {
+            return try {
+                val main = android.os.Looper.getMainLooper() ?: return false
+                android.os.Looper.myLooper() == main
+            } catch (_: Throwable) {
+                false
+            }
+        }
     }
 
     override fun start(localPort: Int) {
@@ -184,17 +206,59 @@ class UdpSignalingChannel(
             lifecycleReporter?.onReceiveLoopStopped(stoppingSocketId)
         }
         io.shutdownNow()
+        sendExecutor.shutdownNow()
     }
 
     override fun send(target: PeerTarget, envelope: SignalEnvelope) {
-        sendInternal(target, envelope, countsAsLocalOutbound = true)
+        executeSend(target, envelope, countsAsLocalOutbound = true)
     }
 
     override fun sendReportingSubmission(target: PeerTarget, envelope: SignalEnvelope): Boolean =
-        sendInternal(target, envelope, countsAsLocalOutbound = true)
+        executeSend(target, envelope, countsAsLocalOutbound = true)
 
     override fun sendRepairAnnounce(target: PeerTarget, envelope: SignalEnvelope) {
-        sendInternal(target, envelope, countsAsLocalOutbound = false)
+        executeSend(target, envelope, countsAsLocalOutbound = false)
+    }
+
+    /**
+     * [DatagramSocket.send] never runs on MainLooper. If already off-main, send inline and
+     * return that Boolean. If called on main, hop to [sendExecutor] and wait for the real
+     * [sendInternal] result — enqueue is logged as ENQUEUED, never returned as success.
+     */
+    private fun executeSend(
+        target: PeerTarget,
+        envelope: SignalEnvelope,
+        countsAsLocalOutbound: Boolean,
+    ): Boolean {
+        if (!isMainLooperThread()) {
+            return sendInternal(target, envelope, countsAsLocalOutbound)
+        }
+        val dst = "${target.host}:${target.port}"
+        TalkbackLog.i(
+            "SIGNAL_DATAGRAM_ENQUEUED type=${envelope.type.name} dst=$dst " +
+                "socketId=$socketId sessionId=${envelope.sessionId} nonce=${envelope.nonce} " +
+                "reason=MAIN_LOOPER",
+        )
+        return try {
+            sendExecutor
+                .submit<Boolean> { sendInternal(target, envelope, countsAsLocalOutbound) }
+                .get(SEND_HOP_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+        } catch (timeout: TimeoutException) {
+            TalkbackLog.w(
+                "SIGNAL_DATAGRAM_SEND_FAILED socketId=$socketId dst=$dst " +
+                    "err=${formatDatagramSendErr(timeout)} type=${envelope.type.name} " +
+                    "udpOutcome=UDP_FAILED reason=HOP_TIMEOUT",
+            )
+            false
+        } catch (error: Throwable) {
+            val cause = error.cause ?: error
+            TalkbackLog.w(
+                "SIGNAL_DATAGRAM_SEND_FAILED socketId=$socketId dst=$dst " +
+                    "err=${formatDatagramSendErr(cause)} type=${envelope.type.name} " +
+                    "udpOutcome=UDP_FAILED reason=HOP_FAILED",
+            )
+            false
+        }
     }
 
     private fun sendInternal(target: PeerTarget, envelope: SignalEnvelope, countsAsLocalOutbound: Boolean): Boolean {
@@ -251,11 +315,18 @@ class UdpSignalingChannel(
         FloorRequestCallsiteTracer.recordUdpWrite(
             sendTarget = target,
             envelope = envelope,
-            sendResult = if (result.isSuccess) "UDP_OK" else "UDP_FAIL:${result.exceptionOrNull()?.message}"
+            sendResult =
+                if (result.isSuccess) {
+                    "UDP_OK"
+                } else {
+                    "UDP_FAIL:${formatDatagramSendErr(result.exceptionOrNull() ?: Exception("unknown"))}"
+                },
         )
         result.onFailure {
             TalkbackLog.w(
-                "SIGNAL_DATAGRAM_SEND_FAILED socketId=$socketId dst=$dst err=${it.message}"
+                "SIGNAL_DATAGRAM_SEND_FAILED socketId=$socketId dst=$dst " +
+                    "err=${formatDatagramSendErr(it)} type=${envelope.type.name} " +
+                    "bytes=${data.size} udpOutcome=UDP_FAILED",
             )
         }
         return result.isSuccess
