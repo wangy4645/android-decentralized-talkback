@@ -8,6 +8,7 @@ import com.talkback.core.session.SessionType
 import com.talkback.core.session.TalkbackSession
 import com.talkback.core.signaling.PeerTarget
 import com.talkback.core.webrtc.conferenceaudio.StubLocalMicFrameSource
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -24,6 +25,7 @@ class ConferenceLocalMicFeedTest {
 
     @Before
     fun setUp() {
+        ConferenceAudioPathLog.resetForTest { }
         observability = ConferenceAudioPathObservability()
         micSource = StubLocalMicFrameSource()
         pushedFrames.clear()
@@ -38,6 +40,11 @@ class ConferenceLocalMicFeedTest {
             busDiagnostics = { sessionId -> bus.diagnostics(sessionId) },
             observability = observability
         )
+    }
+
+    @After
+    fun tearDown() {
+        ConferenceAudioPathLog.resetForTest()
     }
 
     @Test
