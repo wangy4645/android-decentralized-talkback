@@ -663,6 +663,8 @@ object Profile01ShadowRuntimeObservability {
         java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicLong>()
     private val shadowTxEncodeDequeueCounters =
         java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicLong>()
+    private val shadowTxEncodeJobCostCounters =
+        java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicLong>()
     private val shadowTxPcmS1LevelCounters =
         java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicLong>()
     private val d2SendChainTickCounters =
@@ -922,6 +924,45 @@ object Profile01ShadowRuntimeObservability {
                     "accepted" to accepted.toString(),
                     "droppedOldest" to droppedOldest.toString(),
                     "capacity" to "4",
+                    "wallTimeMs" to System.currentTimeMillis().toString(),
+                ),
+        )
+    }
+
+    fun maybeLogShadowTxEncodeJobCost(
+        sessionId: String,
+        moduleId: String,
+        outcome: String,
+        preEncodeUs: Long,
+        opusUs: Long,
+        protectSendUs: Long,
+        jobUs: Long,
+        sent: Boolean,
+    ) {
+        val n =
+            shadowTxEncodeJobCostCounters
+                .getOrPut(sessionId) { java.util.concurrent.atomic.AtomicLong(0) }
+                .incrementAndGet()
+        if (n != 1L && n % 25L != 0L) return
+        val accounted =
+            (if (preEncodeUs >= 0) preEncodeUs else 0L) +
+                (if (opusUs >= 0) opusUs else 0L) +
+                (if (protectSendUs >= 0) protectSendUs else 0L)
+        logPhase(
+            phase = "SHADOW_TX_ENCODE_JOB_COST",
+            sessionId = sessionId,
+            moduleId = moduleId,
+            fields =
+                mapOf(
+                    "jobOrdinal" to n.toString(),
+                    "outcome" to outcome,
+                    "preEncodeUs" to preEncodeUs.toString(),
+                    "opusUs" to opusUs.toString(),
+                    "protectSendUs" to protectSendUs.toString(),
+                    "jobUs" to jobUs.toString(),
+                    "accountedUs" to accounted.toString(),
+                    "unaccountedUs" to (jobUs - accounted).toString(),
+                    "sent" to sent.toString(),
                     "wallTimeMs" to System.currentTimeMillis().toString(),
                 ),
         )

@@ -27,6 +27,8 @@ class ExpectedMemberCatalog {
     fun pendingModuleIds(): List<String> =
         rows.values.filter { it.state == State.PENDING_SOURCE }.map { it.moduleId }
 
+    fun moduleIds(): Set<String> = rows.keys.toSet()
+
     fun get(moduleId: String): Row? = rows[moduleId]
 
     fun expectPresent(

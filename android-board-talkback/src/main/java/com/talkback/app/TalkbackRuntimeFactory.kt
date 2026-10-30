@@ -480,7 +480,7 @@ object TalkbackRuntimeFactory {
                 publicationLedger = profile01MediaKeyPackagePublicationLedger,
                 packageBridge = profile01MediaKeyPackageOriginBridge,
                 schedule = { delayMs, block ->
-                    android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(block, delayMs)
+                    coordinator.scheduleProfile01Control(delayMs, block)
                 },
                 resolveDrainContext = { sessionId ->
                     coordinator.resolveProfile01SupplementDrainContext(sessionId)
@@ -498,7 +498,7 @@ object TalkbackRuntimeFactory {
                 ledger = profile01HeadObligationLedger,
                 clockMs = { System.currentTimeMillis() },
                 schedule = { delayMs, block ->
-                    android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(block, delayMs)
+                    coordinator.scheduleProfile01Control(delayMs, block)
                 },
                 deliver = { id, snapshot ->
                     coordinator.deliverProfile01HeadObligation(id, snapshot)

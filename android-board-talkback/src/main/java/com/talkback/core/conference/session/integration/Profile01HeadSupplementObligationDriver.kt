@@ -86,6 +86,25 @@ class Profile01HeadSupplementObligationDriver(
         schedule(0L) { attempt(id) }
     }
 
+    fun onStaleHeadAck(
+        sessionId: String,
+        peerModuleId: String,
+        ackHeadDigest: String,
+    ) {
+        val live = liveSnapshot(sessionId) ?: return
+        if (live.headDigest == ackHeadDigest) return
+        onLog(
+            "PROFILE01_HEAD_ACK stale_resync session=$sessionId peer=$peerModuleId " +
+                "ackHead=$ackHeadDigest liveHead=${live.headDigest}",
+        )
+        ensureUnackedCurrentHeadKicking(
+            snapshot = live,
+            peerModuleId = peerModuleId,
+            localModuleId = "",
+        )
+        ledger.currentForPeer(sessionId, peerModuleId)?.let { deliverNow(it.id) }
+    }
+
     fun onNack(
         sessionId: String,
         peerModuleId: String,
@@ -168,7 +187,7 @@ class Profile01HeadSupplementObligationDriver(
             if (state == Profile01HeadObligationState.FAULT) {
                 FAULT_RETRY_MS
             } else {
-                BACKOFF_MS[attemptCount.coerceAtMost(BACKOFF_MS.lastIndex)]
+                BACKOFF_MS[attemptCount.coerceIn(0, BACKOFF_MS.lastIndex)]
             }
         if (base <= 0L) return 0L
         val jitter = (base * JITTER_FRACTION * random.nextDouble()).toLong()

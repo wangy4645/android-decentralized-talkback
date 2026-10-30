@@ -79,6 +79,36 @@ class Profile01HeadSupplementObligationTest {
     }
 
     @Test
+    fun staleHeadAck_kicksLiveHeadObligation() {
+        val ledger = Profile01HeadSupplementObligationLedger()
+        val old = snapshot(version = 2, epoch = 3, digest = "aa")
+        val live = snapshot(version = 4, epoch = 5, digest = "bb")
+        var liveDelivers = 0
+        val delayed = ArrayDeque<Pair<Long, () -> Unit>>()
+        val driver =
+            Profile01HeadSupplementObligationDriver(
+                ledger = ledger,
+                clockMs = { 0L },
+                schedule = { delay, run -> delayed.addLast(delay to run) },
+                deliver = { id, _ ->
+                    if (id.headDigest == live.headDigest) liveDelivers++
+                    Profile01HeadSupplementObligationDriver.DeliverOutcome(true, null, live.headDigest)
+                },
+                liveSnapshot = { live },
+                random = kotlin.random.Random(0),
+            )
+        driver.openAndKick(live, setOf("M04"), "M01")
+        delayed.removeFirst().second.invoke()
+        assertEquals(1, liveDelivers)
+        delayed.clear()
+        driver.onStaleHeadAck("s1", "M04", old.headDigest)
+        assertTrue(delayed.isNotEmpty())
+        delayed.removeFirst().second.invoke()
+        assertEquals(2, liveDelivers)
+        assertEquals(live.headDigest, ledger.currentForPeer("s1", "M04")!!.id.headDigest)
+    }
+
+    @Test
     fun senderMismatchIsCallerResponsibility_ledgerRequiresExactPeer() {
         val ledger = Profile01HeadSupplementObligationLedger()
         val snap = snapshot()

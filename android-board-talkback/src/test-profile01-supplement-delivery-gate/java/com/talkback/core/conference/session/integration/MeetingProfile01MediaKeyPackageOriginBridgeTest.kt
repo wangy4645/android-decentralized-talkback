@@ -96,7 +96,9 @@ class MeetingProfile01MediaKeyPackageOriginBridgeTest {
         assertTrue(origin.contains("recipientModuleId=M02"))
         assertTrue(origin.contains("recipientEstablishmentKeyVersion="))
         assertTrue(origin.contains("membershipFactDigest=$digest"))
-        assertTrue(origin.contains("publicationOutcome=EMITTED"))
+        assertTrue(origin.contains("publicationOutcome=UDP_SENT"))
+        assertTrue(logs.any { it.contains("PROFILE01_ORIGIN_EMIT") && it.contains("outcome=EMITTED") })
+        assertTrue(logs.any { it.contains("PROFILE01_ORIGIN_EMIT") && it.contains("udpOutcome=UDP_SENT") })
         assertFalse(origin.contains("masterKey="))
         assertFalse(origin.contains("wrappedPek="))
     }
@@ -152,7 +154,7 @@ class MeetingProfile01MediaKeyPackageOriginBridgeTest {
         assertTrue(fixtureLine.contains("injected=true"))
         assertTrue(fixtureLine.contains("expectedRecipientEstablishmentKeyVersion="))
         assertTrue(fixtureLine.contains("wireRecipientKeyVersion="))
-        assertTrue(fixtureLine.contains("publicationOutcome=EMITTED"))
+        assertTrue(fixtureLine.contains("publicationOutcome=UDP_SENT"))
 
         val wire =
             (

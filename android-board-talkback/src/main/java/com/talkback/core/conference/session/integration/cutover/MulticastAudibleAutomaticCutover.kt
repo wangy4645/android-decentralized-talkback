@@ -26,10 +26,13 @@ object MulticastAudibleAutomaticCutover {
             sessionId = sessionId,
             detail = entryDetail,
         )
-        android.util.Log.i(
-            MeetingProductMediaShadow.LOG_TAG,
-            "AUTO_CUTOVER_ENTRY session=$sessionId $entryDetail",
-        )
+        try {
+            android.util.Log.i(
+                MeetingProductMediaShadow.LOG_TAG,
+                "AUTO_CUTOVER_ENTRY session=$sessionId $entryDetail",
+            )
+        } catch (_: Throwable) {
+        }
         if (!MeetingProductMediaShadow.enabled) return
         if (terminalSessions.contains(sessionId)) return
 
