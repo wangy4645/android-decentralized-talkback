@@ -1,4 +1,4 @@
-﻿package com.talkback.core.conference.session.integration
+package com.talkback.core.conference.session.integration
 
 
 

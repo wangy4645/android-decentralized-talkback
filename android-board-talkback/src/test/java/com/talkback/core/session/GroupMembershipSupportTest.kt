@@ -144,6 +144,80 @@ class GroupMembershipSupportTest {
     }
 
     @Test
+    fun removeCanonicalMember_dropsFromGroupMembersAndMemberModules() {
+        val s = session("M01", "M02", "M03", "M04", "M05")
+        GroupMembershipSupport.removeCanonicalMember(s, "M05")
+        assertEquals(4, s.groupMembers.size)
+        assertFalse(s.groupMembers.any { it.moduleId.value == "M05" })
+        assertFalse(s.memberModules.any { it.value == "M05" })
+        assertEquals(1L, s.rosterEpoch)
+        val hashAfterLeave = GroupMembershipSupport.memberHashForSession(s)
+        val fivePersonHash = GroupMembershipSupport.memberHash(
+            "CH-01",
+            1L,
+            listOf("M01", "M02", "M03", "M04", "M05")
+        )
+        assertFalse(hashAfterLeave == fivePersonHash)
+    }
+
+    @Test
+    fun ensureCanonicalMember_isIdempotentAndRestoresAfterLeave() {
+        val s = session("M01", "M02", "M03", "M04")
+        val m05 = EndpointAddress(ModuleId("M05"), EndpointId("E01"))
+        GroupMembershipSupport.ensureCanonicalMember(s, m05)
+        GroupMembershipSupport.ensureCanonicalMember(s, m05)
+        assertEquals(1, s.groupMembers.count { it.moduleId.value == "M05" })
+        assertTrue(s.memberModules.any { it.value == "M05" })
+    }
+
+    @Test
+    fun applyMembershipSnapshot_sameEpochSameMembers_ignored() {
+        val s = session("M01", "M02", "M03")
+        val result = GroupMembershipSupport.applyMembershipSnapshot(
+            s,
+            1L,
+            0L,
+            s.groupMembers.toList(),
+            "M01",
+            "M01"
+        )
+        assertEquals(GroupMembershipSupport.MembershipSnapshotApplyResult.IGNORED_STALE, result)
+        assertEquals(1L, s.rosterEpoch)
+    }
+
+    @Test
+    fun applyMembershipSnapshot_higherEpochSameMembers_applied() {
+        val s = session("M01", "M02", "M03")
+        val result = GroupMembershipSupport.applyMembershipSnapshot(
+            s,
+            2L,
+            0L,
+            s.groupMembers.toList(),
+            "M01",
+            "M01"
+        )
+        assertEquals(GroupMembershipSupport.MembershipSnapshotApplyResult.APPLIED, result)
+        assertEquals(2L, s.rosterEpoch)
+        assertEquals(3, s.groupMembers.size)
+    }
+
+    @Test
+    fun applyMembershipSnapshot_leaveThenRejoinUsesEpochNotMemberSetAlone() {
+        val s = session("M01", "M02", "M03", "M04", "M05")
+        GroupMembershipSupport.removeCanonicalMember(s, "M05")
+        val four = s.groupMembers.toList()
+        assertEquals(
+            GroupMembershipSupport.MembershipSnapshotApplyResult.APPLIED,
+            GroupMembershipSupport.applyMembershipSnapshot(s, 2L, 0L, four, "M01", "M01")
+        )
+        val five = four + EndpointAddress(ModuleId("M05"), EndpointId("E01"))
+        val rejoin = GroupMembershipSupport.applyMembershipSnapshot(s, 3L, 0L, five, "M01", "M01")
+        assertEquals(GroupMembershipSupport.MembershipSnapshotApplyResult.APPLIED, rejoin)
+        assertEquals(3L, s.rosterEpoch)
+        assertTrue(s.groupMembers.any { it.moduleId.value == "M05" })
+    }
+
+    @Test
     fun applyMembershipSnapshot_sameEpochAuthorityHealsStaleRoster() {
         val s = session("M01", "M03")
         val authorityMembers = listOf(

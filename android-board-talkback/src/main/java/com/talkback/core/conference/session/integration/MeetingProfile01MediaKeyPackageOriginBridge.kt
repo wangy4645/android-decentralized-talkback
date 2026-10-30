@@ -171,6 +171,56 @@ class MeetingProfile01MediaKeyPackageOriginBridge(
         )
     }
 
+    /**
+     * Obligation-driven send: rebuilds and transmits current-head package even when
+     * [MediaKeyPackagePublicationLedger] already recorded a prior attempt.
+     */
+    fun publishMediaKeyPackageForHeadObligation(
+        sessionId: String,
+        snapshot: ConferenceTopologySnapshot,
+        localModuleId: String,
+        isMembershipAuthority: Boolean,
+        peerModuleId: String,
+        expectedHeadDigest: String,
+        publishToPeer: (moduleId: String, signedFactBytes: ByteArray) -> Boolean,
+    ): MediaKeyPackagePeerPublishOutcome {
+        val context =
+            resolveActivePackageContext(sessionId, snapshot.hostModuleId)
+                ?: return MediaKeyPackagePeerPublishOutcome.Skipped("NO_CREATION")
+        val liveDigest =
+            Profile01HeadDigest.compute(
+                conferenceEpoch = context.conferenceEpoch,
+                membershipVersion = context.membershipVersion,
+                mediaKeyEpoch = context.mediaKeyEpoch,
+                membershipFactDigestHex = context.membershipFactDigestHex,
+            )
+        if (liveDigest != expectedHeadDigest) {
+            return MediaKeyPackagePeerPublishOutcome.Skipped("HEAD_MISMATCH")
+        }
+        val plan =
+            resolveMediaKeyPackagePeerPublishPlan(
+                sessionId = sessionId,
+                snapshot = snapshot,
+                localModuleId = localModuleId,
+                isMembershipAuthority = isMembershipAuthority,
+                peerModuleId = peerModuleId,
+                expectedIdentity = null,
+                bypassAlreadyPublished = true,
+            )
+        if (plan !is MediaKeyPackagePeerPublishOutcome.ReadyToSend) {
+            return plan
+        }
+        return executeMediaKeyPackagePeerPublish(
+            sessionId = sessionId,
+            peerModuleId = peerModuleId,
+            identity = plan.identity,
+            creationContext = context,
+            conferenceIdHex = sessionIndex.ensureConferenceIdHex(sessionId),
+            publishToPeer = publishToPeer,
+            recordPublicationOnSuccess = recordPublicationOnSendSuccess,
+        )
+    }
+
     private fun resolveMediaKeyPackagePeerPublishPlan(
         sessionId: String,
         snapshot: ConferenceTopologySnapshot,
@@ -178,6 +228,7 @@ class MeetingProfile01MediaKeyPackageOriginBridge(
         isMembershipAuthority: Boolean,
         peerModuleId: String,
         expectedIdentity: MediaKeyPackagePublicationIdentity?,
+        bypassAlreadyPublished: Boolean = false,
     ): MediaKeyPackagePeerPublishOutcome {
         if (!isMembershipAuthority) {
             return MediaKeyPackagePeerPublishOutcome.Skipped("NOT_MEMBERSHIP_AUTHORITY")
@@ -215,7 +266,7 @@ class MeetingProfile01MediaKeyPackageOriginBridge(
                         reason = "ESTABLISHMENT_KEY_VERSION_DRIFT",
                     )
                 }
-                if (publicationLedger.isPublished(sessionId, identity)) {
+                if (!bypassAlreadyPublished && publicationLedger.isPublished(sessionId, identity)) {
                     return MediaKeyPackagePeerPublishOutcome.Skipped("ALREADY_PUBLISHED")
                 }
                 return MediaKeyPackagePeerPublishOutcome.ReadyToSend(identity)

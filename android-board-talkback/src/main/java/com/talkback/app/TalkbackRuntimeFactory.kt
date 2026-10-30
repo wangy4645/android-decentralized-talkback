@@ -486,8 +486,32 @@ object TalkbackRuntimeFactory {
                     coordinator.resolveProfile01SupplementDrainContext(sessionId)
                 },
                 onLog = { message -> onLog?.invoke(message) },
+                onPublishedWithoutAck = { sessionId, peerModuleId ->
+                    coordinator.ensureProfile01HeadObligationKicking(sessionId, peerModuleId)
+                },
             )
         coordinator.attachProfile01SupplementDeliveryCoordinator(profile01SupplementDeliveryCoordinator)
+        val profile01HeadObligationLedger =
+            com.talkback.core.conference.session.integration.Profile01HeadSupplementObligationLedger()
+        val profile01HeadObligationDriver =
+            com.talkback.core.conference.session.integration.Profile01HeadSupplementObligationDriver(
+                ledger = profile01HeadObligationLedger,
+                clockMs = { System.currentTimeMillis() },
+                schedule = { delayMs, block ->
+                    android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(block, delayMs)
+                },
+                deliver = { id, snapshot ->
+                    coordinator.deliverProfile01HeadObligation(id, snapshot)
+                },
+                liveSnapshot = { sessionId ->
+                    coordinator.liveProfile01HeadSnapshot(sessionId)
+                },
+                onLog = { message -> onLog?.invoke(message) },
+            )
+        coordinator.attachProfile01HeadSupplementObligations(
+            profile01HeadObligationLedger,
+            profile01HeadObligationDriver,
+        )
         val establishmentMaterializationListener =
             AcceptedEstablishmentTrustStateListener { _, _, newlyMaterializedPeerModuleIds ->
                 coordinator.onEstablishmentTrustSnapshotMaterialized(newlyMaterializedPeerModuleIds)

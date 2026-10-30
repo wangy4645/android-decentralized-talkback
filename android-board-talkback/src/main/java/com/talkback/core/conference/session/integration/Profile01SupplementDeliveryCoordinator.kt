@@ -19,6 +19,11 @@ class Profile01SupplementDeliveryCoordinator(
     private val schedule: (delayMs: Long, block: () -> Unit) -> Unit,
     private val resolveDrainContext: (sessionId: String) -> Profile01SupplementDrainContext?,
     private val onLog: (String) -> Unit = {},
+    /**
+     * Local send already recorded in [publicationLedger]. Must not stop current-head
+     * delivery obligation; Host kicks un-ACK'd retry from this hook.
+     */
+    private val onPublishedWithoutAck: (sessionId: String, peerModuleId: String) -> Unit = { _, _ -> },
 ) {
     data class Profile01SupplementDrainContext(
         val scope: Profile01SupplementDeliveryScope,
@@ -99,10 +104,23 @@ class Profile01SupplementDeliveryCoordinator(
         reason: String,
         hintPeerModuleIds: Set<String>?,
     ) {
-        if (!validateScope(scope)) return
+        if (!validateScope(scope)) {
+            Profile01ControlPlaneDiagnosticTrace.recordSupplementDrainSkip(
+                sessionId = scope.sessionId,
+                reason = "STALE_SCOPE",
+            )
+            return
+        }
         val context =
             resolveDrainContext(scope.sessionId)?.copy(scope = scope)
-                ?: return
+                ?: run {
+                    Profile01ControlPlaneDiagnosticTrace.recordSupplementDrainSkip(
+                        sessionId = scope.sessionId,
+                        reason = "NO_DRAIN_CONTEXT",
+                        detail = reason,
+                    )
+                    return
+                }
 
         val peers =
             if (hintPeerModuleIds != null) {
@@ -110,7 +128,14 @@ class Profile01SupplementDeliveryCoordinator(
             } else {
                 context.eligiblePeerModuleIds
             }
-        if (peers.isEmpty()) return
+        if (peers.isEmpty()) {
+            Profile01ControlPlaneDiagnosticTrace.recordSupplementDrainSkip(
+                sessionId = scope.sessionId,
+                reason = "NO_ELIGIBLE_PEERS",
+                detail = reason,
+            )
+            return
+        }
 
         var anyPending = false
         peers
@@ -120,7 +145,12 @@ class Profile01SupplementDeliveryCoordinator(
                 if (!validateScope(context.scope)) return
                 val evaluation = evaluatePeer(context, peerModuleId)
                 when (evaluation) {
-                    PeerEvaluation.AlreadySent -> Unit
+                    PeerEvaluation.AlreadySent ->
+                        Profile01ControlPlaneDiagnosticTrace.recordSupplementPeerEvaluation(
+                            sessionId = scope.sessionId,
+                            peerModuleId = peerModuleId,
+                            evaluation = "AlreadySent",
+                        )
                     is PeerEvaluation.Pending -> {
                         anyPending = true
                         maybeScheduleFastRecoveryPoll(scope)
@@ -167,12 +197,20 @@ class Profile01SupplementDeliveryCoordinator(
                 notePendingIdentityObserved(context.scope.sessionId)
                 PeerEvaluation.Pending(peerModuleId)
             }
-            is MediaKeyPackagePeerPublishOutcome.Skipped ->
+            is MediaKeyPackagePeerPublishOutcome.Skipped -> {
+                Profile01ControlPlaneDiagnosticTrace.recordSupplementPeerEvaluation(
+                    sessionId = context.scope.sessionId,
+                    peerModuleId = peerModuleId,
+                    evaluation = "Skipped",
+                    detail = preview.reason,
+                )
                 if (preview.reason == "ALREADY_PUBLISHED") {
+                    onPublishedWithoutAck(context.scope.sessionId, peerModuleId)
                     PeerEvaluation.AlreadySent
                 } else {
                     PeerEvaluation.Pending(peerModuleId)
                 }
+            }
             is MediaKeyPackagePeerPublishOutcome.BuildFailed -> PeerEvaluation.Pending(peerModuleId)
             else -> PeerEvaluation.Pending(peerModuleId)
         }
@@ -185,7 +223,10 @@ class Profile01SupplementDeliveryCoordinator(
         reason: String,
     ) {
         val sessionId = context.scope.sessionId
-        if (publicationLedger.isPublished(sessionId, expectedIdentity)) return
+        if (publicationLedger.isPublished(sessionId, expectedIdentity)) {
+            onPublishedWithoutAck(sessionId, peerModuleId)
+            return
+        }
 
         val flightKey = sessionId to expectedIdentity
         if (inFlight.putIfAbsent(flightKey, true) != null) return
@@ -212,6 +253,12 @@ class Profile01SupplementDeliveryCoordinator(
                     )
                 }
                 is MediaKeyPackagePeerPublishOutcome.SendFailed -> {
+                    Profile01ControlPlaneDiagnosticTrace.recordSupplementPeerEvaluation(
+                        sessionId = sessionId,
+                        peerModuleId = peerModuleId,
+                        evaluation = "SendFailed",
+                        detail = reason,
+                    )
                     scheduleDrain(
                         sessionId = sessionId,
                         reason = "send_failed",

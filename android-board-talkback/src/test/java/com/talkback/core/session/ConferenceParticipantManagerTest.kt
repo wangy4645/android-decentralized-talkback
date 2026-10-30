@@ -162,6 +162,33 @@ class ConferenceParticipantManagerTest {
     }
 
     @Test
+    fun clearLeaveTombstonesForAdmittedMembers_onlyClearsListedIds() {
+        val sessionId = "CONF-TOMBSTONE"
+        val m04 = ModuleId("M04")
+        manager.initSession(
+            sessionId,
+            local,
+            listOf(
+                local,
+                EndpointAddress(m02, EndpointId("E01")),
+                EndpointAddress(m03, EndpointId("E01")),
+                EndpointAddress(m04, EndpointId("E01")),
+            ),
+        )
+        manager.applyPrune(sessionId, "M03")
+        manager.applyPrune(sessionId, "M04")
+        manager.applyCanonicalMembershipRoster(
+            sessionId,
+            listOf(local, EndpointAddress(m02, EndpointId("E01")), EndpointAddress(m04, EndpointId("E01"))),
+            m01,
+        )
+        val cleared = manager.clearLeaveTombstonesForAdmittedMembers(sessionId, setOf("M01", "M02", "M04"))
+        assertEquals(setOf("M04"), cleared)
+        assertTrue(manager.leftMemberEndpoints(sessionId)?.containsKey("M03") == true)
+        assertFalse(manager.leftMemberEndpoints(sessionId)?.containsKey("M04") == true)
+    }
+
+    @Test
     fun onLateJoin_restoresMissingParticipant() {
         val sessionId = "CONF-3"
         manager.initSession(sessionId, local, listOf(local, EndpointAddress(m02, EndpointId("E01"))))

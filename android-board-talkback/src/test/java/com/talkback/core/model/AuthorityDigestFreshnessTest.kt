@@ -34,6 +34,52 @@ class AuthorityDigestFreshnessTest {
     }
 
     @Test
+    fun notStale_whenPlanesDiffer() {
+        val previous = TopologyDigest(rosterEpoch = 5L, anchorEpoch = 100L, memberHash = 1783685497)
+        val next = TopologyDigest(rosterEpoch = 1L, anchorEpoch = 0L, memberHash = -289621531)
+        assertFalse(
+            AuthorityDigestFreshness.isStaleReplacement(
+                previous,
+                next,
+                MembershipAuthorityPlane.CONFERENCE,
+                MembershipAuthorityPlane.GROUP
+            )
+        )
+    }
+
+    @Test
+    fun notStale_whenSessionFamilyDiffers() {
+        val previous = TopologyDigest(rosterEpoch = 5L, anchorEpoch = 100L, memberHash = 1)
+        val next = TopologyDigest(rosterEpoch = 1L, anchorEpoch = 100L, memberHash = 2)
+        assertFalse(
+            AuthorityDigestFreshness.isStaleReplacement(
+                previous,
+                next,
+                MembershipAuthorityPlane.CONFERENCE,
+                MembershipAuthorityPlane.CONFERENCE,
+                previousSessionFamilyId = "cnf-old",
+                nextSessionFamilyId = "cnf-new"
+            )
+        )
+    }
+
+    @Test
+    fun stale_whenSamePlaneAndFamilyEpochDiffers() {
+        val previous = TopologyDigest(rosterEpoch = 5L, anchorEpoch = 100L, memberHash = 1)
+        val next = TopologyDigest(rosterEpoch = 6L, anchorEpoch = 100L, memberHash = 1)
+        assertTrue(
+            AuthorityDigestFreshness.isStaleReplacement(
+                previous,
+                next,
+                MembershipAuthorityPlane.CONFERENCE,
+                MembershipAuthorityPlane.CONFERENCE,
+                previousSessionFamilyId = "cnf-1",
+                nextSessionFamilyId = "cnf-1"
+            )
+        )
+    }
+
+    @Test
     fun formatInvalidated_includesPreviousAndNewEpoch() {
         val previous = AuthorityDigestObservation(
             channelId = "CH-01",
@@ -41,7 +87,9 @@ class AuthorityDigestFreshnessTest {
             digest = TopologyDigest(rosterEpoch = 3L, anchorEpoch = 1L, memberHash = -925203082),
             observedAtMs = 1L,
             source = AuthorityDigestSource.HELLO,
-            membershipContext = "GROUP"
+            membershipContext = "GROUP",
+            plane = MembershipAuthorityPlane.GROUP,
+            sessionFamilyId = "grp:CH-01"
         )
         val next = AuthorityDigestObservation(
             channelId = "CH-01",
@@ -49,7 +97,9 @@ class AuthorityDigestFreshnessTest {
             digest = TopologyDigest(rosterEpoch = 1L, anchorEpoch = 1L, memberHash = -528664596),
             observedAtMs = 2L,
             source = AuthorityDigestSource.MEMBERSHIP_SNAPSHOT_APPLY,
-            membershipContext = "CONFERENCE"
+            membershipContext = "CONFERENCE",
+            plane = MembershipAuthorityPlane.CONFERENCE,
+            sessionFamilyId = "cnf-1"
         )
         val line = AuthorityDigestFreshness.formatInvalidated("CH-01", previous, next)
         assertTrue(line.startsWith("STALE_AUTHORITY_DIGEST_INVALIDATED"))
@@ -58,5 +108,7 @@ class AuthorityDigestFreshnessTest {
         assertTrue(line.contains("previousSource=HELLO"))
         assertTrue(line.contains("newSource=MEMBERSHIP_SNAPSHOT_APPLY"))
         assertEquals(true, line.contains("newContext=CONFERENCE"))
+        assertTrue(line.contains("previousPlane=GROUP"))
+        assertTrue(line.contains("newPlane=CONFERENCE"))
     }
 }

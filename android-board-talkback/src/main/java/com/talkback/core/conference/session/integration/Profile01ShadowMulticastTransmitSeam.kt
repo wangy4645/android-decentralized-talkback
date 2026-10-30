@@ -428,7 +428,7 @@ class Profile01ShadowMulticastTransmitSeam(
         val conferenceId =
             sessionIndex.conferenceIdForSession(sessionId)
                 ?: return fence(sessionId, "NO_CONFERENCE_ID")
-        val sessionControl = registry.session(conferenceId) ?: return fence(sessionId, "NO_SESSION_FACT")
+        val sessionControl = registry.session(conferenceId) ?: return fence(sessionId, "NO_SESSION_FACT", conferenceId)
         val wiring = ConferenceSessionMediaBridge.wiring
         if (wiring == null || !wiring.hasSession(sessionId)) {
             return fence(sessionId, "NO_SHADOW_SESSION")
@@ -554,9 +554,18 @@ class Profile01ShadowMulticastTransmitSeam(
     private fun fence(
         sessionId: String,
         reason: String,
+        conferenceIdHex: String? = null,
     ): EgressContext? {
         egressBySession.remove(sessionId)
-        Profile01ShadowRuntimeObservability.logShadowTxFenced(sessionId, reason)
+        if (reason == "NO_SESSION_FACT" && conferenceIdHex != null) {
+            Profile01ControlPlaneDiagnosticTrace.logShadowTxNoSessionFact(
+                sessionId = sessionId,
+                conferenceIdHex = conferenceIdHex,
+                registrySessionPresent = registry.session(conferenceIdHex) != null,
+            )
+        } else {
+            Profile01ShadowRuntimeObservability.logShadowTxFenced(sessionId, reason)
+        }
         return null
     }
 }

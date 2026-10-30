@@ -101,6 +101,27 @@ class Profile01SupplementDeliveryPr2Test {
     }
 
     @Test
+    fun alreadyPublished_doesNotOrdinaryResend_butNudgesUnackedObligation() {
+        val harness = newProductionHarness(sessionId = "pr2-published-nudge")
+        seedQuadCreation(harness, eligiblePeers = setOf("M02"))
+        val nudged = mutableListOf<String>()
+        harness.onPublishedWithoutAck = { _, peer -> nudged += peer }
+        harness.publishToPeer = { _, _ -> true }
+        harness.coordinator.scheduleDrain(harness.sessionId, "first")
+        assertEquals(1, harness.ledger.publishedIdentities(harness.sessionId).size)
+        assertTrue(nudged.isEmpty())
+        var extraSends = 0
+        harness.publishToPeer = { _, _ ->
+            extraSends++
+            true
+        }
+        harness.coordinator.scheduleDrain(harness.sessionId, "second")
+        assertEquals(listOf("M02"), nudged)
+        assertEquals(0, extraSends)
+        assertEquals(1, harness.ledger.publishedIdentities(harness.sessionId).size)
+    }
+
+    @Test
     fun duplicateEstablishmentNotification_doesNotResend() {
         val harness = newProductionHarness(sessionId = "pr2-dup-notify")
         seedQuadCreation(harness, eligiblePeers = setOf("M02", "M03", "M04"))
@@ -229,6 +250,7 @@ class Profile01SupplementDeliveryPr2Test {
     ) {
         var publishToPeer: (String, ByteArray) -> Boolean = { _, _ -> true }
         var publishCapture: MutableMap<String, ByteArray> = linkedMapOf()
+        var onPublishedWithoutAck: (String, String) -> Unit = { _, _ -> }
 
         fun quadSnapshot(): ConferenceTopologySnapshot =
             ConferenceTopologySnapshot(
@@ -315,6 +337,9 @@ class Profile01SupplementDeliveryPr2Test {
                     }
                 },
                 resolveDrainContext = { sessionId -> harnessRef.buildDrainContext(sessionId) },
+                onPublishedWithoutAck = { sessionId, peer ->
+                    harnessRef.onPublishedWithoutAck(sessionId, peer)
+                },
             )
         val harness =
             ProductionHarness(

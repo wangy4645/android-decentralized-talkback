@@ -110,9 +110,13 @@ class MeetingProfile01MembershipOriginBridge(
             }
         }
 
+        val channelId = sessionIndex.bindingForSession(sessionId)?.channelId ?: "-"
         val publishedCount =
             publishToEligiblePeers(
                 sessionId = sessionId,
+                conferenceIdHex = conferenceIdHex,
+                channelId = channelId,
+                mediaKeyEpoch = converged.mediaKeyEpoch,
                 localModuleId = localModuleId,
                 eligiblePeerModuleIds = eligiblePeerModuleIds,
                 signedFactBytes = state.signedFactBytes,
@@ -310,6 +314,9 @@ class MeetingProfile01MembershipOriginBridge(
 
     private fun publishToEligiblePeers(
         sessionId: String,
+        conferenceIdHex: String,
+        channelId: String,
+        mediaKeyEpoch: Long,
         localModuleId: String,
         eligiblePeerModuleIds: Set<String>,
         signedFactBytes: ByteArray,
@@ -322,9 +329,30 @@ class MeetingProfile01MembershipOriginBridge(
             .filter { it != localModuleId }
             .sorted()
             .forEach { peerModuleId ->
-                if (!publishedToPeers.add(peerModuleId)) return@forEach
+                if (!publishedToPeers.add(peerModuleId)) {
+                    Profile01ControlPlaneDiagnosticTrace.recordMembershipOriginPeer(
+                        sessionId = sessionId,
+                        conferenceIdHex = conferenceIdHex,
+                        channelId = channelId,
+                        mediaKeyEpoch = mediaKeyEpoch,
+                        peerModuleId = peerModuleId,
+                        disposition =
+                            Profile01ControlPlaneDiagnosticTrace.MembershipOriginPeerDisposition
+                                .SKIPPED_ALREADY_PUBLISHED,
+                    )
+                    return@forEach
+                }
                 if (publishToPeer(peerModuleId, signedFactBytes)) {
                     publishedCount++
+                    Profile01ControlPlaneDiagnosticTrace.recordMembershipOriginPeer(
+                        sessionId = sessionId,
+                        conferenceIdHex = conferenceIdHex,
+                        channelId = channelId,
+                        mediaKeyEpoch = mediaKeyEpoch,
+                        peerModuleId = peerModuleId,
+                        disposition =
+                            Profile01ControlPlaneDiagnosticTrace.MembershipOriginPeerDisposition.SENT,
+                    )
                     if (!replayLog) {
                         onLog(
                             "PROFILE01_ORIGIN_REPLAY session=$sessionId factType=" +
@@ -333,6 +361,15 @@ class MeetingProfile01MembershipOriginBridge(
                     }
                 } else {
                     publishedToPeers.remove(peerModuleId)
+                    Profile01ControlPlaneDiagnosticTrace.recordMembershipOriginPeer(
+                        sessionId = sessionId,
+                        conferenceIdHex = conferenceIdHex,
+                        channelId = channelId,
+                        mediaKeyEpoch = mediaKeyEpoch,
+                        peerModuleId = peerModuleId,
+                        disposition =
+                            Profile01ControlPlaneDiagnosticTrace.MembershipOriginPeerDisposition.SEND_FAILED,
+                    )
                 }
             }
         return publishedCount

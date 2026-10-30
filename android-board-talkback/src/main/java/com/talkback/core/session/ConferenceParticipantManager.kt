@@ -123,6 +123,21 @@ class ConferenceParticipantManager {
         }
     }
 
+    /**
+     * Drop leave tombstones only for module ids now confirmed in the admitted set.
+     * Unlisted leavers stay hidden. Does not wipe the whole map.
+     */
+    fun clearLeaveTombstonesForAdmittedMembers(
+        sessionId: String,
+        admittedModuleIds: Set<String>,
+    ): Set<String> {
+        val state = sessions[sessionId] ?: return emptySet()
+        if (admittedModuleIds.isEmpty()) return emptySet()
+        val cleared = state.leftMemberEndpoints.keys.filter { it in admittedModuleIds }.toSet()
+        state.leftMemberEndpoints.keys.removeAll(cleared)
+        return cleared
+    }
+
     fun leftMemberEndpoints(sessionId: String): MutableMap<String, EndpointAddress>? =
         sessions[sessionId]?.leftMemberEndpoints
 

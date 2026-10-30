@@ -80,6 +80,7 @@ import com.talkback.core.session.ChannelMode
 import com.talkback.core.session.ChannelModeFsm
 import com.talkback.core.session.ChannelReadiness
 import com.talkback.core.session.ConferenceEdgeRecoveryController
+import com.talkback.core.session.ConferenceAdmittedMembership
 import com.talkback.core.session.ConferenceBootstrapDeferral
 import com.talkback.core.session.ConferenceEdgeSdpApplyGate
 import com.talkback.core.session.ConferenceNativeExecutionDomain
@@ -206,6 +207,7 @@ import com.talkback.core.session.ConferenceL4AdjudicationLog
 import com.talkback.core.session.ConferenceL4AdjudicationResult
 import com.talkback.core.session.ConferenceTopologySnapshot
 import com.talkback.core.session.ConferenceTopologySnapshotLog
+import com.talkback.core.session.MeetingOriginAuthority
 import com.talkback.core.session.RecoveryEdgeProvider
 import com.talkback.core.session.RecoveryTargetSnapshot
 import com.talkback.core.session.toConferencePresenceProjection
@@ -247,6 +249,9 @@ import com.talkback.core.util.PairwiseMeshAdmissionLog
 import com.talkback.core.model.AuthorityDigestFreshness
 import com.talkback.core.model.AuthorityDigestObservation
 import com.talkback.core.model.AuthorityDigestSource
+import com.talkback.core.model.ChannelAuthorityDigestStore
+import com.talkback.core.model.MembershipAuthorityPlane
+import com.talkback.core.session.HelloAuthorityDigestClassifier
 import com.talkback.core.model.GroupResyncRequestPayload
 import com.talkback.core.model.MembershipContextExistenceQueryPayload
 import com.talkback.core.model.MembershipContextExistenceResponsePayload
@@ -371,7 +376,14 @@ import com.talkback.core.conference.session.integration.Profile01SupplementDeliv
 import com.talkback.core.conference.session.integration.MeetingProfile01MembershipOriginBridge
 import com.talkback.core.conference.session.integration.MeetingProfile01SourceOriginBridge
 import com.talkback.core.conference.session.integration.Profile01HostLocalSessionFactProjection
+import com.talkback.core.conference.session.integration.Profile01AuthoritativeHeadSnapshot
+import com.talkback.core.conference.session.integration.Profile01HeadObligationId
+import com.talkback.core.conference.session.integration.Profile01HeadObligationState
+import com.talkback.core.conference.session.integration.Profile01HeadSupplementObligationDriver
+import com.talkback.core.conference.session.integration.Profile01HeadSupplementObligationLedger
+import com.talkback.core.conference.session.integration.Profile01HeadSupplementReadyAck
 import com.talkback.core.conference.session.integration.Profile01MediaKeyHeadRepublishRequest
+import com.talkback.core.conference.session.integration.Profile01PeerHeadSupplementAckPending
 import com.talkback.core.conference.session.integration.Profile01LocalConferenceSourceIdentityAuthority
 import com.talkback.core.conference.session.integration.Profile01ShadowMulticastTransmitSeam
 import com.talkback.core.conference.session.profile01.Profile01RejoinCatchUpHostDispatchGate
@@ -540,6 +552,9 @@ class TalkbackCoordinator(
     private var meetingProfile01MembershipOriginBridge: MeetingProfile01MembershipOriginBridge? = null
     private var meetingProfile01MediaKeyPackageOriginBridge: MeetingProfile01MediaKeyPackageOriginBridge? = null
     private var profile01SupplementDeliveryCoordinator: Profile01SupplementDeliveryCoordinator? = null
+    private var profile01HeadObligationLedger: Profile01HeadSupplementObligationLedger? = null
+    private var profile01HeadObligationDriver: Profile01HeadSupplementObligationDriver? = null
+    private val profile01PeerHeadAckPending = Profile01PeerHeadSupplementAckPending()
     private var meetingProfile01SourceOriginBridge: MeetingProfile01SourceOriginBridge? = null
     private var profile01LocalConferenceSourceIdentityAuthority: Profile01LocalConferenceSourceIdentityAuthority? =
         null
@@ -589,6 +604,35 @@ class TalkbackCoordinator(
         profile01SupplementDeliveryCoordinator = coordinator
     }
 
+    fun attachProfile01HeadSupplementObligations(
+        ledger: Profile01HeadSupplementObligationLedger,
+        driver: Profile01HeadSupplementObligationDriver,
+    ) {
+        profile01HeadObligationLedger = ledger
+        profile01HeadObligationDriver = driver
+    }
+
+    /**
+     * Ordinary package drain recorded a local send. Keep un-ACK'd current-head
+     * obligation retrying; do not treat publication ledger as delivery complete.
+     */
+    internal fun ensureProfile01HeadObligationKicking(
+        sessionId: String,
+        peerModuleId: String,
+    ) {
+        val session = sessions[sessionId] ?: return
+        if (session.type != SessionType.CONFERENCE) return
+        if (!isMeetingOriginAuthority(session)) return
+        if (peerModuleId == localModuleId.value) return
+        if (peerModuleId !in session.remotePeersByModule) return
+        val live = liveProfile01HeadSnapshot(sessionId) ?: return
+        profile01HeadObligationDriver?.ensureUnackedCurrentHeadKicking(
+            snapshot = live,
+            peerModuleId = peerModuleId,
+            localModuleId = localModuleId.value,
+        )
+    }
+
     fun onEstablishmentTrustSnapshotMaterialized(materializedPeerModuleIds: Set<String>) {
         if (materializedPeerModuleIds.isEmpty()) return
         val activeConferenceSessionIds =
@@ -614,7 +658,7 @@ class TalkbackCoordinator(
             scope = scope,
             snapshot = snapshot,
             localModuleId = localModuleId.value,
-            isMembershipAuthority = isMembershipAuthority(session),
+            isMembershipAuthority = isMeetingOriginAuthority(session),
             eligiblePeerModuleIds = eligibleConferenceCreationFanoutPeers(session),
             publishToPeer = { moduleId, signedFactBytes ->
                 sendConferenceSignedFactToPeer(session, moduleId, signedFactBytes).also { sent ->
@@ -653,14 +697,23 @@ class TalkbackCoordinator(
 
     fun onMeetingProfile01MediaSupplementReady(
         conferenceId: String,
-        @Suppress("UNUSED_PARAMETER") mediaKeyEpoch: Long,
+        mediaKeyEpoch: Long,
     ) {
         val sessionId = meetingProfile01SessionIndex?.sessionIdForConference(conferenceId) ?: return
         val session = sessions[sessionId] ?: return
         if (session.type != SessionType.CONFERENCE) return
+        val generation =
+            meetingProfile01FactWireIngress?.currentMembershipGenerationForSession(sessionId)
+        if (generation == null || generation.mediaKeyEpoch != mediaKeyEpoch) {
+            return
+        }
+        if (meetingProfile01FactWireIngress?.isCurrentHeadSupplementInstalled(sessionId, conferenceId, mediaKeyEpoch) != true) {
+            return
+        }
         maybeCommitAndPublishLocalConferenceSource(session, "media_supplement_ready")
         publishSourceDeclarationToEligiblePeers(session, "media_supplement_ready")
         profile01HostLocalSessionFactProjection?.maybeProjectHostShadowSession(sessionId)
+        maybeEnqueuePeerHeadSupplementReadyAck(session, conferenceId, mediaKeyEpoch)
     }
 
     fun onMeetingProfile01HostCreationAuthoritativeCommit(sessionId: String) {
@@ -701,6 +754,7 @@ class TalkbackCoordinator(
             session,
             "r4a_host_membership_wire_fanout_post_bind",
         )
+        syncProfile01HeadObligations(session)
     }
 
     /** P04 — peer membership replay deferred; host republishes package at membership head. */
@@ -711,7 +765,7 @@ class TalkbackCoordinator(
     ) {
         val session = sessions[sessionId] ?: return
         if (session.type != SessionType.CONFERENCE) return
-        if (isMembershipAuthority(session)) {
+        if (isMeetingOriginAuthority(session)) {
             profile01SupplementDeliveryCoordinator?.scheduleDrain(
                 sessionId = sessionId,
                 reason = "host_membership_replay_deferred_no_supplement",
@@ -824,6 +878,8 @@ class TalkbackCoordinator(
         meetingProfile01MembershipOriginBridge?.clearSession(sessionId)
         profile01SupplementDeliveryCoordinator?.clearSession(sessionId)
         meetingProfile01MediaKeyPackageOriginBridge?.clearSession(sessionId)
+        profile01HeadObligationDriver?.closeSession(sessionId)
+        profile01PeerHeadAckPending.clearSession(sessionId)
         meetingProfile01SourceOriginBridge?.clearSession(sessionId)
         profile01LocalConferenceSourceIdentityAuthority?.clearSession(sessionId)
         profile01HeadSourceAbsentPeersBySession.remove(sessionId)
@@ -845,6 +901,7 @@ class TalkbackCoordinator(
         profile01HeadSourceAbsentPeersBySession
             .getOrPut(sessionId) { java.util.concurrent.ConcurrentHashMap.newKeySet() }
             .add(moduleId)
+        profile01HeadObligationDriver?.closePeer(sessionId, moduleId)
     }
 
     private fun isConferencePeerMarkedAbsentForHeadSource(
@@ -1031,7 +1088,7 @@ class TalkbackCoordinator(
                 sessionId = session.id,
                 snapshot = snapshot,
                 localModuleId = localModuleId.value,
-                isMembershipAuthority = isMembershipAuthority(session),
+                isMembershipAuthority = isMeetingOriginAuthority(session),
                 recipientModuleId = remoteModuleId,
                 publishToPeer = { moduleId, signedFactBytes ->
                     sendConferenceSignedFactToPeer(session, moduleId, signedFactBytes).also { sent ->
@@ -1372,7 +1429,7 @@ class TalkbackCoordinator(
             },
             membershipEpochProbe = WiredMembershipEpochProbe(
                 resolver = DefaultMembershipAuthorityResolver { channelId ->
-                    authorityDigestForChannel(channelId)
+                    authorityDigestForPlane(channelId, MembershipAuthorityPlane.CONFERENCE)
                 },
                 resolveContext = { channelId, conferenceSessionId ->
                     val session = sessions[conferenceSessionId] ?: return@WiredMembershipEpochProbe null
@@ -1901,10 +1958,10 @@ class TalkbackCoordinator(
     private val lastConferenceBarrierCanPublishBySession = ConcurrentHashMap<String, Boolean>()
     private val lastGroupMeshReconnectMsByPeer = ConcurrentHashMap<String, Long>()
     /**
-     * ADR-0036 Phase 2.4: provenance-bound authority digest observations.
-     * Resolver still compares [TopologyDigest] only; provenance drives stale invalidation.
+     * ADR-0036 Phase 2.4: provenance-bound authority digest observations, keyed by plane.
+     * Resolver still compares [TopologyDigest] only within one plane.
      */
-    private val lastSeenAuthorityDigestByChannel = ConcurrentHashMap<String, AuthorityDigestObservation>()
+    private val lastSeenAuthorityDigestByChannel = ChannelAuthorityDigestStore()
     /** ADR-0036 RCA-6 + RESYNC-LIFECYCLE-001: one ownership record per (channelId, recoveryEpisodeId). */
     private val membershipResyncRecordByKey = ConcurrentHashMap<MembershipResyncKey, MembershipResyncRecord>()
     private val transportRecoveryMembershipTriggers = setOf(
@@ -1915,7 +1972,7 @@ class TalkbackCoordinator(
         RecoveryReevaluateTrigger.PEER_REACHABILITY_RESTORED
     )
     private val membershipAuthorityResolver = DefaultMembershipAuthorityResolver { channelId ->
-        authorityDigestForChannel(channelId)
+        authorityDigestForPlane(channelId, MembershipAuthorityPlane.CONFERENCE)
     }
     /** ADR-0043 Seam I v0: P1 projector for authority-grounded membership context existence. */
     private val membershipContextExistenceProjector: SignalingMembershipContextExistenceProjector by lazy {
@@ -2018,6 +2075,11 @@ class TalkbackCoordinator(
         channelModeFsm(channelId).reset()
         log("Conference channel released for GROUP PTT ch=$channelId reason=$reason")
         MeetingRecoveryLog.onConferenceReleased(channelId, reason)
+        lastSeenAuthorityDigestByChannel.clear(channelId, MembershipAuthorityPlane.CONFERENCE)
+        log(
+            "AUTHORITY_DIGEST_PLANE_CLEARED channel=$channelId plane=CONFERENCE " +
+                "reason=$reason path=authorized_meeting_end"
+        )
         channelGovernance.beginTransition(TransitionTrigger.MEETING_END, channelId)
         val meetingEndBaseline = (dialableRemoteModuleIds().map { it.value } + localModuleId.value)
             .distinct()
@@ -5777,7 +5839,7 @@ class TalkbackCoordinator(
                     sessionId = session.id,
                     snapshot = result.snapshot,
                     localModuleId = localModuleId.value,
-                    isMembershipAuthority = isMembershipAuthority(session),
+                    isMembershipAuthority = isMeetingOriginAuthority(session),
                     eligiblePeerModuleIds = eligibleConferenceCreationFanoutPeers(session),
                     publishToPeer = { moduleId, signedFactBytes ->
                         sendConferenceSignedFactToPeer(session, moduleId, signedFactBytes)
@@ -7316,8 +7378,23 @@ class TalkbackCoordinator(
         )
     }
 
-    private fun authorityDigestForChannel(channelId: String): TopologyDigest? =
-        lastSeenAuthorityDigestByChannel[channelId]?.digest
+    private fun authorityDigestForPlane(
+        channelId: String,
+        plane: MembershipAuthorityPlane
+    ): TopologyDigest? = lastSeenAuthorityDigestByChannel.get(channelId, plane)?.digest
+
+    private fun authorityDigestForSession(session: TalkbackSession): TopologyDigest? {
+        val channelId = session.channelId ?: return null
+        val plane = membershipAuthorityPlaneOf(session) ?: return null
+        return authorityDigestForPlane(channelId, plane)
+    }
+
+    private fun membershipAuthorityPlaneOf(session: TalkbackSession): MembershipAuthorityPlane? =
+        when (session.type) {
+            SessionType.GROUP -> MembershipAuthorityPlane.GROUP
+            SessionType.CONFERENCE -> MembershipAuthorityPlane.CONFERENCE
+            else -> null
+        }
 
     /**
      * #190: shared digest materialization for HELLO publication and recovery convergence.
@@ -7346,7 +7423,7 @@ class TalkbackCoordinator(
         MembershipDigestSupport.convergenceLocalSessionId(conferenceSession)
 
     private fun authorityDigestEpoch(channelId: String): Long? =
-        authorityDigestForChannel(channelId)?.rosterEpoch
+        authorityDigestForPlane(channelId, MembershipAuthorityPlane.CONFERENCE)?.rosterEpoch
 
     /**
      * ADR-0036 Phase 2.4: write provenance-bound authority digest observation.
@@ -7358,33 +7435,49 @@ class TalkbackCoordinator(
         authorityId: String,
         digest: TopologyDigest,
         source: AuthorityDigestSource,
-        membershipContext: String
+        membershipContext: String,
+        plane: MembershipAuthorityPlane,
+        sessionFamilyId: String?
     ) {
-        val previous = lastSeenAuthorityDigestByChannel[channelId]
+        val previous = lastSeenAuthorityDigestByChannel.get(channelId, plane)
         val next = AuthorityDigestObservation(
             channelId = channelId,
             authorityId = authorityId,
             digest = digest,
             observedAtMs = System.currentTimeMillis(),
             source = source,
-            membershipContext = membershipContext
+            membershipContext = membershipContext,
+            plane = plane,
+            sessionFamilyId = sessionFamilyId
         )
         val digestChanged = previous == null ||
             previous.digest.rosterEpoch != digest.rosterEpoch ||
-            previous.digest.memberHash != digest.memberHash
-        lastSeenAuthorityDigestByChannel[channelId] = next
+            previous.digest.memberHash != digest.memberHash ||
+            previous.sessionFamilyId != sessionFamilyId
+        lastSeenAuthorityDigestByChannel.put(next)
         if (previous != null &&
-            AuthorityDigestFreshness.isStaleReplacement(previous.digest, digest)
+            AuthorityDigestFreshness.isStaleReplacement(
+                previous.digest,
+                digest,
+                previous.plane,
+                plane,
+                previous.sessionFamilyId,
+                sessionFamilyId
+            )
         ) {
             log(AuthorityDigestFreshness.formatInvalidated(channelId, previous, next))
         } else {
             log(
                 "AUTHORITY_DIGEST_OBSERVED channel=$channelId authority=$authorityId " +
                     "epoch=${digest.rosterEpoch} hash=${digest.memberHash} " +
-                    "source=${source.name} context=$membershipContext"
+                    "source=${source.name} context=$membershipContext plane=${plane.name} " +
+                    "family=${sessionFamilyId ?: "-"}"
             )
         }
-        if (digestChanged && source != AuthorityDigestSource.TEST_SEED) {
+        if (digestChanged &&
+            source != AuthorityDigestSource.TEST_SEED &&
+            plane == MembershipAuthorityPlane.CONFERENCE
+        ) {
             forceControlReconciliationAfterDigestRefresh(
                 channelId = channelId,
                 previous = previous,
@@ -7454,7 +7547,7 @@ class TalkbackCoordinator(
     }
 
     private fun refreshConferenceControlReconciliationForChannel(channelId: String) {
-        val observation = lastSeenAuthorityDigestByChannel[channelId]
+        val observation = lastSeenAuthorityDigestByChannel.get(channelId, MembershipAuthorityPlane.CONFERENCE)
         sessions.values
             .filter { isConferenceSession(it) && it.accepted && it.channelId == channelId }
             .forEach { session ->
@@ -8037,7 +8130,9 @@ class TalkbackCoordinator(
                     authorityId = authorityId,
                     digest = TopologyDigest.fromSession(session),
                     source = AuthorityDigestSource.TEST_SEED,
-                    membershipContext = session.type.name
+                    membershipContext = session.type.name,
+                    plane = MembershipAuthorityPlane.GROUP,
+                    sessionFamilyId = session.id
                 )
             }
     }
@@ -8854,6 +8949,9 @@ class TalkbackCoordinator(
             callableModuleGate.markVerified(signal.from.moduleId.value)
             rememberSignalPeer(signal.from.moduleId.value, fromPeer)
             val event = channelTextController.onReceive(signal) ?: return
+            if (handleProfile01HeadSupplementReadyAck(signal, event.text)) {
+                return
+            }
             if (handleProfile01MediaKeyHeadRepublishRequest(signal, event.text)) {
                 return
             }
@@ -12866,7 +12964,7 @@ class TalkbackCoordinator(
             conferenceParticipantManager.onLateJoin(session.id, moduleId, remote)
             log("[${session.traceId}] Conference roster restored $moduleId after accept")
         }
-        session.memberModules.add(remote.moduleId)
+        GroupMembershipSupport.ensureCanonicalMember(session, remote)
         session.remotePeersByModule[moduleId] = peer
         maybePublishHeadSourceToRejoinedPeer(
             session = session,
@@ -13662,6 +13760,7 @@ class TalkbackCoordinator(
     private fun syncConferenceUiRosterFromMembership(
         session: TalkbackSession,
         members: List<EndpointAddress>,
+        clearReadmittedLeaveTombstones: Boolean = false,
     ) {
         if (session.type != SessionType.CONFERENCE) return
         conferenceParticipantManager.applyCanonicalMembershipRoster(
@@ -13669,6 +13768,20 @@ class TalkbackCoordinator(
             members,
             localModuleId,
         )
+        if (clearReadmittedLeaveTombstones) {
+            val admittedIds = members.map { it.moduleId.value }.toSet()
+            val cleared = conferenceParticipantManager.clearLeaveTombstonesForAdmittedMembers(
+                session.id,
+                admittedIds,
+            )
+            session.leftMemberEndpoints.keys.retainAll { it !in admittedIds }
+            if (cleared.isNotEmpty()) {
+                log(
+                    "${sessionTag(session)} LEAVE_TOMBSTONE_CLEARED " +
+                        "cleared=${cleared.sorted()} admitted=${admittedIds.sorted()}"
+                )
+            }
+        }
         members.forEach { session.memberModules.add(it.moduleId) }
         session.memberModules.add(localModuleId)
         session.touch()
@@ -13809,9 +13922,9 @@ class TalkbackCoordinator(
         invalidateHostConferenceOfferEdge(session.id, moduleId, "membership_leave:$source")
         releaseFloorIfHolderUnavailable(session, moduleId)
         conferenceParticipantManager.applyPrune(session.id, moduleId)
+        GroupMembershipSupport.removeCanonicalMember(session, moduleId)
         conferenceEdgeRecoveryController.cancelEdge(session.id, moduleId, "member_left")
         negotiationCapabilityObservation.clearEdge(session.id, moduleId)
-        session.memberModules.remove(ModuleId(moduleId))
         session.channelId?.let { groupMeshReconciler.clearPeer(it, moduleId) }
         markConferencePeerAbsentForHeadSource(session.id, moduleId)
         releaseMeshPeer(session, moduleId)
@@ -13827,6 +13940,13 @@ class TalkbackCoordinator(
             "[${session.traceId}] Conference membership mutation remote=$moduleId source=$source " +
                 "remaining=${session.groupMembers.size}"
         )
+        if (isConferenceHostSession(session)) {
+            val epoch = GroupMembershipSupport.bumpRosterEpoch(session)
+            log("${sessionTag(session)} rosterEpoch=$epoch reason=conference_member_left")
+            val remaining = admittedConferenceEndpoints(session)
+            syncConferenceUiRosterFromMembership(session, remaining)
+            broadcastMembershipSnapshot(session)
+        }
     }
 
     /**
@@ -14853,7 +14973,7 @@ class TalkbackCoordinator(
                 sessionId = session.id,
                 snapshot = snapshot,
                 localModuleId = localModuleId.value,
-                isMembershipAuthority = isMembershipAuthority(session),
+                isMembershipAuthority = isMeetingOriginAuthority(session),
                 peerModuleId = rejoinerId,
                 publishToPeer = publish,
             )
@@ -14877,7 +14997,7 @@ class TalkbackCoordinator(
             sessionId = session.id,
             snapshot = snapshot,
             localModuleId = localModuleId.value,
-            isMembershipAuthority = isMembershipAuthority(session),
+            isMembershipAuthority = isMeetingOriginAuthority(session),
             eligiblePeerModuleIds = eligibleConferenceCreationFanoutPeers(session),
             publishToPeer = { moduleId, signedFactBytes ->
                 sendConferenceSignedFactToPeer(session, moduleId, signedFactBytes).also { sent ->
@@ -14959,7 +15079,7 @@ class TalkbackCoordinator(
             sessionId = session.id,
             snapshot = snapshot,
             localModuleId = localModuleId.value,
-            isMembershipAuthority = isMembershipAuthority(session),
+            isMembershipAuthority = isMeetingOriginAuthority(session),
             eligiblePeerModuleIds = eligibleConferenceCreationFanoutPeers(session),
             publishToPeer = { moduleId, signedFactBytes ->
                 sendConferenceSignedFactToPeer(session, moduleId, signedFactBytes).also { sent ->
@@ -14987,6 +15107,53 @@ class TalkbackCoordinator(
         )
     }
 
+    private fun handleProfile01HeadSupplementReadyAck(
+        signal: SignalEnvelope,
+        text: String,
+    ): Boolean {
+        val decoded = Profile01HeadSupplementReadyAck.decode(text) ?: return false
+        val from = signal.from.moduleId.value
+        if (from != decoded.peerModuleId) {
+            log(
+                "PROFILE01_HEAD_ACK rejected session=${decoded.sessionId} reason=SENDER_MISMATCH " +
+                    "from=$from payloadPeer=${decoded.peerModuleId}",
+            )
+            return true
+        }
+        val session = sessions[decoded.sessionId] ?: return true
+        if (session.type != SessionType.CONFERENCE) return true
+        if (!isMeetingOriginAuthority(session)) return true
+        if (from == localModuleId.value || from !in session.remotePeersByModule) {
+            log(
+                "PROFILE01_HEAD_ACK rejected session=${decoded.sessionId} reason=NOT_MEMBER from=$from",
+            )
+            return true
+        }
+        val live = liveProfile01HeadSnapshot(decoded.sessionId)
+        if (live != null && live.headDigest != decoded.headDigest) {
+            log(
+                "PROFILE01_HEAD_ACK rejected session=${decoded.sessionId} reason=STALE_HEAD " +
+                    "from=$from ackHead=${decoded.headDigest} liveHead=${live.headDigest}",
+            )
+            return true
+        }
+        val record =
+            profile01HeadObligationLedger?.onReadyAck(
+                sessionId = decoded.sessionId,
+                peerModuleId = from,
+                headDigest = decoded.headDigest,
+                nowMs = System.currentTimeMillis(),
+            )
+        if (record?.state == Profile01HeadObligationState.ACKED) {
+            val recovered = if (record.recoveredFromFault) " recoveredFromFault=true" else ""
+            log(
+                "${sessionTag(session)} PROFILE01_HEAD_ACK acked peer=$from " +
+                    "head=${decoded.headDigest}$recovered",
+            )
+        }
+        return true
+    }
+
     private fun handleProfile01MediaKeyHeadRepublishRequest(
         signal: SignalEnvelope,
         text: String,
@@ -14994,7 +15161,7 @@ class TalkbackCoordinator(
         val decoded = Profile01MediaKeyHeadRepublishRequest.decode(text) ?: return false
         val session = sessions[decoded.sessionId] ?: return true
         if (session.type != SessionType.CONFERENCE) return true
-        if (!isMembershipAuthority(session)) return true
+        if (!isMeetingOriginAuthority(session)) return true
         val requester = signal.from.moduleId.value
         log(
             "${sessionTag(session)} PROFILE01_MEDIA_KEY_HEAD_REPUBLISH_RECEIVED " +
@@ -15004,6 +15171,11 @@ class TalkbackCoordinator(
             sessionId = session.id,
             hostModuleId = localModuleId.value,
             recipientModuleId = requester,
+        )
+        profile01HeadObligationDriver?.onNack(
+            sessionId = session.id,
+            peerModuleId = requester,
+            mediaKeyEpoch = decoded.mediaKeyEpoch,
         )
         maybeRepublishMediaKeyPackageAfterPeerBind(
             session = session,
@@ -15029,6 +15201,119 @@ class TalkbackCoordinator(
             sessionId = session.id,
             reason = reason,
         )
+    }
+
+    private fun syncProfile01HeadObligations(session: TalkbackSession) {
+        if (session.type != SessionType.CONFERENCE) return
+        if (!isMeetingOriginAuthority(session)) return
+        val snapshot = liveProfile01HeadSnapshot(session.id) ?: return
+        profile01HeadObligationDriver?.openAndKick(
+            snapshot = snapshot,
+            peerModuleIds = eligibleConferenceCreationFanoutPeers(session),
+            localModuleId = localModuleId.value,
+        )
+    }
+
+    internal fun liveProfile01HeadSnapshot(sessionId: String): Profile01AuthoritativeHeadSnapshot? {
+        val generation =
+            meetingProfile01FactWireIngress?.currentMembershipGenerationForSession(sessionId)
+                ?: return null
+        return Profile01AuthoritativeHeadSnapshot.from(generation, sessionId)
+    }
+
+    internal fun deliverProfile01HeadObligation(
+        id: Profile01HeadObligationId,
+        snapshot: Profile01AuthoritativeHeadSnapshot,
+    ): Profile01HeadSupplementObligationDriver.DeliverOutcome {
+        val session = sessions[id.sessionId]
+            ?: return Profile01HeadSupplementObligationDriver.DeliverOutcome(false, "NO_SESSION", null)
+        val topology =
+            conferenceTopologyAuthority.currentSnapshot(session.id)
+                ?: return Profile01HeadSupplementObligationDriver.DeliverOutcome(false, "NO_TOPOLOGY", null)
+        val live = liveProfile01HeadSnapshot(id.sessionId)
+        if (live != null && live.headDigest != id.headDigest) {
+            return Profile01HeadSupplementObligationDriver.DeliverOutcome(
+                sendApiResult = false,
+                failure = "HEAD_MISMATCH",
+                liveHeadDigest = live.headDigest,
+            )
+        }
+        val bridge =
+            meetingProfile01MediaKeyPackageOriginBridge
+                ?: return Profile01HeadSupplementObligationDriver.DeliverOutcome(false, "NO_BRIDGE", live?.headDigest)
+        val outcome =
+            bridge.publishMediaKeyPackageForHeadObligation(
+                sessionId = session.id,
+                snapshot = topology,
+                localModuleId = localModuleId.value,
+                isMembershipAuthority = isMeetingOriginAuthority(session),
+                peerModuleId = id.peerModuleId,
+                expectedHeadDigest = id.headDigest,
+                publishToPeer = { moduleId, signedFactBytes ->
+                    sendConferenceSignedFactToPeer(session, moduleId, signedFactBytes)
+                },
+            )
+        val liveDigest = live?.headDigest ?: snapshot.headDigest
+        return when (outcome) {
+            is com.talkback.core.conference.session.integration.MediaKeyPackagePeerPublishOutcome.Sent ->
+                Profile01HeadSupplementObligationDriver.DeliverOutcome(true, null, liveDigest)
+            is com.talkback.core.conference.session.integration.MediaKeyPackagePeerPublishOutcome.SendFailed ->
+                Profile01HeadSupplementObligationDriver.DeliverOutcome(false, "SEND_FAILED", liveDigest)
+            is com.talkback.core.conference.session.integration.MediaKeyPackagePeerPublishOutcome.Skipped ->
+                Profile01HeadSupplementObligationDriver.DeliverOutcome(false, outcome.reason, liveDigest)
+            is com.talkback.core.conference.session.integration.MediaKeyPackagePeerPublishOutcome.PendingIdentity ->
+                Profile01HeadSupplementObligationDriver.DeliverOutcome(false, outcome.reason, liveDigest)
+            is com.talkback.core.conference.session.integration.MediaKeyPackagePeerPublishOutcome.BuildFailed ->
+                Profile01HeadSupplementObligationDriver.DeliverOutcome(false, outcome.reason, liveDigest)
+            is com.talkback.core.conference.session.integration.MediaKeyPackagePeerPublishOutcome.ReadyToSend ->
+                Profile01HeadSupplementObligationDriver.DeliverOutcome(false, "READY_NOT_EXECUTED", liveDigest)
+        }
+    }
+
+    private fun maybeEnqueuePeerHeadSupplementReadyAck(
+        session: TalkbackSession,
+        @Suppress("UNUSED_PARAMETER") conferenceId: String,
+        mediaKeyEpoch: Long,
+    ) {
+        if (session.type != SessionType.CONFERENCE) return
+        if (isMeetingOriginAuthority(session)) return
+        val generation =
+            meetingProfile01FactWireIngress?.currentMembershipGenerationForSession(session.id)
+                ?: return
+        if (generation.mediaKeyEpoch != mediaKeyEpoch) return
+        if (meetingProfile01FactWireIngress?.isCurrentHeadSupplementInstalled(session.id) != true) return
+        val snapshot = Profile01AuthoritativeHeadSnapshot.from(generation, session.id)
+        profile01PeerHeadAckPending.replaceIfNewerHead(snapshot, localModuleId.value)
+        trySendPeerHeadSupplementReadyAck(session.id)
+    }
+
+    private fun trySendPeerHeadSupplementReadyAck(sessionId: String) {
+        val live = liveProfile01HeadSnapshot(sessionId)
+        val installed =
+            meetingProfile01FactWireIngress?.isCurrentHeadSupplementInstalled(sessionId) == true
+        val pending =
+            profile01PeerHeadAckPending.dropUnlessCurrentHeadReady(
+                sessionId = sessionId,
+                liveHeadDigest = live?.headDigest,
+                currentHeadSupplementInstalled = installed,
+            ) ?: return
+        val session = sessions[sessionId] ?: return
+        val channelId = session.channelId ?: return
+        val remotes = meshRoster(session)
+        val text =
+            Profile01HeadSupplementReadyAck.encode(
+                sessionId = sessionId,
+                snapshot = pending.snapshot,
+                peerModuleId = pending.peerModuleId,
+            )
+        profile01PeerHeadAckPending.markAttempt(sessionId, System.currentTimeMillis())
+        sendChannelText(groupLocalIdentity(session), channelId, remotes, text)
+        val delayMs = if ((profile01PeerHeadAckPending.current(sessionId)?.attemptCount ?: 1) <= 1) 1_100L else 4_000L
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+            val still = profile01PeerHeadAckPending.current(sessionId) ?: return@postDelayed
+            if (still.snapshot.headDigest != pending.snapshot.headDigest) return@postDelayed
+            trySendPeerHeadSupplementReadyAck(sessionId)
+        }, delayMs)
     }
 
     private fun broadcastFloorRelease(session: TalkbackSession) {
@@ -15306,20 +15591,44 @@ class TalkbackCoordinator(
     private fun membershipSnapshotRecipients(session: TalkbackSession): List<EndpointAddress> =
         when (session.type) {
             SessionType.CONFERENCE ->
-                admittedConferenceEndpoints(session).filter { it.moduleId != session.local.moduleId }
+                ConferenceAdmittedMembership.snapshotRecipients(
+                    local = session.local,
+                    canonicalRemotes = GroupMembershipSupport.canonicalRosterEndpoints(session),
+                    admittedRemotes = admittedConferenceEndpoints(session),
+                )
             else ->
                 GroupMembershipSupport.canonicalRosterEndpoints(session)
                     .filter { it.moduleId != session.local.moduleId }
         }
 
     /**
-     * After a peer accepts, push admitted-only roster to every in-meeting device (no rosterEpoch bump).
+     * After a peer accepts, push admitted-only roster to every in-meeting device.
+     * Bump rosterEpoch only when the canonical set actually gained an admitted member
+     * (leave+rejoin must not reuse the prior epoch+hash).
      */
     private fun publishConferenceAdmittedMembershipToPeers(session: TalkbackSession) {
         if (session.type != SessionType.CONFERENCE || !isConferenceHostSession(session)) return
         val admitted = admittedConferenceEndpoints(session)
         if (admitted.size <= 1) return
-        syncConferenceUiRosterFromMembership(session, admitted)
+        val canonicalIds = GroupMembershipSupport.canonicalMemberModuleIds(session)
+            .map { it.value }
+            .toSet()
+        var membershipChanged = false
+        admitted.forEach { endpoint ->
+            if (endpoint.moduleId.value !in canonicalIds) {
+                GroupMembershipSupport.ensureCanonicalMember(session, endpoint)
+                membershipChanged = true
+            }
+        }
+        if (membershipChanged) {
+            val epoch = GroupMembershipSupport.bumpRosterEpoch(session)
+            log("${sessionTag(session)} rosterEpoch=$epoch reason=conference_admitted_membership")
+        }
+        syncConferenceUiRosterFromMembership(
+            session,
+            admitted,
+            clearReadmittedLeaveTombstones = true,
+        )
         broadcastMembershipSnapshot(session)
     }
 
@@ -15894,7 +16203,11 @@ class TalkbackCoordinator(
                         if (forceAlign) " forceAlign localWas=$localEpochBefore" else ""
                 )
                 if (session.type == SessionType.CONFERENCE) {
-                    syncConferenceUiRosterFromMembership(session, members)
+                    syncConferenceUiRosterFromMembership(
+                        session,
+                        members,
+                        clearReadmittedLeaveTombstones = true,
+                    )
                     logMembershipEpochTransition(
                         session = session,
                         channelId = channelId,
@@ -15908,21 +16221,26 @@ class TalkbackCoordinator(
                 }
                 // ADR-0036 Phase 2.4 Fix-C: refresh observation from live authority snapshot
                 // before control reconciliation so stale HELLO cache cannot false-mismatch.
-                observeAuthorityDigest(
-                    channelId = channelId,
-                    authorityId = authorityId,
-                    digest = TopologyDigest(
-                        rosterEpoch = snapshot.rosterEpoch,
-                        anchorEpoch = snapshot.anchorEpoch,
-                        memberHash = GroupMembershipSupport.memberHash(
-                            channelId,
-                            snapshot.rosterEpoch,
-                            members.map { it.moduleId.value }
-                        )
-                    ),
-                    source = AuthorityDigestSource.MEMBERSHIP_SNAPSHOT_APPLY,
-                    membershipContext = session.type.name
-                )
+                val snapshotPlane = membershipAuthorityPlaneOf(session)
+                if (snapshotPlane != null) {
+                    observeAuthorityDigest(
+                        channelId = channelId,
+                        authorityId = authorityId,
+                        digest = TopologyDigest(
+                            rosterEpoch = snapshot.rosterEpoch,
+                            anchorEpoch = snapshot.anchorEpoch,
+                            memberHash = GroupMembershipSupport.memberHash(
+                                channelId,
+                                snapshot.rosterEpoch,
+                                members.map { it.moduleId.value }
+                            )
+                        ),
+                        source = AuthorityDigestSource.MEMBERSHIP_SNAPSHOT_APPLY,
+                        membershipContext = session.type.name,
+                        plane = snapshotPlane,
+                        sessionFamilyId = session.id
+                    )
+                }
                 if (groupSession != null) {
                     touchConvergenceAnchor(groupSession)
                     val deferMeshCompletion = PairwiseMeshAdmissionSupport
@@ -15950,6 +16268,17 @@ class TalkbackCoordinator(
                         "localEpoch=${session.rosterEpoch} from=${caller.moduleId.value}"
                 )
                 if (session.type == SessionType.CONFERENCE) {
+                    val snapshotIds = members.map { it.moduleId.value }.toSet()
+                    val uiIds = conferenceParticipantManager.roster(session.id)
+                        .map { it.moduleId.value }
+                        .toSet() + localModuleId.value
+                    if (snapshotIds != uiIds) {
+                        syncConferenceUiRosterFromMembership(session, members)
+                        log(
+                            "${sessionTag(session)} snapshotIgnored uiRosterHealed " +
+                                "snapshot=${snapshotIds.sorted()} uiWas=${uiIds.sorted()}"
+                        )
+                    }
                     logMembershipEpochTransition(
                         session = session,
                         channelId = channelId,
@@ -16009,7 +16338,11 @@ class TalkbackCoordinator(
                     )
                 ) {
                     GroupMembershipSupport.MembershipSnapshotApplyResult.APPLIED -> {
-                        syncConferenceUiRosterFromMembership(conference, members)
+                        syncConferenceUiRosterFromMembership(
+                            conference,
+                            members,
+                            clearReadmittedLeaveTombstones = true,
+                        )
                         log(
                             "${sessionTag(conference)} conferenceMembershipAligned rosterEpoch=" +
                                 "${snapshot.rosterEpoch} authority=$authorityId"
@@ -16052,6 +16385,19 @@ class TalkbackCoordinator(
         if (session.anchorModuleId == localModuleId) return true
         return resolveBootstrapPrimary(dialableRemoteModuleIds().plus(localModuleId)) == localModuleId
     }
+
+    /**
+     * Conference CREATION / MEMBERSHIP / head-supplement origin owner.
+     * Uses published topology [ConferenceTopologySnapshot.hostModuleId], not mesh ANCHOR.
+     */
+    private fun isMeetingOriginAuthority(session: TalkbackSession): Boolean =
+        MeetingOriginAuthority.isLocalOriginOwner(
+            sessionTypeConference = session.type == SessionType.CONFERENCE,
+            sessionAccepted = session.accepted,
+            localModuleId = localModuleId.value,
+            canonicalHostModuleId = conferenceTopologyAuthority.currentSnapshot(session.id)?.hostModuleId,
+            boundInitiatorModuleId = session.initiatorModuleId?.value,
+        )
 
     private fun topologyFor(session: TalkbackSession): MediaTopology =
         MediaTopology.forSession(session.mediaTopology, memberModuleIds(session).size)
@@ -16135,16 +16481,37 @@ class TalkbackCoordinator(
         return byModule.values.toList()
     }
 
-    /** Accepted conference members only — excludes ringing / not-yet-answered invitees. */
+    /** In-meeting members only — excludes first-ring invitees, keeps reconnect INVITING. */
     private fun admittedConferenceEndpoints(session: TalkbackSession): List<EndpointAddress> {
         if (session.type != SessionType.CONFERENCE) {
             return rosterMembersForPayload(session)
         }
-        val remotes = fullConferenceRoster(session).filter { endpoint ->
-            conferenceParticipantManager.participant(session.id, endpoint.moduleId.value).invite ==
-                InviteState.ACCEPTED
+        val leftIds = conferenceParticipantManager.leftMemberEndpoints(session.id)?.keys
+            ?: session.leftMemberEndpoints.keys
+        val canonicalIds = GroupMembershipSupport.canonicalMemberModuleIds(session)
+            .map { it.value }
+            .toSet()
+        val byModule = LinkedHashMap<String, EndpointAddress>()
+        fullConferenceRoster(session).forEach { endpoint ->
+            byModule[endpoint.moduleId.value] = endpoint
         }
-        return listOf(session.local) + remotes
+        GroupMembershipSupport.canonicalRosterEndpoints(session).forEach { endpoint ->
+            byModule.putIfAbsent(endpoint.moduleId.value, endpoint)
+        }
+        val remotes = byModule.values
+            .filter { it.moduleId != session.local.moduleId }
+            .map { endpoint ->
+                val id = endpoint.moduleId.value
+                val participant = conferenceParticipantManager.participant(session.id, id)
+                ConferenceAdmittedMembership.RemoteAdmissionFact(
+                    endpoint = endpoint,
+                    invite = participant.invite,
+                    media = participant.media,
+                    canonicalMember = id in canonicalIds,
+                    leftMember = id in leftIds,
+                )
+            }
+        return ConferenceAdmittedMembership.admittedEndpoints(session.local, remotes)
     }
 
     private fun admittedConferenceMemberKeys(session: TalkbackSession): List<String> =
@@ -21301,23 +21668,50 @@ class TalkbackCoordinator(
     private fun recordAuthorityDigestFromHello(payload: HelloPayload) {
         val channelId = payload.channelId ?: return
         if (payload.rosterEpoch <= 0L) return
-        // ADR-0036 Phase 2.4 Fix-B: conference recovery needs digest refresh without GROUP session.
-        val session = resolveMembershipContextForResync(channelId) ?: return
+        val incoming = TopologyDigest(
+            rosterEpoch = payload.rosterEpoch,
+            anchorEpoch = payload.anchorEpoch,
+            meshGeneration = payload.meshGeneration,
+            memberHash = payload.memberHash
+        )
+        val conferenceSession = sessions.values.firstOrNull {
+            it.type == SessionType.CONFERENCE && it.accepted && it.channelId == channelId
+        }
+        val groupSession = sessions.values.firstOrNull {
+            it.type == SessionType.GROUP && it.accepted && it.channelId == channelId
+        }
+        val decision = HelloAuthorityDigestClassifier.classify(
+            incoming = incoming,
+            conference = conferenceSession?.let {
+                HelloAuthorityDigestClassifier.SessionDigest(it.id, membershipDigestForSession(it))
+            },
+            group = groupSession?.let {
+                HelloAuthorityDigestClassifier.SessionDigest(it.id, membershipDigestForSession(it))
+            }
+        )
+        if (!decision.observe || decision.plane == null) {
+            log(
+                "AUTHORITY_DIGEST_HELLO_IGNORED channel=$channelId from=${payload.moduleId} " +
+                    "epoch=${incoming.rosterEpoch} hash=${incoming.memberHash} reason=${decision.reason}"
+            )
+            return
+        }
+        val contextSession = when (decision.plane) {
+            MembershipAuthorityPlane.CONFERENCE -> conferenceSession
+            MembershipAuthorityPlane.GROUP -> groupSession
+        } ?: return
         val authorityId = resolveMembershipAuthorityIdForChannel(channelId)
-            ?: session.anchorModuleId?.value
+            ?: contextSession.anchorModuleId?.value
             ?: return
         if (payload.moduleId != authorityId) return
         observeAuthorityDigest(
             channelId = channelId,
             authorityId = authorityId,
-            digest = TopologyDigest(
-                rosterEpoch = payload.rosterEpoch,
-                anchorEpoch = payload.anchorEpoch,
-                meshGeneration = payload.meshGeneration,
-                memberHash = payload.memberHash
-            ),
+            digest = incoming,
             source = AuthorityDigestSource.HELLO,
-            membershipContext = session.type.name
+            membershipContext = decision.plane.name,
+            plane = decision.plane,
+            sessionFamilyId = decision.sessionFamilyId ?: contextSession.id
         )
     }
 
@@ -21392,7 +21786,7 @@ class TalkbackCoordinator(
     private fun membershipDigestAlignedWithAuthority(session: TalkbackSession): Boolean {
         if (isMembershipAuthority(session)) return true
         val channelId = session.channelId ?: return false
-        val authorityDigest = authorityDigestForChannel(channelId) ?: return false
+        val authorityDigest = authorityDigestForSession(session) ?: return false
         val localDigest = TopologyDigest.fromSession(session)
         return localDigest.rosterEpoch == authorityDigest.rosterEpoch &&
             localDigest.memberHash == authorityDigest.memberHash
@@ -21400,7 +21794,8 @@ class TalkbackCoordinator(
 
     private fun evaluateGroupIdentityStability(session: TalkbackSession): GroupIdentityStability.Result {
         val channelId = session.channelId
-        val authorityDigestSeen = channelId != null && lastSeenAuthorityDigestByChannel.containsKey(channelId)
+        val authorityDigestSeen = channelId != null &&
+            lastSeenAuthorityDigestByChannel.contains(channelId, MembershipAuthorityPlane.GROUP)
         return GroupIdentityStability.evaluate(
             session = session,
             localModuleId = localModuleId.value,
@@ -22258,7 +22653,7 @@ class TalkbackCoordinator(
                     sessionId = session.id,
                     snapshot = snapshot,
                     localModuleId = localModuleId.value,
-                    isMembershipAuthority = isMembershipAuthority(session),
+                    isMembershipAuthority = isMeetingOriginAuthority(session),
                     recipientModuleId = remoteModuleId,
                     wireRecipientKeyVersion = wireRecipientKeyVersion,
                     publishToPeer = { moduleId, signedFactBytes ->

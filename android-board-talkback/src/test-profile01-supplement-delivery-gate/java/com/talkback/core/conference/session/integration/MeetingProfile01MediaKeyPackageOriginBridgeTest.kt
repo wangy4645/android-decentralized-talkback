@@ -208,6 +208,42 @@ class MeetingProfile01MediaKeyPackageOriginBridgeTest {
     }
 
     @Test
+    fun publishedWithoutAck_headObligationStillSendsCurrentHeadPackage() {
+        val harness = newHarness(sessionId = "obl-republish-session")
+        seedCreation(harness, eligiblePeers = setOf("M02"))
+        val sends = mutableListOf<ByteArray>()
+        val publish: (String, ByteArray) -> Boolean = { _, bytes ->
+            sends += bytes.copyOf()
+            true
+        }
+        harness.packageBridge.onEligiblePeers(
+            sessionId = harness.sessionId,
+            snapshot = harness.duoSnapshot(),
+            localModuleId = HOST,
+            isMembershipAuthority = true,
+            eligiblePeerModuleIds = setOf("M02"),
+            publishToPeer = publish,
+        )
+        assertEquals(1, sends.size)
+        assertEquals(1, harness.packageBridge.ledger().publishedIdentities(harness.sessionId).size)
+
+        val outcome =
+            harness.packageBridge.publishMediaKeyPackageForHeadObligation(
+                sessionId = harness.sessionId,
+                snapshot = harness.duoSnapshot(),
+                localModuleId = HOST,
+                isMembershipAuthority = true,
+                peerModuleId = "M02",
+                expectedHeadDigest = currentHeadDigest(harness),
+                publishToPeer = publish,
+            )
+        assertTrue(outcome is MediaKeyPackagePeerPublishOutcome.Sent)
+        assertEquals(2, sends.size)
+        assertEquals(Profile01WireConstants.FACT_TYPE_MEDIA_KEY_PACKAGE, factType(sends.last()))
+        assertEquals(1, harness.packageBridge.ledger().publishedIdentities(harness.sessionId).size)
+    }
+
+    @Test
     fun c3_firstSendFails_notPublished_laterTriggerSucceeds() {
         val harness = newHarness(sessionId = "c3-session")
         seedCreation(harness, eligiblePeers = setOf("M02"))
@@ -590,6 +626,32 @@ class MeetingProfile01MediaKeyPackageOriginBridgeTest {
 
     private fun factType(signedFactBytes: ByteArray): Int? =
         Profile01WireCborDecoder.readFactType(signedFactBytes)
+
+    private fun currentHeadDigest(harness: Harness): String {
+        val creationBytes = harness.creationBridge.readSignedCreationFact(harness.sessionId)!!
+        val envelope = Profile01SignedFactEnvelope.parse(creationBytes)!!
+        val digest =
+            com.talkback.core.conference.session.profile01.wire.Profile01FactDigest
+                .computeFactDigest(envelope.fullCanonicalBytes)
+        val decoded =
+            (
+                Profile01WireCborDecoder.decodeCreationSession(
+                    creationBytes,
+                    com.talkback.core.conference.session.profile01.Profile01SessionMediaSupplement(
+                        channelId = "origin-read",
+                        masterKey = ByteArray(16),
+                        masterSalt = ByteArray(12),
+                        keyContextHint64 = ByteArray(8),
+                    ),
+                ) as Profile01WireCborDecoder.DecodeResult.Ready
+            ).value
+        return Profile01HeadDigest.compute(
+            conferenceEpoch = decoded.conferenceEpoch,
+            membershipVersion = decoded.membershipVersion,
+            mediaKeyEpoch = decoded.mediaKeyEpoch,
+            membershipFactDigestHex = digest.joinToString("") { byte -> "%02x".format(byte.toInt() and 0xFF) },
+        )
+    }
 
     private fun testSigner(): Profile01PersistedSignedFactSigner {
         val keyPair =

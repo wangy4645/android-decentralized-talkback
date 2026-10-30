@@ -31,7 +31,7 @@ interface MembershipAuthorityResolver {
     ): MembershipAuthorityResolveOutcome
 }
 
-/** Q7-3-A: reads `lastSeenAuthorityDigestByChannel` observation cache (INV-Q7-005). */
+/** Q7-3-A: reads the CONFERENCE plane of the channel authority digest store (INV-Q7-005). */
 class DefaultMembershipAuthorityResolver(
     private val readAuthorityDigest: (String) -> TopologyDigest?
 ) : MembershipAuthorityResolver {

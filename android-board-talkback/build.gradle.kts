@@ -172,11 +172,39 @@ android {
                 listOf(
                     "com/talkback/core/session/ConferenceParticipantManagerTest.kt",
                     "com/talkback/core/session/ConferenceParticipantProjectorTest.kt",
+                    "com/talkback/core/session/ConferenceLeaveRejoinTombstoneTest.kt",
+                    "com/talkback/core/session/ConferenceAdmittedMembershipTest.kt",
                     "com/talkback/core/session/ConferenceRuntimeProjectorTest.kt",
+                    "com/talkback/core/session/GroupMembershipSupportTest.kt",
+                ),
+            "authorityDigestPlaneDeskOnly" to
+                listOf(
+                    "com/talkback/core/model/AuthorityDigestFreshnessTest.kt",
+                    "com/talkback/core/session/HelloAuthorityDigestClassifierTest.kt",
+                    "com/talkback/core/session/AuthorityDigestFreshnessConvergenceTest.kt",
+                    "com/talkback/core/session/MembershipDigestSupportTest.kt",
+                    "com/talkback/core/session/MembershipAuthorityResolverTest.kt",
+                    "com/talkback/core/session/MembershipAuthorityResolveTraceTest.kt",
                 ),
             "profile01SourceMembershipDeskOnly" to
                 listOf(
                     "com/talkback/core/conference/session/integration/MeetingProfile01SourceMembershipContextRepublicationTest.kt",
+                ),
+            "profile01HeadObligationDeskOnly" to
+                listOf(
+                    "com/talkback/core/conference/session/integration/Profile01HeadSupplementObligationTest.kt",
+                ),
+            "meetingOriginAuthorityDeskOnly" to
+                listOf(
+                    "com/talkback/core/session/MeetingOriginAuthorityTest.kt",
+                ),
+            "profile01MediaKeyHeadReorderDeskOnly" to
+                listOf(
+                    "com/talkback/core/conference/session/integration/Profile01MediaKeyPackageHeadAlignmentTest.kt",
+                    "com/talkback/core/conference/session/integration/MeetingProfile01MediaKeyPackageHeadReorderTest.kt",
+                    "com/talkback/core/conference/session/profile01/wire/Profile01P1DProductionIngressHarness.kt",
+                    "com/talkback/core/conference/session/profile01/Profile01Q5CryptoVectorFixtures.kt",
+                    "com/talkback/core/session/gbc/**",
                 ),
         )
     unitTestFileGates.forEach { (gate, files) ->
@@ -184,7 +212,12 @@ android {
             val staging = layout.buildDirectory.dir("unit-test-gate-src/$gate").get().asFile
             staging.deleteRecursively()
             copy {
-                from("src/test/java") { include(files) }
+                from("src/test/java") {
+                    include(files)
+                    if (gate == "profile01MediaKeyHeadReorderDeskOnly") {
+                        exclude("com/talkback/core/session/gbc/**/*Test.kt")
+                    }
+                }
                 into(staging)
             }
             sourceSets.getByName("test") {
