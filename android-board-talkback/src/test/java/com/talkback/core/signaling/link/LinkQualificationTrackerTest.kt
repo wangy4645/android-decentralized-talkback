@@ -198,6 +198,48 @@ class LinkQualificationTrackerTest {
         assertTrue(lines.any { it.contains("LINK_FACT_RECEIVED") && it.contains("accepted=false") })
     }
 
+    /** Field 2026-10-27 M01: FIRST_OUTBOUND(s2,g2) arrived 11 ms before SOCKET_BOUND(s2,g2). */
+    @Test
+    fun earlyOutboundForNextEpoch_isReplayedOnSocketBound_andReachesBidirectional() {
+        val tracker = trackerWithoutScheduler()
+        tracker.onSocketBound(1L, 1L, "100")
+        tracker.onReceiveLoopStarted(1L, 1L)
+
+        tracker.onFirstOutboundAfterRebind(2L, 2L) // sender thread raced ahead of rebind publication
+        assertFalse(tracker.snapshot().hasOutboundAfterRebind)
+
+        tracker.onSocketBound(2L, 2L, "100")
+        tracker.onReceiveLoopStarted(2L, 2L)
+        assertTrue(tracker.snapshot().hasOutboundAfterRebind)
+        tracker.onFirstInboundAfterRebind(2L, 2L)
+
+        assertEquals(LinkQualificationState.BIDIRECTIONAL_READY, tracker.snapshot().linkQualification)
+        assertTrue(lines.any { it.contains("fact=EARLY_EPOCH_FACT_STASHED") })
+        assertTrue(lines.any { it.contains("fact=EARLY_EPOCH_FACT_REPLAYED") })
+    }
+
+    @Test
+    fun earlyInboundAndOutbound_beforeReceiveLoopStarted_promoteOnReceiveLoop() {
+        val tracker = trackerWithoutScheduler()
+        tracker.onFirstOutboundAfterRebind(1L, 1L)
+        tracker.onFirstInboundAfterRebind(1L, 1L)
+        tracker.onSocketBound(1L, 1L, "100")
+        assertEquals(LinkQualificationState.BOUND, tracker.snapshot().linkQualification)
+        tracker.onReceiveLoopStarted(1L, 1L)
+        assertEquals(LinkQualificationState.BIDIRECTIONAL_READY, tracker.snapshot().linkQualification)
+    }
+
+    @Test
+    fun earlyFactsForMismatchedEpoch_areNotReplayed() {
+        val tracker = trackerWithoutScheduler()
+        tracker.onSocketBound(1L, 1L, "100")
+        tracker.onFirstOutboundAfterRebind(2L, 2L)
+        tracker.onSocketBound(3L, 3L, "100") // epoch 2 never materialised
+        tracker.onReceiveLoopStarted(3L, 3L)
+        assertFalse(tracker.snapshot().hasOutboundAfterRebind)
+        assertEquals(LinkQualificationState.RECEIVE_READY, tracker.snapshot().linkQualification)
+    }
+
     @Test
     fun networkLost_resetsToUnknown() {
         val tracker = trackerWithoutScheduler()

@@ -1,0 +1,9 @@
+﻿gate=P1C_INVITE_JOIN_PRECONDITION
+PRE_I1_peerInviteForH=PASS
+PRE_I2_overlayVisible=PASS
+PRE_I3_joinClickDispatched=PASS
+PRE_I4_acceptDispatched=PASS
+PRE_I5_noRejectBeforeBind=PASS
+PRE_I6_peerBindH=PASS
+hostSessionId=512b3611-a03a-4aa2-bba6-20c708cef77c
+status=PASS

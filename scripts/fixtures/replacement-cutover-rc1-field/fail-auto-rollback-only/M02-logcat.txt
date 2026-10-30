@@ -1,0 +1,6 @@
+REPLACEMENT_CUTOVER_RC1 RC1_FIELD outcome=PILOT_ENABLED session=-
+PROFILE01_SHADOW_RUNTIME phase=PLAYOUT_ACTIVITY sessionId=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee audioTrackOwner=SHADOW_METRICS_ONLY successfulPlayoutWrites=3
+REPLACEMENT_CUTOVER_RC1 RC1_FIELD outcome=CUTOVER_FAILED session=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee detail=production_audiotrack_acquire_failure
+REPLACEMENT_CUTOVER_RC1 RC1_FIELD outcome=AUTO_ROLLBACK_SUCCEEDED session=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee detail=after_acquire_failure
+REPLACEMENT_CUTOVER_RC1 RC1_FIELD outcome=ROLLBACK_SUCCEEDED session=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee detail=MANUAL
+REPLACEMENT_CUTOVER_RC1 AUDIBLE_OWNERSHIP_STATE session=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee state=ANCHOR_ACTIVE

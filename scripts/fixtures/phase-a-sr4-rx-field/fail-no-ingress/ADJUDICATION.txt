@@ -1,0 +1,60 @@
+﻿PA-SR4-RX FIELD ADJUDICATION (Peer Shadow Multicast Receive Gate)
+log_dir=D:\workspace\project\talkback\talkback\scripts\fixtures\phase-a-sr4-rx-field\fail-no-ingress
+run_card=meeting-product-integration-phase-a-sr4-rx-field-run-card.md
+authorization=meeting-product-integration-phase-a-shadow-runtime-pr-pa-sr4-rx-implementation-authorization.md
+PA-SR4_full=NOT_CLOSED_BY_THIS_GATE
+PLAY=OBSERVE_ONLY_NOT_PASS
+
+GROUP_GATE status=PASS verdict=PASS
+INVITE_JOIN_GATE status=PASS hostSessionId=b23edb10-5855-4252-9495-4cefd9f196df
+JOIN_GATE status=PASS hostSessionId=b23edb10-5855-4252-9495-4cefd9f196df
+identity hostSessionId=b23edb10-5855-4252-9495-4cefd9f196df conferenceId=c6b73689f63d5f33e17925e2ef0d0c83 hostModuleId=M01 peerModuleId=M02
+
+observe_only_file=PA_SR4_RX_OBSERVE_ONLY.txt
+
+PREREQUISITE_SAME_SESSION
+J0_CREATION_APPLIED=True
+TX_PREREQUISITE_HOST_PACKETS=True packetsSent_max=33
+PEER_WIRING_SESSION_LIVE=True
+PEER_SESSION_STARTED_HOOK=True
+PEER_WIRING_TRANSPORT_SCOPE=True
+
+RX_FIELD_DIAGNOSTIC_ONLY
+RX_ARMED=True
+RX_DATAGRAMS_RECEIVED_MAX=0
+RX_ADMISSION_ADMITTED=0
+RX_ADMISSION_REJECTED=0
+RX_FAILURE_LINES=0
+INGRESS_PACKETS_MAX=0
+note=diagnostic_fields_do_not_substitute_for_INGRESS_PASS
+
+
+PA-SR4-RX CHAIN
+RX-TX_PREREQUISITE_HOST_TX=True
+RX-ESTABLISH_PEER_WIRING=True
+RX-DIAG_ARMED=True
+RX-DIAG_DATAGRAMS=False max=0
+RX-DIAG_ADMISSION admitted=0 rejected=0
+RX-INGRESS_INGRESS_ACTIVITY=False packetsReceived_max=0
+
+identity_file=PA_SR4_RX_IDENTITY.txt
+sessionId=b23edb10-5855-4252-9495-4cefd9f196df
+conferenceId=c6b73689f63d5f33e17925e2ef0d0c83
+hostModuleId=M01
+peerModuleId=M02
+txPrerequisitePacketsSentMax=33
+peerWiringSessionLive=True
+rxDatagramsMax=0
+rxAdmissionAdmitted=0
+rxAdmissionRejected=0
+ingressPacketsMax=0
+ingressEvidence=NONE
+
+VERDICT=FAIL_PA_SR4_RX
+PA-SR4-RX=FAIL
+PA-SR4=VALID_FAIL_UNCHANGED
+reason=missing_M02_INGRESS_ACTIVITY_packetsReceived_gt0;rx_activity_zero_socket_or_poll_layer
+PR-PA-SR4-PLAY=HOLD
+ADR-0056=KEEP
+Meeting_media_cutover=NOT_AUTHORIZED
+Next=RCA_PA_SR4_RX_USE_DIAGNOSTIC_BREAKDOWN

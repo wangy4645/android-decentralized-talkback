@@ -35,6 +35,11 @@ class AudioMixer(
 
     val currentStats: Stats get() = stats
 
+    /** Observation only: sources that contributed on the last [renderMixedFrame]. */
+    @Volatile
+    var lastContributingSourceIds: Set<String> = emptySet()
+        private set
+
     fun configuredSourceCount(): Int =
         sources.count { it.value.state != SourceState.REMOVED }
 
@@ -76,7 +81,8 @@ class AudioMixer(
         var limiterActive = false
         var clips = 0L
 
-        for ((_, slot) in sources) {
+        val contributing = linkedSetOf<String>()
+        for ((sourceId, slot) in sources) {
             when (slot.state) {
                 SourceState.REMOVING -> {
                     advanceRamp(slot)
@@ -122,8 +128,10 @@ class AudioMixer(
             for (i in out.indices) {
                 out[i] += samples[i].toFloat() * effectiveGain
             }
+            contributing.add(sourceId)
         }
 
+        lastContributingSourceIds = contributing
         sources.entries.removeAll { it.value.state == SourceState.REMOVED }
 
         val pcm = ShortArray(format.samplesPerFrame)

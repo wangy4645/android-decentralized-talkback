@@ -64,6 +64,12 @@ class InviteDispatcher(
                         sentCount = 1,
                         targetCount = 1
                     )
+                InviteDispatchSendResult.ProvisionPending ->
+                    return InviteDispatchResult(
+                        outcome = InviteDispatchOutcome.SUCCESS,
+                        sentCount = 0,
+                        targetCount = 1
+                    )
                 is InviteDispatchSendResult.Failed -> {
                     lastError = result.error
                     when {

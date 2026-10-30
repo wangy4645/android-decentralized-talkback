@@ -1,5 +1,6 @@
 package com.talkback.core.webrtc
 
+import com.talkback.core.media.MediaObservabilityLog
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.UUID
@@ -10,8 +11,11 @@ import com.talkback.core.webrtc.conferenceaudio.ConferencePcmFormat
  * Development stub for LAN talkback bring-up.
  * Replace with org.webrtc backed engine in integration phase.
  */
-class StubWebRtcAudioEngine : WebRtcAudioEngine {
+class StubWebRtcAudioEngine(
+    private val observedModuleId: String? = null
+) : WebRtcAudioEngine {
     private val capturing = AtomicBoolean(false)
+    private val released = AtomicBoolean(false)
     private var remoteOffer: String? = null
     private var remoteAnswer: String? = null
     private var iceListener: ((String) -> Unit)? = null
@@ -107,14 +111,38 @@ class StubWebRtcAudioEngine : WebRtcAudioEngine {
         injectedProgramFrames.add(bytes)
     }
 
+    override fun programSenderSnapshot(): ProgramSenderSnapshot {
+        val programId = "stub-program"
+        val currentId = if (programRelayMode == ProgramRelayMode.PROGRAM) programId else "stub-mic"
+        return ProgramSenderSnapshot(
+            senderId = "stub-sender",
+            currentTrackId = currentId,
+            expectedTrackId = programId,
+            enabled = capturing.get(),
+            readyState = "LIVE",
+            lastReplaceAt = "none"
+        )
+    }
+
     override fun release() {
+        val moduleTag = observedModuleId ?: "stub"
+        if (!released.compareAndSet(false, true)) {
+            MediaObservabilityLog.pcCloseSkipped(moduleTag, "alreadyReleased")
+            return
+        }
+        MediaObservabilityLog.pcCloseEnter(moduleTag)
         capturing.set(false)
         remoteOffer = null
         remoteAnswer = null
         iceConnectionStateName = "CLOSED"
         negotiationSettlingState = NegotiationSettling.NONE
         inboundPcmSink = null
+        MediaObservabilityLog.pcCloseExit(moduleTag)
+        MediaObservabilityLog.sharedFactoryReleaseEnter(moduleTag)
+        MediaObservabilityLog.sharedFactoryReleaseExit(moduleTag, stage = "stub")
     }
+
+    override fun diagnosticPeerConnectionHash(): Int = System.identityHashCode(this)
 
     override fun iceConnectionState(): String = iceConnectionStateName
 

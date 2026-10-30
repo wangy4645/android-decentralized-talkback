@@ -1,0 +1,16 @@
+﻿PA-SR4 FIELD ADJUDICATION (Real Shadow Media Activity Gate)
+log_dir=d:\workspace\project\talkback\talkback\scripts\fixtures\phase-a-sr4-field\invalid-preg
+criteria=meeting-product-integration-phase-a-shadow-runtime-adjudication-criteria.md#PA-SR4
+authorization=meeting-product-integration-phase-a-sr4-field-authorization.md
+PA-SR5_to_SR6=OBSERVE_ONLY
+
+GROUP_GATE status=FAIL verdict=INVALID_GROUP_PRECONDITION
+
+VERDICT=INVALID_GROUP_PRECONDITION
+PA-SR4=NOT_TESTED
+reason=group_still_active
+PA-SR3=UNCHANGED_CLOSED
+B1-R2=UNCHANGED_CLOSED
+ADR-0056=KEEP
+Meeting_media_cutover=NOT_AUTHORIZED
+Next=FIX_FIELD_GROUP_RERUN_PA_SR4

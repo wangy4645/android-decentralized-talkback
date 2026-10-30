@@ -1,0 +1,14 @@
+﻿PA-SR6 FIELD ADJUDICATION (M01 Host Meeting End Teardown)
+log_dir=D:\workspace\project\talkback\talkback\scripts\fixtures\phase-a-sr6-field\invalid-sr5-rotate
+run_card=meeting-product-integration-phase-a-sr6-field-run-card.md
+stimulus=M01_host_Meeting_end_product_path
+adjudication_plane=M02_peer_primary_M01_corroboration
+
+hostSessionId=a1b2c3d4-e5f6-7890-abcd-ef1234567890
+
+VERDICT=INVALID_STIMULUS
+PA-SR6=NOT_TESTED
+reason=sr5_rotate_or_wrong_driver_detected
+ADR-0056=KEEP
+Meeting_media_cutover=NOT_AUTHORIZED
+Next=RERUN_WITH_PaSr6_DRIVER

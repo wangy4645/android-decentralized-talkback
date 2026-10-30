@@ -1,0 +1,25 @@
+﻿PHASE A SHADOW RUNTIME ADJUDICATION
+log_dir=d:\workspace\project\talkback\talkback\scripts\fixtures\phase-a-shadow-runtime\pass-synthetic
+criteria=meeting-product-integration-phase-a-shadow-runtime-adjudication-criteria.md
+fail_shadow_runtime_ne_j0_regression=FROZEN
+
+GROUP_GATE status=PASS verdict=PASS
+INVITE_JOIN_GATE status=PASS hostSessionId=b23edb10-5855-4252-9495-4cefd9f196df
+JOIN_GATE status=PASS hostSessionId=b23edb10-5855-4252-9495-4cefd9f196df
+identity hostSessionId=b23edb10-5855-4252-9495-4cefd9f196df conferenceId=c6b73689f63d5f33e17925e2ef0d0c83 mediaKeyEpoch=1 peerModuleId=M02
+
+AUDIO_TRACK_OWNERSHIP owner=PRODUCTION_ACTIVE count=0 note=not_observed_this_window
+PA-SR RESULTS
+PA-SR1=PASS evidence=creation_applied_and_session_started
+PA-SR2=PASS evidence=wiring_live_transport_scope_active
+PA-SR3=PASS evidence=member_media_ready_and_catalog
+PA-SR4=PASS evidence=ingress_and_playout_runtime_activity
+PA-SR5=PASS evidence=leave_revoke_rejoin
+PA-SR6=PASS evidence=session_stopped_and_teardown_empty
+
+VERDICT=PASS
+Phase_A_Shadow_Runtime=CLOSED / FIELD-PROVEN
+J0_status=UNCHANGED_CLOSED
+ADR-0056=KEEP
+Meeting_media_cutover=NOT_AUTHORIZED
+Next=PHASE_A_ROLLUP_ELIGIBLE

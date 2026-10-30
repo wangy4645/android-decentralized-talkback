@@ -1,0 +1,5 @@
+hostSessionId=c6cb896d-588b-49bb-bc4e-a4a06366d15a
+conferenceId=c6b73689f63d5f33e17925e2ef0d0c83
+hostModuleId=M01
+peerModuleId=M02
+driverMode=PA_SR4_PLAY_NO_NEGATIVE_FIXTURE

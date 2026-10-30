@@ -2,6 +2,9 @@ package com.talkback.core.session
 
 import com.talkback.core.model.EndpointAddress
 import com.talkback.core.model.ModuleId
+import com.talkback.core.session.failure.ConferenceFailureParticipantProjection
+import com.talkback.core.session.failure.ConferenceFailureParticipantProjector
+import com.talkback.core.session.failure.ConferenceFailureTerminal
 
 /**
  * Read-only Conference participant projections (R32/R44). No side effects.
@@ -16,7 +19,9 @@ object ConferenceParticipantProjector {
         val sessionAccepted: Boolean,
         val roster: List<EndpointAddress>,
         val memberViews: List<MemberView>,
-        val leftModuleIds: Set<String> = emptySet()
+        val leftModuleIds: Set<String> = emptySet(),
+        /** Phase A classified L1/L2 terminals by remote module id — projection overlay only. */
+        val failureTerminalsByModuleId: Map<String, ConferenceFailureTerminal> = emptyMap(),
     )
 
     data class Output(
@@ -70,6 +75,9 @@ object ConferenceParticipantProjector {
             displayState = ConferenceParticipantDisplayState.VISIBLE_LOCAL,
             isLocal = true
         )
+        val failureProjections = ConferenceFailureParticipantProjector.projectByModuleId(
+            input.failureTerminalsByModuleId,
+        )
         val viewsByModule = input.memberViews.associateBy { it.moduleId }
         input.roster
             .asSequence()
@@ -79,15 +87,30 @@ object ConferenceParticipantProjector {
             .distinct()
             .forEach { moduleId ->
                 val view = viewsByModule[moduleId] ?: return@forEach
-                val displayState = displayStateForRemote(view, moduleId in input.leftModuleIds) ?: return@forEach
+                val failureProjection = failureProjections[moduleId]
+                val displayState = resolveRemoteDisplayState(
+                    view = view,
+                    left = moduleId in input.leftModuleIds,
+                    failureProjection = failureProjection,
+                ) ?: return@forEach
                 result += ConferenceParticipantViewState(
                     key = view.key,
                     moduleId = moduleId,
                     displayState = displayState,
-                    isLocal = false
+                    isLocal = false,
+                    failureProjection = failureProjection,
                 )
             }
         return result
+    }
+
+    internal fun resolveRemoteDisplayState(
+        view: MemberView,
+        left: Boolean,
+        failureProjection: ConferenceFailureParticipantProjection? = null,
+    ): ConferenceParticipantDisplayState? {
+        failureProjection?.let { return it.displayState }
+        return displayStateForRemote(view, left)
     }
 
     internal fun displayStateForRemote(view: MemberView, left: Boolean): ConferenceParticipantDisplayState? {

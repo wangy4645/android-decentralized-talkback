@@ -2,7 +2,11 @@ package com.talkback.appprod.ui
 
 import com.talkback.appprod.ui.ConferenceNetworkBannerProjection.BannerScope
 import com.talkback.appprod.ui.UserVisibleConnectivityProjection.UserVisibleConnectivityState
+import com.talkback.core.session.ConferencePresenceAvatarBind
 import com.talkback.core.session.ConferenceParticipantViewState
+import com.talkback.core.session.ConferencePresenceProjection
+import com.talkback.core.session.CppMembership
+import com.talkback.core.session.CppPeerConnectivityAxis
 
 /**
  * Single source of truth for meeting network banner / poor-network pill (P1a).
@@ -35,6 +39,30 @@ object ConferenceNetworkPresentation {
             peerConnectivity = peerConnectivity
         )
     )
+
+    fun peerConnectivityFromProjection(
+        projection: ConferencePresenceProjection,
+        localModuleId: String
+    ): List<Pair<String, UserVisibleConnectivityState>> =
+        projection.participants
+            .asSequence()
+            .filter { it.membership == CppMembership.JOINED }
+            .filter { !it.moduleId.equals(localModuleId, ignoreCase = true) }
+            .mapNotNull { record ->
+                val axis = ConferencePresenceAvatarBind.peerConnectivityAxis(
+                    record = record,
+                    recovering = record.moduleId in projection.recoveringPeers
+                ) ?: return@mapNotNull null
+                val connectivity = when (axis) {
+                    CppPeerConnectivityAxis.CONNECTED -> UserVisibleConnectivityState.CONNECTED
+                    CppPeerConnectivityAxis.RECONNECTING -> UserVisibleConnectivityState.RECONNECTING
+                    CppPeerConnectivityAxis.DEGRADED -> UserVisibleConnectivityState.DEGRADED
+                    CppPeerConnectivityAxis.SYNCING -> UserVisibleConnectivityState.SYNCING
+                    CppPeerConnectivityAxis.INITIAL_JOIN -> return@mapNotNull null
+                }
+                record.moduleId to connectivity
+            }
+            .toList()
 
     fun peerConnectivityFromParticipants(
         sessionId: String,

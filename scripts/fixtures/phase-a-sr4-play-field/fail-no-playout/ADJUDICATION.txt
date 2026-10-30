@@ -1,0 +1,56 @@
+﻿PA-SR4-PLAY FIELD ADJUDICATION (Peer Shadow Playout Execution Gate)
+log_dir=D:\workspace\project\talkback\talkback\scripts\fixtures\phase-a-sr4-play-field\fail-no-playout
+run_card=meeting-product-integration-phase-a-sr4-play-field-run-card.md
+rca=meeting-product-integration-phase-a-sr4-play-rca-20260910-092105.md
+
+GROUP_GATE status=PASS verdict=PASS
+INVITE_JOIN_GATE status=PASS hostSessionId=b23edb10-5855-4252-9495-4cefd9f196df
+JOIN_GATE status=PASS hostSessionId=c6cb896d-588b-49bb-bc4e-a4a06366d15a
+identity hostSessionId=c6cb896d-588b-49bb-bc4e-a4a06366d15a conferenceId=c6b73689f63d5f33e17925e2ef0d0c83 hostModuleId=M01 peerModuleId=M02
+
+PREREQUISITE_SAME_SESSION
+J0_CREATION_APPLIED=True
+TX_PREREQUISITE_HOST_PACKETS=True packetsSent_max=100
+PEER_WIRING_SESSION_LIVE=True
+INGRESS_PREREQUISITE=True packetsReceived_max=50 ingressAccepted_max=25
+
+PLAY_FIELD_DIAGNOSTIC
+PLAY_ARMED=False
+PLAY_CYCLE_LINES=0
+ACTIVE_JITTER_SOURCES_MAX=1
+LIVE_DECODERS_MAX=0
+PLAYOUT_WRITES_MAX=0
+AUDIO_TRACK_ISOLATION=True
+PLAY_FAILURE_LINES=0
+PLAY_TICK_FAILURE_LINES=0
+
+PA-SR4-PLAY CHAIN
+PLAY-TX_PREREQUISITE=True
+PLAY-INGRESS_PREREQUISITE=True
+PLAY-DIAG_ARMED=False
+PLAY-DIAG_ACTIVE_JITTER=True max=1
+PLAY-DIAG_LIVE_DECODERS=False max=0
+PLAY-PLAYOUT_ACTIVITY=False successfulPlayoutWrites_max=0
+PLAY-AUDIO_ISOLATION=True
+
+identity_file=PA_SR4_PLAY_IDENTITY.txt
+sessionId=c6cb896d-588b-49bb-bc4e-a4a06366d15a
+conferenceId=c6b73689f63d5f33e17925e2ef0d0c83
+hostModuleId=M01
+peerModuleId=M02
+txPrerequisitePacketsSentMax=100
+ingressPacketsMax=50
+ingressAcceptedMax=25
+activeJitterSourcesMax=1
+liveDecodersMax=0
+playoutWritesMax=0
+audioTrackIsolationOk=True
+playoutEvidence=NONE
+
+VERDICT=FAIL_PA_SR4_PLAY
+PA-SR4-PLAY=FAIL
+PA-SR4=VALID_FAIL_UNCHANGED
+reason=missing_M02_PLAYOUT_ACTIVITY_successfulPlayoutWrites_gt0;jitter_present_but_decode_mix_playout_not_running
+ADR-0056=KEEP
+Meeting_media_cutover=NOT_AUTHORIZED
+Next=RCA_PA_SR4_PLAY_USE_DIAGNOSTIC_BREAKDOWN

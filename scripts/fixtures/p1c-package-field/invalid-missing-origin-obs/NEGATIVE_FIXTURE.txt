@@ -1,0 +1,5 @@
+injected=true
+status=injected
+expectedRejectReason=RECIPIENT_KEY_VERSION_MISMATCH
+injectionMethod=fixture
+notes=dry-run

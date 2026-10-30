@@ -1,0 +1,15 @@
+REPLACEMENT_CUTOVER_RC1 RC1_FIELD outcome=PILOT_ENABLED session=-
+PROFILE01_SHADOW_RUNTIME phase=PLAYOUT_ACTIVITY sessionId=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee audioTrackOwner=SHADOW_METRICS_ONLY successfulPlayoutWrites=5
+REPLACEMENT_CUTOVER_RC1 ANCHOR_AUDIBLE_PROBE session=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee active=false reason=replacement_cutover_anchor_release
+REPLACEMENT_CUTOVER_RC1 MULTICAST_AUDIBLE_PROBE session=- active=true successfulProductionWrites=0
+PROFILE01_SHADOW_RUNTIME phase=AUDIO_TRACK_OWNERSHIP owner=PRODUCTION_ACTIVE
+REPLACEMENT_CUTOVER_RC1 AUDIBLE_OWNERSHIP_STATE session=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee state=MULTICAST_ACTIVE
+REPLACEMENT_CUTOVER_RC1 OWNER_VERIFY session=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee pass=true anchorAudible=false multicastProduction=true
+REPLACEMENT_CUTOVER_RC1 RC1_FIELD outcome=CUTOVER_SUCCEEDED session=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee
+PROFILE01_SHADOW_RUNTIME phase=SHADOW_PLAYOUT_CYCLE sessionId=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee audioTrackOwner=MULTICAST_PRODUCTION successfulPlayoutWrites=12
+REPLACEMENT_CUTOVER_RC1 MULTICAST_AUDIBLE_PROBE session=- active=false successfulProductionWrites=12
+REPLACEMENT_CUTOVER_RC1 ANCHOR_AUDIBLE_PROBE session=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee active=true reason=replacement_cutover_anchor_restore
+REPLACEMENT_CUTOVER_RC1 AUDIBLE_OWNERSHIP_STATE session=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee state=ANCHOR_ACTIVE
+REPLACEMENT_CUTOVER_RC1 OWNER_VERIFY session=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee pass=true anchorAudible=true multicastProduction=false
+REPLACEMENT_CUTOVER_RC1 RC1_FIELD outcome=ROLLBACK_SUCCEEDED session=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee detail=MANUAL
+REPLACEMENT_CUTOVER_RC1 OWNERSHIP_INVARIANT_VIOLATION session=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee anchorAudibleActive=true multicastAudibleActive=true

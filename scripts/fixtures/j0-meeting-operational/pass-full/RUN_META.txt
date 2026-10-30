@@ -1,0 +1,12 @@
+﻿run_stamp=20260909-101752
+gate=P1-C_PACKAGE_FIELD_FIRST_RUN
+hostModuleId=M01
+expectedRecipientModuleId=M02
+establishmentKeyVersion=1
+m01_serial=HTUBB21B09220661
+m02_serial=DSJ-2407041
+packageName=com.talkback.appprod
+buildSha=cac628d
+versionName=1.0.0
+collect_only=false
+first_run=true

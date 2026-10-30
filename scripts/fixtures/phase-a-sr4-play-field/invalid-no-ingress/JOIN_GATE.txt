@@ -1,0 +1,3 @@
+status=PASS
+PRE_J6_packageAdjudicationAllowed=true
+hostSessionId=c6cb896d-588b-49bb-bc4e-a4a06366d15a

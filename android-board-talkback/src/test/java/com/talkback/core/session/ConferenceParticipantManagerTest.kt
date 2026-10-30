@@ -70,6 +70,125 @@ class ConferenceParticipantManagerTest {
     }
 
     @Test
+    fun applyCanonicalMembershipRoster_marksRemotesAcceptedWithoutDowngradingConnected() {
+        val sessionId = "CONF-10"
+        manager.initSession(sessionId, local, listOf(local, EndpointAddress(m02, EndpointId("E01"))))
+        manager.onInviteAccepted(sessionId, "M02")
+        manager.onMediaConnected(sessionId, "M02")
+        val ten = (2..10).map { i ->
+            EndpointAddress(ModuleId("M%02d".format(i)), EndpointId("E01"))
+        }
+        manager.applyCanonicalMembershipRoster(
+            sessionId,
+            listOf(local) + ten,
+            m01,
+        )
+        val snap = manager.snapshot(sessionId, m01)
+        assertEquals(10, snap.roster.size)
+        assertEquals(9, snap.memberViews.size)
+        assertEquals(MediaState.CONNECTED, snap.memberViews.single { it.moduleId == "M02" }.media)
+        assertTrue(snap.memberViews.all { it.invite == InviteState.ACCEPTED })
+        assertEquals(MediaState.CONNECTED, snap.memberViews.single { it.moduleId == "M10" }.media)
+    }
+
+    @Test
+    fun applyCanonicalMembershipRoster_doesNotOverwriteHostMemberMediaFacts() {
+        val sessionId = "CONF-11"
+        val m04 = ModuleId("M04")
+        manager.initSession(
+            sessionId,
+            local,
+            listOf(
+                local,
+                EndpointAddress(m02, EndpointId("E01")),
+                EndpointAddress(m03, EndpointId("E01")),
+                EndpointAddress(m04, EndpointId("E01")),
+            ),
+        )
+        manager.onInviteAccepted(sessionId, "M02")
+        manager.updateMediaState(sessionId, "M03", MediaState.RECONNECTING)
+        manager.onInviteAccepted(sessionId, "M04")
+        manager.updateMediaState(sessionId, "M04", MediaState.FAILED)
+
+        manager.applyCanonicalMembershipRoster(
+            sessionId,
+            listOf(
+                local,
+                EndpointAddress(m02, EndpointId("E01")),
+                EndpointAddress(m03, EndpointId("E01")),
+                EndpointAddress(m04, EndpointId("E01")),
+            ),
+            m01,
+        )
+
+        val snap = manager.snapshot(sessionId, m01)
+        assertEquals(MediaState.CONNECTING, snap.memberViews.single { it.moduleId == "M02" }.media)
+        assertEquals(MediaState.RECONNECTING, snap.memberViews.single { it.moduleId == "M03" }.media)
+        assertEquals(MediaState.FAILED, snap.memberViews.single { it.moduleId == "M04" }.media)
+    }
+
+    @Test
+    fun applyCanonicalMembershipRoster_admittedOnly_keepsUnlistedInviteeRecord() {
+        val sessionId = "CONF-ADMITTED"
+        val m04 = ModuleId("M04")
+        manager.initSession(
+            sessionId,
+            local,
+            listOf(
+                local,
+                EndpointAddress(m02, EndpointId("E01")),
+                EndpointAddress(m03, EndpointId("E01")),
+                EndpointAddress(m04, EndpointId("E01")),
+            ),
+        )
+        manager.onInviteSent(sessionId, "M02", 1L, forReconnect = false)
+        manager.onInviteSent(sessionId, "M03", 1L, forReconnect = false)
+        manager.onInviteSent(sessionId, "M04", 1L, forReconnect = false)
+        manager.onInviteAccepted(sessionId, "M02")
+
+        manager.applyCanonicalMembershipRoster(
+            sessionId,
+            listOf(local, EndpointAddress(m02, EndpointId("E01"))),
+            m01,
+        )
+
+        val snap = manager.snapshot(sessionId, m01)
+        assertEquals(listOf("M01", "M02"), snap.roster.map { it.moduleId.value })
+        assertEquals(InviteState.ACCEPTED, snap.memberViews.single { it.moduleId == "M02" }.invite)
+        assertTrue(manager.containsParticipant(sessionId, "M03"))
+        assertTrue(manager.containsParticipant(sessionId, "M04"))
+        assertEquals(InviteState.INVITING, manager.participant(sessionId, "M03").invite)
+        assertEquals(InviteState.INVITING, manager.participant(sessionId, "M04").invite)
+    }
+
+    @Test
+    fun clearLeaveTombstonesForAdmittedMembers_onlyClearsListedIds() {
+        val sessionId = "CONF-TOMBSTONE"
+        val m04 = ModuleId("M04")
+        manager.initSession(
+            sessionId,
+            local,
+            listOf(
+                local,
+                EndpointAddress(m02, EndpointId("E01")),
+                EndpointAddress(m03, EndpointId("E01")),
+                EndpointAddress(m04, EndpointId("E01")),
+            ),
+        )
+        manager.applyPrune(sessionId, "M03")
+        manager.applyPrune(sessionId, "M04")
+        manager.applyCanonicalMembershipRoster(
+            sessionId,
+            listOf(local, EndpointAddress(m02, EndpointId("E01")), EndpointAddress(m04, EndpointId("E01"))),
+            m01,
+        )
+        val cleared = manager.clearLeaveTombstonesForAdmittedMembers(sessionId, setOf("M01", "M02", "M04"))
+        assertEquals(setOf("M04"), cleared)
+        assertTrue(manager.leftMemberEndpoints(sessionId)?.containsKey("M03") == true)
+        assertFalse(manager.leftMemberEndpoints(sessionId)?.containsKey("M04") == true)
+    }
+
+    @Test
     fun onLateJoin_restoresMissingParticipant() {
         val sessionId = "CONF-3"
         manager.initSession(sessionId, local, listOf(local, EndpointAddress(m02, EndpointId("E01"))))

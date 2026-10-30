@@ -1,0 +1,177 @@
+From 56dddad5ae009f37603961420b664d7a1195c38c Mon Sep 17 00:00:00 2001
+From: happy <happy@local>
+Date: Wed, 19 Aug 2026 17:04:23 +0800
+Subject: [PATCH 3/8] fix(conference): make leave hangup independent from
+ coordinator SDP wait
+
+P0 session-close (HANGUP/GROUP_LEAVE) must not wait on SDP setDescription or PEER_EDGE_READY.
+
+Co-authored-by: Cursor <cursoragent@cursor.com>
+---
+ .../core/media/MediaSessionManager.kt         |  4 +++
+ .../core/session/ConferenceControlSnapshot.kt | 25 +++++++++++++++++++
+ .../peer/PeerControlSignalingAdmission.kt     |  7 ++++++
+ .../core/webrtc/RealWebRtcAudioEngine.kt      | 15 +++++++++--
+ .../core/webrtc/SessionMediaRegistry.kt       |  5 ++++
+ .../talkback/core/webrtc/WebRtcAudioEngine.kt |  2 ++
+ .../peer/PeerControlSignalingAdmissionTest.kt | 10 ++++++++
+ 7 files changed, 66 insertions(+), 2 deletions(-)
+ create mode 100644 android-board-talkback/src/main/java/com/talkback/core/session/ConferenceControlSnapshot.kt
+
+diff --git a/android-board-talkback/src/main/java/com/talkback/core/media/MediaSessionManager.kt b/android-board-talkback/src/main/java/com/talkback/core/media/MediaSessionManager.kt
+index f6d6633..0cd9be2 100644
+--- a/android-board-talkback/src/main/java/com/talkback/core/media/MediaSessionManager.kt
++++ b/android-board-talkback/src/main/java/com/talkback/core/media/MediaSessionManager.kt
+@@ -104,6 +104,10 @@ class MediaSessionManager(
+ 
+     fun getEngine(moduleId: String): WebRtcAudioEngine? = entries[moduleId]?.engine
+ 
++    fun abortPendingNegotiation() {
++        entries.values.forEach { it.engine.abortPendingNegotiation() }
++    }
++
+     fun onIceStateChanged(moduleId: String, iceState: String) {
+         val entry = entries[moduleId] ?: run {
+             if (IceConnectivity.isClosed(iceState)) {
+diff --git a/android-board-talkback/src/main/java/com/talkback/core/session/ConferenceControlSnapshot.kt b/android-board-talkback/src/main/java/com/talkback/core/session/ConferenceControlSnapshot.kt
+new file mode 100644
+index 0000000..738e5e4
+--- /dev/null
++++ b/android-board-talkback/src/main/java/com/talkback/core/session/ConferenceControlSnapshot.kt
+@@ -0,0 +1,25 @@
++package com.talkback.core.session
++
++import com.talkback.core.model.EndpointAddress
++import com.talkback.core.signaling.PeerTarget
++
++data class ConferenceControlPeer(
++    val target: PeerTarget,
++    val remote: EndpointAddress
++)
++
++/**
++ * Thread-safe copy of hangup/leave targets so P0 session-close can send
++ * without waiting on coordinator SDP work.
++ */
++data class ConferenceControlSnapshot(
++    val sessionId: String,
++    val isHost: Boolean,
++    val local: EndpointAddress,
++    val peers: List<ConferenceControlPeer>,
++    val remainingMemberKeys: List<String>,
++    val channelId: String,
++    val initiatorModuleId: String,
++    val floorAuthorityModuleId: String,
++    val rosterEpoch: Long
++)
+diff --git a/android-board-talkback/src/main/java/com/talkback/core/signaling/peer/PeerControlSignalingAdmission.kt b/android-board-talkback/src/main/java/com/talkback/core/signaling/peer/PeerControlSignalingAdmission.kt
+index 784bc81..f4f5add 100644
+--- a/android-board-talkback/src/main/java/com/talkback/core/signaling/peer/PeerControlSignalingAdmission.kt
++++ b/android-board-talkback/src/main/java/com/talkback/core/signaling/peer/PeerControlSignalingAdmission.kt
+@@ -28,6 +28,13 @@ object PeerControlSignalingAdmission {
+         return peerEdgeReady
+     }
+ 
++    /**
++     * Session close must not wait on PEER_EDGE_READY / SDP.
++     * Does not reopen invite/accept admission.
++     */
++    fun maySendSessionClose(type: SignalType): Boolean =
++        type == SignalType.HANGUP || type == SignalType.GROUP_LEAVE
++
+     /**
+      * ADR-0036 Phase 2.1: membership recovery resync may bootstrap before full PEER_EDGE_READY
+      * when the authority peer is observable on the current transport epoch (not NEVER_OBSERVED).
+diff --git a/android-board-talkback/src/main/java/com/talkback/core/webrtc/RealWebRtcAudioEngine.kt b/android-board-talkback/src/main/java/com/talkback/core/webrtc/RealWebRtcAudioEngine.kt
+index 1a17518..289469c 100644
+--- a/android-board-talkback/src/main/java/com/talkback/core/webrtc/RealWebRtcAudioEngine.kt
++++ b/android-board-talkback/src/main/java/com/talkback/core/webrtc/RealWebRtcAudioEngine.kt
+@@ -35,6 +35,7 @@ class RealWebRtcAudioEngine(
+     private val remoteAudioTracks = CopyOnWriteArrayList<AudioTrack>()
+     private val pendingRemoteCandidates = CopyOnWriteArrayList<IceCandidate>()
+     private val capturing = AtomicBoolean(false)
++    private val abortNegotiation = AtomicBoolean(false)
+     @Volatile
+     private var remoteDescriptionApplied = false
+     private var localIceListener: ((String) -> Unit)? = null
+@@ -213,6 +214,10 @@ class RealWebRtcAudioEngine(
+         clearNegotiationSettling()
+     }
+ 
++    override fun abortPendingNegotiation() {
++        abortNegotiation.set(true)
++    }
++
+     override fun rollbackNegotiation() {
+         if (released) return
+         if (peerConnection.signalingState() == PeerConnection.SignalingState.STABLE) return
+@@ -555,8 +560,14 @@ class RealWebRtcAudioEngine(
+     }
+ 
+     private fun await(latch: CountDownLatch, timeoutMessage: String) {
+-        val ok = latch.await(3, TimeUnit.SECONDS)
+-        check(ok) { timeoutMessage }
++        val deadlineNs = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
++        while (true) {
++            check(!abortNegotiation.get()) { "Aborted pending SDP" }
++            val remainingNs = deadlineNs - System.nanoTime()
++            check(remainingNs > 0) { timeoutMessage }
++            val waitMs = TimeUnit.NANOSECONDS.toMillis(remainingNs).coerceIn(1L, 50L)
++            if (latch.await(waitMs, TimeUnit.MILLISECONDS)) return
++        }
+     }
+ 
+     private fun encodeIceCandidate(candidate: IceCandidate): String {
+diff --git a/android-board-talkback/src/main/java/com/talkback/core/webrtc/SessionMediaRegistry.kt b/android-board-talkback/src/main/java/com/talkback/core/webrtc/SessionMediaRegistry.kt
+index 0fd7873..2c26b1a 100644
+--- a/android-board-talkback/src/main/java/com/talkback/core/webrtc/SessionMediaRegistry.kt
++++ b/android-board-talkback/src/main/java/com/talkback/core/webrtc/SessionMediaRegistry.kt
+@@ -47,6 +47,11 @@ class SessionMediaRegistry(
+     fun getMesh(remoteModuleId: String): WebRtcAudioEngine? =
+         sessionManager.getEngine(remoteModuleId)
+ 
++    fun abortPendingNegotiation() {
++        sessionManager.abortPendingNegotiation()
++        unicastEngines.values.forEach { it.abortPendingNegotiation() }
++    }
++
+     fun conferenceEngine(remoteModuleId: String): WebRtcAudioEngine =
+         sessionManager.create(remoteModuleId, MediaBearerScope.CONFERENCE)
+ 
+diff --git a/android-board-talkback/src/main/java/com/talkback/core/webrtc/WebRtcAudioEngine.kt b/android-board-talkback/src/main/java/com/talkback/core/webrtc/WebRtcAudioEngine.kt
+index 7e238d3..3a7b190 100644
+--- a/android-board-talkback/src/main/java/com/talkback/core/webrtc/WebRtcAudioEngine.kt
++++ b/android-board-talkback/src/main/java/com/talkback/core/webrtc/WebRtcAudioEngine.kt
+@@ -18,6 +18,8 @@ interface WebRtcAudioEngine {
+     fun applyRemoteOffer(sdp: String, polite: Boolean = true): String
+     fun applyRemoteAnswer(sdp: String, polite: Boolean = true)
+     fun rollbackNegotiation()
++    /** Unblock coordinator SDP await so leave/hangup can run. */
++    fun abortPendingNegotiation() = Unit
+     fun addIceCandidate(candidate: String)
+     fun startCapture()
+     fun stopCapture()
+diff --git a/android-board-talkback/src/test/java/com/talkback/core/signaling/peer/PeerControlSignalingAdmissionTest.kt b/android-board-talkback/src/test/java/com/talkback/core/signaling/peer/PeerControlSignalingAdmissionTest.kt
+index fd2da1a..c5166b4 100644
+--- a/android-board-talkback/src/test/java/com/talkback/core/signaling/peer/PeerControlSignalingAdmissionTest.kt
++++ b/android-board-talkback/src/test/java/com/talkback/core/signaling/peer/PeerControlSignalingAdmissionTest.kt
+@@ -24,6 +24,16 @@ class PeerControlSignalingAdmissionTest {
+         assertFalse(PeerControlSignalingAdmission.isHardGatedControl(SignalType.FLOOR_REQUEST))
+     }
+ 
++    @Test
++    fun sessionClose_hangupAndGroupLeaveBypassPeerEdgeReady() {
++        assertTrue(PeerControlSignalingAdmission.maySendSessionClose(SignalType.HANGUP))
++        assertTrue(PeerControlSignalingAdmission.maySendSessionClose(SignalType.GROUP_LEAVE))
++        assertFalse(PeerControlSignalingAdmission.maySendSessionClose(SignalType.GROUP_INVITE))
++        assertFalse(
++            PeerControlSignalingAdmission.maySendNewControl(SignalType.HANGUP, peerEdgeReady = false)
++        )
++    }
++
+     @Test
+     fun invSig018_maySend_blocksControlWhenNotReady() {
+         assertFalse(
+-- 
+2.54.0.windows.1
+

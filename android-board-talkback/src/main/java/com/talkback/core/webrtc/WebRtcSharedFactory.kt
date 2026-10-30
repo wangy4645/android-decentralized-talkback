@@ -7,10 +7,12 @@ import android.os.Handler
 import android.os.Looper
 import org.webrtc.PeerConnectionFactory
 import org.webrtc.audio.JavaAudioDeviceModule
+import com.talkback.core.media.MediaObservabilityLog
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.locks.ReentrantLock
 
 /**
  * Single PeerConnectionFactory + AudioDeviceModule for the process.
@@ -18,8 +20,13 @@ import java.util.concurrent.atomic.AtomicInteger
  */
 internal object WebRtcSharedFactory {
     private val lock = Any()
+    /**
+     * G2-RCA2: serialize shared-factory signaling mutations across all PeerConnections.
+     * SRD ANSWER holds through callback completion; addIceCandidate uses the same fence.
+     */
+    private val sdpApplyMutex = ReentrantLock(true)
     private val refCount = AtomicInteger(0)
-    private val mainHandler = Handler(Looper.getMainLooper())
+    private val mainHandler by lazy { Handler(Looper.getMainLooper()) }
     private var factory: PeerConnectionFactory? = null
     private var audioDeviceModule: JavaAudioDeviceModule? = null
     private var audioConfigured = false
@@ -31,6 +38,15 @@ internal object WebRtcSharedFactory {
         return { localOutboundSinks.remove(sink) }
     }
 
+    fun <T> withSrdApplyLock(block: () -> T): T {
+        sdpApplyMutex.lock()
+        try {
+            return block()
+        } finally {
+            sdpApplyMutex.unlock()
+        }
+    }
+
     fun acquire(context: Context): PeerConnectionFactory {
         synchronized(lock) {
             pendingTeardown?.let { mainHandler.removeCallbacks(it) }
@@ -38,6 +54,7 @@ internal object WebRtcSharedFactory {
             val appContext = context.applicationContext
             configureAndroidAudio(appContext)
             if (factory == null) {
+                WebRtcNetworkBridgeInstall.installBeforeWebRtcInit()
                 PeerConnectionFactory.initialize(
                     PeerConnectionFactory.InitializationOptions.builder(appContext)
                         .setEnableInternalTracer(false)
@@ -58,14 +75,19 @@ internal object WebRtcSharedFactory {
         }
     }
 
-    fun release() {
+    fun release(observedModuleId: String? = null) {
+        val moduleTag = observedModuleId ?: "shared"
         synchronized(lock) {
-            if (refCount.decrementAndGet() > 0) return
-            scheduleTeardown()
+            MediaObservabilityLog.sharedFactoryReleaseEnter(moduleTag)
+            if (refCount.decrementAndGet() > 0) {
+                MediaObservabilityLog.sharedFactoryReleaseExit(moduleTag, stage = "refcount")
+                return
+            }
+            scheduleTeardown(moduleTag)
         }
     }
 
-    private fun scheduleTeardown() {
+    private fun scheduleTeardown(moduleTag: String) {
         pendingTeardown?.let { mainHandler.removeCallbacks(it) }
         val teardown = Runnable {
             synchronized(lock) {
@@ -80,6 +102,7 @@ internal object WebRtcSharedFactory {
                     resetAndroidAudio()
                     audioConfigured = false
                 }
+                MediaObservabilityLog.sharedFactoryReleaseExit(moduleTag, stage = "teardown")
             }
         }
         pendingTeardown = teardown
@@ -100,6 +123,7 @@ internal object WebRtcSharedFactory {
     }
 
     private fun dispatchLocalOutboundPcm(samples: JavaAudioDeviceModule.AudioSamples) {
+        CapturePcmAbDiagnostic.onAdmSamplesReady(samples)
         if (localOutboundSinks.isEmpty()) return
         if (samples.audioFormat != AudioFormat.ENCODING_PCM_16BIT) return
         val channels = samples.channelCount

@@ -65,4 +65,17 @@ class EffectiveInteractionModeResolverTest {
             )
         )
     }
+
+    @Test
+    fun roomOnline_overridesRuntimeRecovering() {
+        assertEquals(
+            EffectiveInteractionMode.CONFERENCE_ACTIVE,
+            EffectiveInteractionModeResolver.resolve(
+                conferenceActive = true,
+                runtimePhase = ConferenceRuntimePhase.RECOVERING,
+                hasPendingInvite = false,
+                roomOnline = true
+            )
+        )
+    }
 }

@@ -1,0 +1,36 @@
+﻿MEETING J0 OPERATIONAL ADJUDICATION
+log_dir=d:\workspace\project\talkback\talkback\scripts\fixtures\j0-meeting-operational\pass-full
+identity_keys=conferenceId,sessionId,mediaKeyEpoch,creationFactDigest,membershipFactDigest
+continuation_gate=product_auto_supplementRegistry_put_to_P1E
+
+GROUP_GATE status=PASS verdict= reason=
+GROUP_GATE PRE_G1=PASS PRE_G2=PASS PRE_G3=PASS PRE_G4=true
+
+INVITE_JOIN_GATE status=PASS hostSessionId=512b3611-a03a-4aa2-bba6-20c708cef77c
+INVITE_JOIN_GATE PRE_I1=PASS PRE_I6=PASS
+
+JOIN_GATE status=PASS hostSessionId=512b3611-a03a-4aa2-bba6-20c708cef77c peerSessionId=512b3611-a03a-4aa2-bba6-20c708cef77c
+JOIN_GATE PRE_J5=PASS PRE_J6=true
+
+ANCHOR conferenceId=5a05d8852baf4ccdec233daaa5a45312 sessionId=512b3611-a03a-4aa2-bba6-20c708cef77c mediaKeyEpoch=1 creationFactDigest=5f25f35f8b1a86fbf7eefb55f7c4d4bf0e23cbe7ae7f6479009adb9d35f78309 packageDigest=5f25f35f8b1a86fbf7eefb55f7c4d4bf0e23cbe7ae7f6479009adb9d35f78309
+CREATION_EMIT_LINE=09-09 10:20:41.714 18639 18825 I Talkback: PROFILE01_ORIGIN_EMIT session=512b3611-a03a-4aa2-bba6-20c708cef77c factType=1 outcome=EMITTED conferenceId=5a05d8852baf4ccdec233daaa5a45312 factDigest=5f25f35f8b1a86fbf7eefb55f7c4d4bf0e23cbe7ae7f6479009adb9d35f78309 members=1 meshGen=0
+INCOMPLETE_RETAIN_LINE=09-09 10:20:53.918  6400  6600 I MEETING_MEDIA_SHADOW: INCOMPLETE_RETAIN session=512b3611-a03a-4aa2-bba6-20c708cef77c conference=5a05d8852baf4ccdec233daaa5a45312 mediaKeyEpoch=1 digest=5f25f35f8b1a86fbf7eefb55f7c4d4bf0e23cbe7ae7f6479009adb9d35f78309
+DRAIN_LINE=09-09 10:20:54.874  6400  6600 I MEETING_MEDIA_SHADOW: SESSION_INCOMPLETE_DRAIN conference=5a05d8852baf4ccdec233daaa5a45312 mediaKeyEpoch=1 count=1
+CREATION_APPLIED_LINE=09-09 10:20:54.893  6400  6600 I MEETING_MEDIA_SHADOW: WIRE_INGRESS session=512b3611-a03a-4aa2-bba6-20c708cef77c factType=1 outcome=APPLIED detail=null
+digest_fence=PASS
+
+J0-1 PASS  conferenceId=5a05d8852baf4ccdec233daaa5a45312 factDigest=5f25f35f8b1a86fbf7eefb55f7c4d4bf0e23cbe7ae7f6479009adb9d35f78309 session=512b3611-a03a-4aa2-bba6-20c708cef77c
+J0-2 PASS  DEFERRED_NO_SESSION_RETAINED factType=1 session=512b3611-a03a-4aa2-bba6-20c708cef77c
+J0-3 PASS  PRE-G/I/J delegated hostSessionId=512b3611-a03a-4aa2-bba6-20c708cef77c
+J0-4 PASS  INCOMPLETE_RETAIN+INCOMPLETE_PENDING digest=5f25f35f8b1a86fbf7eefb55f7c4d4bf0e23cbe7ae7f6479009adb9d35f78309 mediaKeyEpoch=1
+J0-5 PASS  POST_BIND+APPLIED+READY digest_fence=PASS productAuto=True
+J0-6 PASS  SESSION_INCOMPLETE_DRAIN count=1 product_auto=True
+J0-7 PASS  WIRE_INGRESS factType=1 outcome=APPLIED session=512b3611-a03a-4aa2-bba6-20c708cef77c
+
+VERDICT=PASS
+identity_fence=PASS
+continuation_path=product_auto
+Meeting_J0=CLOSED / FIELD-PROVEN
+Profile01_Meeting_chain=CLOSED / FIELD-PROVEN
+Next=PHASE_A_ELIGIBLE_NEXT_GATE
+note=CREATION_APPLIED != media_cutover; ADR-0056 KEEP

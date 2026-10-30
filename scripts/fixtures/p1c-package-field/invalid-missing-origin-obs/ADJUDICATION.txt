@@ -1,0 +1,33 @@
+﻿P1-C PACKAGE FIELD ADJUDICATION
+log_dir=D:\workspace\project\talkback\talkback\scripts\fixtures\p1c-package-field\invalid-missing-origin-obs
+expectedRecipientModuleId=M02
+expectedEstablishmentKeyVersion=1
+join_keys=conferenceId,mediaKeyEpoch,recipientModuleId,recipientEstablishmentKeyVersion,membershipFactDigest
+r1_gate=product_post_bind_republish_required
+
+DELIVERY_STAGE initialDelivery=UNKNOWN postBindRepublish=ABSENT postBindIngress=ABSENT supplement=ABSENT
+R1_PATH productAuto=False harnessOnly=False productCoordHits=0 harnessCoordHits=0
+
+IDENTITY conferenceId= mediaKeyEpoch= recipientModuleId= recipientEstablishmentKeyVersion= membershipFactDigest=
+ORIGIN_LINE=
+POST_BIND_LINE=
+APPLIED_LINE=
+READY_LINE=
+
+C-F1 INVALID  no_primary_ORIGIN
+C-F2 INVALID  no_primary_ORIGIN
+C-F3 PASS  peer received factType=11 count=1 initialDelivery=UNKNOWN
+C-F4 INVALID  conference_identity_cannot_correlate
+C-F5 FAIL  no_APPLIED_for_decrypt_path_evidence
+C-F6 FAIL  no_APPLIED_to_pair_with_READY
+C-F7 INVALID  negative_fixture_not_actually_injected_file_without_OBS
+
+POSITIVE LEG NOT_PASS
+CREATION_APPLIED observed=NO|UNKNOWN   (informational only 鈥?not gate input)
+INCOMPLETE_DRAIN observed=NO|UNKNOWN   (informational only 鈥?not gate input)
+
+R1_FIELD=FAIL reason=product_POST_BIND_EMITTED_absent
+
+VERDICT=INVALID
+reason=required_OBS_field_absent_ORIGIN,conference_identity_cannot_correlate,negative_fixture_not_actually_injected,C-F7_negative_fixture_not_actually_injected_file_without_OBS,C-F4_conference_identity_cannot_correlate,C-F2_no_primary_ORIGIN,C-F1_no_primary_ORIGIN
+Next=FIX_CAPTURE_OR_PRODUCT_HOOK_AND_RERUN_P1C_ONLY

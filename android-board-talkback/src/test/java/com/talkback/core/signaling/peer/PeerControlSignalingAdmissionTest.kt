@@ -25,6 +25,16 @@ class PeerControlSignalingAdmissionTest {
     }
 
     @Test
+    fun sessionClose_hangupAndGroupLeaveBypassPeerEdgeReady() {
+        assertTrue(PeerControlSignalingAdmission.maySendSessionClose(SignalType.HANGUP))
+        assertTrue(PeerControlSignalingAdmission.maySendSessionClose(SignalType.GROUP_LEAVE))
+        assertFalse(PeerControlSignalingAdmission.maySendSessionClose(SignalType.GROUP_INVITE))
+        assertFalse(
+            PeerControlSignalingAdmission.maySendNewControl(SignalType.HANGUP, peerEdgeReady = false)
+        )
+    }
+
+    @Test
     fun invSig018_maySend_blocksControlWhenNotReady() {
         assertFalse(
             PeerControlSignalingAdmission.maySendNewControl(SignalType.GROUP_INVITE, peerEdgeReady = false)

@@ -35,7 +35,15 @@ enum class SignalType {
     /** Control-plane transient text between EndpointKeys (ADR-0039). Not a Session. */
     ENDPOINT_TEXT,
     /** Control-plane Channel broadcast text (ADR-0041). Address is channelId, not multi-to. */
-    CHANNEL_TEXT
+    CHANNEL_TEXT,
+    /** ADR-0057: request Current Generation Fact candidate from a holder. */
+    FACT_REQUEST,
+    /** ADR-0057: candidate material for local Verification Boundary (not yet authoritative). */
+    FACT_RESPONSE_CANDIDATE,
+    /** ADR-0057: holder lacks usable accepted Current to re-provide. */
+    FACT_RESPONSE_INSUFFICIENT,
+    /** ADR-0058: Profile 01 signed fact relay (base64 SignedFact bytes). Shadow ingress only in Phase A. */
+    CONFERENCE_SIGNED_FACT,
 }
 
 data class SignalEnvelope(

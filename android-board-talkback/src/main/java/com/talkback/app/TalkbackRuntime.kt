@@ -17,6 +17,7 @@ import com.talkback.core.ptt.PttState
 import com.talkback.core.registry.EndpointRegistry
 import com.talkback.core.webrtc.MediaBearerScope
 import com.talkback.core.session.ChannelReadiness
+import com.talkback.core.model.SignalEnvelope
 import com.talkback.core.signaling.PeerTarget
 import com.talkback.core.sync.RemoteModuleState
 
@@ -52,7 +53,9 @@ data class TalkbackRuntimeConfig(
      */
     val edgeRecoveryObservationWindowMs: Long = 30_000L,
     /** ADR-0004 interim; Phase 3 enforces auto FLOOR_RELEASE on acquire timeout. */
-    val acquireReleaseTimeoutMs: Long = 500L
+    val acquireReleaseTimeoutMs: Long = 500L,
+    /** ADR-0057 PW: deployment trust domain for production GBC trust wiring. */
+    val deploymentTrustDomainId: String = "",
 )
 
 /**
@@ -396,6 +399,10 @@ class TalkbackRuntime(
         runCatching { coordinator.forceDestructiveGroupMeshRecovery(channelId) }
     }
 
+    /** A0.5b: returns true when GROUP bootstrap ingress must defer for hangup media barrier. */
+    fun deferHangupBootstrap(channelId: String, origin: String): Boolean =
+        runCatching { coordinator.deferHangupBootstrap(channelId, origin) }.getOrDefault(false)
+
     fun reconcileGroupMesh(channelId: String) {
         runCatching { coordinator.reconcileGroupMesh(channelId) }
     }
@@ -424,6 +431,28 @@ class TalkbackRuntime(
 
     internal fun testNotifyPeerEdgeSignalingReady(moduleId: String) {
         runCatching { coordinator.testNotifyPeerEdgeSignalingReady(moduleId) }
+    }
+
+    internal fun testDeliverHello(signal: SignalEnvelope, fromPeer: PeerTarget) {
+        runCatching { coordinator.testDeliverHello(signal, fromPeer) }
+    }
+
+    internal fun testResetLatePeerAdmissionMetrics() {
+        runCatching { coordinator.testResetLatePeerAdmissionMetrics() }
+    }
+
+    internal fun testLatePeerAdmitInvokeCount(): Int =
+        runCatching { coordinator.testLatePeerAdmitInvokeCount() }.getOrDefault(0)
+
+    internal fun testReconcileGroupMeshInternalInvocationCount(): Int =
+        runCatching { coordinator.testReconcileGroupMeshInternalInvocationCount() }.getOrDefault(0)
+
+    internal fun testActivateHangupBootstrapBarrier(channelId: String) {
+        runCatching { coordinator.testActivateHangupBootstrapBarrier(channelId) }
+    }
+
+    internal fun testClearHangupBootstrapBarrier(channelId: String) {
+        runCatching { coordinator.testClearHangupBootstrapBarrier(channelId) }
     }
 
     internal fun testSendGroupJoinToPeer(
@@ -671,6 +700,45 @@ class TalkbackRuntime(
     internal fun testBootstrapAdmissionIntentState(channelId: String, moduleId: String): String? =
         coordinator.testBootstrapAdmissionIntentState(channelId, moduleId)
 
+    // ADR-0057 GBC post-verification / ownership seams
+    internal fun testGbcSnapshot(channelId: String) = coordinator.testGbcSnapshot(channelId)
+
+    internal fun testGbcLastEffects(channelId: String) = coordinator.testGbcLastEffects(channelId)
+
+    internal fun testGbcAcceptVerifiedFact(
+        channelId: String,
+        fact: com.talkback.core.session.gbc.AuthoritativeGenerationFact,
+    ) = coordinator.testGbcAcceptVerifiedFact(channelId, fact)
+
+    internal fun testGbcObserveLocalGeneration(
+        channelId: String,
+        generationIdentity: String?,
+        treatedAsCurrent: Boolean,
+    ) = coordinator.testGbcObserveLocalGeneration(channelId, generationIdentity, treatedAsCurrent)
+
+    internal fun testGbcObserveAcquisitionIfUnresolved(channelId: String, reason: String) =
+        coordinator.testGbcObserveAcquisitionIfUnresolved(channelId, reason)
+
+    internal fun testGbcStubVerifierSuccess(
+        candidate: com.talkback.core.session.gbc.GenerationFactCandidate,
+    ) = coordinator.testGbcStubVerifierSuccess(candidate)
+
+    internal fun testGbcOnHelloLocate(channelId: String, holderModuleId: String) =
+        coordinator.testGbcOnHelloLocate(channelId, holderModuleId)
+
+    internal fun testGbcScheduleAcquisition(channelId: String, correlation: String) =
+        coordinator.testGbcScheduleAcquisition(channelId, correlation)
+
+    internal fun testGbcOnCandidateResponse(
+        channelId: String,
+        correlation: String?,
+        candidate: com.talkback.core.session.gbc.GenerationFactCandidate,
+        admissiblePath: Boolean,
+    ) = coordinator.testGbcOnCandidateResponse(channelId, correlation, candidate, admissiblePath)
+
+    internal fun testSendGenerationFactRequests(channelId: String, correlation: String) =
+        coordinator.testSendGenerationFactRequests(channelId, correlation)
+
     internal fun testPreviewBootstrapEdgeReadyRetry(channelId: String, moduleId: String): String =
         coordinator.testPreviewBootstrapEdgeReadyRetry(channelId, moduleId)
 
@@ -747,6 +815,50 @@ class TalkbackRuntime(
 
     fun debugD1ClearIngressMissInjection(): Boolean =
         coordinator.debugD1ClearIngressMissInjection()
+
+    internal fun testProfile01HeadSourceAbsentPeers(sessionId: String): Set<String> =
+        coordinator.testProfile01HeadSourceAbsentPeers(sessionId)
+
+    internal fun testMarkProfile01HeadSourceAbsent(sessionId: String, moduleId: String) =
+        coordinator.testMarkProfile01HeadSourceAbsent(sessionId, moduleId)
+
+    internal fun testMaybePublishHeadSourceToRejoinedPeer(
+        sessionId: String,
+        remoteModuleId: String,
+        reason: String,
+    ) = coordinator.testMaybePublishHeadSourceToRejoinedPeer(sessionId, remoteModuleId, reason)
+
+    internal fun testOnMeetingProfile01LocalShadowWireConsumptionReady(
+        sessionId: String,
+        reason: String,
+    ) = coordinator.onMeetingProfile01LocalShadowWireConsumptionReady(sessionId, reason)
+
+    fun debugP1cRepublishMediaKeyPackageAfterPeerBind(remoteModuleId: String): Boolean =
+        coordinator.debugP1cRepublishMediaKeyPackageAfterPeerBind(remoteModuleId)
+
+    fun debugP1cEmitRecipientKeyVersionMismatchFixture(
+        remoteModuleId: String,
+        wireRecipientKeyVersion: Long? = null,
+    ): Boolean =
+        coordinator.debugP1cEmitRecipientKeyVersionMismatchFixture(
+            remoteModuleId,
+            wireRecipientKeyVersion,
+        )
+
+    fun debugPaSr5RotateLocalConferenceSource(remoteModuleId: String): Boolean =
+        coordinator.debugPaSr5RotateLocalConferenceSource(remoteModuleId)
+
+    fun debugRc1PilotEnable(enabled: Boolean): Boolean =
+        coordinator.debugRc1PilotEnable(enabled)
+
+    fun debugRc1ArmCutover(remoteModuleId: String): Boolean =
+        coordinator.debugRc1ArmCutover(remoteModuleId)
+
+    fun debugRc1ExecuteCutover(remoteModuleId: String): Boolean =
+        coordinator.debugRc1ExecuteCutover(remoteModuleId)
+
+    fun debugRc1Rollback(remoteModuleId: String): Boolean =
+        coordinator.debugRc1Rollback(remoteModuleId)
 
     fun debugSuppressSuccessorAttemptArm(remoteModuleId: String, ttlMs: Long = 180_000L): Boolean =
         coordinator.debugSuppressSuccessorAttemptArm(remoteModuleId, ttlMs)

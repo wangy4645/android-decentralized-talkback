@@ -1,0 +1,33 @@
+﻿P1-C PACKAGE FIELD ADJUDICATION
+log_dir=D:\workspace\project\talkback\talkback\scripts\fixtures\p1c-package-field\fail-applied-without-ready
+expectedRecipientModuleId=M02
+expectedEstablishmentKeyVersion=1
+join_keys=conferenceId,mediaKeyEpoch,recipientModuleId,recipientEstablishmentKeyVersion,membershipFactDigest
+r1_gate=product_post_bind_republish_required
+
+DELIVERY_STAGE initialDelivery=DELIVERED_WITHOUT_DROP postBindRepublish=ABSENT postBindIngress=APPLIED supplement=ABSENT
+R1_PATH productAuto=False harnessOnly=False productCoordHits=0 harnessCoordHits=0
+
+IDENTITY conferenceId=aabbccddeeff00112233445566778899 mediaKeyEpoch=3 recipientModuleId=M02 recipientEstablishmentKeyVersion=1 membershipFactDigest=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+ORIGIN_LINE=09-08 17:00:01.100  1000  1001 I Talkback: PROFILE01_MEDIA_KEY_PACKAGE_ORIGIN conferenceId=aabbccddeeff00112233445566778899 mediaKeyEpoch=3 recipientModuleId=M02 recipientEstablishmentKeyVersion=1 membershipFactDigest=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef publicationOutcome=EMITTED
+POST_BIND_LINE=
+APPLIED_LINE=09-08 17:00:01.220  2000  2001 I Talkback: PROFILE01_MEDIA_KEY_INGEST conferenceId=aabbccddeeff00112233445566778899 mediaKeyEpoch=3 recipientModuleId=M02 establishmentKeyVersion=1 outcome=APPLIED
+READY_LINE=
+
+C-F1 PASS  origin recipient/version exact initialDelivery=DELIVERED_WITHOUT_DROP
+C-F2 PASS  creation digest + epoch exact digest=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef epoch=3
+C-F3 PASS  peer received factType=11 count=1 initialDelivery=DELIVERED_WITHOUT_DROP
+C-F4 PASS  ingest verified/APPLIED establishmentKeyVersion=1 postBindIngress=APPLIED
+C-F5 PASS  decryptOutcome=SUCCESS establishmentPath=PRODUCTION_WIRED keystoreField=EP2_CORROBORATED:EP2_PASS_KEYSTORE_VERIFIED
+C-F6 FAIL  APPLIED_without_matching_READY
+C-F7 PASS  OBS injected=true negativeFixtureId=negfixture001 expectedV=1 wireV=9000001 REJECTED_RECIPIENT_KEY_VERSION_MISMATCH no READY after reject
+
+POSITIVE LEG NOT_PASS
+CREATION_APPLIED observed=NO|UNKNOWN   (informational only 鈥?not gate input)
+INCOMPLETE_DRAIN observed=NO|UNKNOWN   (informational only 鈥?not gate input)
+
+R1_FIELD=FAIL reason=product_POST_BIND_EMITTED_absent
+
+VERDICT=FAIL
+reason=C-F6_applied_without_ready,r1_product_post_bind_absent,C-F6_APPLIED_without_matching_READY
+Next=RCA_PACKAGE_OR_R1_HOOK_HOLD_J0

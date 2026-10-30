@@ -1,0 +1,33 @@
+﻿P1-C PACKAGE FIELD ADJUDICATION
+log_dir=D:\workspace\project\talkback\talkback\scripts\fixtures\p1c-package-field\invalid-harness-only-republish
+expectedRecipientModuleId=M02
+expectedEstablishmentKeyVersion=1
+join_keys=conferenceId,mediaKeyEpoch,recipientModuleId,recipientEstablishmentKeyVersion,membershipFactDigest
+r1_gate=product_post_bind_republish_required
+
+DELIVERY_STAGE initialDelivery=PRE_BIND_DROPPED_ALLOWED postBindRepublish=EMITTED postBindIngress=APPLIED supplement=READY
+R1_PATH productAuto=False harnessOnly=True productCoordHits=0 harnessCoordHits=2
+
+IDENTITY conferenceId=aabbccddeeff00112233445566778899 mediaKeyEpoch=3 recipientModuleId=M02 recipientEstablishmentKeyVersion=1 membershipFactDigest=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+ORIGIN_LINE=09-08 17:00:01.100  1000  1001 I Talkback: PROFILE01_MEDIA_KEY_PACKAGE_ORIGIN conferenceId=aabbccddeeff00112233445566778899 mediaKeyEpoch=3 recipientModuleId=M02 recipientEstablishmentKeyVersion=1 membershipFactDigest=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef publicationOutcome=EMITTED
+POST_BIND_LINE=09-08 17:00:01.160  1000  1001 I Talkback: PROFILE01_MEDIA_KEY_PACKAGE_POST_BIND_REPUBLISH conferenceId=aabbccddeeff00112233445566778899 mediaKeyEpoch=3 recipientModuleId=M02 recipientEstablishmentKeyVersion=1 membershipFactDigest=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef publicationOutcome=EMITTED
+APPLIED_LINE=09-08 17:00:01.220  2000  2001 I Talkback: PROFILE01_MEDIA_KEY_INGEST conferenceId=aabbccddeeff00112233445566778899 mediaKeyEpoch=3 recipientModuleId=M02 establishmentKeyVersion=1 outcome=APPLIED
+READY_LINE=09-08 17:00:01.210  2000  2001 I Talkback: PROFILE01_MEDIA_SUPPLEMENT conferenceId=aabbccddeeff00112233445566778899 mediaKeyEpoch=3 state=READY
+
+C-F1 PASS  origin recipient/version exact initialDelivery=PRE_BIND_DROPPED_ALLOWED
+C-F2 PASS  creation digest + epoch exact digest=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef epoch=3
+C-F3 PASS  peer received factType=11 count=1 initialDelivery=PRE_BIND_DROPPED_ALLOWED
+C-F4 PASS  ingest verified/APPLIED establishmentKeyVersion=1 postBindIngress=APPLIED
+C-F5 PASS  decryptOutcome=SUCCESS establishmentPath=PRODUCTION_WIRED keystoreField=EP2_CORROBORATED:EP2_PASS_KEYSTORE_VERIFIED
+C-F6 PASS  matching supplement READY readyTs=09-08 17:00:01.210 appliedTs=09-08 17:00:01.220 supplement=READY
+C-F7 PASS  OBS injected=true negativeFixtureId=negfixture001 expectedV=1 wireV=9000001 REJECTED_RECIPIENT_KEY_VERSION_MISMATCH no READY after reject
+
+POSITIVE LEG PASS
+CREATION_APPLIED observed=NO|UNKNOWN   (informational only 鈥?not gate input)
+INCOMPLETE_DRAIN observed=NO|UNKNOWN   (informational only 鈥?not gate input)
+
+R1_FIELD=INVALID reason=harness_only_P1C_REPUBLISH_AFTER_BIND
+
+VERDICT=INVALID
+reason=r1_harness_only_republish_not_field_proven
+Next=FIX_CAPTURE_OR_PRODUCT_HOOK_AND_RERUN_P1C_ONLY

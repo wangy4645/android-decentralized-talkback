@@ -1,0 +1,8 @@
+﻿gate=P1C_GROUP_PRECONDITION
+PRE_G1_m01NoActiveGroup=PASS
+PRE_G2_m02NoActiveGroup=PASS
+PRE_G3_noGrpBoundOrPending=PASS
+PRE_G4_createAllowed=true
+channelId=CH-01
+leaveAttempts=1
+status=PASS

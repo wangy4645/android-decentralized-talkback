@@ -1,5 +1,6 @@
 package com.talkback.core.model
 
+import com.talkback.core.session.gbc.trust.mesh.MeshPeerTrustHelloDigest
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -72,6 +73,11 @@ data class FloorSnapshotDigest(
     }
 }
 
+data class StarMediaFactDigest(
+    val spokeModuleId: String,
+    val usable: Boolean
+)
+
 data class HelloPayload(
     val moduleId: String,
     val endpoints: List<RemoteEndpointInfo>,
@@ -87,7 +93,11 @@ data class HelloPayload(
     val memberHash: Int = 0,
     val floorSnapshot: FloorSnapshotDigest? = null,
     /** PRR re-announce only: local transport epoch at send time. */
-    val transportEpoch: Long = 0L
+    val transportEpoch: Long = 0L,
+    /** CPP per-edge media facts; producer is [moduleId], edge is (primary, spoke). */
+    val starMediaFacts: List<StarMediaFactDigest> = emptyList(),
+    /** Optional Profile01 signing / establishment SPKI for late mesh peers. */
+    val meshTrust: MeshPeerTrustHelloDigest? = null,
 ) {
     fun encode(): String {
         val arr = JSONArray()
@@ -127,6 +137,18 @@ data class HelloPayload(
         if (transportEpoch > 0L) {
             json.put("transportEpoch", transportEpoch)
         }
+        if (starMediaFacts.isNotEmpty()) {
+            val arrFacts = JSONArray()
+            starMediaFacts.forEach { fact ->
+                arrFacts.put(
+                    JSONObject()
+                        .put("spoke", fact.spokeModuleId)
+                        .put("usable", fact.usable)
+                )
+            }
+            json.put("starMediaFacts", arrFacts)
+        }
+        meshTrust?.let { json.put("meshTrust", it.encodeJson()) }
         return json.toString()
     }
 
@@ -153,8 +175,19 @@ data class HelloPayload(
                 floorSnapshot = json.optJSONObject("floorSnapshot")?.let {
                     FloorSnapshotDigest.decodeJson(it)
                 },
-                transportEpoch = json.optLong("transportEpoch", 0L)
+                transportEpoch = json.optLong("transportEpoch", 0L),
+                starMediaFacts = decodeStarMediaFacts(json.optJSONArray("starMediaFacts")),
+                meshTrust = MeshPeerTrustHelloDigest.decodeJson(json.optJSONObject("meshTrust")),
             )
         }.getOrNull()
+
+        private fun decodeStarMediaFacts(arr: JSONArray?): List<StarMediaFactDigest> {
+            if (arr == null || arr.length() == 0) return emptyList()
+            return (0 until arr.length()).mapNotNull { i ->
+                val obj = arr.optJSONObject(i) ?: return@mapNotNull null
+                val spoke = obj.optString("spoke").takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                StarMediaFactDigest(spokeModuleId = spoke, usable = obj.optBoolean("usable", false))
+            }
+        }
     }
 }

@@ -117,6 +117,23 @@ class LinkQualificationTracker(
         transitionTo(LinkQualificationState.UNQUALIFIED, reason)
     }
 
+    /**
+     * Facts for an epoch newer than the current one (producer thread raced ahead of [onSocketBound]).
+     * Replayed when that epoch is bound; anything else is discarded. Field 2026-10-27: FIRST_OUTBOUND for
+     * (socket 2, gen 2) arrived 11 ms before SOCKET_BOUND and was dropped, freezing the link in RECEIVE_READY.
+     */
+    private data class EarlyEpochFacts(
+        val socketId: Long,
+        val rebindGeneration: Long,
+        var receiveLoopStarted: Boolean = false,
+        var firstOutbound: Boolean = false,
+        var firstInbound: Boolean = false
+    )
+
+    @Volatile
+    private var earlyEpochFacts: EarlyEpochFacts? = null
+
+    @Synchronized
     override fun onSocketBound(socketId: Long, rebindGeneration: Long, networkId: String) {
         recordFact(LinkQualificationFacts.SOCKET_BOUND, socketId, rebindGeneration, accepted = true)
         cancelInboundTimeout()
@@ -127,35 +144,100 @@ class LinkQualificationTracker(
         hasInboundAfterRebind = false
         qualificationRetryRequested = false
         transitionTo(LinkQualificationState.BOUND, LinkQualificationReasons.SOCKET_BOUND)
+        replayEarlyEpochFacts()
     }
 
+    @Synchronized
     override fun onReceiveLoopStarted(socketId: Long, rebindGeneration: Long) {
         val accepted = sameEpoch(socketId, rebindGeneration)
         recordFact(LinkQualificationFacts.RECEIVE_LOOP_STARTED, socketId, rebindGeneration, accepted)
-        if (!accepted) return
-        if (state == LinkQualificationState.BOUND || state == LinkQualificationState.QUALIFICATION_REPAIRING) {
-            transitionTo(LinkQualificationState.RECEIVE_READY, LinkQualificationReasons.RECEIVE_LOOP_STARTED)
+        if (!accepted) {
+            stashEarlyFact(socketId, rebindGeneration) { it.receiveLoopStarted = true }
+            return
         }
+        applyReceiveLoopStarted()
     }
 
+    @Synchronized
     override fun onFirstOutboundAfterRebind(socketId: Long, rebindGeneration: Long) {
         val accepted = sameEpoch(socketId, rebindGeneration)
         recordFact(LinkQualificationFacts.FIRST_OUTBOUND_AFTER_REBIND, socketId, rebindGeneration, accepted)
-        if (!accepted) return
+        if (!accepted) {
+            stashEarlyFact(socketId, rebindGeneration) { it.firstOutbound = true }
+            return
+        }
+        applyFirstOutbound()
+    }
+
+    @Synchronized
+    override fun onFirstInboundAfterRebind(socketId: Long, rebindGeneration: Long) {
+        val accepted = sameEpoch(socketId, rebindGeneration)
+        recordFact(LinkQualificationFacts.FIRST_INBOUND_AFTER_REBIND, socketId, rebindGeneration, accepted)
+        if (!accepted) {
+            stashEarlyFact(socketId, rebindGeneration) { it.firstInbound = true }
+            return
+        }
+        applyFirstInbound()
+    }
+
+    private fun applyReceiveLoopStarted() {
+        if (state == LinkQualificationState.BOUND || state == LinkQualificationState.QUALIFICATION_REPAIRING) {
+            transitionTo(LinkQualificationState.RECEIVE_READY, LinkQualificationReasons.RECEIVE_LOOP_STARTED)
+            // Packets may already have flowed on this epoch (replayed early facts or outbound before the
+            // receive loop reported in); re-evaluate instead of waiting for a "first" that will not recur.
+            maybePromoteBidirectional(LinkQualificationReasons.RECEIVE_LOOP_STARTED)
+            scheduleInboundTimeoutIfNeeded()
+        }
+    }
+
+    private fun applyFirstOutbound() {
         hasOutboundAfterRebind = true
         maybeEmitRepairPacketObservation(rebindGeneration, outbound = true)
         maybePromoteBidirectional(LinkQualificationReasons.FIRST_OUTBOUND_AFTER_REBIND)
         scheduleInboundTimeoutIfNeeded()
     }
 
-    override fun onFirstInboundAfterRebind(socketId: Long, rebindGeneration: Long) {
-        val accepted = sameEpoch(socketId, rebindGeneration)
-        recordFact(LinkQualificationFacts.FIRST_INBOUND_AFTER_REBIND, socketId, rebindGeneration, accepted)
-        if (!accepted) return
+    private fun applyFirstInbound() {
         hasInboundAfterRebind = true
         cancelInboundTimeout()
         maybeEmitRepairPacketObservation(rebindGeneration, outbound = false)
         maybePromoteBidirectional(LinkQualificationReasons.FIRST_INBOUND_AFTER_REBIND)
+    }
+
+    private fun stashEarlyFact(socketId: Long, rebindGeneration: Long, mark: (EarlyEpochFacts) -> Unit) {
+        // Only epochs strictly newer than the bound one can legitimately arrive early.
+        if (rebindGeneration <= this.rebindGeneration && socketId <= this.socketId) return
+        val current = earlyEpochFacts
+        val target =
+            if (current != null && current.socketId == socketId && current.rebindGeneration == rebindGeneration) {
+                current
+            } else {
+                EarlyEpochFacts(socketId, rebindGeneration).also { earlyEpochFacts = it }
+            }
+        mark(target)
+        LinkQualificationTrace.linkFactReceived(
+            fact = "EARLY_EPOCH_FACT_STASHED",
+            socketId = socketId,
+            rebindGeneration = rebindGeneration,
+            networkId = networkId,
+            accepted = true
+        )
+    }
+
+    private fun replayEarlyEpochFacts() {
+        val early = earlyEpochFacts ?: return
+        earlyEpochFacts = null
+        if (early.socketId != socketId || early.rebindGeneration != rebindGeneration) return
+        LinkQualificationTrace.linkFactReceived(
+            fact = "EARLY_EPOCH_FACT_REPLAYED",
+            socketId = socketId,
+            rebindGeneration = rebindGeneration,
+            networkId = networkId,
+            accepted = true
+        )
+        if (early.receiveLoopStarted) applyReceiveLoopStarted()
+        if (early.firstOutbound) applyFirstOutbound()
+        if (early.firstInbound) applyFirstInbound()
     }
 
     override fun onNetworkLost() {

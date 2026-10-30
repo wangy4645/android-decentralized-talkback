@@ -1,0 +1,4 @@
+﻿PROFILE01_SHADOW_RUNTIME phase=WIRING_MEMBER_INSTALLED sessionId=8b12b21a-37d1-4fc5-ae52-850e2442f4c6 moduleId=M01 sourceGeneration=1 incarnationId=1
+PROFILE01_SHADOW_RUNTIME phase=INGRESS_ACTIVITY sessionId=8b12b21a-37d1-4fc5-ae52-850e2442f4c6 packetsReceived=100
+PROFILE01_SHADOW_RUNTIME phase=PLAYOUT_ACTIVITY sessionId=8b12b21a-37d1-4fc5-ae52-850e2442f4c6 successfulPlayoutWrites=5
+PROFILE01_SHADOW_RUNTIME phase=WIRING_MEMBER_INSTALLED sessionId=8b12b21a-37d1-4fc5-ae52-850e2442f4c6 moduleId=M01 sourceGeneration=2 incarnationId=2

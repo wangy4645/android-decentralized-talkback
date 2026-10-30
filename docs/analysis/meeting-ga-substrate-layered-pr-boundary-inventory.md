@@ -30,7 +30,8 @@ Field listening quality        UNKNOWN (out of scope)
 | Layer | End tip | Commits in layer | Files (three-dot vs prev tip) | Role |
 |-------|---------|------------------|-------------------------------|------|
 | L0 | `1410578` | 5 | 33 | ADR / Phase 1a |
-| L1 | `d06f17c` | 9 | 185 | Ops / investigate fixes |
+| L1 | **`cac628d`** (`12bcbec` on PR branch) | **7** | ~185 (prefix; excl. `d06f17c`) | Ops / investigate fixes |
+| L1-deferred | `d06f17c` | 1 | — | SRD fence — **not in L1 merge**; see `meeting-ga-l1-compile-dependency-rca.md` |
 | L2 | `faf8884` | 1 | 5 | RCA5-A pipeline lock |
 | L3 | `1ab10ae` | 1 | 519 | **Meeting GA main gate** |
 | L4 | `b04be4c` | 3 | 21 | Release freeze / 1.0.1 |
@@ -58,22 +59,23 @@ Cumulative at final tip: **23 commits**, **742 files** vs `origin/main` (`870062
 
 ---
 
-## L1 — Ops / investigate fixes
+## L1 — Ops / investigate fixes (**Option A — prefix only**)
 
 | Field | Boundary |
 |-------|----------|
-| **Base** | L0 tip `1410578` |
-| **Head tip** | `d06f17c` |
-| **Commits** | `6809425`, `ee634bb` (merge), `c2f4842`, `d58e08c`, `ed636c6`, `9491fa6`, `296a213`, `cac628d`, `d06f17c` |
-| **File scope** | ~185 files — session/admission/UI/`talkback-app` + conference ops; includes late-peer HELLO, End Meeting threading, ACCEPT lineage, CFC-1, MEETING_END timeout, SRD stale-peer fence |
-| **Depends on** | L0 |
-| **Unlocks** | L2 (RCA5-A parent is `d06f17c`) |
-| **Acceptance gate** | Dependency check for listed ops themes; desk/unit evidence already carried in those commits where present; no GA multicast production stack required yet |
-| **Rollback** | Revert L1 merge; do not land L2 until L1 tip restored |
+| **Base** | post-L0 `main` |
+| **Head tip (merge)** | **`cac628d`** / branch `12bcbec` |
+| **Commits (7)** | `6809425`, `c2f4842`, `d58e08c`, `ed636c6`, `9491fa6`, `296a213`, `cac628d` (merge `ee634bb` omitted in cherry-pick PR) |
+| **Excluded from L1** | **`d06f17c`** (SRD fence) — deferred; RCA: `meeting-ga-l1-compile-dependency-rca.md` |
+| **File scope** | ~185 files vs pre-split inventory, minus `d06f17c` delta |
+| **Depends on** | L0 merged to `main` |
+| **Unlocks** | L2 planning only after L1 merge; **`d06f17c` placement TBD** with L2/L3 deps |
+| **Acceptance gate** | `:android-board-talkback:compileDebugKotlin` **PASS** on PR #203 prefix; not Meeting GA / not listening proof |
+| **Rollback** | Revert L1 merge on `main` |
 
-**Review focus (not exhaustive file list):** late-peer channel-less HELLO; End Meeting off main thread; leave hangup vs SDP wait; ACCEPT lineage freeze; CFC-1 PARTIAL desk + Phase B wiring; MEETING_END timeout off coordinator queue; SRD stale peer/stats fence (`d06f17c`).
+**Review focus:** late-peer HELLO; End Meeting threading; leave hangup vs SDP wait; ACCEPT lineage; CFC-1 PARTIAL + Phase B L4 wiring; MEETING_END timeout — **not** SRD fence in this PR.
 
-**Note:** `d06f17c` is also the first commit on open **PR #200** head history — see L2.
+**PR #203:** `substrate/l1-ops` — draft, **not merged** until approved.
 
 ---
 
@@ -81,13 +83,13 @@ Cumulative at final tip: **23 commits**, **742 files** vs `origin/main` (`870062
 
 | Field | Boundary |
 |-------|----------|
-| **Base** | L1 tip `d06f17c` |
+| **Base** | post-L1 `main` ( **`d06f17c` deferred** — adjudicate before L2 PR) |
 | **Head tip** | `faf8884` |
 | **Commits** | `faf8884` only |
 | **Exact files** | `ConferenceSessionMediaWiring.kt`; `Profile01ShadowPlayoutClockSeam.kt`; `Profile01ShadowRuntimeObservability.kt`; `Profile01ShadowRca5ConcurrencyReproTest.kt`; `docs/analysis/rca5a-playout-ingress-pipeline-lock.md` |
-| **Depends on** | L1 (`d06f17c`) |
-| **Unlocks** | L3 (`1ab10ae` parent is `faf8884`) |
-| **Acceptance gate** | Independent review of ingress/playout serialization lock; concurrency desk `Profile01ShadowRca5ConcurrencyReproTest`; analysis note present |
+| **Depends on** | L1 prefix on `main`; **Slice-M 已证伪「小切片」**（见 `meeting-ga-l2-slice-m-probe-result.md`）。架构裁定改为 **A′：可编译 GA 引入单元**（`faf8884` + 同平面栈 + Gradle/`concentus`；见 `meeting-ga-today-install-architect-ruling.md`）。Not a solo `faf8884` cherry-pick. `d06f17c` does not unblock. |
+| **Unlocks** | L3 full gate (`1ab10ae`) once compile-closed with L2 |
+| **Acceptance gate** | Independent review of ingress/playout serialization lock; concurrency desk `Profile01ShadowRca5ConcurrencyReproTest`; analysis note present; **`compileDebugKotlin` on intended PR base** (probe: L1+`faf8884` only → **FAIL**) |
 | **Rollback** | Revert L2 only; L3 must not proceed without L2 tip |
 
 ### PR #200 ownership (required before/with L2 land)

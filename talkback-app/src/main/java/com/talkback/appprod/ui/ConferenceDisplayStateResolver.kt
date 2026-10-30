@@ -1,5 +1,6 @@
 package com.talkback.appprod.ui
 
+import com.talkback.core.session.ConferenceHealthUiProjection
 import com.talkback.core.session.ConferenceRuntimePhase
 
 /**
@@ -22,6 +23,8 @@ enum class ConferenceStatusPillKind {
     RECOVERING,
     RECONNECT_FAILED,
     LIVE,
+    ROOM_DEGRADED,
+    ROOM_FAILED,
     MUTED,
     POOR_NETWORK
 }
@@ -34,6 +37,7 @@ data class ConferenceLifecycleFacts(
 )
 
 data class ConferenceConnectivityFacts(
+    /** For CONFERENCE, coordinator [isChannelMediaReady] projects [isConferenceUiReady]. */
     val channelReady: Boolean,
     val channelConnecting: Boolean = false,
     val reconnecting: Boolean = false,
@@ -69,21 +73,29 @@ object ConferenceDisplayStateResolver {
         connectivity: ConferenceConnectivityFacts,
         membership: ConferenceMembershipFacts = ConferenceMembershipFacts(),
         muted: Boolean = false,
-        poorNetwork: Boolean = false
+        poorNetwork: Boolean = false,
+        healthUi: ConferenceHealthUiProjection? = null
     ): ConferenceDisplayState {
         val awaitingRejoin = connectivity.awaitingRejoin ||
             (lifecycle.conferenceMode && !lifecycle.conferenceActive)
-        val mediaConnecting = lifecycle.conferenceActive &&
-            !connectivity.channelReady &&
-            !awaitingRejoin
-        val recovering = lifecycle.conferenceActive &&
+        // Room pill: keep Phase 3 chrome (LIVE / Connecting / Recovering).
+        // Do NOT surface L4 DEGRADED as「会议音频异常」yet — false-fires on join.
+        val recovering = if (healthUi?.roomOnline == true) {
+            false
+        } else {
+            lifecycle.conferenceActive &&
+                connectivity.channelReady &&
+                (
+                    connectivity.reconnecting ||
+                        connectivity.reconnectFailed ||
+                        lifecycle.runtimePhase == ConferenceRuntimePhase.RECOVERING
+                    )
+        }
+        // Live admission: conference session + UI-ready channel only. L4 roomOnline is health/diagnostic.
+        val live = lifecycle.conferenceActive &&
             connectivity.channelReady &&
-            (
-                connectivity.reconnecting ||
-                    connectivity.reconnectFailed ||
-                    lifecycle.runtimePhase == ConferenceRuntimePhase.RECOVERING
-                )
-        val live = lifecycle.conferenceActive && connectivity.channelReady && !awaitingRejoin
+            !awaitingRejoin
+        val mediaConnecting = lifecycle.conferenceActive && !live && !awaitingRejoin
 
         val phase = when {
             awaitingRejoin -> ConferenceDisplayPhase.AWAITING_REJOIN
@@ -143,6 +155,7 @@ object ConferenceDisplayStateResolver {
             connectingParticipantHint = state.meeting.connectingParticipantHint
         ),
         muted = state.conferenceMuted,
-        poorNetwork = state.conferenceNetworkPresentation.showPoorNetworkStatusPill
+        poorNetwork = state.conferenceNetworkPresentation.showPoorNetworkStatusPill,
+        healthUi = state.meeting.healthUi
     )
 }

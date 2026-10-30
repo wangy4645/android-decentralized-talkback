@@ -4,6 +4,7 @@ import com.talkback.appprod.endpointtext.ConversationSummary
 import com.talkback.appprod.endpointtext.ChannelConversationSummary
 import com.talkback.core.session.UnicastCallPhase
 import com.talkback.core.session.ChannelReadiness
+import com.talkback.core.session.ConferenceHealthUiProjection
 import com.talkback.core.session.ConferenceRuntimePhase
 
 enum class ConferenceEndReason {
@@ -77,6 +78,8 @@ data class MeetingUiState(
     val awaitingAdditionalParticipants: Boolean = false,
     /** Conference runtime phase from [TalkbackSessionSnapshot.conferenceRuntimeState] (RO-M2 PR-3). */
     val runtimePhase: ConferenceRuntimePhase? = null,
+    /** Phase 3: room-facing projection. UI must not re-derive MEDIA_USABLE. */
+    val healthUi: ConferenceHealthUiProjection? = null,
     val startedAtMs: Long? = null,
     val networkLabel: String = "N/A",
     val rttMs: Long? = null,

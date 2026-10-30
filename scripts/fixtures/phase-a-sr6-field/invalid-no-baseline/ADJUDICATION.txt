@@ -1,0 +1,15 @@
+﻿PA-SR6 FIELD ADJUDICATION (M01 Host Meeting End Teardown)
+log_dir=D:\workspace\project\talkback\talkback\scripts\fixtures\phase-a-sr6-field\invalid-no-baseline
+run_card=meeting-product-integration-phase-a-sr6-field-run-card.md
+stimulus=M01_host_Meeting_end_product_path
+adjudication_plane=M02_peer_primary_M01_corroboration
+
+hostSessionId=a1b2c3d4-e5f6-7890-abcd-ef1234567890
+WINDOW_A tx_packetsSent_max=0 ingress_packetsReceived_max=0 playout_writes_max=0 peerWiring_lines=1 conferenceId=CONF-01
+
+VERDICT=INVALID_BASELINE
+PA-SR6=NOT_TESTED
+reason=window_A_operational_media_not_proven
+ADR-0056=KEEP
+Meeting_media_cutover=NOT_AUTHORIZED
+Next=FIX_SR4_BASELINE_RERUN_PA_SR6

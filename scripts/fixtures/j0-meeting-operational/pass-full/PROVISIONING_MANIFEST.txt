@@ -1,0 +1,12 @@
+# AUTHORITY OUTPUT — do not copy from EP_PROBE
+operator_run_id=ep-operator-batch-1788856306127
+provisioned_at=2026-09-08T08:31:46.130052Z
+deploymentTrustDomainId=talkback-operational
+taskProfileRevision=20
+signerKeyVersion=1
+M01.establishmentKeyVersion=1
+M01.publicKeyFingerprint=98e9dc3c4b05c439d47ac57a2118d6636cf3fabf9acf89f600ac3344fa79c02e
+M02.establishmentKeyVersion=1
+M02.publicKeyFingerprint=6d50d17b87d67bafea27bc2d7ba86efe74ff0e8dde452828760a63a9be2314eb
+M01.keystoreAlias=talkback-establishment-M01-v1
+M02.keystoreAlias=talkback-establishment-M02-v1

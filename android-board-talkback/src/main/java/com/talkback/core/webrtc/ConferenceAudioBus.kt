@@ -10,6 +10,7 @@ import com.talkback.core.webrtc.conferenceaudio.ParticipantMediaModePolicy
 import com.talkback.core.webrtc.conferenceaudio.PcmFrame
 import com.talkback.core.webrtc.conferenceaudio.PcmFrameCodec
 import com.talkback.core.webrtc.conferenceaudio.PcmInjectionFailure
+import com.talkback.core.webrtc.conferenceaudio.ConferenceProgramDownlinkObservability
 import com.talkback.core.webrtc.conferenceaudio.PcmInjectionPort
 import com.talkback.core.webrtc.conferenceaudio.AudioMixer
 import com.talkback.core.webrtc.conferenceaudio.WebRtcPcmInjectionPort
@@ -23,7 +24,8 @@ class ConferenceAudioBus(
     private val engineLookup: (String) -> WebRtcAudioEngine?,
     private val injectionPortFactory: (WebRtcAudioEngine) -> PcmInjectionPort = { WebRtcPcmInjectionPort(it) },
     private val onInboundPcm: ((sessionId: String, sourceModuleId: String) -> Unit)? = null,
-    private val onInjectionFailure: ((sessionId: String, targetModuleId: String, failure: PcmInjectionFailure) -> Unit)? = null
+    private val onInjectionFailure: ((sessionId: String, targetModuleId: String, failure: PcmInjectionFailure) -> Unit)? = null,
+    private val programDownlink: ConferenceProgramDownlinkObservability = ConferenceProgramDownlinkObservability()
 ) {
     private data class TargetRelay(
         val targetId: String,
@@ -99,6 +101,7 @@ class ConferenceAudioBus(
             targets[targetId] = TargetRelay(targetId, mixer, port)
         }
         if (targets.isEmpty()) return
+        programDownlink.bumpRoutingGeneration()
 
         val taps = remoteIds.mapNotNull { sourceId ->
             val engine = engineLookup(sourceId) ?: return@mapNotNull null
@@ -138,6 +141,12 @@ class ConferenceAudioBus(
 
     private fun dispatchRemoteFrame(sessionId: String, sourceId: String, frame: PcmFrame) {
         val state = sessions[sessionId] ?: return
+        programDownlink.onInboundFrame(
+            conferenceId = sessionId,
+            anchorId = state.view.anchorModuleId,
+            remoteSpoke = sourceId,
+            pcmFormat = frame.format
+        )
         state.targets.forEach { (targetId, target) ->
             if (targetId == sourceId) return@forEach
             target.mixer.push(sourceId, frame)
@@ -147,10 +156,22 @@ class ConferenceAudioBus(
 
     private fun renderTarget(sessionId: String, target: TargetRelay) {
         val mixed = target.mixer.renderMixedFrame()
+        programDownlink.onProgramProduced(
+            conferenceId = sessionId,
+            mixInputCount = target.mixer.configuredSourceCount(),
+            activeSources = target.mixer.lastContributingSourceIds
+        )
         val result = target.port.write(mixed)
         if (result.isFailure) {
             onInjectionFailure?.invoke(sessionId, target.targetId, PcmInjectionFailure.INJECT_FAILED)
+            return
         }
+        val engine = engineLookup(target.targetId)
+        programDownlink.onProgramSent(
+            conferenceId = sessionId,
+            spoke = target.targetId,
+            sender = engine?.programSenderSnapshot()
+        )
     }
 
     private class InboundAudioTap(

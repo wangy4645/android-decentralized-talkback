@@ -1,0 +1,9 @@
+captureConferenceId=CONF-01
+driverEndPhase=COMPLETE
+driverLeavePhase=SKIPPED
+driverRejoinPhase=SKIPPED
+driverRotatePhase=SKIPPED
+quiescenceIngressDelta=0
+quiescencePlayoutDelta=0
+quiescenceSec=30
+sr6Window=C

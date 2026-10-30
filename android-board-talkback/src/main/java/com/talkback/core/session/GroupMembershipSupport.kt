@@ -127,6 +127,30 @@ object GroupMembershipSupport {
     }
 
     /**
+     * Drop one canonical member from the authority roster. Control-plane only:
+     * does not bump [TalkbackSession.rosterEpoch], release media, or mutate invite ICE.
+     */
+    fun removeCanonicalMember(session: TalkbackSession, moduleId: String) {
+        if (moduleId == session.local.moduleId.value) return
+        session.groupMembers = session.groupMembers.filter { it.moduleId.value != moduleId }
+        session.memberModules.remove(ModuleId(moduleId))
+        session.membershipStateByModule.remove(moduleId)
+        session.suspectSinceMsByModule.remove(moduleId)
+        session.pendingInviteeEndpoints.remove(moduleId)
+    }
+
+    fun ensureCanonicalMember(session: TalkbackSession, endpoint: EndpointAddress) {
+        val moduleId = endpoint.moduleId.value
+        if (moduleId == session.local.moduleId.value) return
+        if (session.groupMembers.none { it.moduleId.value == moduleId }) {
+            session.groupMembers = session.groupMembers + endpoint
+        }
+        session.memberModules.add(endpoint.moduleId)
+        ensureMembershipEntry(session, moduleId)
+        session.pendingInviteeEndpoints.remove(moduleId)
+    }
+
+    /**
      * R35: replace stale endpoint binding for [moduleId] when verified HELLO reports a new endpointId.
      * Single key per module — no merge of old and new keys.
      */
@@ -177,6 +201,8 @@ object GroupMembershipSupport {
         val memberIds = members.map { it.moduleId.value }
         val remoteHash = memberHash(channelId, rosterEpoch, memberIds)
         val localHash = memberHashForSession(session)
+        // Same epoch is not enough to ignore: digest must also match. Leave+rejoin that
+        // restores the prior member set must bump rosterEpoch so the snapshot applies.
         if (rosterEpoch == session.rosterEpoch && remoteHash == localHash) {
             return MembershipSnapshotApplyResult.IGNORED_STALE
         }

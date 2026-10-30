@@ -1,0 +1,1 @@
+﻿09-08 17:00:01.100  1000  1001 I Talkback: PROFILE01_MEDIA_KEY_PACKAGE_ORIGIN conferenceId=aabbccddeeff00112233445566778899 mediaKeyEpoch=3 recipientModuleId=M02 recipientEstablishmentKeyVersion=1 membershipFactDigest=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef publicationOutcome=EMITTED

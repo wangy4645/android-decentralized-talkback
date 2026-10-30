@@ -1,0 +1,11 @@
+﻿gate=P1C_JOIN_PRECONDITION
+PRE_J1_hostSession=PASS
+PRE_J2_peerNoCreate=PASS
+PRE_J3_peerInviteForH=PASS
+PRE_J4_peerBindH=PASS
+PRE_J5_sameSessionId=PASS
+PRE_J6_packageAdjudicationAllowed=true
+hostSessionId=512b3611-a03a-4aa2-bba6-20c708cef77c
+peerSessionId=512b3611-a03a-4aa2-bba6-20c708cef77c
+peerJoinPath=btnJoinMeeting_acceptIncoming
+status=PASS

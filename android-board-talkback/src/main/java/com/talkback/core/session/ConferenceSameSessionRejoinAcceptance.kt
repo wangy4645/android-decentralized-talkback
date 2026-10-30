@@ -25,12 +25,15 @@ object ConferenceSameSessionRejoinAcceptance {
         callerModuleId: String,
         payloadRejoin: Boolean,
         payloadSdpBlank: Boolean,
-        payloadInitiatorModuleId: String?
+        payloadInitiatorModuleId: String?,
+        iceConnectedToCaller: Boolean = true
     ): Boolean {
         if (existingType != SessionType.CONFERENCE) return false
         if (existingSessionId != inviteSessionId) return false
-        if (!payloadRejoin) return false
         if (payloadSdpBlank) return false
+        // Same-session host SDP while ICE is not up: accept even if rejoin flag was dropped
+        // (realization-offer path sends rejoin=false).
+        if (!payloadRejoin && iceConnectedToCaller) return false
         // Lineage: only the conference host may drive same-session rejoin reconnect.
         if (existingHostModuleId != null && callerModuleId != existingHostModuleId) {
             return false

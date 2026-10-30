@@ -1,0 +1,17 @@
+﻿P1-C package field PRECONDITIONS
+buildSha=cac628d
+versionName=1.0.0
+devices=M01=HTUBB21B09220661 M02=DSJ-2407041
+hostModuleId=M01
+expectedRecipientModuleId=M02
+establishmentKeyVersion=1
+sameCandidateApk=YES
+productionGbcTrustWiring=YES
+productionEstablishmentWiring=YES
+p1cOriginBridge=YES
+p1cFieldObs=YES
+epProvisioningValid=YES
+ep2KeystoreVerifiedCorroboration=EP2_PASS_KEYSTORE_VERIFIED
+doNotRequireCreationApplied=true
+doNotAdjudicateIncompleteDrain=true
+doNotAdjudicateMeetingOperational=true

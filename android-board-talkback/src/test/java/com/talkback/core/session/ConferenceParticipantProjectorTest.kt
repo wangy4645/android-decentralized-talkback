@@ -136,6 +136,26 @@ class ConferenceParticipantProjectorTest {
     }
 
     @Test
+    fun visible_onlyAcceptedRemotesShown_notFullRoster() {
+        val roster = (2..10).map { i ->
+            EndpointAddress(ModuleId("M%02d".format(i)), EndpointId("E01"))
+        }
+        val out = ConferenceParticipantProjector.project(
+            ConferenceParticipantProjector.Input(
+                localModuleId = m01,
+                localKey = localKey,
+                sessionAccepted = true,
+                roster = roster,
+                memberViews = listOf(
+                    view("M02", InviteState.ACCEPTED, MediaState.CONNECTING),
+                ),
+            )
+        )
+        assertEquals(2, out.visibleParticipantCount)
+        assertEquals(listOf("M02"), out.visibleParticipants.filter { !it.isLocal }.map { it.moduleId })
+    }
+
+    @Test
     fun explainMemberVisibility_matchesProjector() {
         val input = input(
             memberViews = listOf(

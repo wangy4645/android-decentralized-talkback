@@ -18,7 +18,6 @@ internal class ScopedQosStore {
             iceState = iceState,
             updatedMs = System.currentTimeMillis()
         )
-        QosScopeTraceLog.iceUpdate(scope, remoteModuleId, iceState)
     }
 
     @Synchronized
@@ -61,14 +60,5 @@ internal class ScopedQosStore {
         require(scope == MediaBearerScope.GROUP || scope == MediaBearerScope.CONFERENCE) {
             "Mesh QoS scope must be GROUP or CONFERENCE, got $scope"
         }
-    }
-}
-
-internal object QosScopeTraceLog {
-    fun iceUpdate(scope: MediaBearerScope, peer: String, ice: String) {
-        android.util.Log.i(
-            "Talkback",
-            "QOS_SCOPE_TRACE update scope=$scope peer=$peer ice=$ice"
-        )
     }
 }

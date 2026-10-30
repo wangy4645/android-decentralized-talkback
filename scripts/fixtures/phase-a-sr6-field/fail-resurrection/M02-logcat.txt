@@ -1,0 +1,8 @@
+PROFILE01_SHADOW_RUNTIME phase=WIRING_SESSION_STARTED sessionId=a1b2c3d4-e5f6-7890-abcd-ef1234567890 conferenceId=CONF-01 transportScopeActive=true
+PROFILE01_SHADOW_RUNTIME phase=INGRESS_ACTIVITY sessionId=a1b2c3d4-e5f6-7890-abcd-ef1234567890 moduleId=M01 packetsReceived=500
+PROFILE01_SHADOW_RUNTIME phase=PLAYOUT_ACTIVITY sessionId=a1b2c3d4-e5f6-7890-abcd-ef1234567890 successfulPlayoutWrites=10 audioTrackOwner=SHADOW_METRICS_ONLY
+SHADOW hook=SESSION_STOPPED session=a1b2c3d4-e5f6-7890-abcd-ef1234567890 outcome=APPLIED
+PROFILE01_SHADOW_RUNTIME phase=WIRING_MEMBER_REVOKED sessionId=a1b2c3d4-e5f6-7890-abcd-ef1234567890 moduleId=M01 sourceGeneration=1 admittedCount=0 activeJitterSources=0 liveDecoders=0
+PROFILE01_SHADOW_RUNTIME phase=SHADOW_PLAYOUT_DISARMED sessionId=a1b2c3d4-e5f6-7890-abcd-ef1234567890
+PROFILE01_SHADOW_RUNTIME phase=TEARDOWN_EMPTY sessionId=a1b2c3d4-e5f6-7890-abcd-ef1234567890 conferenceId=CONF-01 transportScopeActive=false catalogEntries=0 admittedCount=0 activeJitterSources=0 liveDecoders=0 jitterBufferCount=0 ingressBlocked=true
+PROFILE01_SHADOW_RUNTIME phase=INGRESS_ACTIVITY sessionId=a1b2c3d4-e5f6-7890-abcd-ef1234567890 moduleId=M01 packetsReceived=550

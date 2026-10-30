@@ -135,6 +135,22 @@ class OutboundGroupInviteAttemptSupportTest {
     }
 
     @Test
+    fun markDeliverySatisfiedFromGroupAccept_closesActiveAttempt() {
+        val session = session()
+        OutboundGroupInviteAttemptSupport.recordSuccessfulHandoff(
+            session = session,
+            remoteModuleId = "M03",
+            sessionId = session.id,
+            semantic = GroupInvitePayloadSemantic.BOOTSTRAP_SDP_INVITE,
+            offerLineageId = "GM1",
+            deliveryAttemptId = 1L,
+        )
+        OutboundGroupInviteAttemptSupport.markDeliverySatisfiedFromGroupAccept(session, "M03")
+        assertTrue(OutboundGroupInviteAttemptSupport.isDeliverySatisfied(session, "M03"))
+        assertFalse(OutboundGroupInviteAttemptSupport.isRemoteSignalingInFlight(session, "M03"))
+    }
+
+    @Test
     fun localOfferAlone_doesNotAffectSupportEvaluation() {
         val session = session()
         assertFalse(OutboundGroupInviteAttemptSupport.isRemoteSignalingInFlight(session, "M03"))

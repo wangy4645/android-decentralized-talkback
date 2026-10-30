@@ -1,0 +1,7 @@
+driverEndPhase=COMPLETE
+driverLeavePhase=SKIPPED
+driverRejoinPhase=SKIPPED
+quiescenceIngressDelta=50
+quiescencePlayoutDelta=0
+quiescenceSec=30
+sr6Window=C

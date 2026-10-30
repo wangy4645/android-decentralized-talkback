@@ -19,7 +19,8 @@ enum class ConferenceAdmissionTransitionReason {
     APPLY_REMOTE_OFFER,
     ANSWER_COMMITTED,
     ACCEPT_FAILED,
-    SESSION_TERMINATED
+    SESSION_TERMINATED,
+    MEMBERSHIP_LEAVE,
 }
 
 data class ConferenceAdmissionKey(

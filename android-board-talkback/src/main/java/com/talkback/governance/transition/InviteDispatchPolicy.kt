@@ -61,5 +61,6 @@ data class InviteDispatchResult(
 
 sealed interface InviteDispatchSendResult {
     data object Sent : InviteDispatchSendResult
+    data object ProvisionPending : InviteDispatchSendResult
     data class Failed(val error: InviteDispatchError) : InviteDispatchSendResult
 }

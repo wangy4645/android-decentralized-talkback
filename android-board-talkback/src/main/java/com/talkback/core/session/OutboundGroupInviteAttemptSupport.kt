@@ -13,6 +13,14 @@ object OutboundGroupInviteAttemptSupport {
 
     const val TERMINAL_REASON_TIMEOUT = "ATTEMPT_TIMEOUT"
 
+    const val TERMINAL_REASON_GROUP_ACCEPT = "GROUP_ACCEPT_RECEIVED"
+
+    private val DELIVERY_SATISFIED_TERMINAL_REASONS =
+        setOf(
+            "MESH_LINK_COMPLETED",
+            TERMINAL_REASON_GROUP_ACCEPT,
+        )
+
     fun isAdmissionRelevantSemantic(semantic: GroupInvitePayloadSemantic): Boolean =
         semantic == GroupInvitePayloadSemantic.BOOTSTRAP_SDP_INVITE ||
             semantic == GroupInvitePayloadSemantic.PAIRWISE_MESH_SDP_INVITE
@@ -31,6 +39,23 @@ object OutboundGroupInviteAttemptSupport {
 
     fun isRemoteSignalingInFlight(session: TalkbackSession, remoteModuleId: String): Boolean =
         isActive(session.outboundGroupInviteAttemptsByRemoteModule[remoteModuleId])
+
+    fun isDeliverySatisfied(attempt: OutboundGroupInviteAttempt?): Boolean {
+        if (attempt == null || !attempt.handoffSucceeded) return false
+        val reason = attempt.terminalReason ?: return false
+        return reason in DELIVERY_SATISFIED_TERMINAL_REASONS
+    }
+
+    fun isDeliverySatisfied(session: TalkbackSession, remoteModuleId: String): Boolean =
+        isDeliverySatisfied(session.outboundGroupInviteAttemptsByRemoteModule[remoteModuleId])
+
+    /** Positive completion from correlated GROUP_ACCEPT (GIDR-T2). */
+    fun markDeliverySatisfiedFromGroupAccept(session: TalkbackSession, remoteModuleId: String) {
+        val existing = session.outboundGroupInviteAttemptsByRemoteModule[remoteModuleId] ?: return
+        if (!isAdmissionRelevantSemantic(existing.semantic)) return
+        if (isDeliverySatisfied(existing)) return
+        markTerminal(session, remoteModuleId, TERMINAL_REASON_GROUP_ACCEPT)
+    }
 
     fun recordSuccessfulHandoff(
         session: TalkbackSession,

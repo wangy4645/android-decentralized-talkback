@@ -1,0 +1,4 @@
+driverEndPhase=SKIPPED
+driverLeavePhase=SKIPPED
+driverRejoinPhase=SKIPPED
+sr6Window=A

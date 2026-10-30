@@ -18,6 +18,8 @@ interface WebRtcAudioEngine {
     fun applyRemoteOffer(sdp: String, polite: Boolean = true): String
     fun applyRemoteAnswer(sdp: String, polite: Boolean = true)
     fun rollbackNegotiation()
+    /** Unblock coordinator SDP await so leave/hangup can run. */
+    fun abortPendingNegotiation() = Unit
     fun addIceCandidate(candidate: String)
     fun startCapture()
     fun stopCapture()
@@ -25,6 +27,16 @@ interface WebRtcAudioEngine {
     fun setMuted(muted: Boolean)
     /** Optional trace tag set by coordinator (session id). */
     var playbackDiagnosticTag: String?
+        get() = null
+        set(_) = Unit
+
+    /** GPLB offer lineage for transport diagnostics (GROUP only). */
+    var transportDiagnosticOfferLineageId: String?
+        get() = null
+        set(_) = Unit
+
+    /** Local PC generation for transport diagnostics. */
+    var transportDiagnosticPcGeneration: Long?
         get() = null
         set(_) = Unit
 
@@ -88,4 +100,13 @@ interface WebRtcAudioEngine {
         numberOfChannels: Int,
         numberOfFrames: Int
     ) = Unit
+
+    /** P0 observation only: outbound audio sender vs expected PROGRAM track. */
+    fun programSenderSnapshot(): ProgramSenderSnapshot? = null
+
+    /** Observation-only PeerConnection identity for SRD/domain correlation. */
+    fun diagnosticPeerConnectionHash(): Int? = null
+
+    /** Local/remote SDP ice-ufrag for transport diagnostics (observation only). */
+    fun diagnosticIceUfrags(): Pair<String?, String?> = null to null
 }

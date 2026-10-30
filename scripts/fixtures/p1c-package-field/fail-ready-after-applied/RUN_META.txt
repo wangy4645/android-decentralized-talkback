@@ -1,0 +1,10 @@
+run_stamp=fixture-pass-full
+gate=P1-C_PACKAGE_FIELD
+hostModuleId=M01
+expectedRecipientModuleId=M02
+establishmentKeyVersion=1
+m01_serial=HTUBB21B09220661
+m02_serial=DSJ-2407041
+buildSha=deadbeef
+versionName=fixture
+collect_only=true

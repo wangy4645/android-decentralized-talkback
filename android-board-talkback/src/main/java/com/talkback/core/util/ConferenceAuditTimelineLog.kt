@@ -243,9 +243,14 @@ object ConferenceAuditTimelineLog {
         readyBlockReason: String,
         hostIce: String?,
         channelReadiness: String,
-        writer: String
+        writer: String,
+        mediaReady: Boolean? = null,
+        mediaBlock: String? = null,
+        controlReady: Boolean? = null,
+        controlBlock: String? = null,
     ) {
-        val shouldLog = !uiReady || readyBlockReason != "NONE"
+        val shouldLog = !uiReady || readyBlockReason != "NONE" ||
+            mediaReady == false || controlReady == false
         if (!shouldLog && selectedSessionId == null) return
         log(
             buildString {
@@ -260,6 +265,10 @@ object ConferenceAuditTimelineLog {
                 append(" readyBlockReason=").append(readyBlockReason)
                 append(" hostIce=").append(hostIce ?: "n/a")
                 append(" channelReadiness=").append(channelReadiness)
+                mediaReady?.let { append(" mediaReady=").append(it) }
+                mediaBlock?.let { append(" mediaBlock=").append(it) }
+                controlReady?.let { append(" controlReady=").append(it) }
+                controlBlock?.let { append(" controlBlock=").append(it) }
                 append(" writer=").append(writer)
             }
         )

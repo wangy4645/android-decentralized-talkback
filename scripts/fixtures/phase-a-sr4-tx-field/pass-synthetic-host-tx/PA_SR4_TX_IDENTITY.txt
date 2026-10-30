@@ -1,0 +1,9 @@
+﻿sessionId=b23edb10-5855-4252-9495-4cefd9f196df
+conferenceId=c6b73689f63d5f33e17925e2ef0d0c83
+hostModuleId=M01
+peerModuleId=M02
+hostSessionProjected=True
+hostShadowSessionLive=True
+pttCaptureOn=True
+txActivityPacketsSentMax=12
+txEvidence=09-09 16:40:21.000 I MEETING_MEDIA_SHADOW: PROFILE01_SHADOW_RUNTIME phase=SHADOW_TX_ACTIVITY sessionId=b23edb10-5855-4252-9495-4cefd9f196df moduleId=M01 packetsSent=12 protectedSent=12 sendErrors=0 audioTrackOwner=SHADOW_METRICS_ONLY

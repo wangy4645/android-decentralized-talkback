@@ -1,0 +1,20 @@
+﻿REPLACEMENT CUTOVER RC1 FIELD ADJUDICATION
+log_dir=D:\workspace\project\talkback\talkback\scripts\fixtures\replacement-cutover-rc1-field\pass-synthetic
+run_card=replacement-cutover-rc1-field-run-card.md
+adr=0062-replacement-cutover-rc1-audible-ownership-transition.md
+adjudication_plane=M02
+hostSessionId=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee
+cutoverSucceededLog=True cutoverFailedLog=False autoRollbackLog=False rollbackSucceededLog=True
+windowA=pilotEnabled=True operationalMedia=True preCutoverShadowOnly=False
+windowB=multicastActive=True anchorReleased=True productionAcquired=True ownerVerifyPassB=True productionWritesOk=True
+windowC=rollbackSucceeded=True anchorRestored=True multicastReleased=True anchorActiveState=True ownerVerifyPassC=True postRollbackZombie=False
+
+VERDICT=PASS_RC1
+RC1=PASS
+reason=audible_ownership_flip_reversible
+CUTOVER_SUCCEEDED=true
+ROLLBACK_SUCCEEDED=true
+AUTO_ROLLBACK_ONLY=false
+ADR-0056=KEEP
+Replacement_readiness=READY_FOR_CONTROLLED_PILOT
+Next=READY_FOR_CONTROLLED_PILOT

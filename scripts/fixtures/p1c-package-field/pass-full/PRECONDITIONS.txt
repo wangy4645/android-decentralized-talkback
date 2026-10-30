@@ -1,0 +1,7 @@
+P1-C package field PRECONDITIONS
+buildSha=deadbeef
+versionName=fixture
+expectedRecipientModuleId=M02
+establishmentKeyVersion=1
+ep2KeystoreVerifiedCorroboration=EP2_PASS_KEYSTORE_VERIFIED
+doNotRequireCreationApplied=true
