@@ -133,31 +133,52 @@ class AudibleOwnershipController(
      */
     /**
      * Membership media-key epoch bump cleared decode/catalog; release stale production
-     * ownership so [MulticastAudibleAutomaticCutover] can re-arm when readiness returns.
+     * ownership and restore Anchor until [MulticastAudibleAutomaticCutover] can re-arm.
      */
     fun onMediaKeyEpochRotated(sessionId: String): CutoverOutcome {
         if (activeSessionId != null && activeSessionId != sessionId) {
             return CutoverOutcome.REJECTED_INVALID_STATE
         }
-        when (state) {
-            AudibleOwnershipState.MULTICAST_ACTIVE,
-            AudibleOwnershipState.CUTOVER_ARMED,
-            -> {
-                multicastPort.fenceProductionPlayout(sessionId)
-                multicastPort.releaseProductionAudioTrack(sessionId)
-                ReplacementCutoverObservability.logHandoff(
-                    sessionId,
-                    "MEDIA_KEY_EPOCH_FENCE_MULTICAST",
-                    CutoverOutcome.APPLIED,
-                )
-                state = AudibleOwnershipState.ANCHOR_ACTIVE
-                activeSessionId = sessionId
-                ReplacementCutoverObservability.logState(sessionId, state, "media_key_epoch_rotated")
-            }
-            AudibleOwnershipState.ANCHOR_ACTIVE -> Unit
+        multicastPort.fenceProductionPlayout(sessionId)
+        multicastPort.releaseProductionAudioTrack(sessionId)
+        ReplacementCutoverObservability.logHandoff(
+            sessionId,
+            "MEDIA_KEY_EPOCH_FENCE_MULTICAST",
+            CutoverOutcome.APPLIED,
+        )
+        activeSessionId = sessionId
+        if (anchorPort.isAnchorAudibleActive(sessionId)) {
+            ReplacementCutoverObservability.logHandoff(
+                sessionId,
+                "MEDIA_KEY_EPOCH_RESTORE_ANCHOR",
+                CutoverOutcome.APPLIED,
+            )
+            state = AudibleOwnershipState.ANCHOR_ACTIVE
+            ReplacementCutoverObservability.logState(sessionId, state, "media_key_epoch_rotated")
+            return CutoverOutcome.APPLIED
         }
+        if (!anchorPort.acquireAnchorOwnership(sessionId) ||
+            !anchorPort.isAnchorAudibleActive(sessionId)
+        ) {
+            ReplacementCutoverObservability.logHandoff(
+                sessionId,
+                "MEDIA_KEY_EPOCH_RESTORE_ANCHOR",
+                CutoverOutcome.REJECTED_HANDOFF_FAILURE,
+            )
+            return CutoverOutcome.REJECTED_HANDOFF_FAILURE
+        }
+        ReplacementCutoverObservability.logHandoff(
+            sessionId,
+            "MEDIA_KEY_EPOCH_RESTORE_ANCHOR",
+            CutoverOutcome.APPLIED,
+        )
+        state = AudibleOwnershipState.ANCHOR_ACTIVE
+        ReplacementCutoverObservability.logState(sessionId, state, "media_key_epoch_rotated")
         return CutoverOutcome.APPLIED
     }
+
+    fun isMulticastProductionActive(sessionId: String): Boolean =
+        multicastPort.isProductionAudioTrackActive(sessionId)
 
     fun onSessionTeardown(sessionId: String): CutoverOutcome {
         if (activeSessionId != null && activeSessionId != sessionId) {

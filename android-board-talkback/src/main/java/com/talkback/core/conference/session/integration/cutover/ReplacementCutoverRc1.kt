@@ -49,6 +49,9 @@ object ReplacementCutoverRc1 {
 
     fun currentState(): AudibleOwnershipState? = controller()?.state
 
+    fun isProductionAudioTrackActive(sessionId: String): Boolean =
+        controller()?.isMulticastProductionActive(sessionId) == true
+
     fun onReplacementRuntimeFatal(sessionId: String) {
         controller()?.onReplacementRuntimeFatal(sessionId)
     }

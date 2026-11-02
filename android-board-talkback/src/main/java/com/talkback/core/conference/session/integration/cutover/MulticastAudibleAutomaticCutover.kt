@@ -9,6 +9,8 @@ import java.util.concurrent.ConcurrentHashMap
  */
 object MulticastAudibleAutomaticCutover {
     private val terminalSessions = ConcurrentHashMap.newKeySet<String>()
+    private val fenceSeqBySession = ConcurrentHashMap<String, Long>()
+    private val terminalFenceSeqBySession = ConcurrentHashMap<String, Long>()
 
     fun maybeAttempt(
         sessionId: String,
@@ -48,8 +50,27 @@ object MulticastAudibleAutomaticCutover {
         val state = ReplacementCutoverRc1.currentState()
         when (state) {
             AudibleOwnershipState.MULTICAST_ACTIVE -> {
-                terminalSessions.add(sessionId)
-                return
+                if (ReplacementCutoverRc1.isProductionAudioTrackActive(sessionId)) {
+                    if (isCurrentFenceProduction(sessionId)) {
+                        terminalSessions.add(sessionId)
+                        return
+                    }
+                    terminalSessions.remove(sessionId)
+                    ReplacementCutoverObservability.logRc1Field(
+                        outcome = "AUTO_CUTOVER_OWNERSHIP_DESYNC",
+                        sessionId = sessionId,
+                        detail = "STALE_PRODUCTION_TRACK_AFTER_FENCE",
+                    )
+                    ReplacementCutoverRc1.onMediaKeyEpochRotated(sessionId)
+                } else {
+                    terminalSessions.remove(sessionId)
+                    ReplacementCutoverObservability.logRc1Field(
+                        outcome = "AUTO_CUTOVER_OWNERSHIP_DESYNC",
+                        sessionId = sessionId,
+                        detail = "MULTICAST_ACTIVE_WITHOUT_PRODUCTION_TRACK",
+                    )
+                    ReplacementCutoverRc1.onMediaKeyEpochRotated(sessionId)
+                }
             }
             AudibleOwnershipState.CUTOVER_ARMED -> {
                 executeCutover(sessionId)
@@ -89,10 +110,13 @@ object MulticastAudibleAutomaticCutover {
 
     fun onSessionStopped(sessionId: String) {
         terminalSessions.remove(sessionId)
+        fenceSeqBySession.remove(sessionId)
+        terminalFenceSeqBySession.remove(sessionId)
     }
 
     /** Wiring rotated media key — allow auto cutover to run again after member reinstall. */
     fun onMediaKeyEpochRotated(sessionId: String) {
+        fenceSeqBySession.merge(sessionId, 1L) { previous, _ -> previous + 1L }
         terminalSessions.remove(sessionId)
         ReplacementCutoverRc1.onMediaKeyEpochRotated(sessionId)
         ReplacementCutoverObservability.logRc1Field(
@@ -102,13 +126,36 @@ object MulticastAudibleAutomaticCutover {
     }
 
     private fun executeCutover(sessionId: String) {
+        val productionBefore = ReplacementCutoverRc1.isProductionAudioTrackActive(sessionId)
         val outcome = ReplacementCutoverRc1.executeCutover(sessionId)
-        if (outcome == CutoverOutcome.APPLIED) {
+        val productionAfter = ReplacementCutoverRc1.isProductionAudioTrackActive(sessionId)
+        if (outcome == CutoverOutcome.APPLIED && productionAfter && !productionBefore) {
+            terminalFenceSeqBySession[sessionId] = currentFenceSeq(sessionId)
             terminalSessions.add(sessionId)
             ReplacementCutoverObservability.logRc1Field(
                 outcome = "AUTO_CUTOVER_SUCCEEDED",
                 sessionId = sessionId,
             )
+            return
+        }
+        if (outcome == CutoverOutcome.APPLIED && productionAfter && productionBefore) {
+            terminalSessions.remove(sessionId)
+            ReplacementCutoverObservability.logRc1Field(
+                outcome = "AUTO_CUTOVER_EXECUTE_FAILED",
+                sessionId = sessionId,
+                detail = "STALE_PRODUCTION_TRACK_AFTER_FENCE",
+            )
+            ReplacementCutoverRc1.onMediaKeyEpochRotated(sessionId)
+            return
+        }
+        if (outcome == CutoverOutcome.APPLIED) {
+            terminalSessions.remove(sessionId)
+            ReplacementCutoverObservability.logRc1Field(
+                outcome = "AUTO_CUTOVER_EXECUTE_FAILED",
+                sessionId = sessionId,
+                detail = "MULTICAST_ACTIVE_WITHOUT_PRODUCTION_TRACK",
+            )
+            ReplacementCutoverRc1.onMediaKeyEpochRotated(sessionId)
             return
         }
         markTerminalIfNeeded(sessionId, outcome)
@@ -130,5 +177,12 @@ object MulticastAudibleAutomaticCutover {
             -> terminalSessions.add(sessionId)
             else -> Unit
         }
+    }
+
+    private fun currentFenceSeq(sessionId: String): Long = fenceSeqBySession[sessionId] ?: 0L
+
+    private fun isCurrentFenceProduction(sessionId: String): Boolean {
+        val terminalSeq = terminalFenceSeqBySession[sessionId] ?: return false
+        return terminalSeq == currentFenceSeq(sessionId)
     }
 }

@@ -109,6 +109,58 @@ class AudibleOwnershipControllerTest {
     }
 
     @Test
+    fun epochRotated_fromMulticast_reacquiresAnchorBeforeNextCutover() {
+        controller.armCutover(SESSION)
+        controller.executeCutover(SESSION)
+        assertFalse(anchor.anchorActive)
+        assertEquals(CutoverOutcome.APPLIED, controller.onMediaKeyEpochRotated(SESSION))
+        assertEquals(AudibleOwnershipState.ANCHOR_ACTIVE, controller.state)
+        assertTrue(anchor.anchorActive)
+        assertEquals(1, anchor.acquireCount)
+        assertFalse(multicast.productionActive)
+        assertTrue(multicast.fenceCount > 0)
+        assertTrue(controller.verifySingleOwner(SESSION))
+    }
+
+    @Test
+    fun epochRotated_whenAlreadyAnchorReleased_stillReacquires() {
+        controller.armCutover(SESSION)
+        controller.executeCutover(SESSION)
+        controller.onSessionTeardown(SESSION)
+        assertFalse(anchor.anchorActive)
+        assertEquals(CutoverOutcome.APPLIED, controller.onMediaKeyEpochRotated(SESSION))
+        assertTrue(anchor.anchorActive)
+        assertEquals(1, anchor.acquireCount)
+        assertFalse(multicast.productionActive)
+        assertTrue(multicast.fenceCount > 0)
+    }
+
+    @Test
+    fun epochRotated_whenAnchorAlreadyActive_fencesWithoutAcquire() {
+        multicast.productionActive = true
+        assertTrue(anchor.anchorActive)
+        assertEquals(CutoverOutcome.APPLIED, controller.onMediaKeyEpochRotated(SESSION))
+        assertEquals(AudibleOwnershipState.ANCHOR_ACTIVE, controller.state)
+        assertEquals(0, anchor.acquireCount)
+        assertTrue(anchor.anchorActive)
+        assertFalse(multicast.productionActive)
+        assertTrue(multicast.fenceCount > 0)
+    }
+
+    @Test
+    fun epochRotated_acquireFailure_doesNotClaimAudibleAnchor() {
+        controller.armCutover(SESSION)
+        controller.executeCutover(SESSION)
+        assertEquals(AudibleOwnershipState.MULTICAST_ACTIVE, controller.state)
+        anchor.acquireShouldFail = true
+        assertEquals(CutoverOutcome.REJECTED_HANDOFF_FAILURE, controller.onMediaKeyEpochRotated(SESSION))
+        assertEquals(AudibleOwnershipState.MULTICAST_ACTIVE, controller.state)
+        assertFalse(anchor.anchorActive)
+        assertFalse(multicast.productionActive)
+        assertTrue(multicast.fenceCount > 0)
+    }
+
+    @Test
     fun sessionTeardown_releasesMulticastWithoutAnchorReacquire() {
         controller.armCutover(SESSION)
         controller.executeCutover(SESSION)
@@ -124,6 +176,8 @@ class AudibleOwnershipControllerTest {
     ) : AnchorAudiblePort {
         var releaseCount: Int = 0
         var releaseShouldFail: Boolean = false
+        var acquireCount: Int = 0
+        var acquireShouldFail: Boolean = false
 
         override fun releaseAnchorOwnership(sessionId: String): Boolean {
             releaseCount++
@@ -133,6 +187,8 @@ class AudibleOwnershipControllerTest {
         }
 
         override fun acquireAnchorOwnership(sessionId: String): Boolean {
+            acquireCount++
+            if (acquireShouldFail) return false
             anchorActive = true
             return true
         }

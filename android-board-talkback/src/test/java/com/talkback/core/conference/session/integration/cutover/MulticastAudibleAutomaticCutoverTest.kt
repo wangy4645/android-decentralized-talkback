@@ -112,11 +112,31 @@ class MulticastAudibleAutomaticCutoverTest {
         assertTrue(wiring.rotateMediaKeyEpoch(SESSION, rotated))
 
         assertEquals(AudibleOwnershipState.ANCHOR_ACTIVE, ReplacementCutoverRc1.currentState())
+        assertTrue(anchor.isAnchorAudibleActive(SESSION))
         assertFalse(wiring.audiblePlayoutSeam(SESSION)?.isProductionAudioTrackActive() == true)
 
         armCutoverEligiblePath(mediaKeyEpoch = 2L)
         MulticastAudibleAutomaticCutover.maybeAttempt(SESSION, LOCAL)
         assertEquals(AudibleOwnershipState.MULTICAST_ACTIVE, ReplacementCutoverRc1.currentState())
+        assertTrue(wiring.audiblePlayoutSeam(SESSION)?.isProductionAudioTrackActive() == true)
+        assertEquals(2, anchor.releaseCount)
+    }
+
+    @Test
+    fun maybeAttempt_doesNotTerminalMulticastWithoutProductionTrack() {
+        armCutoverEligiblePath()
+        MulticastAudibleAutomaticCutover.maybeAttempt(SESSION, LOCAL)
+        assertEquals(AudibleOwnershipState.MULTICAST_ACTIVE, ReplacementCutoverRc1.currentState())
+
+        wiring.audiblePlayoutSeam(SESSION)!!.fenceProductionPlayout()
+        wiring.audiblePlayoutSeam(SESSION)!!.releaseProductionAudioTrack()
+        assertFalse(wiring.audiblePlayoutSeam(SESSION)?.isProductionAudioTrackActive() == true)
+
+        MulticastAudibleAutomaticCutover.maybeAttempt(SESSION, LOCAL)
+
+        assertEquals(AudibleOwnershipState.MULTICAST_ACTIVE, ReplacementCutoverRc1.currentState())
+        assertTrue(wiring.audiblePlayoutSeam(SESSION)?.isProductionAudioTrackActive() == true)
+        assertEquals(2, anchor.releaseCount)
     }
 
     private fun armLocalSoloHostPath(mediaKeyEpoch: Long = 1L) {
