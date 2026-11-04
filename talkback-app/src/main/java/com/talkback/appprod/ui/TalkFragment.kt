@@ -69,9 +69,13 @@ class TalkFragment : Fragment() {
         setupPttLockSlide(barPttLock, thumb, trackFill, txtPttHintRef, txtPttLockSlide, imgChevrons, btnPttRef)
 
         val scrollContent = view.findViewById<View>(R.id.talkScrollContent)
-        scrollContent.post { applyResponsiveLayout(scrollContent, barPttLock, thumb) }
+        scrollContent.post {
+            if (!isAdded) return@post
+            applyResponsiveLayout(scrollContent, barPttLock, thumb)
+        }
         scrollContent.addOnLayoutChangeListener { v, _, _, _, _, _, _, _, _ ->
-            if (v.width > 0) applyResponsiveLayout(v, barPttLock, thumb)
+            if (!isAdded || v.width <= 0) return@addOnLayoutChangeListener
+            applyResponsiveLayout(v, barPttLock, thumb)
         }
 
         view.findViewById<TextView>(R.id.btnModePtt).setOnClickListener {
@@ -161,6 +165,7 @@ class TalkFragment : Fragment() {
     }
 
     private fun bindState(view: View, state: TalkUiState) {
+        if (!isAdded) return
         if (boundMeetingMode != state.conferenceMode) {
             boundMeetingMode = state.conferenceMode
             bindPttInteraction(state.conferenceMode)
@@ -655,13 +660,16 @@ class TalkFragment : Fragment() {
     }
 
     private fun applyResponsiveLayout(root: View, lockBar: View, lockThumb: View) {
-        val density = resources.displayMetrics.density
+        // Layout/post callbacks can outlive detach (rotation / crash-dialog path).
+        if (!isAdded) return
+        val res = context?.resources ?: return
+        val density = res.displayMetrics.density
         val widthDp = root.width.takeIf { it > 0 }?.div(density)
-            ?: resources.configuration.screenWidthDp.toFloat()
+            ?: res.configuration.screenWidthDp.toFloat()
         val scale = TalkResponsiveScale.scaleFactor(widthDp)
         if (kotlin.math.abs(scale - appliedLayoutScale) < 0.01f) return
         appliedLayoutScale = scale
-        TalkResponsiveScale.apply(root, scale, resources)
+        TalkResponsiveScale.apply(root, scale, res)
         refreshThumbSlideRange(lockBar, lockThumb)
     }
 

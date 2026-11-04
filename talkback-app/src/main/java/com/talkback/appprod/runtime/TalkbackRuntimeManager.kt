@@ -24,6 +24,7 @@ import com.talkback.core.qos.QosSnapshot
 import com.talkback.core.session.ChannelMeshHostElection
 import com.talkback.core.session.ChannelReadiness
 import com.talkback.core.session.SessionType
+import com.talkback.core.session.gbc.bootstrap.LabDeploymentTrustBootstrap
 import com.talkback.governance.transition.MeetingMode
 
 data class ChannelMeetingQos(
@@ -106,9 +107,27 @@ class TalkbackRuntimeManager(private val appContext: Context) {
     fun rejectPendingConferenceInvite(channelId: String, reason: String = "DECLINED"): Boolean =
         runtime?.rejectPendingConferenceInvite(channelId, reason) == true
 
+    fun isProfile01CreationSignerReady(config: AppConfig): Boolean =
+        LabDeploymentTrustBootstrap.isCreationSignerReady(
+            appContext,
+            config.moduleId,
+        )
+
     fun start(config: AppConfig): Result<Unit> {
         return runCatching {
             stop()
+            when (
+                val trust =
+                    LabDeploymentTrustBootstrap.ensureIfNeeded(
+                        appContext,
+                        config.moduleId,
+                        onLog = { TalkbackLog.i(it) },
+                    )
+            ) {
+                is LabDeploymentTrustBootstrap.Outcome.Failed ->
+                    TalkbackLog.w("DEPLOYMENT_TRUST bootstrap failed: ${trust.reason}")
+                else -> Unit
+            }
             val created = TalkbackRuntimeFactory.create(
                 context = appContext,
                 config = TalkbackRuntimeConfig(
@@ -252,6 +271,12 @@ class TalkbackRuntimeManager(private val appContext: Context) {
 
         return if (config.isConferenceMode()) {
             noteReachableTeammatesIf(remotes != null)
+            if (!isProfile01CreationSignerReady(config)) {
+                TalkbackLog.w(
+                    "Blocked conference create: DEPLOYMENT_TRUST not ready module=${config.moduleId}",
+                )
+                return null
+            }
             val now = System.currentTimeMillis()
             if (!skipNextMeshBackoff && now - lastMeshCallAttemptMs < MESH_CALL_BACKOFF_MS) {
                 return null
