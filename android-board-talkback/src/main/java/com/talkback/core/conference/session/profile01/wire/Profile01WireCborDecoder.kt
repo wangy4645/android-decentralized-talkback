@@ -214,6 +214,57 @@ object Profile01WireCborDecoder {
             )
         }.getOrNull()
 
+    /**
+     * Observe-only signed-fact identity. No verify, no ingest, no scheduling.
+     * [headDigestHex] is the membership-head digest this fact binds to when present:
+     * CREATION/MEMBERSHIP use this fact's digest; MEDIA_KEY uses membershipFactDigest.
+     */
+    data class ObserveIdentity(
+        val conferenceIdHex: String,
+        val factType: Int,
+        val factDigestHex: String,
+        val conferenceEpoch: Long?,
+        val membershipVersion: Long?,
+        val mediaKeyEpoch: Long?,
+        val headDigestHex: String?,
+    )
+
+    fun readObserveIdentity(signedFactBytes: ByteArray): ObserveIdentity? =
+        runCatching {
+            val envelope = parseEnvelope(signedFactBytes) ?: return null
+            val fact = decodeFullFact(envelope.fullCanonicalBytes) ?: return null
+            val conferenceId = fact.authority.requireId128(0, "conferenceId")
+            val factDigestHex =
+                Profile01FactDigest.computeFactDigest(envelope.fullCanonicalBytes).toHexLower()
+            val authority = fact.authority
+            val conferenceEpoch = authority.peekU64(1)
+            val (membershipVersion, mediaKeyEpoch, headDigestHex) =
+                when (fact.factType) {
+                    Profile01WireConstants.FACT_TYPE_CREATION ->
+                        Triple(authority.peekU64(5), authority.peekU64(6), factDigestHex)
+                    Profile01WireConstants.FACT_TYPE_MEMBERSHIP ->
+                        Triple(authority.peekU64(3), authority.peekU64(6), factDigestHex)
+                    Profile01WireConstants.FACT_TYPE_SOURCE_DECLARATION ->
+                        Triple(authority.peekU64(2), authority.peekU64(3), null)
+                    Profile01WireConstants.FACT_TYPE_MEDIA_KEY_PACKAGE ->
+                        Triple(
+                            authority.peekU64(3),
+                            authority.peekU64(4),
+                            authority[5]?.asByteString()?.takeIf { it.size == 32 }?.toHexLower(),
+                        )
+                    else -> Triple(null, null, null)
+                }
+            ObserveIdentity(
+                conferenceIdHex = conferenceId.toHexLower(),
+                factType = fact.factType,
+                factDigestHex = factDigestHex,
+                conferenceEpoch = conferenceEpoch,
+                membershipVersion = membershipVersion,
+                mediaKeyEpoch = mediaKeyEpoch,
+                headDigestHex = headDigestHex,
+            )
+        }.getOrNull()
+
     private fun decodeMediaKeyPackageAuthority(
         signedFactBytes: ByteArray,
         fullCanonicalBytes: ByteArray,
@@ -363,6 +414,9 @@ object Profile01WireCborDecoder {
             underlayScopeId = "p01-underlay-$underlayScope",
         )
     }
+
+    private fun Map<Int, Profile01CborCodec.CborValue>.peekU64(key: Int): Long? =
+        this[key]?.asUnsigned()
 
     private fun Map<Int, Profile01CborCodec.CborValue>.requireU64(
         key: Int,

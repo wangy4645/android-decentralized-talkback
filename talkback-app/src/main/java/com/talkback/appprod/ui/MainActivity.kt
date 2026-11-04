@@ -162,7 +162,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         val invite = state.incomingMeetingInvite
-        if (invite != null && !state.call.active) {
+        if (invite != null && !state.call.active && !meetingShowing) {
             showMeetingInviteScreen(invite)
         } else {
             dismissMeetingInviteOverlay()
@@ -424,6 +424,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     fun showMeetingScreen(target: MeetingNavigation = MeetingNavigation.MAIN) {
+        dismissMeetingInviteOverlay()
         val existing =
             supportFragmentManager.findFragmentByTag(MeetingFragment.TAG_MEETING) as? MeetingFragment
         if (existing?.isAdded == true) {

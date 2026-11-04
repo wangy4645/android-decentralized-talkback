@@ -88,6 +88,14 @@ class TalkViewModel(
     /** Talk page PTT/Meeting tab selection — navigation only; does not drive input binding. */
     @Volatile
     private var userSelectedTab: UserSelectedTab = UserSelectedTab.PTT
+    /**
+     * Accept succeeded: keep meeting overlay/CONNECTING until a refresh started
+     * after commit observes coordinator state. Drops stale pre-accept snapshots.
+     */
+    @Volatile
+    private var meetingAcceptHoldSessionId: String? = null
+    @Volatile
+    private var meetingAcceptCommittedAtMs: Long = 0L
 
     private val _openMeetingEvents = MutableSharedFlow<MeetingNavigation>(extraBufferCapacity = 1)
     val openMeetingEvents: SharedFlow<MeetingNavigation> = _openMeetingEvents.asSharedFlow()
@@ -215,6 +223,7 @@ class TalkViewModel(
     }
 
     private suspend fun refreshInternal() {
+        val refreshStartedAtMs = System.currentTimeMillis()
         syncServiceState()
         var config = configStore.load()
         var activeSession = if (serviceRunning && manager.getRuntime() != null) {
@@ -297,8 +306,12 @@ class TalkViewModel(
         if (raw.conferenceActive && !wasConferenceActive && !meetingLeaveInFlight && config.meetingAutoJoin) {
             _openMeetingEvents.emit(MeetingNavigation.MAIN)
         }
-        wasConferenceActive = raw.conferenceActive
-        _uiState.value = displayState.copy(conferenceEndReason = endReason)
+        val published = applyMeetingAcceptHold(
+            displayState.copy(conferenceEndReason = endReason),
+            refreshStartedAtMs
+        )
+        wasConferenceActive = published.conferenceActive
+        _uiState.value = published
     }
 
     fun isConferenceHost(): Boolean = lastKnownConferenceHost
@@ -649,7 +662,9 @@ class TalkViewModel(
         viewModelScope.launch(Dispatchers.Default) {
             val config = configStore.load()
             val meetingConfig = meetingSessionConfig(config)
-            manager.pendingConferenceInvite(meetingConfig.defaultChannelId)?.sessionId?.let { sessionId ->
+            val acceptedSessionId =
+                manager.pendingConferenceInvite(meetingConfig.defaultChannelId)?.sessionId
+            acceptedSessionId?.let { sessionId ->
                 MeetingInviteUiObservability.log(sessionId, "ACCEPT_DISPATCHED")
             }
             userSelectedTab = UserSelectedTab.MEETING
@@ -659,8 +674,15 @@ class TalkViewModel(
                 _toastMessageRes.emit(R.string.meeting_invite_accept_failed)
                 return@launch
             }
-            refreshInternal()
+            val holdId = acceptedSessionId.orEmpty().ifBlank { "accepted" }
+            meetingAcceptHoldSessionId = holdId
+            meetingAcceptCommittedAtMs = System.currentTimeMillis()
+            _uiState.value = projectMeetingAcceptOpened(_uiState.value, acceptedSessionId)
+            if (!acceptedSessionId.isNullOrBlank()) {
+                MeetingInviteUiObservability.log(acceptedSessionId, "MEETING_OPEN_REQUESTED")
+            }
             _openMeetingEvents.emit(MeetingNavigation.MAIN)
+            refreshInternal()
         }
     }
 
@@ -730,6 +752,50 @@ class TalkViewModel(
         manager.prioritizeNextMeshCall()
         runCatching { manager.ensureChannelSession(config) }
         refreshInternal()
+    }
+
+    private fun applyMeetingAcceptHold(state: TalkUiState, refreshStartedAtMs: Long): TalkUiState {
+        val holdId = meetingAcceptHoldSessionId ?: return state
+        if (state.conferenceActive) {
+            meetingAcceptHoldSessionId = null
+            return state.copy(incomingMeetingInvite = null)
+        }
+        if (refreshStartedAtMs >= meetingAcceptCommittedAtMs) {
+            meetingAcceptHoldSessionId = null
+            return state
+        }
+        return projectMeetingAcceptOpened(state, holdId.takeUnless { it == "accepted" })
+    }
+
+    private fun projectMeetingAcceptOpened(current: TalkUiState, sessionId: String?): TalkUiState {
+        val display = ConferenceDisplayStateResolver.resolve(
+            lifecycle = ConferenceLifecycleFacts(
+                conferenceActive = true,
+                conferenceMode = true,
+                sessionActive = true,
+                runtimePhase = current.meeting.runtimePhase
+            ),
+            connectivity = ConferenceConnectivityFacts(
+                channelReady = false,
+                channelConnecting = true,
+                awaitingRejoin = false
+            ),
+            membership = ConferenceMembershipFacts(),
+            muted = current.conferenceMuted
+        )
+        return current.copy(
+            conferenceMode = true,
+            conferenceActive = true,
+            incomingMeetingInvite = null,
+            rejoinableMeeting = null,
+            channelReady = false,
+            channelConnecting = true,
+            userSelectedTab = UserSelectedTab.MEETING,
+            conferenceDisplay = display,
+            meeting = current.meeting.copy(
+                sessionId = sessionId?.takeIf { it.isNotBlank() } ?: current.meeting.sessionId
+            )
+        )
     }
 
     private fun overlayMeetingEnding(current: TalkUiState): TalkUiState {

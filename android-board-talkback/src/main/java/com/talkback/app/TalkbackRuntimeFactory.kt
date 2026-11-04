@@ -566,7 +566,13 @@ object TalkbackRuntimeFactory {
                 localEstablishmentKeyVersion = profile01EstablishmentAuthority.localEstablishmentKeyVersion,
                 memberBindingMaterializer = profile01ShadowMemberBindingMaterializer,
                 scheduleDelayed = { delayMs, block ->
-                    android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(block, delayMs)
+                    coordinator.scheduleProfile01Control(delayMs) {
+                        coordinator.enqueueOnCoordinator(
+                            com.talkback.core.util.CoordinatorTaskAttribution.Kind.SHADOW,
+                            "path=PROFILE01_DELAYED",
+                            block,
+                        )
+                    }
                 },
             )
         meetingProfile01FactWireIngress.peerMembershipWiringReplay =

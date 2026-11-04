@@ -10,6 +10,7 @@ import com.talkback.core.conference.session.profile01.Profile01WireSessionFact
 import com.talkback.core.conference.session.profile01.wire.Profile01P1DProductionIngressHarness
 import com.talkback.core.conference.session.profile01.wire.Profile01WireCborDecoder
 import com.talkback.core.conference.transport.Slice4MulticastNetworkConstants
+import com.talkback.core.util.CoordinatorTaskAttribution
 import com.talkback.core.model.EndpointAddress
 import com.talkback.core.model.EndpointId
 import com.talkback.core.model.ModuleId
@@ -32,10 +33,12 @@ class MeetingProfile01MediaKeyPackageHeadReorderTest {
     fun setUp() {
         MeetingProductMediaShadow.enabled = true
         ConferenceSessionMediaBridge.wiring = ConferenceSessionMediaWiring.forHarness()
+        CoordinatorTaskAttribution.resetForTest { }
     }
 
     @After
     fun tearDown() {
+        CoordinatorTaskAttribution.resetForTest()
         ConferenceSessionMediaCoordinatorDelegate.factPort = null
         ConferenceSessionMediaBridge.wiring = null
     }
@@ -185,6 +188,94 @@ class MeetingProfile01MediaKeyPackageHeadReorderTest {
     }
 
     @Test
+    fun fiveDistinctMatchPackages_readyReentrancy_ingestsEachDigestOnce() {
+        val fixture = Profile01P1DProductionIngressHarness.create(spyKeyOperation = true)
+        val wire = decodedPackage(fixture)
+        val env = wireEnv(fixture)
+        wireProductionReadyCallback(fixture, env)
+        seedPredecessorHead(fixture, wire)
+        val packages =
+            listOf(fixture.builtPackage.signedFactBytes) +
+                (1..4).map { fill ->
+                    Profile01P1DProductionIngressHarness.buildAdditionalPackage(
+                        fixture,
+                        identityFill = fill.toByte(),
+                    )
+                }
+        packages.forEach { bytes ->
+            assertEquals(
+                WireIngressOutcome.REJECTED_VERIFY,
+                env.wireIngress.onConferenceSignedFact(signedFactEnvelope(bytes)),
+            )
+        }
+        assertEquals(5, env.wireIngress.pendingMediaKeyCountForTest(sessionId))
+        seedMatchingHead(fixture, wire)
+        env.wireIngress.replayPendingMediaKeyAfterMembershipHead(sessionId)
+        assertEquals(5, ingestAppliedCount(fixture))
+        assertEquals(5, readyCount(fixture))
+        assertEquals(5, fixture.keyOperationSpy!!.requestedAliases.size)
+        assertEquals(0, env.wireIngress.pendingMediaKeyCountForTest(sessionId))
+        assertNotNull(fixture.supplementRegistry.lookup(fixture.conferenceIdHex, wire.mediaKeyEpoch))
+    }
+
+    @Test
+    fun nonMatchPackages_remainPendingUntilHeadCatchesUp() {
+        val fixture = Profile01P1DProductionIngressHarness.create(spyKeyOperation = true)
+        val wire = decodedPackage(fixture)
+        val env = wireEnv(fixture)
+        wireProductionReadyCallback(fixture, env)
+        seedPredecessorHead(fixture, wire)
+        assertEquals(
+            WireIngressOutcome.REJECTED_VERIFY,
+            env.wireIngress.onConferenceSignedFact(signedFactEnvelope(fixture.builtPackage.signedFactBytes)),
+        )
+        assertEquals(1, env.wireIngress.pendingMediaKeyCountForTest(sessionId))
+        env.wireIngress.replayPendingMediaKeyAfterMembershipHead(sessionId)
+        assertEquals(0, ingestAppliedCount(fixture))
+        assertEquals(1, env.wireIngress.pendingMediaKeyCountForTest(sessionId))
+        seedMatchingHead(fixture, wire)
+        env.wireIngress.replayPendingMediaKeyAfterMembershipHead(sessionId)
+        assertEquals(1, ingestAppliedCount(fixture))
+        assertEquals(1, readyCount(fixture))
+        assertEquals(0, env.wireIngress.pendingMediaKeyCountForTest(sessionId))
+    }
+
+    @Test
+    fun nestedReadyInjectedPending_isNotDroppedByReentrancyGuard() {
+        val fixture = Profile01P1DProductionIngressHarness.create(spyKeyOperation = true)
+        val wire = decodedPackage(fixture)
+        val env = wireEnv(fixture)
+        val successor =
+            Profile01P1DProductionIngressHarness.resignTamperedPackage(
+                fixture.signer,
+                fixture.builtPackage.signedFactBytes,
+            ) { decoded ->
+                decoded.copy(
+                    membershipVersion = decoded.membershipVersion + 1,
+                    mediaKeyEpoch = decoded.mediaKeyEpoch + 1,
+                )
+            }
+        var injected = false
+        fixture.ingress.onMediaSupplementReady = { conferenceId, mediaKeyEpoch ->
+            if (!injected) {
+                injected = true
+                env.wireIngress.onConferenceSignedFact(signedFactEnvelope(successor))
+            }
+            env.wireIngress.onSupplementReadyForConference(conferenceId, mediaKeyEpoch)
+        }
+        seedPredecessorHead(fixture, wire)
+        assertEquals(
+            WireIngressOutcome.REJECTED_VERIFY,
+            env.wireIngress.onConferenceSignedFact(signedFactEnvelope(fixture.builtPackage.signedFactBytes)),
+        )
+        seedMatchingHead(fixture, wire)
+        env.wireIngress.replayPendingMediaKeyAfterMembershipHead(sessionId)
+        assertEquals(1, ingestAppliedCount(fixture))
+        assertEquals(1, readyCount(fixture))
+        assertEquals(1, env.wireIngress.pendingMediaKeyCountForTest(sessionId))
+    }
+
+    @Test
     fun duplicateAheadPackage_doesNotDoubleApply() {
         val fixture = Profile01P1DProductionIngressHarness.create()
         val wire = decodedPackage(fixture)
@@ -205,6 +296,25 @@ class MeetingProfile01MediaKeyPackageHeadReorderTest {
             }
         assertEquals(1, readyCount)
     }
+
+    private fun wireProductionReadyCallback(
+        fixture: Profile01P1DProductionIngressHarness.Fixture,
+        env: WireEnv,
+    ) {
+        fixture.ingress.onMediaSupplementReady = { conferenceId, mediaKeyEpoch ->
+            env.wireIngress.onSupplementReadyForConference(conferenceId, mediaKeyEpoch)
+        }
+    }
+
+    private fun ingestAppliedCount(fixture: Profile01P1DProductionIngressHarness.Fixture): Int =
+        fixture.observabilityLogs.count {
+            it.startsWith("PROFILE01_MEDIA_KEY_INGEST ") && it.contains("outcome=APPLIED")
+        }
+
+    private fun readyCount(fixture: Profile01P1DProductionIngressHarness.Fixture): Int =
+        fixture.observabilityLogs.count {
+            it.startsWith("PROFILE01_MEDIA_SUPPLEMENT ") && it.contains("state=READY")
+        }
 
     private fun decodedPackage(fixture: Profile01P1DProductionIngressHarness.Fixture) =
         (

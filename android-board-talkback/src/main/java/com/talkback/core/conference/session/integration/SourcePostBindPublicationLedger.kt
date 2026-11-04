@@ -14,17 +14,33 @@ import java.util.concurrent.ConcurrentHashMap
 class SourcePostBindPublicationLedger {
     private val satisfiedBySession =
         ConcurrentHashMap<String, MutableSet<SourcePostBindPublicationIdentity>>()
+    private val preBindEmittedBySession =
+        ConcurrentHashMap<String, MutableSet<SourcePostBindPublicationIdentity>>()
 
     fun isSatisfied(
         sessionId: String,
         identity: SourcePostBindPublicationIdentity,
     ): Boolean = satisfiedBySession[sessionId]?.contains(identity) == true
 
+    fun isPreBindEmitted(
+        sessionId: String,
+        identity: SourcePostBindPublicationIdentity,
+    ): Boolean = preBindEmittedBySession[sessionId]?.contains(identity) == true
+
     fun markSatisfied(
         sessionId: String,
         identity: SourcePostBindPublicationIdentity,
     ) {
         satisfiedBySession
+            .getOrPut(sessionId) { ConcurrentHashMap.newKeySet() }
+            .add(identity)
+    }
+
+    fun markPreBindEmitted(
+        sessionId: String,
+        identity: SourcePostBindPublicationIdentity,
+    ) {
+        preBindEmittedBySession
             .getOrPut(sessionId) { ConcurrentHashMap.newKeySet() }
             .add(identity)
     }
@@ -37,21 +53,30 @@ class SourcePostBindPublicationLedger {
         sessionId: String,
         targetModuleId: String,
     ) {
-        val set = satisfiedBySession[sessionId] ?: return
-        set.removeIf { it.targetModuleId == targetModuleId }
-        if (set.isEmpty()) {
-            satisfiedBySession.remove(sessionId)
+        val set = satisfiedBySession[sessionId]
+        if (set != null) {
+            set.removeIf { it.targetModuleId == targetModuleId }
+            if (set.isEmpty()) {
+                satisfiedBySession.remove(sessionId)
+            }
+        }
+        val preBind = preBindEmittedBySession[sessionId] ?: return
+        preBind.removeIf { it.targetModuleId == targetModuleId }
+        if (preBind.isEmpty()) {
+            preBindEmittedBySession.remove(sessionId)
         }
     }
 
     fun clearSession(sessionId: String) {
         satisfiedBySession.remove(sessionId)
+        preBindEmittedBySession.remove(sessionId)
     }
 }
 
 enum class SourcePostBindRepublishOutcome {
     EMITTED,
     ALREADY_SATISFIED,
+    ALREADY_EMITTED_PRE_BIND,
     SKIPPED_NO_BUILT_SOURCE,
     SKIPPED_NO_PRE_BIND_PUBLICATION,
     SKIPPED_NOT_SELF_ORIGIN,

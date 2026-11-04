@@ -155,6 +155,114 @@ class MeetingProfile01SourceMembershipContextRepublicationTest {
         assertEquals(2L, headWire.mediaKeyEpoch)
     }
 
+    @Test
+    fun r4b_repeat_sameIdentity_doesNotResend() {
+        val harness = newHarness("src-r4b-emit-once")
+        harness.seedCreation()
+        val commitment =
+            harness.localSourceAuthority.commitLocalSource(harness.sessionId, HOST, mediaKeyEpoch = 1L)
+        harness.commitSource(commitment)
+        harness.publishPreBind(LATE_PEER)
+
+        var sendCount = 0
+        val first =
+            harness.sourceBridge.onPeerSourceConsumptionEligible(
+                sessionId = harness.sessionId,
+                snapshot = harness.trioSnapshot(),
+                localModuleId = HOST,
+                targetModuleId = LATE_PEER,
+                reason = "r4b_peer_membership_wire_applied",
+                publishToPeer = { _, _ ->
+                    sendCount++
+                    true
+                },
+            )
+        val second =
+            harness.sourceBridge.onPeerSourceConsumptionEligible(
+                sessionId = harness.sessionId,
+                snapshot = harness.trioSnapshot(),
+                localModuleId = HOST,
+                targetModuleId = LATE_PEER,
+                reason = "r4b_peer_membership_wire_applied",
+                publishToPeer = { _, _ ->
+                    sendCount++
+                    true
+                },
+            )
+        assertEquals(SourcePostBindRepublishOutcome.EMITTED, first)
+        assertEquals(SourcePostBindRepublishOutcome.ALREADY_EMITTED_PRE_BIND, second)
+        assertEquals(1, sendCount)
+    }
+
+    @Test
+    fun consumableReason_afterPreBindEmit_stillDeliversOnce() {
+        val harness = newHarness("src-r4b-then-consumable")
+        harness.seedCreation()
+        val commitment =
+            harness.localSourceAuthority.commitLocalSource(harness.sessionId, HOST, mediaKeyEpoch = 1L)
+        harness.commitSource(commitment)
+        harness.publishPreBind(LATE_PEER)
+
+        var sendCount = 0
+        val preBind =
+            harness.sourceBridge.onPeerSourceConsumptionEligible(
+                sessionId = harness.sessionId,
+                snapshot = harness.trioSnapshot(),
+                localModuleId = HOST,
+                targetModuleId = LATE_PEER,
+                reason = "r4b_peer_membership_wire_applied",
+                publishToPeer = { _, _ ->
+                    sendCount++
+                    true
+                },
+            )
+        val consumable =
+            harness.sourceBridge.onPeerSourceConsumptionEligible(
+                sessionId = harness.sessionId,
+                snapshot = harness.trioSnapshot(),
+                localModuleId = HOST,
+                targetModuleId = LATE_PEER,
+                reason = REASON,
+                publishToPeer = { _, _ ->
+                    sendCount++
+                    true
+                },
+            )
+        val consumableRepeat =
+            harness.sourceBridge.onPeerSourceConsumptionEligible(
+                sessionId = harness.sessionId,
+                snapshot = harness.trioSnapshot(),
+                localModuleId = HOST,
+                targetModuleId = LATE_PEER,
+                reason = REASON,
+                publishToPeer = { _, _ ->
+                    sendCount++
+                    true
+                },
+            )
+        assertEquals(SourcePostBindRepublishOutcome.EMITTED, preBind)
+        assertEquals(SourcePostBindRepublishOutcome.EMITTED, consumable)
+        assertEquals(SourcePostBindRepublishOutcome.ALREADY_SATISFIED, consumableRepeat)
+        assertEquals(2, sendCount)
+    }
+
+    @Test
+    fun postBindFanoutHeadStamp_clearsWhenMembershipAdvances() {
+        val harness = newHarness("src-fanout-head-stamp")
+        harness.seedCreation()
+        val commitment =
+            harness.localSourceAuthority.commitLocalSource(harness.sessionId, HOST, mediaKeyEpoch = 1L)
+        harness.commitSource(commitment)
+        assertEquals(false, harness.sourceBridge.hasCompletedPostBindFanoutAtCurrentHead(harness.sessionId))
+        harness.sourceBridge.markPostBindFanoutCompletedAtCurrentHead(harness.sessionId)
+        assertEquals(true, harness.sourceBridge.hasCompletedPostBindFanoutAtCurrentHead(harness.sessionId))
+
+        harness.advanceMembershipForLatePeer()
+        assertEquals(false, harness.sourceBridge.hasCompletedPostBindFanoutAtCurrentHead(harness.sessionId))
+        assertEquals(SourceOriginBuildOutcome.BUILT, harness.commitSource(commitment))
+        assertEquals(false, harness.sourceBridge.hasCompletedPostBindFanoutAtCurrentHead(harness.sessionId))
+    }
+
     private fun decodeWire(
         signedBytes: ByteArray,
     ): com.talkback.core.conference.session.profile01.Profile01WireMemberSourceFact =

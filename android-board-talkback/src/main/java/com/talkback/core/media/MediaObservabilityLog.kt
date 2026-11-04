@@ -42,6 +42,27 @@ object MediaObservabilityLog {
         TalkbackLog.i("MEDIA_RELEASE_SCHEDULED module=$moduleId origin=$origin")
     }
 
+    /** Observe-only: onReleased posted onto coordinator (enqueue). queueSize excludes the running turn. */
+    fun mediaReleasePostOnReleased(moduleId: String, origin: String, queueSize: Int) {
+        TalkbackLog.i(
+            "MEDIA_RELEASE_POST_ON_RELEASED module=$moduleId origin=$origin " +
+                "coordinatorQueueSize=$queueSize"
+        )
+    }
+
+    /** Observe-only: onReleased body starts on coordinator (execution). waitMs since POST. */
+    fun mediaReleaseRunOnReleased(
+        moduleId: String,
+        origin: String,
+        waitMs: Long,
+        queueSize: Int
+    ) {
+        TalkbackLog.i(
+            "MEDIA_RELEASE_RUN_ON_RELEASED module=$moduleId origin=$origin " +
+                "waitMs=$waitMs coordinatorQueueSize=$queueSize"
+        )
+    }
+
     fun mediaReleaseRequested(moduleId: String, origin: String) {
         TalkbackLog.i("MEDIA_RELEASE_REQUESTED module=$moduleId origin=$origin")
     }

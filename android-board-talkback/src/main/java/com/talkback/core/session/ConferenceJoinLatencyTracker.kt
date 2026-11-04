@@ -12,6 +12,7 @@ class ConferenceJoinLatencyTracker {
 
     data class SessionTrack(
         var inviteAcceptedAtMs: Long? = null,
+        var acceptCommittedAtMs: Long? = null,
         var sessionCreatedAtMs: Long? = null,
         var firstRemoteMediaAtMs: Long? = null,
         var meshRoundStartedAtMs: Long? = null,
@@ -42,6 +43,21 @@ class ConferenceJoinLatencyTracker {
         }
         if (channelId != null) track.channelId = channelId
         logMarker(sessionId, track, "T0_INVITE_ACCEPTED", null, nowMs)
+    }
+
+    fun onAcceptCommitted(sessionId: String, nowMs: Long = System.currentTimeMillis()) {
+        val track = sessions.getOrPut(sessionId) { SessionTrack() }
+        if (track.acceptCommittedAtMs != null) return
+        track.acceptCommittedAtMs = nowMs
+        val sinceT0Ms = track.inviteAcceptedAtMs?.let { nowMs - it }
+        val message = buildString {
+            append("CONFERENCE_JOIN_LATENCY")
+            append(" marker=ACCEPT_COMMITTED")
+            append(" session=").append(sessionId)
+            track.channelId?.let { append(" ch=").append(it) }
+            sinceT0Ms?.let { append(" sinceT0Ms=").append(it) }
+        }
+        log(message)
     }
 
     fun onSessionCreated(sessionId: String, nowMs: Long = System.currentTimeMillis()) {
@@ -118,6 +134,9 @@ class ConferenceJoinLatencyTracker {
             append(" role=").append(track.role)
             append(" joined=").append(joinedCount)
             append(" connected=").append(connectedCount)
+            if (t0 != null && track.acceptCommittedAtMs != null) {
+                append(" acceptCommittedMs=").append(track.acceptCommittedAtMs!! - t0)
+            }
             if (t0 != null && t1 != null) append(" sessionCreateMs=").append(t1 - t0)
             if (t0 != null && t2 != null) append(" firstMediaMs=").append(t2 - t0)
             if (meshT0 != null) append(" fullMeshMs=").append(nowMs - meshT0)

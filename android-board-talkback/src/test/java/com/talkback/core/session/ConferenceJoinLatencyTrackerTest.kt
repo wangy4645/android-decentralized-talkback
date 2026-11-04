@@ -34,6 +34,17 @@ class ConferenceJoinLatencyTrackerTest {
     }
 
     @Test
+    fun acceptCommitted_logsSinceT0_once() {
+        tracker.onInviteAccepted("s1", "CH-01", "participant", 1_000L)
+        tracker.onAcceptCommitted("s1", 1_040L)
+        tracker.onAcceptCommitted("s1", 1_080L)
+
+        val committed = logs.filter { it.contains("marker=ACCEPT_COMMITTED") }
+        assertEquals(1, committed.size)
+        assertTrue(committed[0].contains("sinceT0Ms=40"))
+    }
+
+    @Test
     fun peerMarkers_loggedOnIceTransitions() {
         tracker.onInviteAccepted("s1", "CH-01", "participant", 0L)
         tracker.onJoinedCountChanged("s1", 3, "CH-01", 100L)

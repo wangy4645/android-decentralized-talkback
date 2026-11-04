@@ -329,6 +329,7 @@ import com.talkback.core.util.GroupInviteExecutionLog
 import com.talkback.core.util.GroupInviteInboundExecutionLog
 import com.talkback.core.util.GroupPcLineageBindingLog
 import com.talkback.core.util.GroupLatePeerAdmissionLog
+import com.talkback.core.util.CoordinatorTaskAttribution
 import com.talkback.core.util.GroupLatePeerInviteDiagnosticLog
 import com.talkback.core.util.GroupTransitionReadinessLog
 import com.talkback.core.util.MeetingRecoveryLog
@@ -368,6 +369,7 @@ import com.talkback.core.webrtc.conferenceaudio.PcmInjectionFailure
 import com.talkback.core.webrtc.MediaBearerScope
 import com.talkback.core.webrtc.SessionMediaRegistry
 import com.talkback.core.conference.session.ConferenceSessionMediaCoordinatorDelegate
+import com.talkback.core.conference.session.integration.AcceptBindDrainAttribution
 import com.talkback.core.conference.session.integration.MeetingProfile01ConferenceSessionIndex
 import com.talkback.core.conference.session.integration.MeetingProfile01CreationOriginBridge
 import com.talkback.core.conference.session.integration.MeetingProfile01FactWireIngress
@@ -394,6 +396,7 @@ import com.talkback.core.conference.session.integration.cutover.ReplacementCutov
 import com.talkback.core.conference.session.integration.cutover.ReplacementCutoverAnchorSuspensionRegistry
 import com.talkback.core.conference.session.integration.cutover.ReplacementCutoverRc1
 import com.talkback.core.conference.session.integration.cutover.RollbackTrigger
+import com.talkback.core.conference.session.integration.SourceDeclarationSameObligationCoalescer
 import com.talkback.core.conference.session.integration.SourceOriginBuildOutcome
 import com.talkback.core.conference.session.integration.MediaKeyPackageNegativeFixtureOutcome
 import com.talkback.core.conference.session.integration.MediaKeyPackagePostBindRepublishOutcome
@@ -405,8 +408,10 @@ import com.talkback.core.webrtc.WebRtcAudioEngine
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
+import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.ScheduledFuture
+import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 
 data class TalkbackCoordinatorConfig(
@@ -567,6 +572,8 @@ class TalkbackCoordinator(
         com.talkback.core.session.gbc.trust.mesh.MeshHelloPeerTrustSupplement? = null
     private val profile01MediaKeyHeadRepublishRequestDedup =
         java.util.concurrent.ConcurrentHashMap<String, Long>()
+    private val sourceDeclarationSameObligationCoalescer =
+        SourceDeclarationSameObligationCoalescer()
     /** Guards [onMeetingProfile01LocalShadowWireConsumptionReady] against sync re-entry. */
     private val profile01LocalShadowWireReadySessions =
         ConcurrentHashMap.newKeySet<String>()
@@ -825,8 +832,17 @@ class TalkbackCoordinator(
         try {
             maybeCommitAndPublishLocalConferenceSource(session, reason)
             publishSourceDeclarationToEligiblePeers(session, reason)
-            republishSourceDeclarationPostBindToAllPeers(session, reason)
-            maybeRepublishHeadSourceToAbsentPeersOnMembershipHead(session, reason)
+            val sourceBridge = meetingProfile01SourceOriginBridge
+            if (sourceBridge?.hasCompletedPostBindFanoutAtCurrentHead(sessionId) == true) {
+                log(
+                    "${sessionTag(session)} PROFILE01_SOURCE_SHADOW_WIRE_READY_SAME_HEAD_SKIP " +
+                        "reason=$reason",
+                )
+            } else {
+                republishSourceDeclarationPostBindToAllPeers(session, reason)
+                maybeRepublishHeadSourceToAbsentPeersOnMembershipHead(session, reason)
+                sourceBridge?.markPostBindFanoutCompletedAtCurrentHead(sessionId)
+            }
         } finally {
             profile01LocalShadowWireReadySessions.remove(sessionId)
         }
@@ -861,14 +877,19 @@ class TalkbackCoordinator(
         )
     }
 
-    private fun registerMeetingProfile01Session(session: TalkbackSession) {
+    private fun registerMeetingProfile01Session(
+        session: TalkbackSession,
+        drainRetained: Boolean = true
+    ) {
         val channelId = session.channelId ?: return
         meetingProfile01SessionIndex?.registerSession(
             sessionId = session.id,
             channelId = channelId,
             rosterEpoch = session.rosterEpoch,
         )
-        meetingProfile01FactWireIngress?.drainRetainedAfterSessionBind(session.id)
+        if (drainRetained) {
+            meetingProfile01FactWireIngress?.drainRetainedAfterSessionBind(session.id)
+        }
     }
 
     private fun unregisterMeetingProfile01Session(sessionId: String) {
@@ -882,8 +903,10 @@ class TalkbackCoordinator(
         profile01HeadObligationDriver?.closeSession(sessionId)
         profile01PeerHeadAckPending.clearSession(sessionId)
         meetingProfile01SourceOriginBridge?.clearSession(sessionId)
+        sourceDeclarationSameObligationCoalescer.clearSession(sessionId)
         profile01LocalConferenceSourceIdentityAuthority?.clearSession(sessionId)
         profile01HeadSourceAbsentPeersBySession.remove(sessionId)
+        conferenceAcceptBindDrainStarted.remove(sessionId)
     }
 
     private fun markMeetingProfile01MediaConnected(
@@ -1121,10 +1144,13 @@ class TalkbackCoordinator(
         session: TalkbackSession,
         reason: String,
     ) {
+        if (session.type != SessionType.CONFERENCE) return
+        maybeCommitAndPublishLocalConferenceSource(session, reason)
+        publishSourceDeclarationToEligiblePeers(session, reason)
         session.remotePeersByModule.keys
             .filter { it != localModuleId.value }
             .forEach { remoteModuleId ->
-                maybeRepublishSourceDeclarationAfterPeerBind(session, remoteModuleId, reason)
+                replaySourceDeclarationPostBindToPeer(session, remoteModuleId, reason)
             }
     }
 
@@ -1136,6 +1162,14 @@ class TalkbackCoordinator(
         if (session.type != SessionType.CONFERENCE) return
         maybeCommitAndPublishLocalConferenceSource(session, reason)
         publishSourceDeclarationToEligiblePeers(session, reason)
+        replaySourceDeclarationPostBindToPeer(session, remoteModuleId, reason)
+    }
+
+    private fun replaySourceDeclarationPostBindToPeer(
+        session: TalkbackSession,
+        remoteModuleId: String,
+        reason: String,
+    ) {
         val bridge = meetingProfile01SourceOriginBridge ?: return
         val snapshot = conferenceTopologyAuthority.currentSnapshot(session.id) ?: return
         val outcome =
@@ -1155,7 +1189,8 @@ class TalkbackCoordinator(
             outcome != SourcePostBindRepublishOutcome.SKIPPED_NOT_SELF_ORIGIN &&
             outcome != SourcePostBindRepublishOutcome.SKIPPED_NOT_IN_TOPOLOGY &&
             outcome != SourcePostBindRepublishOutcome.SKIPPED_STALE_IDENTITY &&
-            outcome != SourcePostBindRepublishOutcome.SKIPPED_STALE_MEMBERSHIP_CONTEXT
+            outcome != SourcePostBindRepublishOutcome.SKIPPED_STALE_MEMBERSHIP_CONTEXT &&
+            outcome != SourcePostBindRepublishOutcome.ALREADY_EMITTED_PRE_BIND
         ) {
             log(
                 "${sessionTag(session)} PROFILE01_SOURCE_POST_BIND_REPUBLISH " +
@@ -1502,7 +1537,18 @@ class TalkbackCoordinator(
                     origin = origin
                 ) {
                     val success = runCatching { releaseAction() }.isSuccess
-                    runOnCoordinator { onReleased(success) }
+                    val postedAtMs = System.currentTimeMillis()
+                    val queuedAhead = coordinatorWorkQueue.size
+                    MediaObservabilityLog.mediaReleasePostOnReleased(moduleId, origin, queuedAhead)
+                    runOnCoordinator {
+                        MediaObservabilityLog.mediaReleaseRunOnReleased(
+                            moduleId,
+                            origin,
+                            System.currentTimeMillis() - postedAtMs,
+                            coordinatorWorkQueue.size
+                        )
+                        onReleased(success)
+                    }
                 }
             }
         )
@@ -1924,6 +1970,8 @@ class TalkbackCoordinator(
     /** Test-only: last successful outbound GROUP_INVITE payload per session+peer. */
     private val testLastOutboundGroupInvitePayloadByKey = ConcurrentHashMap<String, GroupSessionPayload>()
     private val pendingConferenceInvitesByChannel = ConcurrentHashMap<String, PendingConferenceInvite>()
+    /** Participant accept: bind-drain started for this session id (coordinator thread). */
+    private val conferenceAcceptBindDrainStarted = HashSet<String>()
     /** Participant-side memory after voluntary conference leave (stable room rejoin). */
     private val lastRejoinableConferenceByChannel = ConcurrentHashMap<String, RejoinableConferenceRecord>()
     /** Host session id we are trying to re-enter (suppress first-time invite UX). */
@@ -2007,9 +2055,14 @@ class TalkbackCoordinator(
         ConcurrentHashMap<String, Pair<MeetingMode, Set<EndpointId>>>()
     private val meetingStartDeclarationByChannel =
         ConcurrentHashMap<String, MeetingStartDeclarationWindow>()
-    private val coordinatorExecutor = Executors.newSingleThreadExecutor { r ->
-        Thread(r, "talkback-coordinator")
-    }
+    private val coordinatorWorkQueue = LinkedBlockingQueue<Runnable>()
+    private val coordinatorExecutor = ThreadPoolExecutor(
+        1,
+        1,
+        0L,
+        TimeUnit.MILLISECONDS,
+        coordinatorWorkQueue
+    ) { r -> Thread(r, "talkback-coordinator") }
     private val onCoordinatorThread = ThreadLocal.withInitial { false }
     private val scheduler: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor { r ->
         Thread(r, "talkback-scheduler")
@@ -2386,21 +2439,78 @@ class TalkbackCoordinator(
                     peer = signal.from.moduleId.value
                 )
             }
-            runOnCoordinator {
-                if (signal.type == SignalType.GROUP_ACCEPT) {
-                    logGroupAcceptExec(
-                        stage = "HANDLE_SIGNAL_ENTER",
-                        sessionId = signal.sessionId,
-                        peer = signal.from.moduleId.value
+            val signalKind = when (signal.type) {
+                SignalType.GROUP_JOIN -> CoordinatorTaskAttribution.Kind.OFFER
+                SignalType.CONFERENCE_SIGNED_FACT -> CoordinatorTaskAttribution.Kind.SHADOW
+                else -> CoordinatorTaskAttribution.Kind.OTHER
+            }
+            val sourceObligationKey =
+                if (signal.type == SignalType.CONFERENCE_SIGNED_FACT) {
+                    meetingProfile01FactWireIngress?.sourceDeclarationObligationKey(signal)
+                } else {
+                    null
+                }
+            if (sourceObligationKey != null &&
+                !sourceDeclarationSameObligationCoalescer.tryOccupy(sourceObligationKey)
+            ) {
+                if (sourceDeclarationSameObligationCoalescer.shouldLogCoalesced(sourceObligationKey)) {
+                    logSourceFact9SameObligationCoalesced(
+                        stage = "SKIP",
+                        key = sourceObligationKey,
+                        coalescedCount =
+                            sourceDeclarationSameObligationCoalescer.coalescedCount(sourceObligationKey),
                     )
                 }
-                handleSignal(signal, peer)
-                if (signal.type == SignalType.GROUP_ACCEPT) {
-                    logGroupAcceptExec(
-                        stage = "HANDLE_SIGNAL_EXIT",
-                        sessionId = signal.sessionId,
-                        peer = signal.from.moduleId.value
-                    )
+                return@onMessage
+            }
+            val signalIdentity =
+                if (signal.type == SignalType.CONFERENCE_SIGNED_FACT) {
+                    meetingProfile01FactWireIngress?.observeSignedFactIdentity(signal)
+                        ?: CoordinatorTaskAttribution.shadowSignedFactIdentity(
+                            sessionId = signal.sessionId,
+                            peerModuleId = signal.from.moduleId.value,
+                            factType = null,
+                            factDigestHex = null,
+                            conferenceEpoch = null,
+                            membershipVersion = null,
+                            mediaKeyEpoch = null,
+                            headDigestHex = null,
+                        )
+                } else {
+                    "path=SIGNAL type=${signal.type} session=${signal.sessionId} " +
+                        "peer=${signal.from.moduleId.value}"
+                }
+            CoordinatorTaskAttribution.scoped(signalKind, signalIdentity) {
+                runOnCoordinator {
+                    try {
+                        if (signal.type == SignalType.GROUP_ACCEPT) {
+                            logGroupAcceptExec(
+                                stage = "HANDLE_SIGNAL_ENTER",
+                                sessionId = signal.sessionId,
+                                peer = signal.from.moduleId.value
+                            )
+                        }
+                        handleSignal(signal, peer)
+                        if (signal.type == SignalType.GROUP_ACCEPT) {
+                            logGroupAcceptExec(
+                                stage = "HANDLE_SIGNAL_EXIT",
+                                sessionId = signal.sessionId,
+                                peer = signal.from.moduleId.value
+                            )
+                        }
+                    } finally {
+                        if (sourceObligationKey != null) {
+                            val skipped =
+                                sourceDeclarationSameObligationCoalescer.release(sourceObligationKey)
+                            if (skipped > 0L) {
+                                logSourceFact9SameObligationCoalesced(
+                                    stage = "RELEASE",
+                                    key = sourceObligationKey,
+                                    coalescedCount = skipped,
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -2491,6 +2601,21 @@ class TalkbackCoordinator(
             delayMs.coerceAtLeast(0L),
             TimeUnit.MILLISECONDS,
         )
+    }
+
+    /** Async hop onto coordinator. Never Future.get — scheduler/UI must not wait. */
+    internal fun enqueueOnCoordinator(block: () -> Unit) {
+        runOnCoordinator(block)
+    }
+
+    internal fun enqueueOnCoordinator(
+        kind: CoordinatorTaskAttribution.Kind,
+        identity: String,
+        block: () -> Unit,
+    ) {
+        CoordinatorTaskAttribution.scoped(kind, identity) {
+            runOnCoordinator(block)
+        }
     }
 
     fun stop() {
@@ -9347,8 +9472,18 @@ class TalkbackCoordinator(
         recordAuthorityDigestFromHello(payload)
         recordAuthorityFloorSnapshotFromHello(payload)
         maybeRequestGroupResyncFromHello(payload)
-        ensureCanonicalMemberPresent(payload, fromPeer)
-        maybeAdmitLatePeerFromHello(payload)
+        CoordinatorTaskAttribution.scoped(
+            CoordinatorTaskAttribution.Kind.LATE_PEER,
+            "path=ENSURE_CANONICAL peer=${payload.moduleId} ch=${payload.channelId}",
+        ) {
+            ensureCanonicalMemberPresent(payload, fromPeer)
+        }
+        CoordinatorTaskAttribution.scoped(
+            CoordinatorTaskAttribution.Kind.LATE_PEER,
+            "path=HELLO_ADMIT peer=${payload.moduleId} ch=${payload.channelId}",
+        ) {
+            maybeAdmitLatePeerFromHello(payload)
+        }
         applyAuthorityFloorSnapshotFromHello(payload)
         if (wasStale) {
             onRemoteModuleRecovered(payload.moduleId)
@@ -10643,14 +10778,9 @@ class TalkbackCoordinator(
         freezeChannelMemberSnapshot(session)
         sessions[signal.sessionId] = session
         if (sessionType == SessionType.CONFERENCE) {
-            registerMeetingProfile01Session(session)
-            auditConferenceSessionLifecycle(
-                event = "SESSION_CREATED",
-                session = session,
-                writer = "acceptGroupInvite",
-                cause = "participant_invite_accepted",
-                creationSource = "INVITE_ACCEPT"
-            )
+            // Index only here; retained-fact drain runs on the next coordinator turn so Accept
+            // can return without waiting for media/key materialize.
+            registerMeetingProfile01Session(session, drainRetained = false)
         }
         enterChannelMode(
             channelId,
@@ -10716,7 +10846,7 @@ class TalkbackCoordinator(
                     )
                     return false
                 }
-                beginConferenceAcceptWhenEngineReady(
+                commitConferenceAcceptAndScheduleBindDrain(
                     session = session,
                     signal = signal,
                     fromPeer = fromPeer,
@@ -10724,7 +10854,8 @@ class TalkbackCoordinator(
                     caller = caller,
                     callee = callee,
                     channelId = channelId,
-                    members = members
+                    members = members,
+                    membershipAcceptNoMedia = false
                 )
                 return true
             }
@@ -10733,38 +10864,20 @@ class TalkbackCoordinator(
                 !mayAnswerHostOffer &&
                 !shouldAnswerHostMedia
             ) {
-                markConferenceSessionAccepted(session, "participant_accepted")
-                sendSignalHandoff(
-                    fromPeer,
-                    buildSignedEnvelope(SignalType.GROUP_ACCEPT, callee, caller, signal.sessionId, "")
+                commitConferenceAcceptAndScheduleBindDrain(
+                    session = session,
+                    signal = signal,
+                    fromPeer = fromPeer,
+                    payload = payload,
+                    caller = caller,
+                    callee = callee,
+                    channelId = channelId,
+                    members = members,
+                    membershipAcceptNoMedia = true
                 )
-                log(
-                    "${sessionTag(session)} CONFERENCE_MEMBERSHIP_ACCEPT_NO_MEDIA from=$inboundPeer " +
-                        "sdpBlank=${payload.sdp.isBlank()} " +
-                        "handoff=${ConferenceAcceptedMediaHandoffPhase.ACCEPTED_WAIT_MEDIA}"
-                )
-                clearPendingConferenceInvite(sessionId = session.id, channelId = channelId)
-                if (
-                    ConferenceAcceptedMediaHandoffContract.mayStartRealizationAfterMembershipAccept(
-                        localModuleId.value,
-                        realizationSnap
-                    )
-                ) {
-                    realizeAdmittedConferenceMediaEdges(session)
-                } else {
-                    log(
-                        "${sessionTag(session)} CONFERENCE_ACCEPTED_WAIT_MEDIA from=$inboundPeer " +
-                            "reason=${ConferenceAcceptedMediaHandoffContract.REASON_SPOKE_MUST_WAIT}"
-                    )
-                }
-                completeGroupMesh(session)
-                drainPendingGroupJoins(session.id)
-                scheduleGroupMeshRetries(session.id)
-                updateSessionReceivePlayback(session)
-                log("[${session.traceId}] Conference invite accepted ch=$channelId members=${members.size}")
                 return true
             }
-            beginConferenceAcceptWhenEngineReady(
+            commitConferenceAcceptAndScheduleBindDrain(
                 session = session,
                 signal = signal,
                 fromPeer = fromPeer,
@@ -10772,7 +10885,8 @@ class TalkbackCoordinator(
                 caller = caller,
                 callee = callee,
                 channelId = channelId,
-                members = members
+                members = members,
+                membershipAcceptNoMedia = false
             )
             return true
         }
@@ -10788,6 +10902,178 @@ class TalkbackCoordinator(
             acceptPath = GroupInviteInboundExecutionSupport.AcceptPath.Fresh,
         )
         return true
+    }
+
+    private fun commitConferenceAcceptAndScheduleBindDrain(
+        session: TalkbackSession,
+        signal: SignalEnvelope,
+        fromPeer: PeerTarget,
+        payload: GroupSessionPayload,
+        caller: EndpointAddress,
+        callee: EndpointAddress,
+        channelId: String,
+        members: List<EndpointAddress>,
+        membershipAcceptNoMedia: Boolean
+    ) {
+        clearPendingConferenceInvite(sessionId = session.id, channelId = channelId)
+        conferenceJoinLatencyTracker.onAcceptCommitted(session.id)
+        runOnCoordinator {
+            runQueuedConferenceAcceptBindDrain(
+                session = session,
+                signal = signal,
+                fromPeer = fromPeer,
+                payload = payload,
+                caller = caller,
+                callee = callee,
+                channelId = channelId,
+                members = members,
+                membershipAcceptNoMedia = membershipAcceptNoMedia
+            )
+        }
+    }
+
+    private fun runQueuedConferenceAcceptBindDrain(
+        session: TalkbackSession,
+        signal: SignalEnvelope,
+        fromPeer: PeerTarget,
+        payload: GroupSessionPayload,
+        caller: EndpointAddress,
+        callee: EndpointAddress,
+        channelId: String,
+        members: List<EndpointAddress>,
+        membershipAcceptNoMedia: Boolean
+    ) {
+        val current = sessions[session.id]
+        if (current == null || current !== session || current.type != SessionType.CONFERENCE) {
+            log(
+                "[${session.traceId}] ACCEPT_BIND_DRAIN_SKIP session=${session.id} " +
+                    "reason=session_gone_or_replaced"
+            )
+            return
+        }
+        if (current.isForegroundSuspended()) {
+            log(
+                "[${session.traceId}] ACCEPT_BIND_DRAIN_SKIP session=${session.id} " +
+                    "reason=session_suspended"
+            )
+            return
+        }
+        if (!conferenceAcceptBindDrainStarted.add(session.id)) {
+            log(
+                "[${session.traceId}] ACCEPT_BIND_DRAIN_SKIP session=${session.id} " +
+                    "reason=drain_already_started"
+            )
+            return
+        }
+        val drainStartedAtMs = System.currentTimeMillis()
+        try {
+            AcceptBindDrainAttribution.scoped(session.id, session.traceId) {
+                val drainOutcome =
+                    meetingProfile01FactWireIngress?.drainRetainedAfterSessionBind(session.id)
+                val drainMs = System.currentTimeMillis() - drainStartedAtMs
+                log(
+                    "[${session.traceId}] ACCEPT_BIND_DRAIN session=${session.id} elapsedMs=$drainMs " +
+                        "applied=${drainOutcome?.applied ?: 0} rejected=${drainOutcome?.rejected ?: 0} " +
+                        "fenced=${drainOutcome?.fenced ?: 0}"
+                )
+                AcceptBindDrainAttribution.span(
+                    stage = "POST_DRAIN_AUDIT",
+                    obligation = AcceptBindDrainAttribution.Obligation.STATE_COMMIT,
+                ) {
+                    auditConferenceSessionLifecycle(
+                        event = "SESSION_CREATED",
+                        session = session,
+                        writer = "acceptGroupInvite",
+                        cause = "participant_invite_accepted",
+                        creationSource = "INVITE_ACCEPT"
+                    )
+                }
+                if (membershipAcceptNoMedia) {
+                    AcceptBindDrainAttribution.span(
+                        stage = "POST_DRAIN_MEMBERSHIP_NO_MEDIA",
+                        obligation = AcceptBindDrainAttribution.Obligation.STATE_COMMIT,
+                    ) {
+                        completeConferenceMembershipAcceptNoMedia(
+                            session = session,
+                            fromPeer = fromPeer,
+                            caller = caller,
+                            callee = callee,
+                            channelId = channelId,
+                            members = members
+                        )
+                    }
+                } else {
+                    AcceptBindDrainAttribution.span(
+                        stage = "POST_DRAIN_ENGINE_READY",
+                        obligation = AcceptBindDrainAttribution.Obligation.MEDIA_WIRING,
+                    ) {
+                        beginConferenceAcceptWhenEngineReady(
+                            session = session,
+                            signal = signal,
+                            fromPeer = fromPeer,
+                            payload = payload,
+                            caller = caller,
+                            callee = callee,
+                            channelId = channelId,
+                            members = members
+                        )
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            log("[${session.traceId}] ACCEPT_BIND_DRAIN_FAILED session=${session.id}: ${e.message}")
+            if (sessions[session.id] === session) {
+                handleConferenceAcceptProvisionFailed(
+                    session = session,
+                    signal = signal,
+                    fromPeer = fromPeer,
+                    caller = caller,
+                    callee = callee,
+                    channelId = channelId,
+                    moduleId = caller.moduleId.value
+                )
+            }
+        }
+    }
+
+    private fun completeConferenceMembershipAcceptNoMedia(
+        session: TalkbackSession,
+        fromPeer: PeerTarget,
+        caller: EndpointAddress,
+        callee: EndpointAddress,
+        channelId: String,
+        members: List<EndpointAddress>
+    ) {
+        val inboundPeer = caller.moduleId.value
+        markConferenceSessionAccepted(session, "participant_accepted")
+        sendSignalHandoff(
+            fromPeer,
+            buildSignedEnvelope(SignalType.GROUP_ACCEPT, callee, caller, session.id, "")
+        )
+        val realizationSnap = conferenceRealizationSnapshot(session)
+        log(
+            "${sessionTag(session)} CONFERENCE_MEMBERSHIP_ACCEPT_NO_MEDIA from=$inboundPeer " +
+                "sdpBlank=true " +
+                "handoff=${ConferenceAcceptedMediaHandoffPhase.ACCEPTED_WAIT_MEDIA}"
+        )
+        if (
+            ConferenceAcceptedMediaHandoffContract.mayStartRealizationAfterMembershipAccept(
+                localModuleId.value,
+                realizationSnap
+            )
+        ) {
+            realizeAdmittedConferenceMediaEdges(session)
+        } else {
+            log(
+                "${sessionTag(session)} CONFERENCE_ACCEPTED_WAIT_MEDIA from=$inboundPeer " +
+                    "reason=${ConferenceAcceptedMediaHandoffContract.REASON_SPOKE_MUST_WAIT}"
+            )
+        }
+        completeGroupMesh(session)
+        drainPendingGroupJoins(session.id)
+        scheduleGroupMeshRetries(session.id)
+        updateSessionReceivePlayback(session)
+        log("[${session.traceId}] Conference invite accepted ch=$channelId members=${members.size}")
     }
 
     /**
@@ -11079,6 +11365,15 @@ class TalkbackCoordinator(
     }
 
     private fun handleGroupJoin(signal: SignalEnvelope, fromPeer: PeerTarget) {
+        CoordinatorTaskAttribution.scoped(
+            CoordinatorTaskAttribution.Kind.OFFER,
+            "path=GROUP_JOIN session=${signal.sessionId} peer=${signal.from.moduleId.value}",
+        ) {
+            handleGroupJoinWork(signal, fromPeer)
+        }
+    }
+
+    private fun handleGroupJoinWork(signal: SignalEnvelope, fromPeer: PeerTarget) {
         val payload = GroupSessionPayload.decode(signal.payload)
         payload?.let { observeRecoveryDeliveryIngress(signal, fromPeer, it) }
         val channelId = payload?.channelId
@@ -15100,6 +15395,9 @@ class TalkbackCoordinator(
     ) {
         if (session.type != SessionType.CONFERENCE) return
         val bridge = meetingProfile01SourceOriginBridge ?: return
+        if (bridge.shouldSkipEquivalentSourceRetry(session.id, localModuleId.value)) {
+            return
+        }
         val authority = profile01LocalConferenceSourceIdentityAuthority ?: return
         val commitment =
             authority.commitLocalSource(
@@ -18622,6 +18920,29 @@ class TalkbackCoordinator(
         fixedOfferLineageId: String? = null,
         fixedDeliveryAttemptId: Long? = null
     ): Boolean {
+        return CoordinatorTaskAttribution.scoped(
+            CoordinatorTaskAttribution.Kind.OFFER,
+            "path=PEER_OFFER session=${session.id} peer=$remoteModuleId iceRestart=$iceRestart",
+        ) {
+            attemptConferencePeerOfferWork(
+                session,
+                remoteModuleId,
+                remote,
+                iceRestart,
+                fixedOfferLineageId,
+                fixedDeliveryAttemptId,
+            )
+        }
+    }
+
+    private fun attemptConferencePeerOfferWork(
+        session: TalkbackSession,
+        remoteModuleId: String,
+        remote: EndpointAddress,
+        iceRestart: Boolean,
+        fixedOfferLineageId: String? = null,
+        fixedDeliveryAttemptId: Long? = null
+    ): Boolean {
         if (!config.iceReconnectEnabled) return false
         val peer = session.remotePeersByModule[remoteModuleId]
         if (peer == null) {
@@ -19212,6 +19533,15 @@ class TalkbackCoordinator(
 
     /** Pairwise offerer (local < peer) invites late peers into the live GROUP mesh. */
     private fun tryReinviteGroupPeerPairwise(moduleId: String): Boolean {
+        return CoordinatorTaskAttribution.scoped(
+            CoordinatorTaskAttribution.Kind.LATE_PEER,
+            "path=PAIRWISE_REINVITE peer=$moduleId",
+        ) {
+            tryReinviteGroupPeerPairwiseWork(moduleId)
+        }
+    }
+
+    private fun tryReinviteGroupPeerPairwiseWork(moduleId: String): Boolean {
         if (moduleId == localModuleId.value) {
             log(
                 GroupLatePeerInviteDiagnosticLog.pairwiseReinviteSkipped(
@@ -22468,17 +22798,56 @@ class TalkbackCoordinator(
         onLog?.invoke(message)
     }
 
+    private fun logSourceFact9SameObligationCoalesced(
+        stage: String,
+        key: SourceDeclarationSameObligationCoalescer.Key,
+        coalescedCount: Long,
+    ) {
+        log(
+            "SOURCE_FACT_9_SAME_OBLIGATION_COALESCED stage=$stage " +
+                "session=${key.sessionId} peer=${key.peerModuleId} " +
+                "membershipVersion=${key.membershipVersion} mediaKeyEpoch=${key.mediaKeyEpoch} " +
+                "factDigest=${key.factDigestHex} coalescedCount=$coalescedCount",
+        )
+    }
+
     private fun runOnCoordinator(block: () -> Unit) {
         if (stopped || coordinatorExecutor.isShutdown) return
+        val scope = CoordinatorTaskAttribution.current()
+        val kind = scope?.kind ?: CoordinatorTaskAttribution.Kind.OTHER
+        val identity = scope?.identity ?: "-"
+        val seq = CoordinatorTaskAttribution.nextSeq()
+        val postedAtMs = System.currentTimeMillis()
+        val queuedAhead = coordinatorWorkQueue.size
+        CoordinatorTaskAttribution.post(seq, kind, identity, "ASYNC", queuedAhead)
         runCatching {
             coordinatorExecutor.execute {
                 if (stopped) return@execute
+                val waitMs = System.currentTimeMillis() - postedAtMs
                 onCoordinatorThread.set(true)
+                CoordinatorTaskAttribution.run(
+                    seq,
+                    kind,
+                    identity,
+                    "ASYNC",
+                    waitMs,
+                    coordinatorWorkQueue.size,
+                )
+                val execStartMs = System.currentTimeMillis()
                 try {
                     block()
                 } catch (e: Exception) {
                     log("Coordinator error: ${e.message}")
                 } finally {
+                    CoordinatorTaskAttribution.end(
+                        seq,
+                        kind,
+                        identity,
+                        "ASYNC",
+                        waitMs,
+                        System.currentTimeMillis() - execStartMs,
+                        coordinatorWorkQueue.size,
+                    )
                     onCoordinatorThread.set(false)
                 }
             }
@@ -22492,15 +22861,46 @@ class TalkbackCoordinator(
         if (onCoordinatorThread.get()) {
             return block()
         }
+        val scope = CoordinatorTaskAttribution.current()
+        val kind = scope?.kind ?: CoordinatorTaskAttribution.Kind.OTHER
+        val identity = scope?.identity ?: "-"
+        val seq = CoordinatorTaskAttribution.nextSeq()
+        val postedAtMs = System.currentTimeMillis()
+        CoordinatorTaskAttribution.post(
+            seq,
+            kind,
+            identity,
+            "SYNC",
+            coordinatorWorkQueue.size,
+        )
         // Must mark [onCoordinatorThread] while [block] runs — otherwise a nested
         // runOnCoordinatorSync (e.g. RC1 auto cutover -> releaseAnchorOwnership raised
         // from inside invite dispatch) re-submits to the single-thread executor and
         // self-deadlocks the coordinator.
         return coordinatorExecutor.submit<T> {
+            val waitMs = System.currentTimeMillis() - postedAtMs
             onCoordinatorThread.set(true)
+            CoordinatorTaskAttribution.run(
+                seq,
+                kind,
+                identity,
+                "SYNC",
+                waitMs,
+                coordinatorWorkQueue.size,
+            )
+            val execStartMs = System.currentTimeMillis()
             try {
                 block()
             } finally {
+                CoordinatorTaskAttribution.end(
+                    seq,
+                    kind,
+                    identity,
+                    "SYNC",
+                    waitMs,
+                    System.currentTimeMillis() - execStartMs,
+                    coordinatorWorkQueue.size,
+                )
                 onCoordinatorThread.set(false)
             }
         }.get()

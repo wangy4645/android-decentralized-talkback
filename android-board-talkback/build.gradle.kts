@@ -190,6 +190,27 @@ android {
                 listOf(
                     "com/talkback/core/conference/session/integration/MeetingProfile01SourceMembershipContextRepublicationTest.kt",
                 ),
+            "sourceRetrySameHeadDeskOnly" to
+                listOf(
+                    "com/talkback/core/conference/session/integration/SourceRetrySameHeadCoalescerTest.kt",
+                    "com/talkback/core/conference/session/integration/MeetingProfile01SourceRetrySameHeadCoalescingDeskTest.kt",
+                    "com/talkback/core/conference/session/integration/MeetingProfile01SourceOriginEligibilityContinuationTest.kt",
+                    "com/talkback/core/conference/session/integration/MeetingProfile01SourceOriginBridgeTest.kt",
+                    "com/talkback/core/conference/session/integration/MeetingProfile01SourceGenerationAuthorityTest.kt",
+                ),
+            "sourceFact9ObligationDeskOnly" to
+                listOf(
+                    "com/talkback/core/conference/session/integration/SourceDeclarationSameObligationCoalescerTest.kt",
+                ),
+            "acceptBindDrainAttributionDeskOnly" to
+                listOf(
+                    "com/talkback/core/conference/session/integration/AcceptBindDrainAttributionTest.kt",
+                ),
+            "coordinatorTaskAttributionDeskOnly" to
+                listOf(
+                    "com/talkback/core/util/CoordinatorTaskAttributionTest.kt",
+                    "com/talkback/core/conference/session/profile01/wire/Profile01WireCborDecoderObserveIdentityTest.kt",
+                ),
             "profile01HeadObligationDeskOnly" to
                 listOf(
                     "com/talkback/core/conference/session/integration/Profile01HeadSupplementObligationTest.kt",

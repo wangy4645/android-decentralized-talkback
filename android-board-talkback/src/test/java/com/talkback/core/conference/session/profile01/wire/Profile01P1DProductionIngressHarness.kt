@@ -137,6 +137,52 @@ internal object Profile01P1DProductionIngressHarness {
         )
     }
 
+    fun buildAdditionalPackage(
+        fixture: Fixture,
+        identityFill: Byte,
+    ): ByteArray {
+        val q5ReferenceWire = Profile01Q5CryptoVectorFixtures.wirePackage(corpus)
+        val secret = hex(corpus.inputs.conferenceMediaSecretHex)
+        val contextDigest = hex(corpus.expected.membershipKeyContextDigestHex)
+        val commitment = Profile01PackageCrypto.computeMediaKeyCommitment(secret, contextDigest)
+        val recipientBinding =
+            Profile01PackageRecipientBinding.fromModuleEstablishmentBinding(
+                ModuleEstablishmentBinding(
+                    moduleId = corpus.inputs.recipientModuleId,
+                    establishmentKeyVersion = corpus.inputs.recipientKeyVersion,
+                    keyState = GenerationFactKeyState.ACTIVE,
+                    establishmentPublicKeySpki =
+                        Profile01Q5TestRecipientKeyEstablishmentSeam.testEstablishmentPublicKeySpki(),
+                    activatedAtRevision = 10L,
+                ),
+            )
+        val request =
+            Profile01MediaKeyPackageBuildRequest(
+                material =
+                    Profile01ConferenceKeyMaterial(
+                        conferenceId = q5ReferenceWire.conferenceId.copyOf(),
+                        conferenceEpoch = q5ReferenceWire.conferenceEpoch,
+                        ownerModuleId = q5ReferenceWire.ownerModuleId,
+                        membershipVersion = q5ReferenceWire.membershipVersion,
+                        mediaKeyEpoch = q5ReferenceWire.mediaKeyEpoch,
+                        conferenceMediaSecret = secret,
+                        membershipKeyContextDigest = contextDigest,
+                        mediaKeyCommitment = commitment,
+                    ),
+                creationFactDigest = hex(corpus.inputs.membershipFactDigestHex),
+                recipient = recipientBinding,
+            )
+        val pek = hex(corpus.inputs.pekHex).also { it[it.lastIndex] = identityFill }
+        val identity = ByteArray(16) { identityFill }
+        val nonce = hex(corpus.inputs.gcmNonceHex).also { it[it.lastIndex] = identityFill }
+        val result =
+            Profile01MediaKeyPackageBuilder(
+                signer = fixture.signer,
+                randomSource = Profile01PackageRandomSource.fixed(pek, identity, nonce),
+            ).build(request)
+        return (result as Profile01MediaKeyPackageBuildResult.Ready).signedFactBytes
+    }
+
     fun resignTamperedPackage(
         signer: Profile01PersistedSignedFactSigner,
         signedFactBytes: ByteArray,

@@ -1320,6 +1320,7 @@ object Profile01ShadowRuntimeObservability {
 
     private fun emit(line: String) {
         try {
+            com.talkback.core.util.CoordinatorTaskAttribution.noteShadowRuntimeThread()
             Log.i(MeetingProductMediaShadow.LOG_TAG, line)
         } catch (_: Throwable) {
         }

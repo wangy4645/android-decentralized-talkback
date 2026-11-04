@@ -84,6 +84,8 @@ class MeetingProfile01SourceOriginBridge(
     @Volatile
     var memberBindingMaterializer: Profile01ShadowMemberBindingMaterializer? = null
 
+    private val postBindFanoutCompletedHead = ConcurrentHashMap<String, String>()
+
     private data class SourcePublicationState(
 
         val signedFactBytes: ByteArray,
@@ -120,9 +122,113 @@ class MeetingProfile01SourceOriginBridge(
 
     private val committedIdentityBySession = ConcurrentHashMap<String, CommittedSourceIdentity>()
 
+    private val sameHeadRetryCoalescer = SourceRetrySameHeadCoalescer()
+
 
 
     fun onLocalConferenceSourceCommitted(
+
+        sessionId: String,
+
+        localModuleId: String,
+
+        authoritySourceGeneration: Long,
+
+        ssrc: Int,
+
+        sourceInstanceId: ByteArray,
+
+        mediaGroupDescriptorDigest: ByteArray,
+
+        continuationTrigger: String? = null,
+
+    ): SourceOriginBuildOutcome {
+
+        val conferenceIdHex = sessionIndex.conferenceIdForSession(sessionId)
+
+        val generation = conferenceIdHex?.let { membershipConvergence.current(it) }
+
+        val headKey = SourceRetrySameHeadCoalescer.headKey(sessionId, localModuleId, generation)
+
+        if (sameHeadRetryCoalescer.shouldCoalesce(headKey)) {
+
+            logSameHeadCoalesced(headKey)
+
+            return SourceOriginBuildOutcome.ORIGIN_SOURCE_GAP
+
+        }
+
+        var activeKey = headKey
+
+        var grantFollowUp = true
+
+        while (true) {
+
+            sameHeadRetryCoalescer.begin(activeKey)
+
+            val outcome =
+
+                executeLocalConferenceSourceCommitted(
+
+                    sessionId = sessionId,
+
+                    localModuleId = localModuleId,
+
+                    authoritySourceGeneration = authoritySourceGeneration,
+
+                    ssrc = ssrc,
+
+                    sourceInstanceId = sourceInstanceId,
+
+                    mediaGroupDescriptorDigest = mediaGroupDescriptorDigest,
+
+                    continuationTrigger = continuationTrigger,
+
+                )
+
+            val runFollowUp =
+
+                sameHeadRetryCoalescer.complete(activeKey, outcome, grantFollowUp = grantFollowUp)
+
+            if (!runFollowUp) {
+
+                return outcome
+
+            }
+
+            grantFollowUp = false
+
+            val latestConferenceId = sessionIndex.conferenceIdForSession(sessionId)
+
+            val latestGeneration = latestConferenceId?.let { membershipConvergence.current(it) }
+
+            activeKey = SourceRetrySameHeadCoalescer.headKey(sessionId, localModuleId, latestGeneration)
+
+        }
+
+    }
+
+    fun shouldSkipEquivalentSourceRetry(sessionId: String, localModuleId: String): Boolean {
+
+        val conferenceIdHex = sessionIndex.conferenceIdForSession(sessionId) ?: return false
+
+        val generation = membershipConvergence.current(conferenceIdHex)
+
+        val headKey = SourceRetrySameHeadCoalescer.headKey(sessionId, localModuleId, generation)
+
+        if (!sameHeadRetryCoalescer.shouldCoalesce(headKey)) {
+
+            return false
+
+        }
+
+        logSameHeadCoalesced(headKey)
+
+        return true
+
+    }
+
+    private fun executeLocalConferenceSourceCommitted(
 
         sessionId: String,
 
@@ -272,7 +378,15 @@ class MeetingProfile01SourceOriginBridge(
 
             )
 
-            logGap(sessionId, localModuleId, "NOT_IN_ROSTER")
+            logGap(
+                sessionId,
+                localModuleId,
+                "NOT_IN_ROSTER",
+                mediaKeyEpoch = generation.mediaKeyEpoch,
+                membershipVersion = generation.membershipVersion,
+                hasMember = false,
+                memberCount = generation.members.size,
+            )
 
             return SourceOriginBuildOutcome.ORIGIN_SOURCE_GAP
 
@@ -704,6 +818,20 @@ class MeetingProfile01SourceOriginBridge(
             }
         }
 
+        val consumableClose =
+            Profile01SourcePostBindRepublishReason.marksConsumableDeliverySatisfied(reason)
+        if (!consumableClose &&
+            postBindPublicationLedger.isPreBindEmitted(sessionId, postBindIdentity)
+        ) {
+            logPostBindRepublish(
+                sessionId = sessionId,
+                identity = postBindIdentity,
+                reason = reason,
+                outcome = "ALREADY_EMITTED_PRE_BIND",
+            )
+            return SourcePostBindRepublishOutcome.ALREADY_EMITTED_PRE_BIND
+        }
+
         logPostBindRepublish(
             sessionId = sessionId,
             identity = postBindIdentity,
@@ -712,10 +840,10 @@ class MeetingProfile01SourceOriginBridge(
         )
 
         if (publishToPeer(targetModuleId, cachedBytes)) {
-            val consumableClose =
-                Profile01SourcePostBindRepublishReason.marksConsumableDeliverySatisfied(reason)
             if (consumableClose) {
                 postBindPublicationLedger.markSatisfied(sessionId, postBindIdentity)
+            } else {
+                postBindPublicationLedger.markPreBindEmitted(sessionId, postBindIdentity)
             }
             logPostBindRepublish(
                 sessionId = sessionId,
@@ -749,6 +877,27 @@ class MeetingProfile01SourceOriginBridge(
         return membershipConvergence.current(conferenceIdHex)?.mediaKeyEpoch
     }
 
+    fun hasCompletedPostBindFanoutAtCurrentHead(sessionId: String): Boolean {
+        val key = membershipAlignedPublicationKey(sessionId) ?: return false
+        return postBindFanoutCompletedHead[sessionId] == key
+    }
+
+    fun markPostBindFanoutCompletedAtCurrentHead(sessionId: String) {
+        val key = membershipAlignedPublicationKey(sessionId) ?: return
+        postBindFanoutCompletedHead[sessionId] = key
+    }
+
+    private fun membershipAlignedPublicationKey(sessionId: String): String? {
+        val conferenceIdHex = sessionIndex.conferenceIdForSession(sessionId) ?: return null
+        val generation = membershipConvergence.current(conferenceIdHex) ?: return null
+        val state = sourceStateBySession[sessionId] ?: return null
+        if (!signedSourceMatchesGeneration(state.signedFactBytes, generation)) {
+            return null
+        }
+        return "${generation.membershipVersion}|${generation.mediaKeyEpoch}|" +
+            "${state.publishedAuthorityGeneration}|${state.factDigestHex}"
+    }
+
     fun readSignedSourceFact(sessionId: String): ByteArray? =
 
         sourceStateBySession[sessionId]?.signedFactBytes?.copyOf()
@@ -765,7 +914,11 @@ class MeetingProfile01SourceOriginBridge(
 
         postBindPublicationLedger.clearSession(sessionId)
 
+        postBindFanoutCompletedHead.remove(sessionId)
+
         eligibilityObligationStore.clearSession(sessionId)
+
+        sameHeadRetryCoalescer.clearSession(sessionId)
 
     }
 
@@ -962,6 +1115,32 @@ class MeetingProfile01SourceOriginBridge(
         )
     }
 
+    private fun logSameHeadCoalesced(key: SourceRetrySameHeadCoalescer.HeadKey) {
+
+        if (!sameHeadRetryCoalescer.shouldLogCoalesced(key)) {
+
+            return
+
+        }
+
+        onLog(
+
+            "PROFILE01_SOURCE_RETRY_SAME_HEAD_COALESCED session=${key.sessionId} " +
+
+                "moduleId=${key.localModuleId} mediaKeyEpoch=${key.mediaKeyEpoch} " +
+
+                "membershipVersion=${key.membershipVersion} headDigest=${key.headDigestHex} " +
+
+                "coalescedCount=${sameHeadRetryCoalescer.coalescedCount(key)} " +
+
+                "outcome=ORIGIN_SOURCE_GAP",
+
+        )
+
+    }
+
+
+
     private fun logGap(
 
         sessionId: String,
@@ -970,13 +1149,33 @@ class MeetingProfile01SourceOriginBridge(
 
         reason: String,
 
+        mediaKeyEpoch: Long? = null,
+
+        membershipVersion: Long? = null,
+
+        hasMember: Boolean? = null,
+
+        memberCount: Int? = null,
+
     ) {
+
+        val extra = buildString {
+
+            if (mediaKeyEpoch != null) append(" mediaKeyEpoch=$mediaKeyEpoch")
+
+            if (membershipVersion != null) append(" membershipVersion=$membershipVersion")
+
+            if (hasMember != null) append(" hasMember=$hasMember")
+
+            if (memberCount != null) append(" memberCount=$memberCount")
+
+        }
 
         onLog(
 
             "PROFILE01_ORIGIN_EMIT session=$sessionId factType=${Profile01WireConstants.FACT_TYPE_SOURCE_DECLARATION} " +
 
-                "moduleId=$moduleId outcome=ORIGIN_SOURCE_GAP reason=$reason",
+                "moduleId=$moduleId outcome=ORIGIN_SOURCE_GAP reason=$reason$extra",
 
         )
 

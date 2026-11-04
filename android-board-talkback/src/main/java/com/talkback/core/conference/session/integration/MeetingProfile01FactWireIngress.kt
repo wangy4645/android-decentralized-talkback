@@ -57,6 +57,8 @@ class MeetingProfile01FactWireIngress(
 
     private val pendingMediaKeyAwaitingHead =
         ConcurrentHashMap<String, MutableList<PendingMediaKeyPackage>>()
+    private val mediaKeyPendingRetryInFlight = ConcurrentHashMap.newKeySet<String>()
+    private val mediaKeyPendingRetryFollowUp = ConcurrentHashMap.newKeySet<String>()
     private val membershipHeadFastRecoveryInFlight = ConcurrentHashMap.newKeySet<String>()
     private val pendingMembershipAwaitingCreation =
         ConcurrentHashMap<String, MutableList<ByteArray>>()
@@ -80,7 +82,48 @@ class MeetingProfile01FactWireIngress(
         val retainedAtMs: Long,
     )
 
+    fun observeSignedFactIdentity(signal: SignalEnvelope): String {
+        val observed = readObserveIdentity(signal)
+        return com.talkback.core.util.CoordinatorTaskAttribution.shadowSignedFactIdentity(
+            sessionId = signal.sessionId,
+            peerModuleId = signal.from.moduleId.value,
+            factType = observed?.factType,
+            factDigestHex = observed?.factDigestHex,
+            conferenceEpoch = observed?.conferenceEpoch,
+            membershipVersion = observed?.membershipVersion,
+            mediaKeyEpoch = observed?.mediaKeyEpoch,
+            headDigestHex = observed?.headDigestHex,
+        )
+    }
+
+    fun sourceDeclarationObligationKey(
+        signal: SignalEnvelope,
+    ): SourceDeclarationSameObligationCoalescer.Key? =
+        SourceDeclarationSameObligationCoalescer.keyOrNull(
+            sessionId = signal.sessionId,
+            peerModuleId = signal.from.moduleId.value,
+            observed = readObserveIdentity(signal),
+        )
+
+    private fun readObserveIdentity(
+        signal: SignalEnvelope,
+    ): Profile01WireCborDecoder.ObserveIdentity? =
+        runCatching {
+            decodeSignedFactPayload(signal.payload)?.let { bytes ->
+                Profile01WireCborDecoder.readObserveIdentity(bytes)
+            }
+        }.getOrNull()
+
     fun onConferenceSignedFact(signal: SignalEnvelope): WireIngressOutcome {
+        return com.talkback.core.util.CoordinatorTaskAttribution.scoped(
+            com.talkback.core.util.CoordinatorTaskAttribution.Kind.SHADOW,
+            observeSignedFactIdentity(signal),
+        ) {
+            onConferenceSignedFactWork(signal)
+        }
+    }
+
+    private fun onConferenceSignedFactWork(signal: SignalEnvelope): WireIngressOutcome {
         if (!MeetingProductMediaShadow.enabled) return WireIngressOutcome.SHADOW_DISABLED
         val sessionBinding = sessionIndex.bindingForSession(signal.sessionId)
         if (sessionBinding == null) {
@@ -97,16 +140,44 @@ class MeetingProfile01FactWireIngress(
         sessionId: String,
         onlyFactTypes: Set<Int>? = PRE_BIND_DRAIN_SESSION_BIND_FACT_TYPES,
     ): SessionBindDrainOutcome {
+        if (!AcceptBindDrainAttribution.inAcceptBindDrain()) {
+            return drainRetainedAfterSessionBindWork(sessionId, onlyFactTypes)
+        }
+        AcceptBindDrainAttribution.markTopDrainStarting()
+        return AcceptBindDrainAttribution.span(
+            stage = "DRAIN_PASS",
+            detail = "factTypes=${AcceptBindDrainAttribution.formatFactTypes(onlyFactTypes)}",
+            obligation = AcceptBindDrainAttribution.Obligation.RETENTION,
+        ) {
+            drainRetainedAfterSessionBindWork(sessionId, onlyFactTypes)
+        }
+    }
+
+    private fun drainRetainedAfterSessionBindWork(
+        sessionId: String,
+        onlyFactTypes: Set<Int>?,
+    ): SessionBindDrainOutcome {
         val conferenceIdHex =
-            runCatching { sessionIndex.ensureConferenceIdHex(sessionId) }
-                .getOrNull()
-                ?: return SessionBindDrainOutcome(0, 0, 0)
-        val batch = preBindRetention.detachForDrain(conferenceIdHex, onlyFactTypes)
+            AcceptBindDrainAttribution.ifActive(
+                stage = "RESOLVE_CONFERENCE_ID",
+                obligation = AcceptBindDrainAttribution.Obligation.STATE_COMMIT,
+            ) {
+                runCatching { sessionIndex.ensureConferenceIdHex(sessionId) }.getOrNull()
+            } ?: return SessionBindDrainOutcome(0, 0, 0)
+        val batch =
+            AcceptBindDrainAttribution.ifActive(
+                stage = "DETACH_BATCH",
+                detail = "conferenceId=$conferenceIdHex",
+                obligation = AcceptBindDrainAttribution.Obligation.RETENTION,
+            ) {
+                preBindRetention.detachForDrain(conferenceIdHex, onlyFactTypes)
+            } ?: preBindRetention.detachForDrain(conferenceIdHex, onlyFactTypes)
         preBindRetention.observability.logBindDrain(sessionId, conferenceIdHex, batch.size)
+        val sessionBinding = sessionIndex.bindingForSession(sessionId)
         var applied = 0
         var rejected = 0
         var fenced = 0
-        for (detached in batch) {
+        for ((index, detached) in batch.withIndex()) {
             if (detached.signal.sessionId != sessionId) {
                 fenced++
                 preBindRetention.observability.logSessionDiscard(
@@ -125,7 +196,40 @@ class MeetingProfile01FactWireIngress(
                 )
                 continue
             }
-            when (onConferenceSignedFact(detached.signal)) {
+            if (sessionBinding == null) {
+                rejected++
+                continue
+            }
+            val observed =
+                decodeSignedFactPayload(detached.signal.payload)?.let { bytes ->
+                    Profile01WireCborDecoder.readObserveIdentity(bytes)
+                }
+            val itemKey =
+                if (observed != null) {
+                    AcceptBindDrainAttribution.itemKey(
+                        factType = observed.factType,
+                        factDigestHex = observed.factDigestHex,
+                        peerModuleId = detached.signal.from.moduleId.value,
+                        membershipVersion = observed.membershipVersion,
+                        mediaKeyEpoch = observed.mediaKeyEpoch,
+                    )
+                } else {
+                    "idx=$index peer=${detached.signal.from.moduleId.value} decode=failed"
+                }
+            AcceptBindDrainAttribution.noteItemKey(itemKey)
+            val outcome =
+                if (AcceptBindDrainAttribution.inAcceptBindDrain()) {
+                    AcceptBindDrainAttribution.span(
+                        stage = "ITEM_APPLY",
+                        detail = "idx=$index key=$itemKey",
+                        obligation = AcceptBindDrainAttribution.Obligation.STATE_COMMIT,
+                    ) {
+                        applySignedFact(detached.signal, sessionBinding)
+                    }
+                } else {
+                    onConferenceSignedFact(detached.signal)
+                }
+            when (outcome) {
                 WireIngressOutcome.APPLIED -> applied++
                 else -> rejected++
             }
@@ -135,6 +239,8 @@ class MeetingProfile01FactWireIngress(
 
     fun onSessionUnregistered(sessionId: String) {
         pendingMediaKeyAwaitingHead.remove(sessionId)
+        mediaKeyPendingRetryInFlight.remove(sessionId)
+        mediaKeyPendingRetryFollowUp.remove(sessionId)
         pendingMembershipAwaitingCreation.remove(sessionId)
         pendingMembershipAwaitingCreationDigests.remove(sessionId)
         incompleteApplyContinuation.discardForSession(sessionId, IncompleteDiscardReason.SESSION_UNREGISTERED)
@@ -213,19 +319,36 @@ class MeetingProfile01FactWireIngress(
         signal: SignalEnvelope,
         sessionBinding: MeetingProfile01ConferenceSessionIndex.Binding,
     ): WireIngressOutcome {
-        val signedBytes = decodeSignedFactPayload(signal.payload)
+        val signedBytes =
+            AcceptBindDrainAttribution.ifActive(
+                stage = "DECODE_PAYLOAD",
+                obligation = AcceptBindDrainAttribution.Obligation.STATE_COMMIT,
+            ) {
+                decodeSignedFactPayload(signal.payload)
+            } ?: decodeSignedFactPayload(signal.payload)
         if (signedBytes == null) {
             observability.record(WireIngressOutcome.REJECTED_DECODE, signal.sessionId, null, "MALFORMED_PAYLOAD")
             return WireIngressOutcome.REJECTED_DECODE
         }
         val factType =
-            Profile01WireCborDecoder.readFactType(signedBytes)
+            AcceptBindDrainAttribution.ifActive(
+                stage = "READ_FACT_TYPE",
+                obligation = AcceptBindDrainAttribution.Obligation.STATE_COMMIT,
+            ) {
+                Profile01WireCborDecoder.readFactType(signedBytes)
+            } ?: Profile01WireCborDecoder.readFactType(signedBytes)
                 ?: run {
                     observability.record(WireIngressOutcome.REJECTED_DECODE, signal.sessionId, null, "UNKNOWN_FACT_TYPE")
                     return WireIngressOutcome.REJECTED_DECODE
                 }
         return try {
-            routeFact(factType, signedBytes, signal, sessionBinding)
+            AcceptBindDrainAttribution.ifActive(
+                stage = "ROUTE_FACT",
+                detail = "factType=$factType",
+                obligation = AcceptBindDrainAttribution.Obligation.STATE_COMMIT,
+            ) {
+                routeFact(factType, signedBytes, signal, sessionBinding)
+            } ?: routeFact(factType, signedBytes, signal, sessionBinding)
         } catch (t: Throwable) {
             observability.recordFailed(signal.sessionId, factType, t)
             WireIngressOutcome.SHADOW_FAILED
@@ -511,6 +634,24 @@ class MeetingProfile01FactWireIngress(
     }
 
     private fun retryPendingMediaKeyAfterMembership(sessionId: String) {
+        if (!mediaKeyPendingRetryInFlight.add(sessionId)) {
+            mediaKeyPendingRetryFollowUp.add(sessionId)
+            return
+        }
+        try {
+            do {
+                mediaKeyPendingRetryFollowUp.remove(sessionId)
+                drainPendingMediaKeySnapshot(sessionId)
+            } while (mediaKeyPendingRetryFollowUp.remove(sessionId))
+        } finally {
+            mediaKeyPendingRetryInFlight.remove(sessionId)
+            if (mediaKeyPendingRetryFollowUp.remove(sessionId)) {
+                retryPendingMediaKeyAfterMembership(sessionId)
+            }
+        }
+    }
+
+    private fun drainPendingMediaKeySnapshot(sessionId: String) {
         val list = pendingMediaKeyAwaitingHead[sessionId] ?: return
         val snapshot =
             synchronized(list) {
@@ -578,6 +719,11 @@ class MeetingProfile01FactWireIngress(
                 }
             }
         }
+    }
+
+    internal fun pendingMediaKeyCountForTest(sessionId: String): Int {
+        val list = pendingMediaKeyAwaitingHead[sessionId] ?: return 0
+        return synchronized(list) { list.size }
     }
 
     /** Desk / tests: drain retained packages after a head is installed outside wire ingest. */
@@ -979,7 +1125,20 @@ class MeetingProfile01FactWireIngress(
             }
         }
         observability.record(WireIngressOutcome.APPLIED, sessionId, factType)
-        replayAfterPublish(
+        AcceptBindDrainAttribution.ifActive(
+            stage = "REPLAY_AFTER_PUBLISH",
+            detail = "factType=$factType",
+            obligation = AcceptBindDrainAttribution.Obligation.PROJECTION,
+        ) {
+            replayAfterPublish(
+                sessionId,
+                factType,
+                sessionBinding,
+                moduleId,
+                publishedMembershipVersion,
+                publishOutcome,
+            )
+        } ?: replayAfterPublish(
             sessionId,
             factType,
             sessionBinding,
@@ -992,6 +1151,18 @@ class MeetingProfile01FactWireIngress(
 
     /** P05 — pending ingest before replay; bounded fast recovery before P04 channel fallback. */
     private fun onMembershipHeadApplied(
+        sessionId: String,
+        sessionBinding: MeetingProfile01ConferenceSessionIndex.Binding,
+    ) {
+        AcceptBindDrainAttribution.ifActive(
+            stage = "ON_MEMBERSHIP_HEAD_APPLIED",
+            obligation = AcceptBindDrainAttribution.Obligation.STATE_COMMIT,
+        ) {
+            onMembershipHeadAppliedWork(sessionId, sessionBinding)
+        } ?: onMembershipHeadAppliedWork(sessionId, sessionBinding)
+    }
+
+    private fun onMembershipHeadAppliedWork(
         sessionId: String,
         sessionBinding: MeetingProfile01ConferenceSessionIndex.Binding,
     ) {
@@ -1111,13 +1282,42 @@ class MeetingProfile01FactWireIngress(
                 val membershipVersionForRead =
                     publishedMembershipVersion
                         ?: error("CREATION replay requires published membershipVersion")
-                replaySessionStarted(sessionId, sessionBinding, membershipVersionForRead)
-                replayPendingMembershipAwaitingCreation(sessionId, sessionBinding)
-                advanceMembershipHeadAfterCreationApplied(sessionId, sessionBinding)
-                // After CREATION head is live: drain retained PACKAGE; SOURCE via mediaKeyEpoch alignment.
-                drainRetainedAfterSessionBind(sessionId, PRE_BIND_DRAIN_MEMBERSHIP_HEAD_FACT_TYPES)
-                finalizePeerMediaKeyEpochConsumption(sessionId)
-                memberBindingMaterializer?.onCreationWireApplied(sessionId)
+                AcceptBindDrainAttribution.ifActive(
+                    stage = "REPLAY_SESSION_STARTED",
+                    obligation = AcceptBindDrainAttribution.Obligation.PROJECTION,
+                ) {
+                    replaySessionStarted(sessionId, sessionBinding, membershipVersionForRead)
+                } ?: replaySessionStarted(sessionId, sessionBinding, membershipVersionForRead)
+                AcceptBindDrainAttribution.ifActive(
+                    stage = "REPLAY_PENDING_MEMBERSHIP",
+                    obligation = AcceptBindDrainAttribution.Obligation.STATE_COMMIT,
+                ) {
+                    replayPendingMembershipAwaitingCreation(sessionId, sessionBinding)
+                } ?: replayPendingMembershipAwaitingCreation(sessionId, sessionBinding)
+                AcceptBindDrainAttribution.ifActive(
+                    stage = "ADVANCE_MEMBERSHIP_HEAD",
+                    obligation = AcceptBindDrainAttribution.Obligation.STATE_COMMIT,
+                ) {
+                    advanceMembershipHeadAfterCreationApplied(sessionId, sessionBinding)
+                } ?: advanceMembershipHeadAfterCreationApplied(sessionId, sessionBinding)
+                AcceptBindDrainAttribution.ifActive(
+                    stage = "NESTED_DRAIN_MEDIA_KEY",
+                    obligation = AcceptBindDrainAttribution.Obligation.MEDIA_WIRING,
+                ) {
+                    drainRetainedAfterSessionBind(sessionId, PRE_BIND_DRAIN_MEMBERSHIP_HEAD_FACT_TYPES)
+                } ?: drainRetainedAfterSessionBind(sessionId, PRE_BIND_DRAIN_MEMBERSHIP_HEAD_FACT_TYPES)
+                AcceptBindDrainAttribution.ifActive(
+                    stage = "FINALIZE_PEER_MEDIA_KEY_EPOCH",
+                    obligation = AcceptBindDrainAttribution.Obligation.MEDIA_WIRING,
+                ) {
+                    finalizePeerMediaKeyEpochConsumption(sessionId)
+                } ?: finalizePeerMediaKeyEpochConsumption(sessionId)
+                AcceptBindDrainAttribution.ifActive(
+                    stage = "CREATION_WIRE_APPLIED",
+                    obligation = AcceptBindDrainAttribution.Obligation.MEDIA_WIRING,
+                ) {
+                    memberBindingMaterializer?.onCreationWireApplied(sessionId)
+                } ?: memberBindingMaterializer?.onCreationWireApplied(sessionId)
             }
             Profile01WireConstants.FACT_TYPE_SOURCE_DECLARATION ->
                 moduleId?.let { id ->
