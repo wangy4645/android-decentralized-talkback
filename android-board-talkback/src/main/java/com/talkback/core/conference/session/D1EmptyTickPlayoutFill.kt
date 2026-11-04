@@ -1,21 +1,19 @@
 package com.talkback.core.conference.session
 
-import com.talkback.core.conference.runtime.MediaJitterConstants
 import com.talkback.core.conference.runtime.MixedBlock
 import com.talkback.core.conference.runtime.OpusCodecConstants
 
 /**
- * D1 — bounded digital silence when mix output is empty but playout clock should advance.
- * See PROPOSAL-D1-EMPTY-TICK-PLAYOUT-20261019.txt.
+ * Bounded digital silence when mix output is empty but playout clock should advance.
+ *
+ * A1 (2026-11-04): after the first real mix write, empty ticks keep filling 20 ms zeros
+ * with no consecutive cap. Pre-first-real-mix empty ticks still SKIP (join/hold window).
  */
 internal object D1EmptyTickPlayoutFill {
-    const val MAX_CONSECUTIVE_EMPTY_FILL_TICKS: Int = 6
-
     val silenceFrameSamples: Int = OpusCodecConstants.FRAME_SAMPLES_20MS
 
     data class State(
         var hasWrittenRealMix: Boolean = false,
-        var consecutiveEmptyFillTicks: Int = 0,
     )
 
     enum class PlayoutWriteAction {
@@ -34,9 +32,6 @@ internal object D1EmptyTickPlayoutFill {
         if (!state.hasWrittenRealMix) {
             return PlayoutWriteAction.SKIP
         }
-        if (state.consecutiveEmptyFillTicks >= MAX_CONSECUTIVE_EMPTY_FILL_TICKS) {
-            return PlayoutWriteAction.SKIP
-        }
         return PlayoutWriteAction.WRITE_DIGITAL_SILENCE
     }
 
@@ -44,21 +39,14 @@ internal object D1EmptyTickPlayoutFill {
         when (action) {
             PlayoutWriteAction.WRITE_MIXED_BLOCK -> {
                 state.hasWrittenRealMix = true
-                state.consecutiveEmptyFillTicks = 0
             }
-            PlayoutWriteAction.WRITE_DIGITAL_SILENCE -> {
-                state.consecutiveEmptyFillTicks += 1
-            }
-            PlayoutWriteAction.SKIP -> Unit
+            PlayoutWriteAction.WRITE_DIGITAL_SILENCE,
+            PlayoutWriteAction.SKIP,
+            -> Unit
         }
     }
 
     fun reset(state: State) {
         state.hasWrittenRealMix = false
-        state.consecutiveEmptyFillTicks = 0
     }
-
-    /** Aligns with [MediaJitterConstants.MAX_PLAYOUT_DELAY_MS] at 20ms/tick. */
-    fun maxFillDurationMs(): Long =
-        MAX_CONSECUTIVE_EMPTY_FILL_TICKS.toLong() * MediaJitterConstants.MEDIA_SLOT_MS
 }

@@ -235,6 +235,27 @@ android {
                     "com/talkback/core/conference/session/profile01/Profile01Q5CryptoVectorFixtures.kt",
                     "com/talkback/core/session/gbc/**",
                 ),
+            "profile01EpochSuccessorDeskOnly" to
+                listOf(
+                    "com/talkback/core/conference/session/integration/Profile01EpochSuccessorTxRxLifecycleDeskTest.kt",
+                ),
+            "groupInboundSdpRosterMismatchDeskOnly" to
+                listOf(
+                    "com/talkback/core/session/GroupPairwiseNegotiationAuthorityTest.kt",
+                ),
+            "profile01A1MediaCommitDeskOnly" to
+                listOf(
+                    "com/talkback/core/conference/session/integration/Profile01A1MediaCommitFenceDeskTest.kt",
+                ),
+            "aqcRcaObserveDeskOnly" to
+                listOf(
+                    "com/talkback/core/conference/session/integration/aqc/AqcRcaObserveDeskTest.kt",
+                ),
+            "aqcPlayoutContinuityDeskOnly" to
+                listOf(
+                    "com/talkback/core/conference/session/D1EmptyTickPlayoutFillDeskTest.kt",
+                    "com/talkback/core/conference/session/integration/ProductionPlayoutDeadlinePumpTest.kt",
+                ),
         )
     unitTestFileGates.forEach { (gate, files) ->
         if (project.hasProperty(gate)) {
