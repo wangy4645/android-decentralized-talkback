@@ -6,13 +6,19 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.LinearLayout
 import android.widget.Toast
+import androidx.appcompat.app.AlertDialog
 import androidx.fragment.app.Fragment
+import androidx.fragment.app.activityViewModels
 import com.talkback.appprod.R
 import com.talkback.appprod.data.AppConfigStore
+import com.talkback.appprod.data.AppLocaleChoice
+import com.talkback.appprod.data.AppLocaleStore
 
 class GeneralSettingsFragment : Fragment() {
     private lateinit var store: AppConfigStore
+    private lateinit var localeStore: AppLocaleStore
     private var suppressToggleCallbacks = false
+    private val talkViewModel: TalkViewModel by activityViewModels { TalkViewModelFactory(requireContext()) }
 
     override fun onCreateView(
         inflater: LayoutInflater,
@@ -22,6 +28,7 @@ class GeneralSettingsFragment : Fragment() {
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         store = AppConfigStore(requireContext())
+        localeStore = AppLocaleStore(requireContext())
         bindSettingsToolbar(R.string.settings_general_title)
 
         val groupSystem = view.findViewById<LinearLayout>(R.id.groupSystem)
@@ -93,10 +100,10 @@ class GeneralSettingsFragment : Fragment() {
 
         groupOther.inflateSettingsRow(R.layout.item_settings_subpage_nav_row).setupSubpageNavRow(
             title = getString(R.string.settings_language_title),
-            value = getString(R.string.settings_language_value),
+            value = AppLocaleController.displayLabel(requireContext(), localeStore.load()),
             showChevron = true,
             showDivider = true,
-            onClick = { showComingSoon() }
+            onClick = { showLanguagePicker() }
         )
 
         groupOther.inflateSettingsRow(R.layout.item_settings_subpage_nav_row).setupSubpageNavRow(
@@ -115,6 +122,28 @@ class GeneralSettingsFragment : Fragment() {
         )
 
         suppressToggleCallbacks = false
+    }
+
+    private fun showLanguagePicker() {
+        val current = localeStore.load()
+        val choices = AppLocaleChoice.entries
+        val labels = choices.map { getString(it.labelRes()) }.toTypedArray()
+        val checkedIndex = choices.indexOf(current).coerceAtLeast(0)
+        AlertDialog.Builder(requireContext())
+            .setTitle(R.string.settings_language_title)
+            .setSingleChoiceItems(labels, checkedIndex) { dialog, which ->
+                val chosen = choices[which]
+                dialog.dismiss()
+                if (chosen != current) {
+                    AppLocaleController.commitUserChoice(
+                        requireContext(),
+                        chosen,
+                        refreshVisibleState = { talkViewModel.refresh() },
+                    )
+                }
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
     }
 
     private fun persist(

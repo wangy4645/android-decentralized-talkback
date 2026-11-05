@@ -56,6 +56,8 @@ class TalkViewModel(
     private val configStore: AppConfigStore
 ) : ViewModel() {
     private val app = TalkbackApp.get(appContext)
+    private val localizedContext: Context
+        get() = AppLocaleController.localizedContext(appContext)
     private val manager get() = app.runtimeManager
     private val conversationStore = app.conversationStore
     private val channelConversationStore = app.channelConversationStore
@@ -964,7 +966,7 @@ class TalkViewModel(
                     timestampMs = System.currentTimeMillis(),
                     direction = EndpointTextDirection.OUTBOUND,
                     senderKey = localKey,
-                    senderLabel = appContext.getString(R.string.conversation_sender_you)
+                    senderLabel = localizedContext.getString(R.string.conversation_sender_you)
                 )
             )
             refreshConversationUi()
@@ -1019,7 +1021,7 @@ class TalkViewModel(
     }
 
     fun endpointLabelForKey(key: String): String {
-        val youSuffix = appContext.getString(R.string.you_suffix)
+        val youSuffix = localizedContext.getString(R.string.you_suffix)
         val fromState = _uiState.value.endpoints.find { it.key == key }?.displayLabel
         if (!fromState.isNullOrBlank() && !fromState.endsWith(youSuffix)) {
             return fromState
@@ -1222,21 +1224,21 @@ class TalkViewModel(
         // Control plane: who holds the floor, derived ONLY from floor protocol (never ICE).
         val floorPresentation = buildFloorPresentation(config, session, localRawKey, conferenceActive)
         val floorOwner = when {
-            conferenceActive -> appContext.getString(R.string.conference_floor_all)
+            conferenceActive -> localizedContext.getString(R.string.conference_floor_all)
             floorPresentation is FloorPresentation.Acquiring -> {
                 if (floorPresentation.degraded) {
-                    appContext.getString(R.string.floor_acquiring_degraded)
+                    localizedContext.getString(R.string.floor_acquiring_degraded)
                 } else {
-                    appContext.getString(R.string.floor_acquiring)
+                    localizedContext.getString(R.string.floor_acquiring)
                 }
             }
             floorPresentation is FloorPresentation.Speaking -> moduleLabel(floorPresentation.moduleId)
             else -> "--"
         }
         val talking = when {
-            conferenceActive && conferenceMuted -> appContext.getString(R.string.conference_status_muted)
-            conferenceActive && manager.isChannelMediaReady(config) -> appContext.getString(R.string.conference_status_live)
-            conferenceActive -> appContext.getString(R.string.conference_status_connecting)
+            conferenceActive && conferenceMuted -> localizedContext.getString(R.string.conference_status_muted)
+            conferenceActive && manager.isChannelMediaReady(config) -> localizedContext.getString(R.string.conference_status_live)
+            conferenceActive -> localizedContext.getString(R.string.conference_status_connecting)
             floorPresentation is FloorPresentation.Acquiring -> moduleLabel(localRawKey)
             localPttActive -> moduleLabel(localRawKey)
             floorPresentation is FloorPresentation.Speaking -> moduleLabel(floorPresentation.moduleId)
@@ -1351,9 +1353,9 @@ class TalkViewModel(
             )
             val recovering = presence?.recoveringPeers?.joinToString(",") ?: ""
             val awaiting = session?.awaitingAdditionalParticipants == true
-            val display = MeetingPresenceDisplay.participantCountLabel(joined)
+            val display = MeetingPresenceDisplay.participantCountLabel(localizedContext, joined)
             val connectingHint = presence?.let {
-                ConferencePresenceUiFuse.joiningHint(it, failureModuleIds, conferenceMuted)
+                ConferencePresenceUiFuse.joiningHint(localizedContext, it, failureModuleIds, conferenceMuted)
             }
             TalkbackLog.i(
                 "Meeting pill: display=$display connected=$connected joined=$joined " +
@@ -1369,13 +1371,14 @@ class TalkViewModel(
         val meetingConnectedCount = conferencePresence?.connectedCount ?: 0
         val meetingJoinedCount = conferencePresence?.joinedCount ?: 0
         val meetingRecoveringPeers = conferencePresence?.recoveringPeers ?: emptySet()
-        val meetingParticipantLabel = MeetingPresenceDisplay.participantCountLabel(meetingJoinedCount)
+        val meetingParticipantLabel = MeetingPresenceDisplay.participantCountLabel(localizedContext, meetingJoinedCount)
         val awaitingAdditionalParticipants = session?.awaitingAdditionalParticipants == true
         val failureModuleIdsForHint = ConferencePresenceUiFuse.classifiedFailureModuleIds(
             session?.visibleParticipants.orEmpty()
         )
         val connectingParticipantHint = if (conferenceMediaLive && conferencePresence != null) {
             ConferencePresenceUiFuse.joiningHint(
+                localizedContext,
                 conferencePresence,
                 failureModuleIdsForHint,
                 conferenceMuted
@@ -1551,6 +1554,7 @@ class TalkViewModel(
                     )
                 }
                 val conferenceUi = MeetingPresenceDisplay.renderConferencePresence(
+                    context = localizedContext,
                     presence = presence,
                     participantFacts = participantFacts,
                     localCaptureBlocked = conferenceMuted
@@ -1583,6 +1587,7 @@ class TalkViewModel(
                 }
             } else if (presence != null && presence.participants.isNotEmpty()) {
                 val conferenceUi = MeetingPresenceDisplay.renderFromProjection(
+                    context = localizedContext,
                     projection = presence,
                     localModuleId = localModuleId,
                     speakingModuleId = speakingModuleId,
@@ -1722,7 +1727,7 @@ class TalkViewModel(
     }
 
     private fun localYouLabel(key: String): String =
-        "${moduleLabel(key)} ${appContext.getString(R.string.you_suffix)}"
+        "${moduleLabel(key)} ${localizedContext.getString(R.string.you_suffix)}"
 
     private fun isLocalEndpointKey(key: String, localRawKey: String): Boolean =
         moduleIdFromKey(key).equals(moduleIdFromKey(localRawKey), ignoreCase = true)

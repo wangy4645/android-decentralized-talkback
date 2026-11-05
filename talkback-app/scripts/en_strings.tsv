@@ -1,0 +1,454 @@
+﻿app_name	HumLink
+cd_toolbar_menu	Menu
+cd_toolbar_volume	Volume
+cd_toolbar_more	More options
+notification_channel_name	HumLink Service
+notification_running	HumLink service is running
+nav_talk	Talk
+nav_channels	Channels
+nav_contacts	Contacts
+nav_settings	Settings
+ptt_hold_hint	Press & Hold to Talk
+ptt_hold_hint_lines	Press & Hold\nto Talk
+talk_button_hold_to_talk	Hold to Talk
+talk_button_group_ptt_active_hint	%1$s · Group PTT active
+ptt_locked_hint	PTT Locked — slide to release
+ptt_locked_hint_lines	PTT Locked\nslide to release
+ptt_label	PTT
+lock_ptt	Lock PTT
+lock_ptt_slide	Slide to Lock PTT
+lock_ptt_unlock_slide	Slide to Unlock PTT
+floor_owner	Floor Owner
+floor_acquiring	Acquiring floor…
+floor_acquiring_degraded	Acquiring floor (media degraded)…
+floor_acquire_timeout	Could not start microphone — floor released
+floor_owner_short	Floor
+talking	Talking
+talking_short	Talk
+network	Network
+network_short	Net
+online_endpoints	Online Endpoints
+online_endpoints_count	Online Endpoints (%1$d)
+view_all	View All
+online_count_format	%1$d Online
+online_count_compact	%1$d online
+device_list	Devices
+you_suffix	(You)
+meeting_you_in_meeting	You\'re in the meeting
+status_online	Online
+status_speaking	Speaking
+status_offline	Offline
+status_inviting	Inviting…
+status_connecting	Connecting…
+status_joining	Joining…
+status_syncing	Syncing…
+status_degraded	Degraded
+status_reconnecting	Reconnecting…
+status_expired	No answer
+action_broadcast	All Call
+action_monitor	Monitor
+action_emergency	Emergency
+action_record	Record
+feature_status_not_enabled	Not enabled
+feature_status_coming_soon	Coming soon
+feature_status_not_configured	Not configured
+feature_status_profile_ready	Profile ready
+all_call_placeholder_body	One-tap notification to all endpoints. Requires All Call permission.
+emergency_placeholder_body	Priority floor override for urgent alerts.
+emergency_confirm_body	Your task profile includes Emergency priority. Floor override will be available in a future update.
+monitor_placeholder_body	Listen-only monitoring without taking the floor.
+record_placeholder_body	Save voice notes locally for field reporting.
+feature_placeholder_dismiss	Got it
+feature_placeholder_admin_hint	Contact your administrator.
+service_not_running	Service not running — open Settings to start
+no_session	Press and hold PTT to join this channel
+ptt_join_hint	Press and hold PTT to join this channel
+channel_connecting	Connecting audio…
+channel_discovering	Discovering teammates…
+channel_syncing	Syncing channel…
+channel_awaiting_host	Waiting for channel sync…
+ptt_setting_up_channel	Setting up channel…
+ptt_no_teammates	No teammates online yet. Wait a few seconds, or confirm all devices use the same task key.
+ptt_channel_not_ready	Setting up channel…
+ptt_floor_busy	Channel busy — %1$s is speaking
+ptt_meeting_active	In a meeting — PTT is unavailable
+meeting_ptt_tab_blocked	Meeting in progress — leave the meeting before using PTT
+settings_meeting_auto_join	Auto-join Meeting
+settings_meeting_auto_join_footer	When on, switching to Meeting joins immediately and incoming meetings connect without a prompt. When off, you receive a meeting invitation and choose Join or Decline (default).
+meeting_invite_title	%1$s invited you to a Meeting
+meeting_invite_subtitle	Tap Join to enter the meeting screen
+meeting_invite_join	Join
+meeting_invite_decline	Decline
+meeting_invite_pending	Meeting invitation
+meeting_rejoin_hint	Return to meeting — tap the center button
+meeting_rejoining	Rejoining meeting…
+meeting_reconnecting	Reconnecting…
+meeting_reconnect_failed	Connection failed — tap center to retry
+meeting_invite_accept_failed	Meeting invite expired. Tap Meeting to try again.
+no_peers_for_group	No teammates online yet. Wait a few seconds, or confirm all devices use the same task key.
+feature_coming_soon	Coming soon
+start_service	Start Service
+stop_service	Stop Service
+settings_title	Settings
+channels_title	Channel
+contacts_title	Contacts
+contacts_tab_endpoints	Endpoints
+contacts_tab_groups	Groups
+contacts_section_online	Online (%1$d)
+contacts_section_offline	Offline (%1$d)
+channel_edit_hint	To change channel ID or display name, open Settings → My Identity.
+channel_status_service_stopped	Service stopped
+channel_status_waiting	Ready — hold PTT to talk
+channel_status_speaking	Speaking: %1$s
+channel_status_idle	Idle
+channel_online_session	%1$d online · session active
+channel_online_count	%1$d online
+channel_network	Network: %1$s
+channel_floor_owner	Floor: %1$s
+channel_floor_location	Floor: %1$s
+settings_conference_mode	Meeting Mode
+settings_conference_mode_hint	When enabled, the channel uses full-duplex Meeting (up to 8 modules). When off, use half-duplex group PTT (hold to talk).
+conference_floor_all	Meeting
+conference_status_live	Live
+conference_status_room_degraded	Meeting audio degraded
+conference_status_room_failed	Meeting ended
+conference_status_muted	Muted
+conference_status_connecting	Connecting…
+meeting_status_connecting	Connecting
+meeting_status_waiting	Waiting
+meeting_ended	Meeting ended
+conference_ptt_mute	MUTE
+conference_ptt_unmute	UNMUTE
+conference_ptt_hint_live	Meeting is live
+conference_ptt_hint_join	Joining meeting…
+settings_channel_mode_group	PTT group
+settings_channel_mode_conference	Meeting
+mode_ptt	PTT
+mode_meeting	Meeting
+meeting_title	Meeting
+meeting_channel_title	%1$s - Meeting
+meeting_participants	%1$d Participants
+meeting_participants_presence	%1$s Participants
+online_count_presence	%1$s online
+meeting_tap_to_join	Tap to Join
+talk_button_meeting_control	Meeting Control
+meeting_tap_to_view	Tap to View
+meeting_in_progress	Meeting in progress
+meeting_connecting	Connecting to meeting…
+meeting_connecting_hint	Please wait
+meeting_cancel	Cancel
+meeting_leave	Leave Meeting
+meeting_status_label	Status
+meeting_participants_label	Participants
+meeting_speaking	Speaking
+cd_meeting_volume_meter	Audio level
+meeting_you_muted	You are muted
+meeting_tap_mic_to_speak	Tap mic to speak
+meeting_poor_network	Poor Network
+meeting_poor_network_hint	Network is unstable. Audio may be affected.
+meeting_members_title	Meeting Members
+meeting_participants_section	PARTICIPANTS
+meeting_control_members	Members
+meeting_options_title	Meeting Options
+meeting_info_title	Meeting Info
+meeting_invite_members	Invite Members
+meeting_invite	Invite
+meeting_invite_search_hint	Search members
+meeting_invite_selected	Invite Selected (%1$d)
+meeting_invite_success	Invited %1$d member(s)
+meeting_invite_none	No members available to invite
+meeting_invite_failed	Unable to invite selected members
+meeting_mute_all_applied	You are muted. Mute all applies to this device.
+meeting_end_for_all_done	Meeting ended
+meeting_control_speaker	Speaker
+meeting_audio_route_speaker_on	Speaker on
+meeting_audio_route_earpiece_on	Earpiece on
+meeting_control_more	More
+meeting_control_section	MEETING CONTROL
+meeting_mute_all	Mute All
+meeting_lock	Lock Meeting
+meeting_end_for_all	End Meeting for All
+meeting_audio_settings	Audio Settings
+meeting_auto_gain	Auto Gain Control
+meeting_noise_suppression	Noise Suppression
+meeting_info_channel	Channel
+meeting_info_id	Meeting ID
+meeting_info_creator	Creator
+meeting_info_start_time	Start Time
+meeting_copy_link	Copy Meeting Link
+meeting_link_copied	Meeting link copied
+meeting_link_planned	Meeting links are planned for a future update.
+meeting_control_planned	This control is planned for a future update.
+meeting_tab_all	All
+meeting_tab_muted	Muted
+action_meeting	Meeting
+settings_home_channel_summary_with_mode	Channel: %1$s · %2$s · %3$s
+cd_settings_back	Back
+settings_section_device	DEVICE
+settings_section_network	NETWORK
+settings_section_security	SECURITY
+settings_section_system	SYSTEM
+settings_identity_title	My Identity
+settings_network_status_title	Network Status
+settings_service_title	Service
+settings_service_running	Running
+settings_service_stopped	Stopped
+network_quality_excellent	Excellent
+network_quality_good	Good
+network_quality_poor	Poor
+network_quality_offline	Offline
+network_quality_na	N/A
+settings_network_detail_qos_excellent	Talkback service is running. Link quality is excellent.
+settings_network_detail_qos_good	Talkback service is running. Link quality is good.
+settings_network_detail_qos_poor	Talkback service is running. Link quality is poor.
+settings_network_detail_qos_na	Talkback service is running. Waiting for peer links.
+settings_network_detail_offline	No active network connection.
+settings_network_detail_unavailable	Unable to read network state.
+settings_network_detail_limited	Network connected but not ready for IP traffic.
+settings_network_detail_link_ready	Device link is up and validated.
+settings_network_detail_link_connected	Device link is up. Start the service to measure talkback quality.
+settings_network_transport_label	Transport: %1$s
+settings_network_transport_wifi	Wi-Fi
+settings_network_transport_ethernet	Ethernet
+settings_network_transport_cellular	Cellular
+settings_network_transport_other	Other
+settings_network_status_hint	Shows device connectivity. When the talkback service is running, quality reflects live peer links.
+settings_service_start_hint	Configure port and remote peers (optional if mDNS works), then start or stop the talkback service here.
+settings_section_this_device	THIS DEVICE
+settings_section_remote_peers	REMOTE PEERS
+settings_hint_local_ip	Local IP (share with other devices)
+settings_copy_ip	Copy
+settings_local_ip_copied	IP copied
+settings_local_ip_unavailable	Not connected to Wi-Fi
+settings_peers_hint	Peers are auto-discovered on the RF mesh. Add a row here only when troubleshooting.
+settings_peers_json_advanced_hint	For bulk import/export by engineers. Normal operators should use the form above.
+settings_hint_peer_module_id	Remote module ID, e.g. M02
+settings_hint_peer_host	Remote IP, e.g. 192.168.1.102
+settings_hint_peer_port	Remote port, e.g. 50001
+settings_peer_add	Add peer
+settings_peer_remove	Remove
+settings_peers_empty	No manual peers. Auto-discovery is active.
+settings_peer_summary	%1$s · %2$s:%3$d
+settings_peer_duplicate	Peer %1$s already exists
+settings_peer_self	Cannot add this device as a peer
+settings_peer_added	Peer added
+settings_peer_removed	Peer removed
+settings_show_advanced	Show advanced
+settings_hide_advanced	Hide advanced
+settings_import_peers_json	Import from JSON
+settings_import_peers_json_ok	Imported %1$d peer(s)
+settings_import_peers_json_failed	Invalid peers JSON
+settings_security_title	Security
+settings_security_subtitle_open	Whitelist open
+settings_security_subtitle_whitelist	%1$d modules whitelisted
+settings_general_title	General
+settings_general_subtitle	Auto start, auto redial
+settings_about	About
+settings_about_version	Version %1$s
+settings_home_channel_summary	Single channel: %1$s · %2$s. All devices must use the same channel ID to group call.
+settings_hint_module_id	Module ID
+settings_hint_endpoint_id	Endpoint ID
+settings_hint_channel_id	Channel ID (group call)
+settings_hint_channel_name	Channel display name
+settings_channel_single_hint	V1 uses one channel per device. There is no multi-channel list.
+settings_hint_signaling_port	Signaling port
+settings_hint_static_peers	Manual peer override (optional JSON)
+settings_hint_allowed_modules	Allowed module IDs (comma-separated, empty = all)
+settings_save	Save
+settings_saved	Saved
+settings_encryption_section	ENCRYPTION
+settings_encryption_mode_title	Encryption Mode
+settings_encryption_mode_subtitle	AES-256 (Planned)
+settings_encryption_mode_footer	End-to-end AES-256 encryption is planned for a future update.
+settings_badge_planned	Planned
+settings_signaling_protection_title	Signaling Protection
+settings_status_enabled	Enabled
+settings_signaling_protection_footer	Current: HMAC-SHA256 signature for UDP signaling.
+settings_shared_secret_section	SHARED SECRET
+settings_shared_secret_label	Shared Secret
+settings_change_shared_secret	Change Shared Secret
+settings_hint_shared_secret	Shared secret
+settings_toggle_secret_visibility	Show or hide shared secret
+settings_allowed_list_section	ALLOWED LIST
+settings_whitelist_mode_title	Whitelist Mode
+settings_manage_allowed_devices	Manage Allowed Devices
+settings_allowed_devices_count	%1$d Devices
+settings_allowed_list_edit_hint	Enter module IDs separated by commas (e.g. M01,M02).
+settings_allowed_list_title	Allowed Devices
+settings_advanced_section	ADVANCED
+settings_certificate_title	Certificate
+settings_certificate_not_configured	Not Configured
+settings_ptt_behavior_section	PTT BEHAVIOR
+settings_other_section	OTHER
+settings_keep_screen_on_title	Keep Screen On
+settings_keep_screen_on_value	While PTT
+settings_ptt_hold_timeout_title	PTT Hold Timeout
+settings_ptt_hold_timeout_value	60 Seconds
+settings_ptt_lock_mode_title	PTT Lock Mode
+settings_ptt_lock_mode_value	Slide to Lock
+settings_release_to_listen_title	Release to Listen
+settings_release_to_listen_footer	Release PTT to listen others
+settings_language_title	Language
+settings_language_follow_system	Follow system
+settings_language_english	English
+settings_language_chinese_simplified	简体中文
+settings_validation_module_id	Module ID must be 2–16 characters [A–Z0–9]
+settings_validation_endpoint_id	Endpoint ID must be 1–16 characters [A–Z0–9]
+settings_validation_port	Port must be between 1024 and 65535
+settings_validation_peer_module_id	Peer module ID must be 2–16 characters [A–Z0–9]
+settings_validation_peer_module_id_self	Peer module ID cannot match this device
+settings_validation_peer_host_required	Peer IP is required
+settings_validation_peer_host_invalid	Peer IP format is invalid
+settings_validation_peer_port	Peer port must be between 1024 and 65535
+settings_validation_secret_required	Task shared secret is required
+settings_time_format_title	Time Format
+settings_time_format_value	24-Hour
+settings_clear_cache_title	Clear Cache
+settings_clear_cache_value	12.5 MB
+settings_allowed_count_open	No module whitelist (all allowed)
+settings_allowed_count	%1$d modules whitelisted
+settings_auto_start	Auto start on boot
+settings_auto_redial	Auto redial on recovery
+settings_auto_accept_calls	Auto-answer calls
+settings_auto_accept_calls_footer	When off, incoming calls show answer / reject. Restart service after change.
+settings_restart_service_hint	Restart service to apply call settings
+call_accept	Answer
+call_reject	Decline
+call_hangup	Hang up
+call_mute	Mute
+call_unmute	Unmute
+call_unknown_remote	Unknown
+call_status_incoming	Incoming call
+call_status_ringing_out	Calling…
+call_status_connecting	Connecting…
+call_status_connected	In call
+call_peer_offline	Peer is offline
+call_failed	Call failed
+call_failed_busy	Call failed — line busy (end other call or channel session)
+call_failed_unreachable	Call failed — peer not reachable (check Service peers / same Wi-Fi)
+call_action_private	Private Call
+call_action_private_sub	Full-duplex call
+call_action_monitor	Monitor
+call_action_monitor_sub	One-way listen
+call_action_message	Send Message
+call_action_favorite	Add to Favorites
+call_action_cancel	Cancel
+endpoint_text_compose_title	Message %1$s
+endpoint_text_hint	Max 256 characters
+endpoint_text_char_count	%1$d/%2$d
+endpoint_text_char_count_zero	0/256
+endpoint_text_send	Send
+endpoint_text_sent	Message sent
+message_notification_channel	Messages
+message_notification_title	New message
+message_notification_body	From %1$s\n%2$s
+message_notification_direct_body	From %1$s (Direct)
+message_notification_channel_body	From %1$s (Channel)
+message_inbound_toast_channel	New message\nFrom %1$s (Channel)
+messages_section_channels	Channels
+messages_section_direct	Direct Messages
+channel_conversation_members	%1$d members · %2$d online
+channel_text_no_members	No online channel members
+channel_message_preview_empty	No channel messages yet
+message_notification_multi_title	%1$d new messages
+message_notification_multi_body	From: %1$s
+message_inbound_toast_single	%1$s\nNew message
+message_inbound_toast_multi	%1$d new messages\nFrom: %2$s
+endpoint_text_unreachable	Message failed — peer not reachable
+endpoint_text_too_long	Message too long (max 256 characters)
+endpoint_text_send_failed	Message failed to send
+endpoint_text_failed	Message failed
+channels_tab_messages	Messages
+conversations_title	Conversations
+conversations_sort_recent	Recent
+message_compose_fab	New message
+message_compose_title	New message
+message_compose_no_targets	No online endpoints
+messages_list_empty	No messages yet
+messages_list_empty_hint	Send a message from Contacts or start here
+conversation_empty	No messages yet
+conversation_empty_hint	Start conversation
+conversation_sender_you	Me
+conversation_secure_hint	Secure · End-to-end
+conversation_input_hint	Type message...
+conversation_time_yesterday	Yesterday
+messages_unread_badge	%1$d unread
+call_end	End Call
+call_status_speaking	Speaking…
+call_status_connected_pill	Connected
+call_timer_label	Call Time
+call_status_remote_speaking	Remote speaking
+call_banner_dots	···
+call_status_reconnecting	Reconnecting…
+call_status_poor_connection	Poor connection
+call_control_mute	Mute
+call_control_unmute	Unmute
+call_control_speaker	Speaker
+call_control_headset	Headset
+call_control_audio_route	Audio Route
+call_control_more	More
+call_audio_route_title	Audio Route
+call_audio_route_speaker	Speaker
+call_audio_route_earpiece	Phone
+call_audio_route_headset	Headset
+call_more_diagnostics	Call Diagnostics
+call_more_recording	Recording
+call_more_share_location	Share Location
+call_diagnostics_title	Call Diagnostics
+call_diagnostics_line	%1$s: %2$s
+call_qos_network	Network
+call_qos_rtt	RTT
+call_qos_loss	Packet Loss
+call_qos_codec	Codec
+call_qos_na	N/A
+call_ended_title	Call Ended
+call_summary_title	Call Summary
+call_back_to_contacts	Back to Contacts
+call_back_to_conversation	Back to conversation
+call_back_to_talk	Back to Talk
+call_cannot_call_offline	Cannot call — %1$s is offline
+call_peer_busy	%1$s is busy
+call_summary_line	%1$s: %2$s
+call_summary_start	Start Time
+call_summary_end	End Time
+call_summary_duration	Duration
+call_summary_avg_rtt	Avg RTT
+call_summary_packet_loss	Packet Loss
+call_summary_network	Network Quality
+settings_state_invalid	Invalid config: %1$s
+settings_state_starting	Starting service for %1$s-%2$s…
+settings_state_stopping	Stopping service…
+settings_state_running	State: %1$s %2$s
+settings_secret_required_warning	Task shared secret is required before starting the service.
+task_profiles_title	Task Groups
+task_profiles_footer	Each task group binds an application secret and channel. Peers are auto-discovered on the RF mesh; static peers are optional overrides. Switch RF key out-of-band before switching groups.
+task_profile_add	Add Task Group
+task_profile_edit	Edit
+task_profile_delete	Delete
+task_profile_switch	Switch
+task_profile_active_badge	Active
+task_profile_meta	%1$s · %2$s %3$s
+task_profile_rf_meta	· RF: %1$s
+task_profile_name_label	Task group name
+task_profile_channel_id_label	Channel ID
+task_profile_channel_name_label	Channel display name
+task_profile_rf_key_label	RF key label (reminder)
+task_profile_rf_key_hint	Switch the RF task key using your hardware/config tool before switching to this group in the app.
+task_profile_priority_label	Local priority (this task)
+task_profile_priority_hint	Higher priority wins floor disputes. Emergency can preempt an active speaker.
+task_profile_priority_normal	Normal
+task_profile_priority_dispatch	Commander
+task_profile_priority_emergency	Emergency
+ptt_floor_preempted	Higher-priority speaker took the floor
+task_profile_manual_peers_section	Manual peer override (optional)
+task_profile_manual_peers_hint	Leave empty for zero-config discovery. Add Module ID, IP, and port only if auto-discovery fails.
+task_profile_switch_confirm_title	Switch task group?
+task_profile_switch_confirm_message	You will leave the current group and reconnect to \"%1$s\". Active calls will end. Ensure the matching RF key is already applied.
+task_profile_already_active	This task group is already active.
+task_profile_switched	Task group switched.
+task_profile_deleted	Task group deleted.
+task_profile_delete_last	At least one task group must remain.
+task_profile_not_found	Task group not found.
+task_profile_pick_title	Select task group
+settings_task_profiles_title	Task Groups
+settings_task_profiles_subtitle	Manage secrets and switch groups

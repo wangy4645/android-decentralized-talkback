@@ -55,6 +55,9 @@ class MainActivity : AppCompatActivity() {
         // Hardware volume keys drive the in-call stream used by both WebRTC and multicast playout.
         volumeControlStream = AudioManager.STREAM_VOICE_CALL
         talkViewModel = ViewModelProvider(this, TalkViewModelFactory(this))[TalkViewModel::class.java]
+        if (savedInstanceState != null) {
+            talkViewModel.refresh()
+        }
         requestAudioPermissionIfNeeded()
         requestNotificationPermissionIfNeeded()
 

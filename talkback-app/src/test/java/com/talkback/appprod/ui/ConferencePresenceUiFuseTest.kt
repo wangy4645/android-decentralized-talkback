@@ -12,8 +12,14 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RuntimeEnvironment
+import org.robolectric.RobolectricTestRunner
 
+@RunWith(RobolectricTestRunner::class)
 class ConferencePresenceUiFuseTest {
+
+    private val context get() = RuntimeEnvironment.getApplication()
 
     @Before
     fun setUp() {
@@ -40,7 +46,7 @@ class ConferencePresenceUiFuseTest {
             ParticipantPresenceRecord("M04", CppMembership.JOINED, CppMediaRelation.NONE, CppEvidence.UNKNOWN),
         )
         val failures = setOf("M03", "M04")
-        assertNull(ConferencePresenceUiFuse.joiningHint(projection, failures, localCaptureBlocked = false))
+        assertNull(ConferencePresenceUiFuse.joiningHint(context, projection, failures, localCaptureBlocked = false))
     }
 
     @Test
@@ -75,7 +81,7 @@ class ConferencePresenceUiFuseTest {
         val failureIds = ConferencePresenceUiFuse.classifiedFailureModuleIds(visible)
         assertEquals(setOf("M03", "M04"), failureIds)
         assertTrue(presence.recoveringPeers.isEmpty())
-        assertNull(ConferencePresenceUiFuse.joiningHint(presence, failureIds, false))
+        assertNull(ConferencePresenceUiFuse.joiningHint(context, presence, failureIds, false))
 
         val facts = visible.map { participant ->
             MeetingPresenceDisplay.ParticipantPresentationFacts(
@@ -88,7 +94,7 @@ class ConferencePresenceUiFuseTest {
                 speaking = false,
             )
         }
-        val ui = MeetingPresenceDisplay.renderConferencePresence(presence, facts)
+        val ui = MeetingPresenceDisplay.renderConferencePresence(context, presence, facts)
         assertEquals(EndpointStatus.DEGRADED, ui.avatarStatuses["M03"])
         assertEquals(EndpointStatus.DEGRADED, ui.avatarStatuses["M04"])
         assertNull(ui.connectingHint)

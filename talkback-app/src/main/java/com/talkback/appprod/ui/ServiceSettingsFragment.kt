@@ -114,7 +114,7 @@ class ServiceSettingsFragment : Fragment() {
         )
         val validationError = SettingsActions.validateServiceConfig(next)
         if (validationError != null) {
-            txtState.text = getString(R.string.settings_state_invalid, validationError)
+            txtState.text = getString(R.string.settings_state_invalid, getString(validationError))
             return
         }
         store.save(next)

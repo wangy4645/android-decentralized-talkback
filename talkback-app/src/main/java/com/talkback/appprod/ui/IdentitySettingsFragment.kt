@@ -42,7 +42,7 @@ class IdentitySettingsFragment : Fragment() {
             val port = store.load().signalingPort
             val validationError = SettingsActions.validateInput(moduleId, endpointId, port)
             if (validationError != null) {
-                Toast.makeText(requireContext(), validationError, Toast.LENGTH_SHORT).show()
+                Toast.makeText(requireContext(), getString(validationError), Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
             val current = store.load()

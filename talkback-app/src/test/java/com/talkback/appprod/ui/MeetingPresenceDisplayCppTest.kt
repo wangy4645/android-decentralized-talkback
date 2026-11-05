@@ -8,8 +8,14 @@ import com.talkback.core.session.ParticipantPresenceRecord
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RuntimeEnvironment
+import org.robolectric.RobolectricTestRunner
 
+@RunWith(RobolectricTestRunner::class)
 class MeetingPresenceDisplayCppTest {
+
+    private val context get() = RuntimeEnvironment.getApplication()
 
     private fun record(
         moduleId: String,
@@ -36,6 +42,7 @@ class MeetingPresenceDisplayCppTest {
             record("M04")
         )
         val ui = MeetingPresenceDisplay.renderFromProjection(
+            context = context,
             projection = p,
             localModuleId = "M01",
             speakingModuleId = null,
@@ -43,7 +50,7 @@ class MeetingPresenceDisplayCppTest {
         )
         assertEquals(4, ui.participantStates.size)
         assertEquals(EndpointStatus.CONNECTING, ui.avatarStatuses["M04"])
-        assertEquals("M04 joining...", ui.connectingHint)
+        assertEquals(context.getString(com.talkback.appprod.R.string.meeting_single_peer_joining, "M04"), ui.connectingHint)
     }
 
     @Test
@@ -55,6 +62,7 @@ class MeetingPresenceDisplayCppTest {
             record("M04", media = CppMediaRelation.DIRECT, evidence = CppEvidence.FRESH)
         )
         val ui = MeetingPresenceDisplay.renderFromProjection(
+            context = context,
             projection = p,
             localModuleId = "M01",
             speakingModuleId = null,

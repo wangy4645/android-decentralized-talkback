@@ -31,8 +31,8 @@ class TaskProfileManager(context: Context) {
     fun applyProfile(profileId: String, restartService: Boolean): Result<TaskProfile> {
         val profile = profileStore.getProfile(profileId)
             ?: return Result.failure(IllegalArgumentException("profile not found"))
-        SettingsActions.validateSecret(profile.sharedSecret)?.let {
-            return Result.failure(IllegalArgumentException(it))
+        SettingsActions.validateSecret(profile.sharedSecret)?.let { messageRes ->
+            return Result.failure(IllegalArgumentException(appContext.getString(messageRes)))
         }
         applyProfileFields(profile)
         profileStore.setActiveProfileId(profile.id)

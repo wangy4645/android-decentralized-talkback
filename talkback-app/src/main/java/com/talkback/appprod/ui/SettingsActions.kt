@@ -2,65 +2,76 @@ package com.talkback.appprod.ui
 
 import android.content.Context
 import android.content.Intent
+import androidx.annotation.StringRes
 import androidx.core.content.ContextCompat
+import com.talkback.appprod.R
 import com.talkback.appprod.data.AppConfig
 import com.talkback.appprod.service.TalkbackForegroundService
 
 object SettingsActions {
-    fun validateInput(moduleId: String, endpointId: String, port: Int?): String? {
+    @StringRes
+    fun validateInput(moduleId: String, endpointId: String, port: Int?): Int? {
         if (!moduleId.matches(Regex("^[A-Z0-9]{2,16}$"))) {
-            return "moduleId must be 2-16 chars [A-Z0-9]"
+            return R.string.settings_validation_module_id
         }
         if (!endpointId.matches(Regex("^[A-Z0-9]{1,16}$"))) {
-            return "endpointId must be 1-16 chars [A-Z0-9]"
+            return R.string.settings_validation_endpoint_id
         }
         if (port == null || port !in 1024..65535) {
-            return "port must be in range 1024-65535"
+            return R.string.settings_validation_port
         }
         return null
     }
 
-    fun validatePeerModuleId(moduleId: String, localModuleId: String): String? {
+    @StringRes
+    fun validatePeerModuleId(moduleId: String, localModuleId: String): Int? {
         val normalized = moduleId.trim().uppercase()
         if (!normalized.matches(Regex("^[A-Z0-9]{2,16}$"))) {
-            return "peer moduleId must be 2-16 chars [A-Z0-9]"
+            return R.string.settings_validation_peer_module_id
         }
         if (normalized == localModuleId.trim().uppercase()) {
-            return "peer moduleId cannot match this device"
+            return R.string.settings_validation_peer_module_id_self
         }
         return null
     }
 
-    fun validatePeerHost(host: String): String? {
+    @StringRes
+    fun validatePeerHost(host: String): Int? {
         val trimmed = host.trim()
-        if (trimmed.isEmpty()) return "peer IP is required"
+        if (trimmed.isEmpty()) return R.string.settings_validation_peer_host_required
         val ipv4 = Regex("^((25[0-5]|2[0-4]\\d|[01]?\\d\\d?)\\.){3}(25[0-5]|2[0-4]\\d|[01]?\\d\\d?)$")
         val hostname = Regex("^[A-Za-z0-9]([A-Za-z0-9.-]{0,62}[A-Za-z0-9])?$")
         if (!trimmed.matches(ipv4) && !trimmed.matches(hostname)) {
-            return "peer IP format is invalid"
+            return R.string.settings_validation_peer_host_invalid
         }
         return null
     }
 
-    fun validatePeerPort(port: Int?): String? {
+    @StringRes
+    fun validatePeerPort(port: Int?): Int? {
         if (port == null || port !in 1024..65535) {
-            return "peer port must be in range 1024-65535"
+            return R.string.settings_validation_peer_port
         }
         return null
     }
 
-    fun validateSecret(secret: String): String? {
+    @StringRes
+    fun validateSecret(secret: String): Int? {
         if (secret.trim().isEmpty()) {
-            return "task shared secret is required"
+            return R.string.settings_validation_secret_required
         }
         return null
     }
 
-    fun validateServiceConfig(config: AppConfig): String? {
+    @StringRes
+    fun validateServiceConfig(config: AppConfig): Int? {
         validateInput(config.moduleId, config.endpointId, config.signalingPort)?.let { return it }
         validateSecret(config.sharedSecret)?.let { return it }
         return null
     }
+
+    fun validationMessage(context: Context, @StringRes messageRes: Int): String =
+        context.getString(messageRes)
 
     fun startService(context: Context, config: AppConfig) {
         val intent = Intent(context, TalkbackForegroundService::class.java).apply {
@@ -80,8 +91,6 @@ object SettingsActions {
     }
 
     fun stopService(context: Context) {
-        // Prefer foreground-service start so ACTION_STOP reaches an already-running
-        // TalkbackForegroundService on Android O+ (plain startService can be dropped).
         ContextCompat.startForegroundService(
             context,
             Intent(context, TalkbackForegroundService::class.java).apply {

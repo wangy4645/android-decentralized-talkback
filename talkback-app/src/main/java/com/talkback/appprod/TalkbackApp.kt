@@ -1,7 +1,9 @@
 package com.talkback.appprod
 
 import android.app.Application
+import android.content.Context
 import com.talkback.appprod.data.TaskProfileManager
+import com.talkback.appprod.ui.AppLocaleController
 import com.talkback.appprod.endpointtext.ChannelConversationStore
 import com.talkback.appprod.endpointtext.ConversationStore
 import com.talkback.appprod.endpointtext.EndpointTextInboundNotifier
@@ -32,6 +34,11 @@ class TalkbackApp : Application() {
 
     var serviceRunning: Boolean = false
         internal set
+
+    override fun attachBaseContext(base: Context) {
+        AppLocaleController.applyStored(base)
+        super.attachBaseContext(base)
+    }
 
     override fun onCreate() {
         super.onCreate()

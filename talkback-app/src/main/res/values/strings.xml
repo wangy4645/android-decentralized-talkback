@@ -13,7 +13,7 @@
     <string name="ptt_hold_hint">Press &amp; Hold to Talk</string>
     <string name="ptt_hold_hint_lines">Press &amp; Hold\nto Talk</string>
     <string name="talk_button_hold_to_talk">Hold to Talk</string>
-    <string name="talk_button_group_ptt_active_hint">%1$s · 组呼在线</string>
+    <string name="talk_button_group_ptt_active_hint">%1$s · Group PTT active</string>
     <string name="ptt_locked_hint">PTT Locked — slide to release</string>
     <string name="ptt_locked_hint_lines">PTT Locked\nslide to release</string>
     <string name="ptt_label">PTT</string>
@@ -112,7 +112,7 @@
     <string name="settings_conference_mode_hint">When enabled, the channel uses full-duplex Meeting (up to 8 modules). When off, use half-duplex group PTT (hold to talk).</string>
     <string name="conference_floor_all">Meeting</string>
     <string name="conference_status_live">Live</string>
-    <string name="conference_status_room_degraded">会议音频异常</string>
+    <string name="conference_status_room_degraded">Meeting audio degraded</string>
     <string name="conference_status_room_failed">Meeting ended</string>
     <string name="conference_status_muted">Muted</string>
     <string name="conference_status_connecting">Connecting…</string>
@@ -291,7 +291,18 @@
     <string name="settings_release_to_listen_title">Release to Listen</string>
     <string name="settings_release_to_listen_footer">Release PTT to listen others</string>
     <string name="settings_language_title">Language</string>
-    <string name="settings_language_value">English</string>
+    <string name="settings_language_follow_system">Follow system</string>
+    <string name="settings_language_english">English</string>
+    <string name="settings_language_chinese_simplified">简体中文</string>
+    <string name="settings_validation_module_id">Module ID must be 2–16 characters [A–Z0–9]</string>
+    <string name="settings_validation_endpoint_id">Endpoint ID must be 1–16 characters [A–Z0–9]</string>
+    <string name="settings_validation_port">Port must be between 1024 and 65535</string>
+    <string name="settings_validation_peer_module_id">Peer module ID must be 2–16 characters [A–Z0–9]</string>
+    <string name="settings_validation_peer_module_id_self">Peer module ID cannot match this device</string>
+    <string name="settings_validation_peer_host_required">Peer IP is required</string>
+    <string name="settings_validation_peer_host_invalid">Peer IP format is invalid</string>
+    <string name="settings_validation_peer_port">Peer port must be between 1024 and 65535</string>
+    <string name="settings_validation_secret_required">Task shared secret is required</string>
     <string name="settings_time_format_title">Time Format</string>
     <string name="settings_time_format_value">24-Hour</string>
     <string name="settings_clear_cache_title">Clear Cache</string>
@@ -442,5 +453,14 @@
     <string name="task_profile_not_found">Task group not found.</string>
     <string name="task_profile_pick_title">Select task group</string>
     <string name="settings_task_profiles_title">Task Groups</string>
+    <string name="meeting_microphone_unavailable">Microphone unavailable</string>
+    <string name="meeting_single_peer_joining">%1$s joining…</string>
+    <string name="meeting_multiple_peers_joining">%1$d joining…</string>
+    <string name="meeting_hint_peer_reconnecting">%1$s reconnecting…</string>
+    <string name="meeting_hint_peers_reconnecting">%1$d members reconnecting</string>
+    <string name="meeting_hint_peer_degraded">%1$s degraded…</string>
+    <string name="meeting_hint_peers_degraded">%1$d members degraded</string>
+    <string name="meeting_hint_peer_syncing">%1$s syncing…</string>
+    <string name="meeting_hint_peers_syncing">%1$d members syncing</string>
     <string name="settings_task_profiles_subtitle">Manage secrets and switch groups</string>
 </resources>

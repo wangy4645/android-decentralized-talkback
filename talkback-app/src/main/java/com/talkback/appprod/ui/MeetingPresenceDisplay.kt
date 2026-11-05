@@ -1,5 +1,7 @@
 package com.talkback.appprod.ui
 
+import android.content.Context
+import com.talkback.appprod.R
 import com.talkback.core.session.ConferencePresenceUiBind
 import com.talkback.core.session.CppAvatarAvailability
 import com.talkback.core.session.CppAvatarParticipantRow
@@ -23,7 +25,8 @@ object MeetingPresenceDisplay {
     @Volatile
     var receivePathLivenessProvider: ReceivePathLivenessProvider = NoOpReceivePathLivenessProvider
 
-    fun participantCountLabel(joinedCount: Int): String = "$joinedCount Participants"
+    fun participantCountLabel(context: Context, joinedCount: Int): String =
+        context.getString(R.string.meeting_participants, joinedCount)
 
     enum class ParticipantAvailabilityKind {
         NONE,
@@ -224,17 +227,18 @@ object MeetingPresenceDisplay {
     }
 
     fun aggregateAvailabilityHint(
+        context: Context,
         states: List<ParticipantPresentationState>,
         localCaptureBlocked: Boolean
     ): String? {
         if (localCaptureBlocked) {
-            return "Microphone unavailable"
+            return context.getString(R.string.meeting_microphone_unavailable)
         }
         val joining = states.filter { !it.isLocal && it.availabilityKind == ParticipantAvailabilityKind.JOINING }
         if (joining.isNotEmpty()) {
             return when (joining.size) {
-                1 -> "${joining.single().moduleId} joining..."
-                else -> "${joining.size} joining..."
+                1 -> context.getString(R.string.meeting_single_peer_joining, joining.single().moduleId)
+                else -> context.getString(R.string.meeting_multiple_peers_joining, joining.size)
             }
         }
         val connectivityPeers = states.mapNotNull { state ->
@@ -243,11 +247,13 @@ object MeetingPresenceDisplay {
             state.moduleId to c
         }
         return UserVisibleConnectivityProjection.formatMeetingHint(
+            context,
             UserVisibleConnectivityProjection.aggregateMeetingConnectivity(connectivityPeers)
         )
     }
 
     fun renderFromProjection(
+        context: Context,
         projection: ConferencePresenceProjection,
         localModuleId: String,
         speakingModuleId: String?,
@@ -261,8 +267,13 @@ object MeetingPresenceDisplay {
         )
         val states = rows.map { it.toPresentationState() }
         return ConferencePresenceUi(
-            headerLabel = participantCountLabel(projection.joinedCount),
-            connectingHint = ConferencePresenceUiBind.joiningHint(projection, localCaptureBlocked),
+            headerLabel = participantCountLabel(context, projection.joinedCount),
+            connectingHint = ConferencePresenceUiFuse.joiningHint(
+                context,
+                projection,
+                emptySet(),
+                localCaptureBlocked
+            ),
             avatarStatuses = states.associate { it.moduleId to it.endpointStatus },
             participantStates = states
         )
@@ -333,6 +344,7 @@ object MeetingPresenceDisplay {
             displayState == ConferenceParticipantDisplayState.VISIBLE_DOMAIN_BLOCKED
 
     fun renderConferencePresence(
+        context: Context,
         presence: ConferencePresenceProjection,
         participantFacts: List<ParticipantPresentationFacts>,
         localCaptureBlocked: Boolean = false
@@ -346,8 +358,8 @@ object MeetingPresenceDisplay {
         val hintStates = states.filter { it.moduleId !in failureModuleIds }
         val avatarStatuses = states.associate { it.moduleId to it.endpointStatus }
         return ConferencePresenceUi(
-            headerLabel = participantCountLabel(presence.joinedCount),
-            connectingHint = aggregateAvailabilityHint(hintStates, localCaptureBlocked),
+            headerLabel = participantCountLabel(context, presence.joinedCount),
+            connectingHint = aggregateAvailabilityHint(context, hintStates, localCaptureBlocked),
             avatarStatuses = avatarStatuses,
             participantStates = states
         )

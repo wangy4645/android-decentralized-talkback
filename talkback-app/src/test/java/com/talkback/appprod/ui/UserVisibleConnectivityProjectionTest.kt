@@ -11,11 +11,18 @@ import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RuntimeEnvironment
+import org.robolectric.RobolectricTestRunner
+import com.talkback.appprod.R
 
 /**
  * ADR-0034 dual-axis mapping + aggregation + admission isolation guards.
  */
+@RunWith(RobolectricTestRunner::class)
 class UserVisibleConnectivityProjectionTest {
+
+    private val context get() = RuntimeEnvironment.getApplication()
 
     @Test
     fun caseA_smoke_mediaOk_controlSyncPending_isSyncing_notReconnecting() {
@@ -172,7 +179,10 @@ class UserVisibleConnectivityProjectionTest {
         )
         assertEquals(UserVisibleConnectivityState.DEGRADED, summary!!.state)
         assertEquals(listOf("M03"), summary.peerIds)
-        assertEquals("M03 degraded...", UserVisibleConnectivityProjection.formatMeetingHint(summary))
+        assertEquals(
+            context.getString(R.string.meeting_hint_peer_degraded, "M03"),
+            UserVisibleConnectivityProjection.formatMeetingHint(context, summary)
+        )
     }
 
     @Test
@@ -186,7 +196,10 @@ class UserVisibleConnectivityProjectionTest {
         )
         assertEquals(UserVisibleConnectivityState.DEGRADED, summary!!.state)
         assertEquals(3, summary.peerIds.size)
-        assertEquals("3 members degraded", UserVisibleConnectivityProjection.formatMeetingHint(summary))
+        assertEquals(
+            context.getString(R.string.meeting_hint_peers_degraded, 3),
+            UserVisibleConnectivityProjection.formatMeetingHint(context, summary)
+        )
     }
 
     @Test
@@ -198,7 +211,7 @@ class UserVisibleConnectivityProjectionTest {
             )
         )
         assertNull(summary)
-        assertNull(UserVisibleConnectivityProjection.formatMeetingHint(summary))
+        assertNull(UserVisibleConnectivityProjection.formatMeetingHint(context, summary))
     }
 
     @Test

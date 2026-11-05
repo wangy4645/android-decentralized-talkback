@@ -154,4 +154,8 @@ class ManualPeerEditor(
     private fun toast(message: String) {
         Toast.makeText(hintText.context, message, Toast.LENGTH_SHORT).show()
     }
+
+    private fun toast(@androidx.annotation.StringRes messageRes: Int) {
+        Toast.makeText(hintText.context, messageRes, Toast.LENGTH_SHORT).show()
+    }
 }

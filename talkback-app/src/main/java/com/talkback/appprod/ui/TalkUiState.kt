@@ -72,7 +72,7 @@ data class MeetingUiState(
     /** Remote peers with active edge recovery on this device (ADR-0022 R27′). */
     val recoveringPeers: Set<String> = emptySet(),
     /** Primary meeting header label from joinedCount only (ADR-0025 R30-F). */
-    val participantCountLabel: String = "0 Participants",
+    val participantCountLabel: String = "",
     /** Optional weak hint e.g. "1 connecting..." — never connected/joined fraction. */
     val connectingParticipantHint: String? = null,
     val awaitingAdditionalParticipants: Boolean = false,

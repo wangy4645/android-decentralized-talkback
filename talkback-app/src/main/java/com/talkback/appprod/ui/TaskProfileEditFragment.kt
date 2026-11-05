@@ -178,8 +178,7 @@ class TaskProfileEditFragment : Fragment() {
 
 
             SettingsActions.validateSecret(secret)?.let {
-
-                Toast.makeText(requireContext(), it, Toast.LENGTH_SHORT).show()
+                Toast.makeText(requireContext(), getString(it), Toast.LENGTH_SHORT).show()
 
                 return@setOnClickListener
 

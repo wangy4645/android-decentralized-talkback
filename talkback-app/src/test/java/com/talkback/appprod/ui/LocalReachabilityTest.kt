@@ -9,9 +9,15 @@ import org.junit.Assert.assertTrue
 import org.junit.After
 import org.junit.Before
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RuntimeEnvironment
+import org.robolectric.RobolectricTestRunner
 import java.lang.reflect.Modifier
 
+@RunWith(RobolectricTestRunner::class)
 class LocalReachabilityTest {
+
+    private val context get() = RuntimeEnvironment.getApplication()
 
     @Before
     fun setUp() {
@@ -56,7 +62,7 @@ class LocalReachabilityTest {
         assertEquals(MeetingPresenceDisplay.ParticipantAvailabilityKind.SYNCING, presentation.availabilityKind)
         assertEquals(
             "M01 syncing...",
-            MeetingPresenceDisplay.aggregateAvailabilityHint(listOf(presentation), localCaptureBlocked = false)
+            MeetingPresenceDisplay.aggregateAvailabilityHint(context,listOf(presentation), localCaptureBlocked = false)
         )
     }
 
@@ -146,7 +152,7 @@ class LocalReachabilityTest {
         )
         assertEquals(
             "M01 reconnecting...",
-            MeetingPresenceDisplay.aggregateAvailabilityHint(
+            MeetingPresenceDisplay.aggregateAvailabilityHint(context,
                 listOf(presentation, m02, m03),
                 localCaptureBlocked = false
             )
@@ -175,7 +181,7 @@ class LocalReachabilityTest {
             )
         )
         assertNull(
-            MeetingPresenceDisplay.aggregateAvailabilityHint(listOf(presentation), localCaptureBlocked = false)
+            MeetingPresenceDisplay.aggregateAvailabilityHint(context,listOf(presentation), localCaptureBlocked = false)
         )
     }
 

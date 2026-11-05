@@ -198,6 +198,12 @@ class TalkbackForegroundService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_REFRESH_NOTIFICATION) {
+            if (!serviceStopped) {
+                startForeground(NOTIFY_ID, buildNotification(getString(R.string.notification_running)))
+            }
+            return START_STICKY
+        }
         if (intent?.action == ACTION_STOP_SERVICE) {
             stopServiceInternal("Stopped by user action")
             stopSelf()
@@ -209,8 +215,8 @@ class TalkbackForegroundService : Service() {
         serviceStopped = false
 
         val config = AppConfigStore(this).load()
-        SettingsActions.validateSecret(config.sharedSecret)?.let { reason ->
-            stopServiceInternal("Start failed: $reason")
+        SettingsActions.validateSecret(config.sharedSecret)?.let { reasonRes ->
+            stopServiceInternal("Start failed: ${getString(reasonRes)}")
             stopSelf()
             return START_NOT_STICKY
         }
@@ -294,7 +300,7 @@ class TalkbackForegroundService : Service() {
             .setContentTitle(getString(R.string.app_name))
             .setContentText(content)
             .setOngoing(true)
-            .addAction(0, "Stop", stopPendingIntent)
+            .addAction(0, getString(R.string.stop_service), stopPendingIntent)
             .build()
     }
 
@@ -322,6 +328,7 @@ class TalkbackForegroundService : Service() {
         const val EXTRA_STATIC_PEERS_JSON = "staticPeersJson"
 
         const val ACTION_STOP_SERVICE = "com.talkback.appprod.action.STOP_SERVICE"
+        const val ACTION_REFRESH_NOTIFICATION = "com.talkback.appprod.action.REFRESH_NOTIFICATION"
         const val ACTION_SERVICE_STATE = "com.talkback.appprod.action.SERVICE_STATE"
 
         const val EXTRA_SERVICE_STATE = "serviceState"

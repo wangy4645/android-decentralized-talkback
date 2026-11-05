@@ -1,5 +1,6 @@
 package com.talkback.appprod.ui
 
+import com.talkback.appprod.R
 import com.talkback.core.session.ConferenceParticipantDisplayState
 import com.talkback.core.session.ConferencePresenceProjection
 import com.talkback.core.session.MediaState
@@ -11,8 +12,14 @@ import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Before
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RuntimeEnvironment
+import org.robolectric.RobolectricTestRunner
 
+@RunWith(RobolectricTestRunner::class)
 class MeetingPresenceDisplayTest {
+
+    private val context get() = RuntimeEnvironment.getApplication()
 
     @Before
     fun setUp() {
@@ -26,12 +33,12 @@ class MeetingPresenceDisplayTest {
 
     @Test
     fun header_usesJoinedCount_only() {
-        assertEquals("3 Participants", MeetingPresenceDisplay.participantCountLabel(joinedCount = 3))
+        assertEquals(context.getString(R.string.meeting_participants, 3), MeetingPresenceDisplay.participantCountLabel(context, joinedCount = 3))
     }
 
     @Test
     fun r30i_visibleConnected_hidesHint_evenWhenGroupPlaybackGateOff() {
-        val ui = MeetingPresenceDisplay.renderConferencePresence(
+        val ui = MeetingPresenceDisplay.renderConferencePresence(context,
             presence = ConferencePresenceProjection(joinedCount = 3, connectedCount = 3),
             participantFacts = listOf(
                 remote("M01", ConferenceParticipantDisplayState.VISIBLE_CONNECTED),
@@ -52,7 +59,7 @@ class MeetingPresenceDisplayTest {
             override fun mediaEverLive(sessionId: String, remoteModuleId: String): Boolean =
                 remoteModuleId in setOf("M01", "M02")
         }
-        val ui = MeetingPresenceDisplay.renderConferencePresence(
+        val ui = MeetingPresenceDisplay.renderConferencePresence(context,
             presence = ConferencePresenceProjection(joinedCount = 3, connectedCount = 2),
             participantFacts = listOf(
                 remote("M01", ConferenceParticipantDisplayState.VISIBLE_CONNECTED),
@@ -72,7 +79,7 @@ class MeetingPresenceDisplayTest {
             override fun mediaEverLive(sessionId: String, remoteModuleId: String): Boolean =
                 remoteModuleId in setOf("M01", "M02")
         }
-        val ui = MeetingPresenceDisplay.renderConferencePresence(
+        val ui = MeetingPresenceDisplay.renderConferencePresence(context,
             presence = ConferencePresenceProjection(joinedCount = 3, connectedCount = 2),
             participantFacts = listOf(
                 remote("M01", ConferenceParticipantDisplayState.VISIBLE_CONNECTED),
@@ -85,7 +92,7 @@ class MeetingPresenceDisplayTest {
 
     @Test
     fun r30i_meshBootstrapConnecting_notHintWhenMediaConnected() {
-        val ui = MeetingPresenceDisplay.renderConferencePresence(
+        val ui = MeetingPresenceDisplay.renderConferencePresence(context,
             presence = ConferencePresenceProjection(joinedCount = 3, connectedCount = 2),
             participantFacts = listOf(
                 remote("M01", ConferenceParticipantDisplayState.VISIBLE_CONNECTED),
@@ -106,7 +113,7 @@ class MeetingPresenceDisplayTest {
             override fun mediaEverLive(sessionId: String, remoteModuleId: String): Boolean =
                 remoteModuleId in setOf("M01", "M02", "M03")
         }
-        val ui = MeetingPresenceDisplay.renderConferencePresence(
+        val ui = MeetingPresenceDisplay.renderConferencePresence(context,
             presence = ConferencePresenceProjection(
                 joinedCount = 3,
                 connectedCount = 2,
@@ -128,7 +135,7 @@ class MeetingPresenceDisplayTest {
     @Test
     fun adr0034_recoveryPendingWithPlaybackReady_showsSyncing_notReconnecting() {
         // ADR-0034: MEDIA_OK + recovering/control pending → SYNCING (supersedes ADR-0030 Rule 2 UX).
-        val ui = MeetingPresenceDisplay.renderConferencePresence(
+        val ui = MeetingPresenceDisplay.renderConferencePresence(context,
             presence = ConferencePresenceProjection(
                 joinedCount = 3,
                 connectedCount = 3,
@@ -160,7 +167,7 @@ class MeetingPresenceDisplayTest {
 
             override fun mediaEverLive(sessionId: String, remoteModuleId: String): Boolean = true
         }
-        val ui = MeetingPresenceDisplay.renderConferencePresence(
+        val ui = MeetingPresenceDisplay.renderConferencePresence(context,
             presence = ConferencePresenceProjection(
                 joinedCount = 3,
                 connectedCount = 2,
@@ -188,7 +195,7 @@ class MeetingPresenceDisplayTest {
 
             override fun mediaEverLive(sessionId: String, remoteModuleId: String): Boolean = true
         }
-        val ui = MeetingPresenceDisplay.renderConferencePresence(
+        val ui = MeetingPresenceDisplay.renderConferencePresence(context,
             presence = ConferencePresenceProjection(joinedCount = 3, connectedCount = 2),
             participantFacts = listOf(
                 remote(
@@ -241,7 +248,7 @@ class MeetingPresenceDisplayTest {
             override fun mediaEverLive(sessionId: String, remoteModuleId: String): Boolean = true
         }
         val mediaUnavailable = MediaUsabilityFact.currentUnavailable(MediaState.RECONNECTING)
-        val ui = MeetingPresenceDisplay.renderConferencePresence(
+        val ui = MeetingPresenceDisplay.renderConferencePresence(context,
             presence = ConferencePresenceProjection(
                 joinedCount = 3,
                 connectedCount = 2,
@@ -272,7 +279,7 @@ class MeetingPresenceDisplayTest {
             override fun mediaEverLive(sessionId: String, remoteModuleId: String): Boolean =
                 remoteModuleId == "M01"
         }
-        val ui = MeetingPresenceDisplay.renderConferencePresence(
+        val ui = MeetingPresenceDisplay.renderConferencePresence(context,
             presence = ConferencePresenceProjection(joinedCount = 3, connectedCount = 1),
             participantFacts = listOf(
                 remote("M01", ConferenceParticipantDisplayState.VISIBLE_CONNECTED),
@@ -286,7 +293,7 @@ class MeetingPresenceDisplayTest {
     @Test
     fun adr0034_recoveringPeersAggregate_alone_doesNotDriveHint() {
         // recoveringPeers on presence projection is diagnostic; per-peer facts own UX.
-        val ui = MeetingPresenceDisplay.renderConferencePresence(
+        val ui = MeetingPresenceDisplay.renderConferencePresence(context,
             presence = ConferencePresenceProjection(
                 joinedCount = 3,
                 connectedCount = 3,
@@ -308,7 +315,7 @@ class MeetingPresenceDisplayTest {
 
     @Test
     fun adr0034_controlDegraded_withMediaOk_showsDegraded() {
-        val ui = MeetingPresenceDisplay.renderConferencePresence(
+        val ui = MeetingPresenceDisplay.renderConferencePresence(context,
             presence = ConferencePresenceProjection(joinedCount = 2, connectedCount = 2),
             participantFacts = listOf(
                 remote("M01", ConferenceParticipantDisplayState.VISIBLE_CONNECTED),
@@ -319,7 +326,10 @@ class MeetingPresenceDisplayTest {
                 )
             )
         )
-        assertEquals("M03 degraded...", ui.connectingHint)
+        assertEquals(
+            context.getString(R.string.meeting_hint_peer_degraded, "M03"),
+            ui.connectingHint
+        )
         assertEquals(EndpointStatus.DEGRADED, ui.avatarStatuses["M03"])
     }
 

@@ -1,5 +1,8 @@
 package com.talkback.appprod.ui
 
+import android.content.Context
+import com.talkback.appprod.R
+
 /**
  * User-visible connectivity projection (ADR-0034 / INV-PRES-001..009; ADR-0044).
  *
@@ -122,18 +125,24 @@ object UserVisibleConnectivityProjection {
         )
     }
 
-    fun formatMeetingHint(summary: MeetingConnectivitySummary?): String? {
+    fun formatMeetingHint(context: Context, summary: MeetingConnectivitySummary?): String? {
         if (summary == null) return null
-        val label = when (summary.state) {
-            UserVisibleConnectivityState.RECONNECTING -> "reconnecting"
-            UserVisibleConnectivityState.DEGRADED -> "degraded"
-            UserVisibleConnectivityState.SYNCING -> "syncing"
-            UserVisibleConnectivityState.CONNECTED -> return null
-        }
-        return when (summary.peerIds.size) {
-            0 -> null
-            1 -> "${summary.peerIds.single()} $label..."
-            else -> "${summary.peerIds.size} members $label"
+        val peerCount = summary.peerIds.size
+        if (peerCount == 0) return null
+        return when (summary.state) {
+            UserVisibleConnectivityState.CONNECTED -> null
+            UserVisibleConnectivityState.RECONNECTING -> when (peerCount) {
+                1 -> context.getString(R.string.meeting_hint_peer_reconnecting, summary.peerIds.single())
+                else -> context.getString(R.string.meeting_hint_peers_reconnecting, peerCount)
+            }
+            UserVisibleConnectivityState.DEGRADED -> when (peerCount) {
+                1 -> context.getString(R.string.meeting_hint_peer_degraded, summary.peerIds.single())
+                else -> context.getString(R.string.meeting_hint_peers_degraded, peerCount)
+            }
+            UserVisibleConnectivityState.SYNCING -> when (peerCount) {
+                1 -> context.getString(R.string.meeting_hint_peer_syncing, summary.peerIds.single())
+                else -> context.getString(R.string.meeting_hint_peers_syncing, peerCount)
+            }
         }
     }
 
