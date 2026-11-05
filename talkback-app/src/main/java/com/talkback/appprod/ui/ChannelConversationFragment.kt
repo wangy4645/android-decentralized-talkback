@@ -22,6 +22,7 @@ import androidx.lifecycle.repeatOnLifecycle
 import com.talkback.appprod.R
 import com.talkback.appprod.endpointtext.ChannelTextRecord
 import com.talkback.appprod.endpointtext.EndpointTextDirection
+import com.talkback.core.endpointattachment.AttachmentKind
 import kotlinx.coroutines.launch
 
 class ChannelConversationFragment : Fragment() {
@@ -29,11 +30,15 @@ class ChannelConversationFragment : Fragment() {
 
     private var channelId: String = ""
     private var channelLabel: String = ""
+    private lateinit var attachmentActions: ConversationAttachmentActions
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         channelId = requireArguments().getString(ARG_CHANNEL_ID).orEmpty()
         channelLabel = requireArguments().getString(ARG_CHANNEL_LABEL).orEmpty()
+        attachmentActions = ConversationAttachmentActions(this) { bytes, kind, mimeType, fileName ->
+            sendAttachment(bytes, kind, mimeType, fileName)
+        }
     }
 
     override fun onCreateView(
@@ -59,6 +64,9 @@ class ChannelConversationFragment : Fragment() {
         val container = view.findViewById<LinearLayout>(R.id.containerConversationMessages)
         val input = view.findViewById<EditText>(R.id.editConversationInput)
         val send = view.findViewById<TextView>(R.id.btnConversationSend)
+        view.findViewById<View>(R.id.btnConversationAttach).setOnClickListener {
+            attachmentActions.showAttachMenu()
+        }
 
         fun renderMessages(messages: List<ChannelTextRecord>) {
             val hasMessages = messages.isNotEmpty()
@@ -125,6 +133,11 @@ class ChannelConversationFragment : Fragment() {
         viewModel.setOpenChannelConversation(channelId)
     }
 
+    override fun onDestroyView() {
+        attachmentActions.release()
+        super.onDestroyView()
+    }
+
     override fun onStop() {
         viewModel.setOpenChannelConversation(null)
         super.onStop()
@@ -135,25 +148,56 @@ class ChannelConversationFragment : Fragment() {
         parent: LinearLayout,
         record: ChannelTextRecord
     ): View {
-        val row = inflater.inflate(R.layout.item_conversation_message, parent, false)
-        val bubble = row.findViewById<LinearLayout>(R.id.bubbleRoot)
+        val views = MessageRowUiBinder.inflateMessageRow(inflater, parent)
         val outbound = record.direction == EndpointTextDirection.OUTBOUND
-        val params = bubble.layoutParams as FrameLayout.LayoutParams
+        val params = views.bubble.layoutParams as FrameLayout.LayoutParams
         if (outbound) {
             params.gravity = Gravity.END
-            bubble.setBackgroundResource(R.drawable.bg_message_bubble_outbound)
-            row.findViewById<TextView>(R.id.txtMessageSender).text =
-                getString(R.string.conversation_sender_you)
+            views.bubble.setBackgroundResource(R.drawable.bg_message_bubble_outbound)
+            views.sender.text = getString(R.string.conversation_sender_you)
         } else {
             params.gravity = Gravity.START
-            bubble.setBackgroundResource(R.drawable.bg_message_bubble_inbound)
-            row.findViewById<TextView>(R.id.txtMessageSender).text = record.senderLabel
+            views.bubble.setBackgroundResource(R.drawable.bg_message_bubble_inbound)
+            views.sender.text = record.senderLabel
         }
-        bubble.layoutParams = params
-        row.findViewById<TextView>(R.id.txtMessageTime).text =
-            ConversationTimeFormat.formatMessageTime(record.timestampMs)
-        row.findViewById<TextView>(R.id.txtMessageBody).text = record.text
-        return row
+        views.bubble.layoutParams = params
+        views.time.text = ConversationTimeFormat.formatMessageTime(record.timestampMs)
+        MessageRowUiBinder.bindChannelBody(
+            requireContext(),
+            views.body,
+            views.attachmentContainer,
+            views.attachmentPreview,
+            views.attachmentAction,
+            record
+        )
+        return views.row
+    }
+
+    private fun sendAttachment(
+        bytes: ByteArray,
+        kind: AttachmentKind,
+        mimeType: String,
+        fileName: String
+    ) {
+        val caption = view?.findViewById<EditText>(R.id.editConversationInput)?.text?.toString()?.trim()
+        viewModel.syncServiceState()
+        when (
+            val err = viewModel.sendChannelAttachment(
+                bytes,
+                kind,
+                mimeType,
+                fileName,
+                caption?.takeIf { it.isNotEmpty() }
+            )
+        ) {
+            null -> view?.findViewById<EditText>(R.id.editConversationInput)?.text?.clear()
+            "SERVICE_STOPPED" -> toast(R.string.service_not_running)
+            "NO_MEMBERS" -> toast(R.string.channel_text_no_members)
+            "UNREACHABLE" -> toast(R.string.endpoint_text_unreachable)
+            "ATTACHMENT_TOO_LARGE" -> toast(R.string.message_attachment_too_large)
+            "SEND_FAILED", "ATTACHMENT_EMPTY" -> toast(R.string.message_attachment_send_failed)
+            else -> toast(R.string.endpoint_text_failed)
+        }
     }
 
     private fun toast(resId: Int) {

@@ -7,6 +7,9 @@ import com.talkback.core.discovery.StaticPeerDiscoveryService
 import com.talkback.core.discovery.StaticPeerEntry
 import com.talkback.core.endpointtext.EndpointTextEvent
 import com.talkback.core.channeltext.ChannelTextEvent
+import com.talkback.core.endpointattachment.AttachmentKind
+import com.talkback.core.endpointattachment.ChannelAttachmentEvent
+import com.talkback.core.endpointattachment.EndpointAttachmentEvent
 import com.talkback.core.model.EndpointAddress
 import com.talkback.core.model.EndpointId
 import com.talkback.core.model.EndpointPriority
@@ -108,6 +111,38 @@ class TalkbackRuntime(
         text: String
     ): Result<Unit> = coordinator.sendChannelText(from, channelId, remotes, text)
 
+    fun sendEndpointAttachment(
+        from: EndpointAddress,
+        to: EndpointAddress,
+        data: ByteArray,
+        kind: AttachmentKind,
+        mimeType: String,
+        fileName: String,
+        caption: String?
+    ): Result<Unit> =
+        coordinator.sendEndpointAttachment(from, to, data, kind, mimeType, fileName, caption)
+
+    fun sendChannelAttachment(
+        from: EndpointAddress,
+        channelId: String,
+        remotes: List<EndpointAddress>,
+        data: ByteArray,
+        kind: AttachmentKind,
+        mimeType: String,
+        fileName: String,
+        caption: String?
+    ): Result<Unit> =
+        coordinator.sendChannelAttachment(
+            from,
+            channelId,
+            remotes,
+            data,
+            kind,
+            mimeType,
+            fileName,
+            caption
+        )
+
     var onEndpointTextReceived: ((EndpointTextEvent) -> Unit)?
         get() = coordinator.onEndpointTextReceived
         set(value) {
@@ -118,6 +153,18 @@ class TalkbackRuntime(
         get() = coordinator.onChannelTextReceived
         set(value) {
             coordinator.onChannelTextReceived = value
+        }
+
+    var onEndpointAttachmentReceived: ((EndpointAttachmentEvent) -> Unit)?
+        get() = coordinator.onEndpointAttachmentReceived
+        set(value) {
+            coordinator.onEndpointAttachmentReceived = value
+        }
+
+    var onChannelAttachmentReceived: ((ChannelAttachmentEvent) -> Unit)?
+        get() = coordinator.onChannelAttachmentReceived
+        set(value) {
+            coordinator.onChannelAttachmentReceived = value
         }
 
     fun groupCall(

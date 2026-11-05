@@ -153,6 +153,16 @@
         android:paddingTop="10dp"
         android:paddingBottom="6dp">
 
+        <ImageView
+            android:id="@+id/btnConversationAttach"
+            android:layout_width="36dp"
+            android:layout_height="36dp"
+            android:background="?android:attr/selectableItemBackgroundBorderless"
+            android:contentDescription="@string/message_attach_cd"
+            android:padding="6dp"
+            android:src="@drawable/ic_conversation_more"
+            android:tint="@color/tb_text_secondary" />
+
         <EditText
             android:id="@+id/editConversationInput"
             style="@style/ConversationInput"

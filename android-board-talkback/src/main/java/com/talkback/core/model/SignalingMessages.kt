@@ -36,6 +36,12 @@ enum class SignalType {
     ENDPOINT_TEXT,
     /** Control-plane Channel broadcast text (ADR-0041). Address is channelId, not multi-to. */
     CHANNEL_TEXT,
+    /** Data-plane attachment meta for 1:1 Endpoint messages (V2). Chunks follow on ENDPOINT_ATTACHMENT_CHUNK. */
+    ENDPOINT_ATTACHMENT_META,
+    ENDPOINT_ATTACHMENT_CHUNK,
+    /** Channel-scoped attachment broadcast (fan-out meta + chunks per member). */
+    CHANNEL_ATTACHMENT_META,
+    CHANNEL_ATTACHMENT_CHUNK,
     /** ADR-0057: request Current Generation Fact candidate from a holder. */
     FACT_REQUEST,
     /** ADR-0057: candidate material for local Verification Boundary (not yet authoritative). */

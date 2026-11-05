@@ -6,6 +6,8 @@ import com.talkback.appprod.data.TaskProfileManager
 import com.talkback.appprod.ui.AppLocaleController
 import com.talkback.appprod.endpointtext.ChannelConversationStore
 import com.talkback.appprod.endpointtext.ConversationStore
+import com.talkback.appprod.endpointtext.MessageAttachmentStorage
+import com.talkback.appprod.endpointtext.MessagePersistence
 import com.talkback.appprod.endpointtext.EndpointTextInboundNotifier
 import com.talkback.appprod.runtime.TalkbackRuntimeManager
 import com.talkback.core.conference.aqc.AqcRuntime
@@ -23,11 +25,11 @@ class TalkbackApp : Application() {
     lateinit var runtimeManager: TalkbackRuntimeManager
         private set
 
-    /** Process-local Tactical Message presentation cache. Not transport state. */
-    val conversationStore = ConversationStore()
-
-    /** Process-local Channel Message presentation cache (ADR-0041). */
-    val channelConversationStore = ChannelConversationStore()
+    /** Process-local Tactical Message presentation + SQLite persistence. */
+    val messagePersistence = MessagePersistence(this)
+    val messageAttachmentStorage = MessageAttachmentStorage.fromContext(this)
+    val conversationStore = ConversationStore(messagePersistence)
+    val channelConversationStore = ChannelConversationStore(messagePersistence)
 
     lateinit var endpointTextInboundNotifier: EndpointTextInboundNotifier
         private set

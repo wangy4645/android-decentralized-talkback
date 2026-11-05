@@ -13,6 +13,9 @@ import com.talkback.appprod.data.AppConfig
 import com.talkback.appprod.data.AppConfigStore
 import com.talkback.core.endpointtext.EndpointTextEvent
 import com.talkback.core.channeltext.ChannelTextEvent
+import com.talkback.core.endpointattachment.AttachmentKind
+import com.talkback.core.endpointattachment.ChannelAttachmentEvent
+import com.talkback.core.endpointattachment.EndpointAttachmentEvent
 import com.talkback.core.media.MediaTopologyPolicy
 import com.talkback.core.model.EndpointAddress
 import com.talkback.core.model.EndpointId
@@ -57,6 +60,12 @@ class TalkbackRuntimeManager(private val appContext: Context) {
 
     @Volatile
     var onChannelTextReceived: ((ChannelTextEvent) -> Unit)? = null
+
+    @Volatile
+    var onEndpointAttachmentReceived: ((EndpointAttachmentEvent) -> Unit)? = null
+
+    @Volatile
+    var onChannelAttachmentReceived: ((ChannelAttachmentEvent) -> Unit)? = null
 
     private companion object {
         const val MESH_CALL_BACKOFF_MS = 3_000L
@@ -154,6 +163,12 @@ class TalkbackRuntimeManager(private val appContext: Context) {
             created.onChannelTextReceived = { event ->
                 onChannelTextReceived?.invoke(event)
             }
+            created.onEndpointAttachmentReceived = { event ->
+                onEndpointAttachmentReceived?.invoke(event)
+            }
+            created.onChannelAttachmentReceived = { event ->
+                onChannelAttachmentReceived?.invoke(event)
+            }
             created.start()
             runtime = created
             skipNextMeshBackoff = true
@@ -170,6 +185,8 @@ class TalkbackRuntimeManager(private val appContext: Context) {
     fun stop() {
         runtime?.onEndpointTextReceived = null
         runtime?.onChannelTextReceived = null
+        runtime?.onEndpointAttachmentReceived = null
+        runtime?.onChannelAttachmentReceived = null
         runtime?.stop()
         runtime = null
         skipNextMeshBackoff = true
@@ -587,6 +604,50 @@ class TalkbackRuntimeManager(private val appContext: Context) {
         val rt = runtime ?: return Result.failure(IllegalStateException("SERVICE_STOPPED"))
         val remotes = collectChannelRemotes(config).orEmpty()
         return rt.sendChannelText(localAddress(config), channelId, remotes, text)
+    }
+
+    fun sendEndpointAttachment(
+        config: AppConfig,
+        remote: EndpointAddress,
+        data: ByteArray,
+        kind: AttachmentKind,
+        mimeType: String,
+        fileName: String,
+        caption: String?
+    ): Result<Unit> {
+        val rt = runtime ?: return Result.failure(IllegalStateException("SERVICE_STOPPED"))
+        return rt.sendEndpointAttachment(
+            localAddress(config),
+            remote,
+            data,
+            kind,
+            mimeType,
+            fileName,
+            caption
+        )
+    }
+
+    fun sendChannelAttachment(
+        config: AppConfig,
+        channelId: String,
+        data: ByteArray,
+        kind: AttachmentKind,
+        mimeType: String,
+        fileName: String,
+        caption: String?
+    ): Result<Unit> {
+        val rt = runtime ?: return Result.failure(IllegalStateException("SERVICE_STOPPED"))
+        val remotes = collectChannelRemotes(config).orEmpty()
+        return rt.sendChannelAttachment(
+            localAddress(config),
+            channelId,
+            remotes,
+            data,
+            kind,
+            mimeType,
+            fileName,
+            caption
+        )
     }
 
     fun channelTextRemotes(config: AppConfig): List<EndpointAddress> =

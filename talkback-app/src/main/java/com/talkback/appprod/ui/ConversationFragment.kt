@@ -24,6 +24,7 @@ import androidx.lifecycle.repeatOnLifecycle
 import com.talkback.appprod.R
 import com.talkback.appprod.endpointtext.EndpointTextDirection
 import com.talkback.appprod.endpointtext.EndpointTextRecord
+import com.talkback.core.endpointattachment.AttachmentKind
 import com.talkback.appprod.ui.call.CallLaunchContext
 import com.talkback.appprod.ui.call.CallReturnTarget
 import com.talkback.appprod.ui.call.CallSource
@@ -35,11 +36,15 @@ class ConversationFragment : Fragment() {
 
     private var remoteKey: String = ""
     private var remoteLabel: String = ""
+    private lateinit var attachmentActions: ConversationAttachmentActions
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         remoteKey = requireArguments().getString(ARG_KEY).orEmpty()
         remoteLabel = requireArguments().getString(ARG_LABEL).orEmpty()
+        attachmentActions = ConversationAttachmentActions(this) { bytes, kind, mimeType, fileName ->
+            sendAttachment(bytes, kind, mimeType, fileName)
+        }
     }
 
     override fun onCreateView(
@@ -68,6 +73,9 @@ class ConversationFragment : Fragment() {
         val container = view.findViewById<LinearLayout>(R.id.containerConversationMessages)
         val input = view.findViewById<EditText>(R.id.editConversationInput)
         val send = view.findViewById<TextView>(R.id.btnConversationSend)
+        view.findViewById<View>(R.id.btnConversationAttach).setOnClickListener {
+            attachmentActions.showAttachMenu()
+        }
 
         fun renderMessages(messages: List<EndpointTextRecord>) {
             val hasMessages = messages.isNotEmpty()
@@ -145,6 +153,11 @@ class ConversationFragment : Fragment() {
         viewModel.setOpenConversation(remoteKey)
     }
 
+    override fun onDestroyView() {
+        attachmentActions.release()
+        super.onDestroyView()
+    }
+
     override fun onStop() {
         viewModel.setOpenConversation(null)
         super.onStop()
@@ -169,25 +182,56 @@ class ConversationFragment : Fragment() {
         parent: LinearLayout,
         record: EndpointTextRecord
     ): View {
-        val row = inflater.inflate(R.layout.item_conversation_message, parent, false)
-        val bubble = row.findViewById<LinearLayout>(R.id.bubbleRoot)
+        val views = MessageRowUiBinder.inflateMessageRow(inflater, parent)
         val outbound = record.direction == EndpointTextDirection.OUTBOUND
-        val params = bubble.layoutParams as FrameLayout.LayoutParams
+        val params = views.bubble.layoutParams as FrameLayout.LayoutParams
         if (outbound) {
             params.gravity = Gravity.END
-            bubble.setBackgroundResource(R.drawable.bg_message_bubble_outbound)
-            row.findViewById<TextView>(R.id.txtMessageSender).text =
-                getString(R.string.conversation_sender_you)
+            views.bubble.setBackgroundResource(R.drawable.bg_message_bubble_outbound)
+            views.sender.text = getString(R.string.conversation_sender_you)
         } else {
             params.gravity = Gravity.START
-            bubble.setBackgroundResource(R.drawable.bg_message_bubble_inbound)
-            row.findViewById<TextView>(R.id.txtMessageSender).text = remoteLabel
+            views.bubble.setBackgroundResource(R.drawable.bg_message_bubble_inbound)
+            views.sender.text = remoteLabel
         }
-        bubble.layoutParams = params
-        row.findViewById<TextView>(R.id.txtMessageTime).text =
-            ConversationTimeFormat.formatMessageTime(record.timestampMs)
-        row.findViewById<TextView>(R.id.txtMessageBody).text = record.text
-        return row
+        views.bubble.layoutParams = params
+        views.time.text = ConversationTimeFormat.formatMessageTime(record.timestampMs)
+        MessageRowUiBinder.bindDirectBody(
+            requireContext(),
+            views.body,
+            views.attachmentContainer,
+            views.attachmentPreview,
+            views.attachmentAction,
+            record
+        )
+        return views.row
+    }
+
+    private fun sendAttachment(
+        bytes: ByteArray,
+        kind: AttachmentKind,
+        mimeType: String,
+        fileName: String
+    ) {
+        val caption = view?.findViewById<EditText>(R.id.editConversationInput)?.text?.toString()?.trim()
+        viewModel.syncServiceState()
+        when (
+            val err = viewModel.sendEndpointAttachment(
+                remoteKey,
+                bytes,
+                kind,
+                mimeType,
+                fileName,
+                caption?.takeIf { it.isNotEmpty() }
+            )
+        ) {
+            null -> view?.findViewById<EditText>(R.id.editConversationInput)?.text?.clear()
+            "SERVICE_STOPPED" -> toast(R.string.service_not_running)
+            "UNREACHABLE" -> toast(R.string.endpoint_text_unreachable)
+            "ATTACHMENT_TOO_LARGE" -> toast(R.string.message_attachment_too_large)
+            "SEND_FAILED", "ATTACHMENT_EMPTY" -> toast(R.string.message_attachment_send_failed)
+            else -> toast(R.string.endpoint_text_failed)
+        }
     }
 
     private fun toast(resId: Int) {

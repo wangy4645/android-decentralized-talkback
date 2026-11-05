@@ -18,6 +18,11 @@ import com.talkback.appprod.endpointtext.ConversationSummary
 import com.talkback.appprod.endpointtext.EndpointTextInboundNotifier
 import com.talkback.appprod.endpointtext.EndpointTextDirection
 import com.talkback.appprod.endpointtext.EndpointTextRecord
+import com.talkback.appprod.endpointtext.MessageAttachmentInfo
+import com.talkback.appprod.endpointtext.MessageAttachmentStorage
+import com.talkback.core.endpointattachment.AttachmentKind
+import com.talkback.core.endpointattachment.ChannelAttachmentEvent
+import com.talkback.core.endpointattachment.EndpointAttachmentEvent
 import com.talkback.core.endpointtext.EndpointTextEvent
 import com.talkback.core.channeltext.ChannelTextEvent
 import com.talkback.core.session.ChannelReadiness
@@ -61,6 +66,7 @@ class TalkViewModel(
     private val manager get() = app.runtimeManager
     private val conversationStore = app.conversationStore
     private val channelConversationStore = app.channelConversationStore
+    private val attachmentStorage: MessageAttachmentStorage = app.messageAttachmentStorage
     private val taskProfileManager = TaskProfileManager(appContext)
 
     private val _uiState = MutableStateFlow(buildIdleState(configStore.load()))
@@ -156,11 +162,65 @@ class TalkViewModel(
         }
     }
 
+    private val endpointAttachmentSink: (EndpointAttachmentEvent) -> Unit = { event ->
+        val file = attachmentStorage.writeBytes(event.attachmentId, event.fileName, event.bytes)
+        val info = MessageAttachmentInfo(
+            kind = event.kind,
+            mimeType = event.mimeType,
+            fileName = event.fileName,
+            localPath = file.absolutePath,
+            sizeBytes = file.length()
+        )
+        conversationStore.append(
+            EndpointTextRecord(
+                endpointKey = event.from.key,
+                text = event.caption.orEmpty(),
+                timestampMs = System.currentTimeMillis(),
+                direction = EndpointTextDirection.INBOUND,
+                attachment = info
+            )
+        )
+        refreshConversationUi()
+        val label = endpointLabelForKey(event.from.key)
+        val team = teamDisplayName()
+        inboundNotifier.onInbound(event.from.key, label, team)
+    }
+
+    private val channelAttachmentSink: (ChannelAttachmentEvent) -> Unit = { event ->
+        val file = attachmentStorage.writeBytes(event.attachmentId, event.fileName, event.bytes)
+        val info = MessageAttachmentInfo(
+            kind = event.kind,
+            mimeType = event.mimeType,
+            fileName = event.fileName,
+            localPath = file.absolutePath,
+            sizeBytes = file.length()
+        )
+        val label = endpointLabelForKey(event.from.key)
+        channelConversationStore.append(
+            ChannelTextRecord(
+                channelId = event.channelId,
+                text = event.caption.orEmpty(),
+                timestampMs = System.currentTimeMillis(),
+                direction = EndpointTextDirection.INBOUND,
+                senderKey = event.from.key,
+                senderLabel = label,
+                attachment = info
+            )
+        )
+        refreshConversationUi()
+        val team = teamDisplayName()
+        if (!channelConversationStore.isOpen(event.channelId)) {
+            inboundNotifier.onChannelInbound(event.channelId, team)
+        }
+    }
+
     init {
         MeetingPresenceDisplay.receivePathLivenessProvider =
             RuntimeReceivePathLivenessProvider { manager.getRuntime() }
         manager.onEndpointTextReceived = endpointTextSink
         manager.onChannelTextReceived = channelTextSink
+        manager.onEndpointAttachmentReceived = endpointAttachmentSink
+        manager.onChannelAttachmentReceived = channelAttachmentSink
         refreshConversationUi()
         taskProfileManager.ensureInitialized()
         val config = configStore.load()
@@ -974,6 +1034,99 @@ class TalkViewModel(
         return error
     }
 
+    fun sendEndpointAttachment(
+        remoteKey: String,
+        bytes: ByteArray,
+        kind: AttachmentKind,
+        mimeType: String,
+        fileName: String,
+        caption: String?
+    ): String? {
+        val config = configStore.load()
+        if (!isServiceReady()) return "SERVICE_STOPPED"
+        val remote = endpointAddressFromKey(config, remoteKey) ?: return "INVALID_PEER"
+        val attachmentId = MessageAttachmentStorage.newAttachmentId()
+        val localFile = attachmentStorage.writeBytes(attachmentId, fileName, bytes)
+        val error = EndpointTextSendErrorMapper.map(
+            manager.sendEndpointAttachment(
+                config,
+                remote,
+                bytes,
+                kind,
+                mimeType,
+                fileName,
+                caption
+            )
+        )
+        if (error == null) {
+            conversationStore.append(
+                EndpointTextRecord(
+                    endpointKey = remoteKey,
+                    text = caption.orEmpty(),
+                    timestampMs = System.currentTimeMillis(),
+                    direction = EndpointTextDirection.OUTBOUND,
+                    attachment = MessageAttachmentInfo(
+                        kind = kind,
+                        mimeType = mimeType,
+                        fileName = fileName,
+                        localPath = localFile.absolutePath,
+                        sizeBytes = localFile.length()
+                    )
+                )
+            )
+            refreshConversationUi()
+        }
+        return error
+    }
+
+    fun sendChannelAttachment(
+        bytes: ByteArray,
+        kind: AttachmentKind,
+        mimeType: String,
+        fileName: String,
+        caption: String?
+    ): String? {
+        val config = configStore.load()
+        if (!isServiceReady()) return "SERVICE_STOPPED"
+        val channelId = config.defaultChannelId
+        val attachmentId = MessageAttachmentStorage.newAttachmentId()
+        val localFile = attachmentStorage.writeBytes(attachmentId, fileName, bytes)
+        val error = EndpointTextSendErrorMapper.map(
+            manager.sendChannelAttachment(
+                config,
+                channelId,
+                bytes,
+                kind,
+                mimeType,
+                fileName,
+                caption
+            )
+        )
+        if (error == null) {
+            val localKey =
+                "${config.moduleId.trim().uppercase()}-${config.endpointId.trim().uppercase()}"
+            channelConversationStore.append(
+                ChannelTextRecord(
+                    channelId = channelId,
+                    text = caption.orEmpty(),
+                    timestampMs = System.currentTimeMillis(),
+                    direction = EndpointTextDirection.OUTBOUND,
+                    senderKey = localKey,
+                    senderLabel = localizedContext.getString(R.string.conversation_sender_you),
+                    attachment = MessageAttachmentInfo(
+                        kind = kind,
+                        mimeType = mimeType,
+                        fileName = fileName,
+                        localPath = localFile.absolutePath,
+                        sizeBytes = localFile.length()
+                    )
+                )
+            )
+            refreshConversationUi()
+        }
+        return error
+    }
+
     fun conversationSummaries(): List<ConversationSummary> = conversationStore.summaries()
 
     fun conversationMessages(endpointKey: String): List<EndpointTextRecord> =
@@ -1047,6 +1200,12 @@ class TalkViewModel(
         }
         if (manager.onChannelTextReceived === channelTextSink) {
             manager.onChannelTextReceived = null
+        }
+        if (manager.onEndpointAttachmentReceived === endpointAttachmentSink) {
+            manager.onEndpointAttachmentReceived = null
+        }
+        if (manager.onChannelAttachmentReceived === channelAttachmentSink) {
+            manager.onChannelAttachmentReceived = null
         }
         super.onCleared()
     }

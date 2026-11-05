@@ -1,6 +1,8 @@
 package com.talkback.appprod.ui
 
 import com.talkback.core.channeltext.ChannelTextController
+import com.talkback.core.endpointattachment.ChannelAttachmentController
+import com.talkback.core.endpointattachment.EndpointAttachmentController
 import com.talkback.core.endpointtext.EndpointTextController
 
 /**
@@ -21,8 +23,16 @@ object EndpointTextSendErrorMapper {
                 message.contains(ChannelTextController.REASON_TEXT_TOO_LONG, ignoreCase = true) ->
                 "TEXT_TOO_LONG"
             message.contains(EndpointTextController.REASON_SEND_FAILED, ignoreCase = true) ||
-                message.contains(ChannelTextController.REASON_SEND_FAILED, ignoreCase = true) ->
+                message.contains(ChannelTextController.REASON_SEND_FAILED, ignoreCase = true) ||
+                message.contains(EndpointAttachmentController.REASON_SEND_FAILED, ignoreCase = true) ||
+                message.contains(ChannelAttachmentController.REASON_SEND_FAILED, ignoreCase = true) ->
                 "SEND_FAILED"
+            message.contains(EndpointAttachmentController.REASON_TOO_LARGE, ignoreCase = true) ||
+                message.contains(ChannelAttachmentController.REASON_TOO_LARGE, ignoreCase = true) ->
+                "ATTACHMENT_TOO_LARGE"
+            message.contains(EndpointAttachmentController.REASON_EMPTY, ignoreCase = true) ||
+                message.contains(ChannelAttachmentController.REASON_EMPTY, ignoreCase = true) ->
+                "ATTACHMENT_EMPTY"
             else -> "FAILED"
         }
     }

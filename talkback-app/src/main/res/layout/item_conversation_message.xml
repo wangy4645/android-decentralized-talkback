@@ -54,6 +54,32 @@
             android:includeFontPadding="false"
             android:textColor="@color/tb_text_primary"
             android:textSize="13sp" />
+
+        <LinearLayout
+            android:id="@+id/containerMessageAttachment"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:paddingTop="6dp"
+            android:visibility="gone">
+
+            <ImageView
+                android:id="@+id/imgMessageAttachment"
+                android:layout_width="200dp"
+                android:layout_height="140dp"
+                android:adjustViewBounds="true"
+                android:scaleType="centerCrop"
+                android:visibility="gone"
+                android:contentDescription="@string/message_attachment_image_cd" />
+
+            <TextView
+                android:id="@+id/btnMessageAttachmentAction"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:paddingTop="4dp"
+                android:textColor="@color/tb_primary"
+                android:textSize="12sp" />
+        </LinearLayout>
     </LinearLayout>
 
 </FrameLayout>

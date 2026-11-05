@@ -1,10 +1,10 @@
 package com.talkback.appprod.endpointtext
 
 /**
- * Process-local Channel Text presentation cache (ADR-0041).
- * Keyed by channelId — not by multi-select recipient lists.
+ * Channel message presentation cache (ADR-0041) with optional SQLite persistence.
  */
 class ChannelConversationStore(
+    private val persistence: MessagePersistence? = null,
     private val capacityPerChannel: Int = DEFAULT_CAPACITY
 ) {
     init {
@@ -22,30 +22,35 @@ class ChannelConversationStore(
     fun append(record: ChannelTextRecord) {
         val key = record.channelId
         if (key.isBlank()) return
+        val markRead = key == openChannelId
+        persistence?.insertChannel(record, markRead)
+        if (persistence != null) return
         val buffer = byChannel.getOrPut(key) { ArrayDeque() }
         buffer.addLast(record)
         while (buffer.size > capacityPerChannel) {
             buffer.removeFirst()
         }
-        if (record.direction == EndpointTextDirection.INBOUND && key != openChannelId) {
+        if (record.direction == EndpointTextDirection.INBOUND && !markRead) {
             unreadByChannel[key] = (unreadByChannel[key] ?: 0) + 1
         }
     }
 
     @Synchronized
     fun recent(channelId: String): List<ChannelTextRecord> {
+        persistence?.let { return it.recentChannel(channelId) }
         val buffer = byChannel[channelId] ?: return emptyList()
         return buffer.toList()
     }
 
     @Synchronized
     fun summary(channelId: String): ChannelConversationSummary? {
+        persistence?.let { return it.channelSummary(channelId) }
         val buffer = byChannel[channelId] ?: return null
         if (buffer.isEmpty()) return null
         val last = buffer.last()
         return ChannelConversationSummary(
             channelId = channelId,
-            lastMessage = last.text,
+            lastMessage = last.previewText(),
             lastTimestampMs = last.timestampMs,
             lastSenderLabel = last.senderLabel,
             unreadCount = unreadByChannel[channelId] ?: 0
@@ -53,15 +58,18 @@ class ChannelConversationStore(
     }
 
     @Synchronized
-    fun unread(channelId: String): Int = unreadByChannel[channelId] ?: 0
+    fun unread(channelId: String): Int =
+        persistence?.channelUnread(channelId) ?: (unreadByChannel[channelId] ?: 0)
 
     @Synchronized
-    fun totalUnread(): Int = unreadByChannel.values.sum()
+    fun totalUnread(): Int =
+        persistence?.totalChannelUnread() ?: unreadByChannel.values.sum()
 
     @Synchronized
     fun setOpenChannel(channelId: String?) {
         openChannelId = channelId?.takeIf { it.isNotBlank() }
         if (openChannelId != null) {
+            persistence?.markChannelRead(openChannelId!!)
             unreadByChannel.remove(openChannelId)
         }
     }
@@ -71,6 +79,7 @@ class ChannelConversationStore(
 
     @Synchronized
     fun clear() {
+        persistence?.clearAll()
         byChannel.clear()
         unreadByChannel.clear()
         openChannelId = null
@@ -81,13 +90,24 @@ class ChannelConversationStore(
     }
 }
 
+private fun ChannelTextRecord.previewText(): String {
+    if (text.isNotBlank()) return text
+    return when (attachment?.kind) {
+        com.talkback.core.endpointattachment.AttachmentKind.IMAGE -> "[Image]"
+        com.talkback.core.endpointattachment.AttachmentKind.VOICE -> "[Voice]"
+        com.talkback.core.endpointattachment.AttachmentKind.FILE -> "[File]"
+        null -> text
+    }
+}
+
 data class ChannelTextRecord(
     val channelId: String,
     val text: String,
     val timestampMs: Long,
     val direction: EndpointTextDirection,
     val senderKey: String,
-    val senderLabel: String
+    val senderLabel: String,
+    val attachment: MessageAttachmentInfo? = null
 )
 
 data class ChannelConversationSummary(

@@ -29,6 +29,13 @@ import com.talkback.core.channeltext.ChannelTextPrepareResult
 import com.talkback.core.endpointtext.EndpointTextController
 import com.talkback.core.endpointtext.EndpointTextEvent
 import com.talkback.core.endpointtext.EndpointTextPrepareResult
+import com.talkback.core.endpointattachment.AttachmentKind
+import com.talkback.core.endpointattachment.ChannelAttachmentController
+import com.talkback.core.endpointattachment.ChannelAttachmentEvent
+import com.talkback.core.endpointattachment.ChannelAttachmentPrepareResult
+import com.talkback.core.endpointattachment.EndpointAttachmentController
+import com.talkback.core.endpointattachment.EndpointAttachmentEvent
+import com.talkback.core.endpointattachment.EndpointAttachmentPrepareResult
 import com.talkback.core.discovery.CompositeModuleDiscoveryService
 import com.talkback.core.discovery.DiscoverySignalHandler
 import com.talkback.core.discovery.GossipDiscoveryControl
@@ -551,6 +558,12 @@ class TalkbackCoordinator(
 
     @Volatile
     var onChannelTextReceived: ((ChannelTextEvent) -> Unit)? = null
+
+    @Volatile
+    var onEndpointAttachmentReceived: ((EndpointAttachmentEvent) -> Unit)? = null
+
+    @Volatile
+    var onChannelAttachmentReceived: ((ChannelAttachmentEvent) -> Unit)? = null
 
     private var meetingProfile01FactWireIngress: MeetingProfile01FactWireIngress? = null
     private var meetingProfile01SessionIndex: MeetingProfile01ConferenceSessionIndex? = null
@@ -1204,6 +1217,14 @@ class TalkbackCoordinator(
     )
 
     private val channelTextController = ChannelTextController(
+        onLog = { message -> log(message) }
+    )
+
+    private val endpointAttachmentController = EndpointAttachmentController(
+        onLog = { message -> log(message) }
+    )
+
+    private val channelAttachmentController = ChannelAttachmentController(
         onLog = { message -> log(message) }
     )
 
@@ -2747,6 +2768,154 @@ class TalkbackCoordinator(
                     channelTextController.markSent(from, channelId)
                     log(
                         "CHANNEL_TEXT sent messageId=${prepared.payload.messageId} " +
+                            "channelId=$channelId from=${from.key} delivered=$sent/${targets.size}"
+                    )
+                }
+            }
+        }
+    }
+
+    /**
+     * Endpoint attachment (V2 data-plane): META + CHUNK signals on signed UDP path.
+     * Bypasses Session / Floor / Admission like ENDPOINT_TEXT.
+     */
+    fun sendEndpointAttachment(
+        from: EndpointAddress,
+        to: EndpointAddress,
+        data: ByteArray,
+        kind: AttachmentKind,
+        mimeType: String,
+        fileName: String,
+        caption: String?
+    ): Result<Unit> = runCatching {
+        runOnCoordinatorSync {
+            val peer = resolvePeerForModule(to.moduleId.value)
+                ?: error(EndpointAttachmentController.REASON_UNREACHABLE)
+            if (!isModuleDialable(to.moduleId.value)) {
+                error(EndpointAttachmentController.REASON_UNREACHABLE)
+            }
+            when (
+                val prepared = endpointAttachmentController.prepareSend(
+                    from,
+                    to,
+                    data,
+                    kind,
+                    mimeType,
+                    fileName,
+                    caption
+                )
+            ) {
+                is EndpointAttachmentPrepareResult.Rejected ->
+                    error(prepared.reason)
+                EndpointAttachmentPrepareResult.RateLimited -> Unit
+                is EndpointAttachmentPrepareResult.Ready -> {
+                    val metaEnvelope = buildSignedEnvelope(
+                        SignalType.ENDPOINT_ATTACHMENT_META,
+                        from,
+                        to,
+                        sessionId = "",
+                        payload = prepared.meta.encode()
+                    )
+                    if (!sendSignalHandoff(peer, metaEnvelope)) {
+                        error(EndpointAttachmentController.REASON_SEND_FAILED)
+                    }
+                    for (chunk in prepared.chunks) {
+                        val chunkEnvelope = buildSignedEnvelope(
+                            SignalType.ENDPOINT_ATTACHMENT_CHUNK,
+                            from,
+                            to,
+                            sessionId = "",
+                            payload = chunk.payload
+                        )
+                        if (!sendSignalHandoff(peer, chunkEnvelope)) {
+                            error(EndpointAttachmentController.REASON_SEND_FAILED)
+                        }
+                    }
+                    endpointAttachmentController.markSent(from, to)
+                    log(
+                        "ENDPOINT_ATTACHMENT sent attachmentId=${prepared.meta.attachmentId} " +
+                            "from=${from.key} to=${to.key} bytes=${prepared.meta.totalBytes}"
+                    )
+                }
+            }
+        }
+    }
+
+    fun sendChannelAttachment(
+        from: EndpointAddress,
+        channelId: String,
+        remotes: List<EndpointAddress>,
+        data: ByteArray,
+        kind: AttachmentKind,
+        mimeType: String,
+        fileName: String,
+        caption: String?
+    ): Result<Unit> = runCatching {
+        runOnCoordinatorSync {
+            if (channelId.isBlank()) {
+                error(ChannelAttachmentController.REASON_INVALID_CHANNEL)
+            }
+            val targets = remotes.filter { it.moduleId.value != from.moduleId.value }
+            if (targets.isEmpty()) {
+                error(ChannelAttachmentController.REASON_NO_MEMBERS)
+            }
+            when (
+                val prepared = channelAttachmentController.prepareSend(
+                    from,
+                    channelId,
+                    data,
+                    kind,
+                    mimeType,
+                    fileName,
+                    caption
+                )
+            ) {
+                is ChannelAttachmentPrepareResult.Rejected ->
+                    error(prepared.reason)
+                ChannelAttachmentPrepareResult.RateLimited -> Unit
+                is ChannelAttachmentPrepareResult.Ready -> {
+                    var sent = 0
+                    var lastFail: String? = null
+                    for (to in targets) {
+                        val peer = resolvePeerForModule(to.moduleId.value)
+                        if (peer == null || !isModuleDialable(to.moduleId.value)) {
+                            lastFail = ChannelAttachmentController.REASON_UNREACHABLE
+                            continue
+                        }
+                        val metaEnvelope = buildSignedEnvelope(
+                            SignalType.CHANNEL_ATTACHMENT_META,
+                            from,
+                            to,
+                            sessionId = "",
+                            payload = prepared.meta.encode()
+                        )
+                        if (!sendSignalHandoff(peer, metaEnvelope)) {
+                            lastFail = ChannelAttachmentController.REASON_SEND_FAILED
+                            continue
+                        }
+                        var chunkOk = true
+                        for (chunk in prepared.chunks) {
+                            val chunkEnvelope = buildSignedEnvelope(
+                                SignalType.CHANNEL_ATTACHMENT_CHUNK,
+                                from,
+                                to,
+                                sessionId = "",
+                                payload = chunk.payload
+                            )
+                            if (!sendSignalHandoff(peer, chunkEnvelope)) {
+                                chunkOk = false
+                                lastFail = ChannelAttachmentController.REASON_SEND_FAILED
+                                break
+                            }
+                        }
+                        if (chunkOk) sent++
+                    }
+                    if (sent == 0) {
+                        error(lastFail ?: ChannelAttachmentController.REASON_SEND_FAILED)
+                    }
+                    channelAttachmentController.markSent(from, channelId)
+                    log(
+                        "CHANNEL_ATTACHMENT sent attachmentId=${prepared.meta.attachmentId} " +
                             "channelId=$channelId from=${from.key} delivered=$sent/${targets.size}"
                     )
                 }
@@ -9103,6 +9272,36 @@ class TalkbackCoordinator(
             onChannelTextReceived?.invoke(event)
             return
         }
+        if (signal.type == SignalType.ENDPOINT_ATTACHMENT_META) {
+            observePeerInboundAfterAuth(signal)
+            callableModuleGate.markVerified(signal.from.moduleId.value)
+            rememberSignalPeer(signal.from.moduleId.value, fromPeer)
+            endpointAttachmentController.onReceiveMeta(signal)
+            return
+        }
+        if (signal.type == SignalType.ENDPOINT_ATTACHMENT_CHUNK) {
+            observePeerInboundAfterAuth(signal)
+            callableModuleGate.markVerified(signal.from.moduleId.value)
+            rememberSignalPeer(signal.from.moduleId.value, fromPeer)
+            val event = endpointAttachmentController.onReceiveChunk(signal) ?: return
+            onEndpointAttachmentReceived?.invoke(event)
+            return
+        }
+        if (signal.type == SignalType.CHANNEL_ATTACHMENT_META) {
+            observePeerInboundAfterAuth(signal)
+            callableModuleGate.markVerified(signal.from.moduleId.value)
+            rememberSignalPeer(signal.from.moduleId.value, fromPeer)
+            channelAttachmentController.onReceiveMeta(signal)
+            return
+        }
+        if (signal.type == SignalType.CHANNEL_ATTACHMENT_CHUNK) {
+            observePeerInboundAfterAuth(signal)
+            callableModuleGate.markVerified(signal.from.moduleId.value)
+            rememberSignalPeer(signal.from.moduleId.value, fromPeer)
+            val event = channelAttachmentController.onReceiveChunk(signal) ?: return
+            onChannelAttachmentReceived?.invoke(event)
+            return
+        }
         if (signal.type == SignalType.CONFERENCE_SIGNED_FACT) {
             observePeerInboundAfterAuth(signal)
             callableModuleGate.markVerified(signal.from.moduleId.value)
@@ -9163,6 +9362,10 @@ class TalkbackCoordinator(
                 handleGenerationFactResponseInsufficient(signal, fromPeer)
             SignalType.ENDPOINT_TEXT -> Unit // handled above; keep exhaustive
             SignalType.CHANNEL_TEXT -> Unit // handled above; keep exhaustive
+            SignalType.ENDPOINT_ATTACHMENT_META -> Unit // handled above
+            SignalType.ENDPOINT_ATTACHMENT_CHUNK -> Unit // handled above
+            SignalType.CHANNEL_ATTACHMENT_META -> Unit // handled above
+            SignalType.CHANNEL_ATTACHMENT_CHUNK -> Unit // handled above
             SignalType.CONFERENCE_SIGNED_FACT -> Unit // handled above; keep exhaustive
             else -> Unit
         }

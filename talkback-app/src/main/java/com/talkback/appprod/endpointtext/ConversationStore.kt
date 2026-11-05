@@ -1,11 +1,11 @@
 package com.talkback.appprod.endpointtext
 
 /**
- * Process-local conversation cache for Tactical Message presentation.
- *
- * Not transport state — clearing has zero protocol impact. In-memory only.
+ * Direct message presentation + unread tracking.
+ * When [persistence] is set, messages survive process restarts (SQLite).
  */
 class ConversationStore(
+    private val persistence: MessagePersistence? = null,
     private val capacityPerEndpoint: Int = DEFAULT_CAPACITY_PER_ENDPOINT
 ) {
     init {
@@ -23,30 +23,34 @@ class ConversationStore(
     fun append(record: EndpointTextRecord) {
         val key = record.endpointKey
         if (key.isBlank()) return
+        val markRead = key == openConversationKey
+        persistence?.insertDirect(record, markRead)
+        if (persistence != null) return
         val buffer = byEndpoint.getOrPut(key) { ArrayDeque() }
         buffer.addLast(record)
         while (buffer.size > capacityPerEndpoint) {
             buffer.removeFirst()
         }
-        if (record.direction == EndpointTextDirection.INBOUND && key != openConversationKey) {
+        if (record.direction == EndpointTextDirection.INBOUND && !markRead) {
             unreadByEndpoint[key] = (unreadByEndpoint[key] ?: 0) + 1
         }
     }
 
-    /** Newest first. */
     @Synchronized
     fun recent(endpointKey: String): List<EndpointTextRecord> {
+        persistence?.let { return it.recentDirect(endpointKey) }
         val buffer = byEndpoint[endpointKey] ?: return emptyList()
         return buffer.reversed()
     }
 
     @Synchronized
     fun summaries(): List<ConversationSummary> {
+        persistence?.let { return it.directSummaries() }
         return byEndpoint.map { (key, buffer) ->
             val last = buffer.last()
             ConversationSummary(
                 endpointKey = key,
-                lastMessage = last.text,
+                lastMessage = last.previewText(),
                 lastTimestampMs = last.timestampMs,
                 lastDirection = last.direction,
                 unreadCount = unreadByEndpoint[key] ?: 0
@@ -55,11 +59,13 @@ class ConversationStore(
     }
 
     @Synchronized
-    fun totalUnread(): Int = unreadByEndpoint.values.sum()
+    fun totalUnread(): Int =
+        persistence?.totalDirectUnread() ?: unreadByEndpoint.values.sum()
 
     @Synchronized
     fun markRead(endpointKey: String) {
         if (endpointKey.isBlank()) return
+        persistence?.markDirectRead(endpointKey)
         unreadByEndpoint.remove(endpointKey)
     }
 
@@ -76,6 +82,7 @@ class ConversationStore(
 
     @Synchronized
     fun clear() {
+        persistence?.clearAll()
         byEndpoint.clear()
         unreadByEndpoint.clear()
         openConversationKey = null
@@ -83,5 +90,15 @@ class ConversationStore(
 
     companion object {
         const val DEFAULT_CAPACITY_PER_ENDPOINT = 8
+    }
+}
+
+private fun EndpointTextRecord.previewText(): String {
+    if (text.isNotBlank()) return text
+    return when (attachment?.kind) {
+        com.talkback.core.endpointattachment.AttachmentKind.IMAGE -> "[Image]"
+        com.talkback.core.endpointattachment.AttachmentKind.VOICE -> "[Voice]"
+        com.talkback.core.endpointattachment.AttachmentKind.FILE -> "[File]"
+        null -> text
     }
 }
