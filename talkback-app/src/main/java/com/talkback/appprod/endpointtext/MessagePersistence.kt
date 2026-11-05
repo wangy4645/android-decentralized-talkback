@@ -16,6 +16,8 @@ class MessagePersistence(context: Context) : SQLiteOpenHelper(
     null,
     DB_VERSION
 ) {
+    /** Invoked with attachment paths removed from SQL by row trim; consumer should GC unreferenced files. */
+    var onAttachmentPathsEvicted: ((List<String>) -> Unit)? = null
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
             """
@@ -89,8 +91,11 @@ class MessagePersistence(context: Context) : SQLiteOpenHelper(
                 )
             }
             db.insert("direct_messages", null, values)
-            trimDirectThread(db, record.endpointKey)
+            val evicted = trimDirectThread(db, record.endpointKey)
             db.setTransactionSuccessful()
+            if (evicted.isNotEmpty()) {
+                onAttachmentPathsEvicted?.invoke(evicted)
+            }
         } finally {
             db.endTransaction()
         }
@@ -122,8 +127,11 @@ class MessagePersistence(context: Context) : SQLiteOpenHelper(
                 )
             }
             db.insert("channel_messages", null, values)
-            trimChannelThread(db, record.channelId)
+            val evicted = trimChannelThread(db, record.channelId)
             db.setTransactionSuccessful()
+            if (evicted.isNotEmpty()) {
+                onAttachmentPathsEvicted?.invoke(evicted)
+            }
         } finally {
             db.endTransaction()
         }
@@ -295,39 +303,79 @@ class MessagePersistence(context: Context) : SQLiteOpenHelper(
     }
 
     @Synchronized
+    fun countAttachmentPathReferences(path: String): Int {
+        if (path.isBlank()) return 0
+        val db = readableDatabase
+        var total = 0
+        db.rawQuery(
+            "SELECT COUNT(*) FROM direct_messages WHERE attachment_local_path = ?",
+            arrayOf(path)
+        ).use { if (it.moveToFirst()) total += it.getInt(0) }
+        db.rawQuery(
+            "SELECT COUNT(*) FROM channel_messages WHERE attachment_local_path = ?",
+            arrayOf(path)
+        ).use { if (it.moveToFirst()) total += it.getInt(0) }
+        return total
+    }
+
+    @Synchronized
     fun clearAll() {
         writableDatabase.delete("direct_messages", null, null)
         writableDatabase.delete("channel_messages", null, null)
     }
 
-    private fun trimDirectThread(db: SQLiteDatabase, endpointKey: String) {
-        db.execSQL(
+    private fun trimDirectThread(db: SQLiteDatabase, endpointKey: String): List<String> {
+        val evictedPaths = ArrayList<String>()
+        val deleteIds = ArrayList<Long>()
+        db.rawQuery(
             """
-            DELETE FROM direct_messages
-            WHERE endpoint_key = ? AND id NOT IN (
-              SELECT id FROM direct_messages
-              WHERE endpoint_key = ?
-              ORDER BY timestamp_ms DESC
-              LIMIT ?
-            )
+            SELECT id, attachment_local_path FROM direct_messages
+            WHERE endpoint_key = ?
+            ORDER BY timestamp_ms DESC
             """.trimIndent(),
-            arrayOf(endpointKey, endpointKey, MAX_ROWS_PER_THREAD.toString())
-        )
+            arrayOf(endpointKey)
+        ).use { cursor ->
+            var index = 0
+            while (cursor.moveToNext()) {
+                if (index >= MAX_ROWS_PER_THREAD) {
+                    deleteIds.add(cursor.getLong(0))
+                    val path = cursor.getString(1)
+                    if (!path.isNullOrBlank()) evictedPaths.add(path)
+                }
+                index++
+            }
+        }
+        for (id in deleteIds) {
+            db.delete("direct_messages", "id = ?", arrayOf(id.toString()))
+        }
+        return evictedPaths
     }
 
-    private fun trimChannelThread(db: SQLiteDatabase, channelId: String) {
-        db.execSQL(
+    private fun trimChannelThread(db: SQLiteDatabase, channelId: String): List<String> {
+        val evictedPaths = ArrayList<String>()
+        val deleteIds = ArrayList<Long>()
+        db.rawQuery(
             """
-            DELETE FROM channel_messages
-            WHERE channel_id = ? AND id NOT IN (
-              SELECT id FROM channel_messages
-              WHERE channel_id = ?
-              ORDER BY timestamp_ms DESC
-              LIMIT ?
-            )
+            SELECT id, attachment_local_path FROM channel_messages
+            WHERE channel_id = ?
+            ORDER BY timestamp_ms DESC
             """.trimIndent(),
-            arrayOf(channelId, channelId, MAX_ROWS_PER_THREAD.toString())
-        )
+            arrayOf(channelId)
+        ).use { cursor ->
+            var index = 0
+            while (cursor.moveToNext()) {
+                if (index >= MAX_ROWS_PER_THREAD) {
+                    deleteIds.add(cursor.getLong(0))
+                    val path = cursor.getString(1)
+                    if (!path.isNullOrBlank()) evictedPaths.add(path)
+                }
+                index++
+            }
+        }
+        for (id in deleteIds) {
+            db.delete("channel_messages", "id = ?", arrayOf(id.toString()))
+        }
+        return evictedPaths
     }
 
     private fun previewLine(text: String, attachmentKind: String?): String {

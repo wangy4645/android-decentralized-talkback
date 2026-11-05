@@ -65,6 +65,14 @@ class TalkbackApp : Application() {
             File(filesDir, MixOutputMakeupFieldExperiment.FIELD_FLAG_FILE_NAME),
         )
         runtimeManager = TalkbackRuntimeManager(this)
+        messagePersistence.onAttachmentPathsEvicted = { paths ->
+            paths.forEach { path ->
+                if (messagePersistence.countAttachmentPathReferences(path) == 0) {
+                    messageAttachmentStorage.deleteFileAtPath(path)
+                }
+            }
+        }
+        messageAttachmentStorage.sweepPartialFiles(120_000L)
         endpointTextInboundNotifier = EndpointTextInboundNotifier(this, MainScope())
         TaskProfileManager(this).ensureInitialized()
     }
