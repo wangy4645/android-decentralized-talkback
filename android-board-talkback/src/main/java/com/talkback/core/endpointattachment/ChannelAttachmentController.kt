@@ -8,6 +8,8 @@ import java.util.UUID
 class ChannelAttachmentController(
     private val rateLimitWindowMs: Long = RATE_LIMIT_WINDOW_MS,
     private val dedupCapacity: Int = DEDUP_CAPACITY,
+    private val transferTtlMs: Long = AttachmentTransferPolicy.TRANSFER_TTL_MS,
+    private val maxInboundTransfers: Int = AttachmentTransferPolicy.MAX_INBOUND_TRANSFERS,
     private val clockMs: () -> Long = System::currentTimeMillis,
     private val newMessageId: () -> String = { UUID.randomUUID().toString() },
     private val onLog: (String) -> Unit = {}
@@ -19,10 +21,12 @@ class ChannelAttachmentController(
     }
     private data class InboundTransfer(
         val meta: ChannelAttachmentMetaPayload,
-        val buffer: ChannelAttachmentReassemblyBuffer
+        val buffer: ChannelAttachmentReassemblyBuffer,
+        val senderEndpointKey: String,
+        val startedAtMs: Long
     )
 
-    private val inbound = HashMap<String, InboundTransfer>()
+    private val inbound = HashMap<AttachmentTransferKey, InboundTransfer>()
 
     fun prepareSend(
         from: EndpointAddress,
@@ -38,11 +42,11 @@ class ChannelAttachmentController(
         if (channelId.isBlank()) {
             return ChannelAttachmentPrepareResult.Rejected(REASON_INVALID_CHANNEL)
         }
-        if (data.size > AttachmentChunker.MAX_ATTACHMENT_BYTES) {
-            return ChannelAttachmentPrepareResult.Rejected(REASON_TOO_LARGE)
-        }
         if (data.isEmpty()) {
             return ChannelAttachmentPrepareResult.Rejected(REASON_EMPTY)
+        }
+        if (data.size > AttachmentTransferPolicy.DEFAULT_MAX_ATTACHMENT_BYTES) {
+            return ChannelAttachmentPrepareResult.Rejected(REASON_TOO_LARGE)
         }
         val rateKey = rateLimitKey(from.key, channelId)
         val now = clockMs()
@@ -86,14 +90,21 @@ class ChannelAttachmentController(
     fun onReceiveMeta(signal: SignalEnvelope): ChannelAttachmentMetaPayload? {
         if (signal.type != SignalType.CHANNEL_ATTACHMENT_META) return null
         val payload = ChannelAttachmentMetaPayload.decode(signal.payload) ?: return null
+        if (payload.sha256.isBlank()) return null
         synchronized(recentMessageIds) {
             if (recentMessageIds.containsKey(payload.messageId)) return null
             recentMessageIds[payload.messageId] = clockMs()
         }
+        val now = clockMs()
         synchronized(inbound) {
-            inbound[payload.attachmentId] = InboundTransfer(
+            expireStaleTransfersLocked(now)
+            if (inbound.size >= maxInboundTransfers) return null
+            val key = AttachmentTransferKey(payload.attachmentId, signal.from.key)
+            inbound[key] = InboundTransfer(
                 meta = payload,
-                buffer = ChannelAttachmentReassemblyBuffer(payload, onLog)
+                buffer = ChannelAttachmentReassemblyBuffer(payload, onLog),
+                senderEndpointKey = signal.from.key,
+                startedAtMs = now
             )
         }
         return payload
@@ -102,10 +113,14 @@ class ChannelAttachmentController(
     fun onReceiveChunk(signal: SignalEnvelope): ChannelAttachmentEvent? {
         if (signal.type != SignalType.CHANNEL_ATTACHMENT_CHUNK) return null
         val chunk = AttachmentChunker.decodeChunkPayload(signal.payload) ?: return null
+        val key = AttachmentTransferKey(chunk.attachmentId, signal.from.key)
+        val now = clockMs()
         val (meta, completeBytes) = synchronized(inbound) {
-            val transfer = inbound[chunk.attachmentId] ?: return null
+            expireStaleTransfersLocked(now)
+            val transfer = inbound[key] ?: return null
+            if (transfer.senderEndpointKey != signal.from.key) return null
             val bytes = transfer.buffer.ingest(chunk.index, chunk.bytes) ?: return null
-            inbound.remove(chunk.attachmentId)
+            inbound.remove(key)
             transfer.meta to bytes
         }
         return ChannelAttachmentEvent(
@@ -117,8 +132,23 @@ class ChannelAttachmentController(
             mimeType = meta.mimeType,
             fileName = meta.fileName,
             bytes = completeBytes,
-            caption = meta.caption
+            caption = meta.caption,
+            sha256 = meta.sha256
         )
+    }
+
+    internal fun expireStaleTransfersForTest(nowMs: Long = clockMs()) {
+        synchronized(inbound) { expireStaleTransfersLocked(nowMs) }
+    }
+
+    private fun expireStaleTransfersLocked(now: Long) {
+        val iter = inbound.entries.iterator()
+        while (iter.hasNext()) {
+            val entry = iter.next()
+            if (now - entry.value.startedAtMs > transferTtlMs) {
+                iter.remove()
+            }
+        }
     }
 
     private fun rateLimitKey(sender: String, channelId: String): String =

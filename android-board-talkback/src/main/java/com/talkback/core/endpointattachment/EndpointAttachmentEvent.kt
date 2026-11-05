@@ -11,7 +11,8 @@ data class EndpointAttachmentEvent(
     val mimeType: String,
     val fileName: String,
     val bytes: ByteArray,
-    val caption: String?
+    val caption: String?,
+    val sha256: String
 )
 
 data class ChannelAttachmentEvent(
@@ -23,5 +24,6 @@ data class ChannelAttachmentEvent(
     val mimeType: String,
     val fileName: String,
     val bytes: ByteArray,
-    val caption: String?
+    val caption: String?,
+    val sha256: String
 )

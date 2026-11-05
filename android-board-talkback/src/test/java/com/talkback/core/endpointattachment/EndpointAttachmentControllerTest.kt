@@ -8,6 +8,7 @@ import com.talkback.core.model.SignalType
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -19,15 +20,18 @@ import org.robolectric.annotation.Config
 class EndpointAttachmentControllerTest {
     private val m01 = ModuleId("M01")
     private val m02 = ModuleId("M02")
-    private val from = EndpointAddress(m01, EndpointId("E01"))
-    private val to = EndpointAddress(m02, EndpointId("E01"))
+    private val m03 = ModuleId("M03")
+    private val alice = EndpointAddress(m01, EndpointId("E01"))
+    private val bobEndpoint = EndpointAddress(m02, EndpointId("E01"))
+    private val eve = EndpointAddress(m03, EndpointId("E01"))
+    private val to = bobEndpoint
 
     @Test
     fun prepareSend_andReassemble_roundTrip() {
         val controller = EndpointAttachmentController()
         val payload = ByteArray(1200) { (it % 256).toByte() }
         val prepared = controller.prepareSend(
-            from,
+            alice,
             to,
             payload,
             AttachmentKind.FILE,
@@ -39,21 +43,99 @@ class EndpointAttachmentControllerTest {
         val ready = prepared as EndpointAttachmentPrepareResult.Ready
         assertEquals(3, ready.chunks.size)
 
-        val metaSignal = envelope(SignalType.ENDPOINT_ATTACHMENT_META, ready.meta.encode())
+        val metaSignal = envelope(alice, SignalType.ENDPOINT_ATTACHMENT_META, ready.meta.encode(), "n-meta")
         assertNotNull(controller.onReceiveMeta(metaSignal))
 
         var event: EndpointAttachmentEvent? = null
-        for (chunk in ready.chunks) {
-            val chunkSignal = envelope(SignalType.ENDPOINT_ATTACHMENT_CHUNK, chunk.payload)
+        for ((i, chunk) in ready.chunks.withIndex()) {
+            val chunkSignal = envelope(
+                alice,
+                SignalType.ENDPOINT_ATTACHMENT_CHUNK,
+                chunk.payload,
+                "n-chunk-$i"
+            )
             event = controller.onReceiveChunk(chunkSignal) ?: continue
         }
         assertNotNull(event)
         assertArrayEquals(payload, event!!.bytes)
         assertEquals("cap", event.caption)
-        assertEquals(AttachmentKind.FILE, event.kind)
+        assertEquals(ready.meta.sha256, event.sha256)
     }
 
-    private fun envelope(type: SignalType, payload: String): SignalEnvelope =
+    @Test
+    fun chunkFromDifferentSender_isRejected() {
+        val controller = EndpointAttachmentController()
+        val payload = ByteArray(500) { 1 }
+        val ready = controller.prepareSend(
+            alice,
+            to,
+            payload,
+            AttachmentKind.FILE,
+            "application/octet-stream",
+            "a.bin",
+            caption = null
+        ) as EndpointAttachmentPrepareResult.Ready
+
+        assertNotNull(
+            controller.onReceiveMeta(
+                envelope(alice, SignalType.ENDPOINT_ATTACHMENT_META, ready.meta.encode(), "meta-1")
+            )
+        )
+        val chunk = ready.chunks.first()
+        assertNull(
+            controller.onReceiveChunk(
+                envelope(eve, SignalType.ENDPOINT_ATTACHMENT_CHUNK, chunk.payload, "evil-1")
+            )
+        )
+        assertNotNull(
+            controller.onReceiveChunk(
+                envelope(alice, SignalType.ENDPOINT_ATTACHMENT_CHUNK, chunk.payload, "ok-1")
+            )
+        )
+    }
+
+    @Test
+    fun staleTransfer_isEvicted() {
+        var now = 0L
+        val controller = EndpointAttachmentController(
+            transferTtlMs = 1000L,
+            clockMs = { now }
+        )
+        val payload = byteArrayOf(1, 2, 3)
+        val ready = controller.prepareSend(
+            alice,
+            to,
+            payload,
+            AttachmentKind.FILE,
+            "application/octet-stream",
+            "t.bin",
+            caption = null
+        ) as EndpointAttachmentPrepareResult.Ready
+        assertNotNull(
+            controller.onReceiveMeta(
+                envelope(alice, SignalType.ENDPOINT_ATTACHMENT_META, ready.meta.encode(), "meta-t")
+            )
+        )
+        now = 2000L
+        controller.expireStaleTransfersForTest(now)
+        assertNull(
+            controller.onReceiveChunk(
+                envelope(
+                    alice,
+                    SignalType.ENDPOINT_ATTACHMENT_CHUNK,
+                    ready.chunks.first().payload,
+                    "chunk-late"
+                )
+            )
+        )
+    }
+
+    private fun envelope(
+        from: EndpointAddress,
+        type: SignalType,
+        payload: String,
+        nonce: String
+    ): SignalEnvelope =
         SignalEnvelope(
             type = type,
             from = from,
@@ -61,7 +143,7 @@ class EndpointAttachmentControllerTest {
             sessionId = "",
             timestampMs = System.currentTimeMillis(),
             payload = payload,
-            nonce = "n-${type.name}",
+            nonce = nonce,
             signature = "sig"
         )
 }

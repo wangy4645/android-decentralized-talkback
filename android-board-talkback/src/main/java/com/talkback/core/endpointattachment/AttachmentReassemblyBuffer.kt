@@ -34,12 +34,14 @@ internal class AttachmentReassemblyBuffer(
             onLog("ATTACHMENT size_mismatch attachmentId=${meta.attachmentId}")
             return null
         }
-        if (meta.sha256.isNotBlank()) {
-            val actual = AttachmentChunker.sha256Hex(out)
-            if (!actual.equals(meta.sha256, ignoreCase = true)) {
-                onLog("ATTACHMENT sha256_fail attachmentId=${meta.attachmentId}")
-                return null
-            }
+        if (meta.sha256.isBlank()) {
+            onLog("ATTACHMENT sha256_missing attachmentId=${meta.attachmentId}")
+            return null
+        }
+        val actual = AttachmentChunker.sha256Hex(out)
+        if (!actual.equals(meta.sha256, ignoreCase = true)) {
+            onLog("ATTACHMENT sha256_fail attachmentId=${meta.attachmentId}")
+            return null
         }
         return out
     }

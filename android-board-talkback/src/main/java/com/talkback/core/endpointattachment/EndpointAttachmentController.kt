@@ -8,6 +8,8 @@ import java.util.UUID
 class EndpointAttachmentController(
     private val rateLimitWindowMs: Long = RATE_LIMIT_WINDOW_MS,
     private val dedupCapacity: Int = DEDUP_CAPACITY,
+    private val transferTtlMs: Long = AttachmentTransferPolicy.TRANSFER_TTL_MS,
+    private val maxInboundTransfers: Int = AttachmentTransferPolicy.MAX_INBOUND_TRANSFERS,
     private val clockMs: () -> Long = System::currentTimeMillis,
     private val newMessageId: () -> String = { UUID.randomUUID().toString() },
     private val onLog: (String) -> Unit = {}
@@ -19,10 +21,12 @@ class EndpointAttachmentController(
     }
     private data class InboundTransfer(
         val meta: EndpointAttachmentMetaPayload,
-        val buffer: AttachmentReassemblyBuffer
+        val buffer: AttachmentReassemblyBuffer,
+        val senderEndpointKey: String,
+        val startedAtMs: Long
     )
 
-    private val inbound = HashMap<String, InboundTransfer>()
+    private val inbound = HashMap<AttachmentTransferKey, InboundTransfer>()
 
     fun prepareSend(
         from: EndpointAddress,
@@ -35,11 +39,11 @@ class EndpointAttachmentController(
         messageId: String? = null,
         attachmentId: String? = null
     ): EndpointAttachmentPrepareResult {
-        if (data.size > AttachmentChunker.MAX_ATTACHMENT_BYTES) {
-            return EndpointAttachmentPrepareResult.Rejected(REASON_TOO_LARGE)
-        }
         if (data.isEmpty()) {
             return EndpointAttachmentPrepareResult.Rejected(REASON_EMPTY)
+        }
+        if (data.size > AttachmentTransferPolicy.DEFAULT_MAX_ATTACHMENT_BYTES) {
+            return EndpointAttachmentPrepareResult.Rejected(REASON_TOO_LARGE)
         }
         val rateKey = rateLimitKey(from.key, to.key)
         val now = clockMs()
@@ -86,6 +90,10 @@ class EndpointAttachmentController(
             return null
         }
         if (signal.to == null) return null
+        if (payload.sha256.isBlank()) {
+            onLog("ENDPOINT_ATTACHMENT meta_missing_sha256 from=${signal.from.key}")
+            return null
+        }
         synchronized(recentMessageIds) {
             if (recentMessageIds.containsKey(payload.messageId)) {
                 onLog("ENDPOINT_ATTACHMENT meta_dedup messageId=${payload.messageId}")
@@ -93,10 +101,19 @@ class EndpointAttachmentController(
             }
             recentMessageIds[payload.messageId] = clockMs()
         }
+        val now = clockMs()
         synchronized(inbound) {
-            inbound[payload.attachmentId] = InboundTransfer(
+            expireStaleTransfersLocked(now)
+            if (inbound.size >= maxInboundTransfers) {
+                onLog("ENDPOINT_ATTACHMENT inbound_cap from=${signal.from.key}")
+                return null
+            }
+            val key = AttachmentTransferKey(payload.attachmentId, signal.from.key)
+            inbound[key] = InboundTransfer(
                 meta = payload,
-                buffer = AttachmentReassemblyBuffer(payload, onLog)
+                buffer = AttachmentReassemblyBuffer(payload, onLog),
+                senderEndpointKey = signal.from.key,
+                startedAtMs = now
             )
         }
         onLog("ENDPOINT_ATTACHMENT meta_recv attachmentId=${payload.attachmentId} from=${signal.from.key}")
@@ -110,13 +127,23 @@ class EndpointAttachmentController(
             return null
         }
         val to = signal.to ?: return null
+        val key = AttachmentTransferKey(chunk.attachmentId, signal.from.key)
+        val now = clockMs()
         val (meta, completeBytes) = synchronized(inbound) {
-            val transfer = inbound[chunk.attachmentId] ?: run {
-                onLog("ENDPOINT_ATTACHMENT chunk_orphan attachmentId=${chunk.attachmentId}")
+            expireStaleTransfersLocked(now)
+            val transfer = inbound[key] ?: run {
+                onLog(
+                    "ENDPOINT_ATTACHMENT chunk_orphan attachmentId=${chunk.attachmentId} " +
+                        "from=${signal.from.key}"
+                )
+                return null
+            }
+            if (transfer.senderEndpointKey != signal.from.key) {
+                onLog("ENDPOINT_ATTACHMENT chunk_sender_mismatch attachmentId=${chunk.attachmentId}")
                 return null
             }
             val bytes = transfer.buffer.ingest(chunk.index, chunk.bytes) ?: return null
-            inbound.remove(chunk.attachmentId)
+            inbound.remove(key)
             transfer.meta to bytes
         }
         onLog(
@@ -132,8 +159,28 @@ class EndpointAttachmentController(
             mimeType = meta.mimeType,
             fileName = meta.fileName,
             bytes = completeBytes,
-            caption = meta.caption
+            caption = meta.caption,
+            sha256 = meta.sha256
         )
+    }
+
+    /** Test seam: evict stale transfers without receiving traffic. */
+    internal fun expireStaleTransfersForTest(nowMs: Long = clockMs()) {
+        synchronized(inbound) { expireStaleTransfersLocked(nowMs) }
+    }
+
+    private fun expireStaleTransfersLocked(now: Long) {
+        val iter = inbound.entries.iterator()
+        while (iter.hasNext()) {
+            val entry = iter.next()
+            if (now - entry.value.startedAtMs > transferTtlMs) {
+                onLog(
+                    "ENDPOINT_ATTACHMENT transfer_expired attachmentId=${entry.key.attachmentId} " +
+                        "from=${entry.key.senderEndpointKey}"
+                )
+                iter.remove()
+            }
+        }
     }
 
     private fun rateLimitKey(sender: String, receiver: String): String =

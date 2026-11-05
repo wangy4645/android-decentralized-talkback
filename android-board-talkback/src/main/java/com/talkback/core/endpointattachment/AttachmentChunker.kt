@@ -10,6 +10,7 @@ import java.security.MessageDigest
  */
 object AttachmentChunker {
     const val CHUNK_RAW_BYTES = 480
+    /** Hard protocol ceiling; product default is [AttachmentTransferPolicy.DEFAULT_MAX_ATTACHMENT_BYTES]. */
     const val MAX_ATTACHMENT_BYTES = 3 * 1024 * 1024
 
     fun sha256Hex(bytes: ByteArray): String {
