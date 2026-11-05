@@ -64,9 +64,9 @@ class ChannelConversationFragment : Fragment() {
         val container = view.findViewById<LinearLayout>(R.id.containerConversationMessages)
         val input = view.findViewById<EditText>(R.id.editConversationInput)
         val send = view.findViewById<TextView>(R.id.btnConversationSend)
-        view.findViewById<View>(R.id.btnConversationAttach).setOnClickListener {
-            attachmentActions.showAttachMenu()
-        }
+        ConversationMorePanelBinder.bind(view, attachmentActions)
+        ConversationVoiceInputBinder.bind(view, attachmentActions)
+        ConversationAttachPanelBack.install(this, view)
 
         fun renderMessages(messages: List<ChannelTextRecord>) {
             val hasMessages = messages.isNotEmpty()

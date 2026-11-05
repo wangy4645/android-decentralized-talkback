@@ -37,6 +37,8 @@ class MainActivity : AppCompatActivity() {
     private var wasConferenceActive = false
     private var pendingCallReturnTarget: CallReturnTarget? = null
     private var conversationHiddenForCall = false
+    private lateinit var conversationDismissBack: OnBackPressedCallback
+    private lateinit var meetingFallbackBack: OnBackPressedCallback
 
     private val stateReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -126,29 +128,51 @@ class MainActivity : AppCompatActivity() {
 
         handleInboundNavigationIntent(intent)
 
-        onBackPressedDispatcher.addCallback(
-            this,
-            object : OnBackPressedCallback(true) {
-                override fun handleOnBackPressed() {
-                    if (findViewById<View>(R.id.conversationOverlayContainer).isVisible) {
-                        dismissConversation()
-                        return
-                    }
-                    val meeting = supportFragmentManager.findFragmentByTag(MeetingFragment.TAG_MEETING)
-                        as? MeetingFragment
-                    if (meeting?.isAdded == true) {
-                        if (meeting.childFragmentManager.backStackEntryCount > 0) {
-                            meeting.hideSubPage()
-                        } else {
-                            meeting.handleMeetingBack()
-                        }
+        conversationDismissBack = object : OnBackPressedCallback(false) {
+            override fun handleOnBackPressed() {
+                dismissConversation()
+            }
+        }
+        onBackPressedDispatcher.addCallback(this, conversationDismissBack)
+
+        meetingFallbackBack = object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                val meeting = supportFragmentManager.findFragmentByTag(MeetingFragment.TAG_MEETING)
+                    as? MeetingFragment
+                if (meeting?.isAdded == true) {
+                    if (meeting.childFragmentManager.backStackEntryCount > 0) {
+                        meeting.hideSubPage()
                     } else {
-                        isEnabled = false
-                        onBackPressedDispatcher.onBackPressed()
+                        meeting.handleMeetingBack()
                     }
+                } else {
+                    isEnabled = false
+                    onBackPressedDispatcher.onBackPressed()
+                    isEnabled = true
                 }
             }
-        )
+        }
+        onBackPressedDispatcher.addCallback(this, meetingFallbackBack)
+
+        ConversationAttachmentPickerGate.addListener {
+            updateConversationDismissBackCallback()
+        }
+        updateConversationDismissBackCallback()
+    }
+
+    override fun onDestroy() {
+        talkViewModel.bindInboundToastHandler(null)
+        super.onDestroy()
+    }
+
+    private fun updateConversationDismissBackCallback() {
+        if (!::conversationDismissBack.isInitialized) return
+        val overlayVisible = findViewById<View>(R.id.conversationOverlayContainer).isVisible
+        val pickerOpen = ConversationAttachmentPickerGate.active
+        conversationDismissBack.isEnabled = overlayVisible && !pickerOpen
+        if (::meetingFallbackBack.isInitialized) {
+            meetingFallbackBack.isEnabled = !pickerOpen
+        }
     }
 
     private fun handleTalkUiState(state: TalkUiState) {
@@ -207,11 +231,6 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         talkViewModel.clearInboundNotification()
-    }
-
-    override fun onDestroy() {
-        talkViewModel.bindInboundToastHandler(null)
-        super.onDestroy()
     }
 
     fun navigateToMessagesTab() {
@@ -396,6 +415,7 @@ class MainActivity : AppCompatActivity() {
                 ConversationFragment.TAG_CONVERSATION
             )
         }
+        updateConversationDismissBackCallback()
     }
 
     fun showChannelConversation(channelId: String, channelLabel: String) {
@@ -408,6 +428,7 @@ class MainActivity : AppCompatActivity() {
                 ChannelConversationFragment.TAG_CHANNEL_CONVERSATION
             )
         }
+        updateConversationDismissBackCallback()
     }
 
     fun dismissConversation() {
@@ -424,6 +445,7 @@ class MainActivity : AppCompatActivity() {
         findViewById<View>(R.id.conversationOverlayContainer).isVisible = false
         talkViewModel.setOpenConversation(null)
         talkViewModel.setOpenChannelConversation(null)
+        updateConversationDismissBackCallback()
     }
 
     fun showMeetingScreen(target: MeetingNavigation = MeetingNavigation.MAIN) {

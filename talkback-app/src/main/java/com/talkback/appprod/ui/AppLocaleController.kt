@@ -15,9 +15,17 @@ object AppLocaleController {
 
     fun applyStored(context: Context) {
         val store = AppLocaleStore(context)
-        val choice = store.load()
-        if (!store.hasPersistedChoice()) {
-            store.save(choice)
+        var choice = store.load()
+        when {
+            !store.hasPersistedChoice() -> {
+                store.save(AppLocaleChoice.SYSTEM)
+                choice = AppLocaleChoice.SYSTEM
+            }
+            !store.hasExplicitUserChoice() && choice != AppLocaleChoice.SYSTEM -> {
+                // Field / legacy builds may have persisted en/zh before default was follow-system.
+                store.save(AppLocaleChoice.SYSTEM)
+                choice = AppLocaleChoice.SYSTEM
+            }
         }
         applyChoice(choice)
     }
@@ -40,7 +48,10 @@ object AppLocaleController {
         choice: AppLocaleChoice,
         refreshVisibleState: (() -> Unit)? = null,
     ) {
-        AppLocaleStore(context).save(choice)
+        AppLocaleStore(context).apply {
+            save(choice)
+            markExplicitUserChoice()
+        }
         refreshVisibleState?.invoke()
         applyChoice(choice)
         refreshForegroundServiceNotification(context)

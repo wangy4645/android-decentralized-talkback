@@ -7,15 +7,15 @@ import org.junit.Test
 class ConversationStoreTest {
 
     @Test
-    fun append_thenRecent_returnsNewestFirst() {
+    fun append_thenRecent_returnsOldestFirst_forChatTimeline() {
         val store = ConversationStore(capacityPerEndpoint = 8)
         store.append(record("peer-a", "first", 1_000L, EndpointTextDirection.INBOUND))
         store.append(record("peer-a", "second", 2_000L, EndpointTextDirection.OUTBOUND))
 
         val recent = store.recent("peer-a")
-        assertEquals(listOf("second", "first"), recent.map { it.text })
-        assertEquals(EndpointTextDirection.OUTBOUND, recent[0].direction)
-        assertEquals(EndpointTextDirection.INBOUND, recent[1].direction)
+        assertEquals(listOf("first", "second"), recent.map { it.text })
+        assertEquals(EndpointTextDirection.INBOUND, recent[0].direction)
+        assertEquals(EndpointTextDirection.OUTBOUND, recent[1].direction)
     }
 
     @Test
@@ -40,8 +40,8 @@ class ConversationStoreTest {
 
         val recent = store.recent("peer-a")
         assertEquals(8, recent.size)
-        assertEquals("msg-8", recent.first().text)
-        assertEquals("msg-1", recent.last().text)
+        assertEquals("msg-1", recent.first().text)
+        assertEquals("msg-8", recent.last().text)
         assertTrue(recent.none { it.text == "msg-0" })
     }
 

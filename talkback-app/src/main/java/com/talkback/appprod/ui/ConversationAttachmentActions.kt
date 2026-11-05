@@ -1,9 +1,13 @@
 package com.talkback.appprod.ui
 
-import android.app.AlertDialog
+import android.app.Activity
 import android.content.Context
+import android.content.Intent
 import android.media.MediaRecorder
 import android.net.Uri
+import android.os.Build
+import android.provider.DocumentsContract
+import android.provider.MediaStore
 import android.widget.Toast
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
@@ -16,7 +20,7 @@ import java.io.File
  * Registers pickers / voice capture for conversation screens only.
  */
 class ConversationAttachmentActions(
-    fragment: Fragment,
+    private val fragment: Fragment,
     private val onBytesReady: (
         bytes: ByteArray,
         kind: AttachmentKind,
@@ -25,74 +29,143 @@ class ConversationAttachmentActions(
     ) -> Unit
 ) {
     private val context: Context = fragment.requireContext()
+
     private var voiceRecorder: MediaRecorder? = null
     private var voiceOutputFile: File? = null
+    private var voiceStartedAtMs: Long = 0L
 
-    private val pickImage: ActivityResultLauncher<String> =
-        fragment.registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-            if (uri != null) deliverUri(uri, AttachmentKind.IMAGE, defaultName = "photo.jpg")
+    private val pickImage: ActivityResultLauncher<Intent> =
+        fragment.registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            finishPickerSession()
+            if (result.resultCode != Activity.RESULT_OK) return@registerForActivityResult
+            val uri = result.data?.data ?: return@registerForActivityResult
+            deliverUri(uri, AttachmentKind.IMAGE, defaultName = "photo.jpg")
         }
 
-    private val pickFile: ActivityResultLauncher<Array<String>> =
-        fragment.registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-            if (uri != null) deliverUri(uri, AttachmentKind.FILE, defaultName = "file.bin")
+    private val pickDocument: ActivityResultLauncher<Intent> =
+        fragment.registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            finishPickerSession()
+            if (result.resultCode != Activity.RESULT_OK) return@registerForActivityResult
+            val uri = result.data?.data ?: return@registerForActivityResult
+            deliverUri(uri, AttachmentKind.FILE, defaultName = "file.bin")
         }
 
-    fun showAttachMenu() {
-        AlertDialog.Builder(context)
-            .setTitle(R.string.message_attach_cd)
-            .setItems(
-                arrayOf(
-                    context.getString(R.string.message_attach_pick_image),
-                    context.getString(R.string.message_attach_pick_file),
-                    context.getString(R.string.message_attach_record_voice)
-                )
-            ) { _, which ->
-                when (which) {
-                    0 -> pickImage.launch("image/*")
-                    1 -> pickFile.launch(arrayOf("*/*"))
-                    2 -> toggleVoiceRecording()
-                }
+    fun pickImage() {
+        beginPickerSession()
+        val intent = Intent(Intent.ACTION_PICK, MediaStore.Images.Media.EXTERNAL_CONTENT_URI).apply {
+            type = "image/*"
+        }
+        runCatching { pickImage.launch(intent) }.onFailure { finishPickerSession() }
+    }
+
+    fun pickFile() {
+        beginPickerSession()
+        launchSystemFilePicker()
+    }
+
+    private fun launchSystemFilePicker() {
+        val intent = buildDocumentPickIntent()
+        runCatching {
+            pickDocument.launch(intent)
+        }.onFailure {
+            finishPickerSession()
+            Toast.makeText(context, R.string.message_attach_file_unavailable, Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    /** Document-oriented SAF: no catch-all mime (Huawei opens image/Screenshot grid). Images use [pickImage]. */
+    private fun buildDocumentPickIntent(): Intent {
+        val mimeTypes = arrayOf(
+            "application/*",
+            "text/*",
+        )
+        return Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "*/*"
+            putExtra(Intent.EXTRA_MIME_TYPES, mimeTypes)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                putExtra(DocumentsContract.EXTRA_INITIAL_URI, documentPickStartUri())
             }
-            .show()
+        }
+    }
+
+    private fun documentPickStartUri(): Uri {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            MediaStore.Downloads.EXTERNAL_CONTENT_URI
+        } else {
+            Uri.parse("content://com.android.externalstorage.documents/document/primary:Download")
+        }
+    }
+
+    fun isVoiceRecording(): Boolean = voiceRecorder != null
+
+    /** Hold-to-talk: returns false if recorder could not start. */
+    fun startVoiceRecording(): Boolean {
+        if (voiceRecorder != null) return true
+        val file = File(context.cacheDir, "voice_${System.currentTimeMillis()}.m4a")
+        voiceOutputFile = file
+        return runCatching {
+            voiceRecorder = MediaRecorder().apply {
+                setAudioSource(MediaRecorder.AudioSource.MIC)
+                setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+                setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+                setOutputFile(file.absolutePath)
+                prepare()
+                start()
+            }
+            voiceStartedAtMs = System.currentTimeMillis()
+            true
+        }.getOrElse {
+            releaseVoiceRecorder(deleteFile = true)
+            Toast.makeText(context, R.string.message_voice_record_start_failed, Toast.LENGTH_SHORT).show()
+            false
+        }
+    }
+
+    /** Release finger: stop and send if long enough. */
+    fun finishVoiceRecordingAndSend() {
+        val file = voiceOutputFile ?: return
+        val durationMs = System.currentTimeMillis() - voiceStartedAtMs
+        releaseVoiceRecorder(deleteFile = false)
+        if (durationMs < MIN_VOICE_MS) {
+            file.delete()
+            Toast.makeText(context, R.string.message_voice_too_short, Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (!file.exists() || file.length() == 0L) {
+            file.delete()
+            return
+        }
+        val bytes = file.readBytes()
+        onBytesReady(bytes, AttachmentKind.VOICE, "audio/mp4", file.name)
+    }
+
+    fun cancelVoiceRecording() {
+        releaseVoiceRecorder(deleteFile = true)
     }
 
     fun release() {
-        runCatching {
-            voiceRecorder?.stop()
-        }
-        voiceRecorder?.release()
-        voiceRecorder = null
-        voiceOutputFile = null
+        finishPickerSession()
+        releaseVoiceRecorder(deleteFile = true)
     }
 
-    private fun toggleVoiceRecording() {
-        if (voiceRecorder != null) {
-            stopVoiceAndSend()
-            return
-        }
-        val file = File(context.cacheDir, "voice_${System.currentTimeMillis()}.m4a")
-        voiceOutputFile = file
-        voiceRecorder = MediaRecorder().apply {
-            setAudioSource(MediaRecorder.AudioSource.MIC)
-            setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
-            setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
-            setOutputFile(file.absolutePath)
-            prepare()
-            start()
-        }
-        Toast.makeText(context, R.string.message_voice_recording_hint, Toast.LENGTH_SHORT).show()
+    private fun beginPickerSession() {
+        ConversationAttachmentPickerGate.setActive(true)
     }
 
-    private fun stopVoiceAndSend() {
-        val file = voiceOutputFile ?: return
+    private fun finishPickerSession() {
+        ConversationAttachmentPickerGate.setActive(false)
+    }
+
+    private fun releaseVoiceRecorder(deleteFile: Boolean) {
         runCatching { voiceRecorder?.stop() }
-        voiceRecorder?.release()
+        runCatching { voiceRecorder?.release() }
         voiceRecorder = null
+        voiceOutputFile?.let { file ->
+            if (deleteFile) file.delete()
+        }
         voiceOutputFile = null
-        if (!file.exists() || file.length() == 0L) return
-        val bytes = file.readBytes()
-        onBytesReady(bytes, AttachmentKind.VOICE, "audio/mp4", file.name)
+        voiceStartedAtMs = 0L
     }
 
     private fun deliverUri(uri: Uri, kind: AttachmentKind, defaultName: String) {
@@ -112,5 +185,9 @@ class ConversationAttachmentActions(
             }
         }
         return null
+    }
+
+    companion object {
+        private const val MIN_VOICE_MS = 600L
     }
 }

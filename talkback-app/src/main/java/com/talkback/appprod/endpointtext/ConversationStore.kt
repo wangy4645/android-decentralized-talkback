@@ -42,7 +42,7 @@ class ConversationStore(
     fun recent(endpointKey: String): List<EndpointTextRecord> {
         persistence?.let { return it.recentDirect(endpointKey) }
         val buffer = byEndpoint[endpointKey] ?: return emptyList()
-        return buffer.reversed()
+        return buffer.toList()
     }
 
     @Synchronized

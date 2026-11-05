@@ -25,11 +25,14 @@ class TalkbackApp : Application() {
     lateinit var runtimeManager: TalkbackRuntimeManager
         private set
 
-    /** Process-local Tactical Message presentation + SQLite persistence. */
-    val messagePersistence = MessagePersistence(this)
-    val messageAttachmentStorage = MessageAttachmentStorage.fromContext(this)
-    val conversationStore = ConversationStore(messagePersistence)
-    val channelConversationStore = ChannelConversationStore(messagePersistence)
+    /**
+     * Message stores must not touch [getFilesDir] in Application `<init>` —
+     * base Context is not attached until after [attachBaseContext].
+     */
+    val messagePersistence by lazy { MessagePersistence(this) }
+    val messageAttachmentStorage by lazy { MessageAttachmentStorage.fromContext(this) }
+    val conversationStore by lazy { ConversationStore(messagePersistence) }
+    val channelConversationStore by lazy { ChannelConversationStore(messagePersistence) }
 
     lateinit var endpointTextInboundNotifier: EndpointTextInboundNotifier
         private set

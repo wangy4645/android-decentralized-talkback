@@ -16,8 +16,16 @@ class AppLocaleStore(context: Context) {
         prefs.edit().putString(KEY_CHOICE, choice.persistKey()).apply()
     }
 
+    /** Set when the user picks a language in Settings (not first-run default). */
+    fun hasExplicitUserChoice(): Boolean = prefs.getBoolean(KEY_EXPLICIT_USER, false)
+
+    fun markExplicitUserChoice() {
+        prefs.edit().putBoolean(KEY_EXPLICIT_USER, true).apply()
+    }
+
     companion object {
         private const val PREFS_NAME = "talkback_app_locale"
         private const val KEY_CHOICE = "choice"
+        private const val KEY_EXPLICIT_USER = "explicit_user"
     }
 }

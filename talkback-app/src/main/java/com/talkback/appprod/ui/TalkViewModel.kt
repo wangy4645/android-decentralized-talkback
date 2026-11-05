@@ -1169,7 +1169,7 @@ class TalkViewModel(
     fun conversationSummaries(): List<ConversationSummary> = conversationStore.summaries()
 
     fun conversationMessages(endpointKey: String): List<EndpointTextRecord> =
-        conversationStore.recent(endpointKey).reversed()
+        conversationStore.recent(endpointKey)
 
     fun channelMessages(channelId: String = configStore.load().defaultChannelId): List<ChannelTextRecord> =
         channelConversationStore.recent(channelId)

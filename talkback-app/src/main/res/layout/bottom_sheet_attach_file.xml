@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="@color/tb_surface_elevated"
+    android:orientation="vertical"
+    android:paddingBottom="12dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingHorizontal="12dp"
+        android:paddingVertical="10dp">
+
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:fontFamily="sans-serif-medium"
+            android:text="@string/message_attach_pick_file"
+            android:textColor="@color/tb_text_primary"
+            android:textSize="15sp" />
+
+        <ImageView
+            android:id="@+id/btnAttachFileSheetClose"
+            android:layout_width="36dp"
+            android:layout_height="36dp"
+            android:background="?android:attr/selectableItemBackgroundBorderless"
+            android:contentDescription="@string/message_attach_sheet_close_cd"
+            android:padding="6dp"
+            android:src="@drawable/ic_message_attach_plus_close"
+            android:tint="@color/tb_text_secondary" />
+    </LinearLayout>
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="@color/tb_divider" />
+
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/listAttachFileSheet"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:maxHeight="280dp"
+        android:nestedScrollingEnabled="true"
+        android:paddingVertical="4dp" />
+
+    <TextView
+        android:id="@+id/txtAttachFileSheetEmpty"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center"
+        android:paddingHorizontal="20dp"
+        android:paddingTop="16dp"
+        android:paddingBottom="8dp"
+        android:text="@string/message_attach_file_recent_empty"
+        android:textColor="@color/tb_text_muted"
+        android:textSize="13sp"
+        android:visibility="gone" />
+
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/btnAttachFileSheetChoose"
+        style="@style/Widget.Material3.Button.TextButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginHorizontal="12dp"
+        android:layout_marginBottom="4dp"
+        android:text="@string/message_attach_file_browse"
+        android:textColor="@color/tb_primary" />
+</LinearLayout>

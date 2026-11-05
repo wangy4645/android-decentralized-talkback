@@ -154,36 +154,100 @@
         android:paddingBottom="6dp">
 
         <ImageView
-            android:id="@+id/btnConversationAttach"
+            android:id="@+id/btnConversationVoiceMode"
             android:layout_width="36dp"
             android:layout_height="36dp"
             android:background="?android:attr/selectableItemBackgroundBorderless"
-            android:contentDescription="@string/message_attach_cd"
+            android:contentDescription="@string/message_voice_mode_cd"
             android:padding="6dp"
-            android:src="@drawable/ic_conversation_more"
+            android:src="@drawable/ic_message_attach_mic"
             android:tint="@color/tb_text_secondary" />
 
-        <EditText
-            android:id="@+id/editConversationInput"
-            style="@style/ConversationInput"
+        <FrameLayout
             android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:hint="@string/conversation_input_hint"
-            android:imeOptions="actionSend"
-            android:inputType="textCapSentences|textMultiLine"
-            android:maxLength="256"
-            android:maxLines="4" />
+            android:layout_weight="1">
+
+            <EditText
+                android:id="@+id/editConversationInput"
+                style="@style/ConversationInput"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="@string/conversation_input_hint"
+                android:imeOptions="actionSend"
+                android:inputType="textCapSentences|textMultiLine"
+                android:maxLength="256"
+                android:maxLines="4" />
+
+            <LinearLayout
+                android:id="@+id/conversationInputHoldBar"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:background="@drawable/bg_conversation_input"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center"
+                android:minHeight="40dp"
+                android:orientation="horizontal"
+                android:paddingHorizontal="12dp"
+                android:paddingVertical="8dp"
+                android:visibility="gone">
+
+                <TextView
+                    android:id="@+id/txtConversationInputHold"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:includeFontPadding="false"
+                    android:text="@string/message_voice_hold_to_talk"
+                    android:textColor="@color/tb_text_primary"
+                    android:textSize="15sp" />
+            </LinearLayout>
+        </FrameLayout>
+
+        <ImageView
+            android:id="@+id/btnConversationAttach"
+            android:layout_width="36dp"
+            android:layout_height="36dp"
+            android:layout_marginStart="6dp"
+            android:background="?android:attr/selectableItemBackgroundBorderless"
+            android:contentDescription="@string/message_attach_cd"
+            android:padding="6dp"
+            android:src="@drawable/ic_message_attach_plus"
+            android:tint="@color/tb_text_secondary" />
 
         <TextView
             android:id="@+id/btnConversationSend"
             style="@style/ConversationSendButton"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginStart="10dp"
+            android:layout_marginStart="6dp"
             android:clickable="true"
             android:focusable="true"
             android:text="@string/endpoint_text_send" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:id="@+id/conversationMorePanel"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="@color/tb_surface_elevated"
+        android:orientation="horizontal"
+        android:paddingHorizontal="12dp"
+        android:paddingVertical="12dp"
+        android:visibility="gone">
+
+        <include
+            android:id="@+id/conversationMorePhoto"
+            layout="@layout/item_conversation_more_action"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginEnd="16dp" />
+
+        <include
+            android:id="@+id/conversationMoreFile"
+            layout="@layout/item_conversation_more_action"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content" />
     </LinearLayout>
 
     <TextView

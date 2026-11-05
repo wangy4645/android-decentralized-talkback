@@ -31,4 +31,11 @@ class AppLocaleStoreTest {
         store.save(AppLocaleChoice.CHINESE_SIMPLIFIED)
         assertEquals(AppLocaleChoice.CHINESE_SIMPLIFIED, AppLocaleStore(context).load())
     }
+
+    @Test
+    fun explicitUserChoice_tracksSettingsPicker() {
+        assertEquals(false, store.hasExplicitUserChoice())
+        store.markExplicitUserChoice()
+        assertEquals(true, AppLocaleStore(context).hasExplicitUserChoice())
+    }
 }
