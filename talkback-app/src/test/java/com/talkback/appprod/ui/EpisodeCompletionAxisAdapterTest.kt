@@ -1,22 +1,21 @@
 package com.talkback.appprod.ui
 
 import com.talkback.core.session.ConferenceParticipantDisplayState
-import com.talkback.core.session.EpisodeCompletionProjection
-import com.talkback.core.session.EpisodeCompletionState
-import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNull
 import org.junit.After
+import org.junit.Assert.assertEquals
 import org.junit.Before
 import org.junit.Test
 
 /**
- * PR5-3 M1/M2 — completion axis on presentation; Class C recovering demoted from connectivity.
+ * PR5-3 presentation adapter guards (UVCP connectivity axis).
+ *
+ * Episode completion projection is no longer carried on [MeetingPresenceDisplay.ParticipantPresentationState];
+ * see `EpisodeCompletionProjectionFacadeTest` in android-board-talkback for completion ownership tests.
  */
 class EpisodeCompletionAxisAdapterTest {
 
     @Before
     fun setUp() {
-        UserVisibleConnectivityProjection.resetForTest(demoteClassC = true)
         MeetingPresenceDisplay.receivePathLivenessProvider = object : ReceivePathLivenessProvider {
             override fun receivePathLive(sessionId: String, remoteModuleId: String) = true
             override fun mediaEverLive(sessionId: String, remoteModuleId: String) = true
@@ -26,20 +25,10 @@ class EpisodeCompletionAxisAdapterTest {
     @After
     fun tearDown() {
         MeetingPresenceDisplay.receivePathLivenessProvider = NoOpReceivePathLivenessProvider
-        UserVisibleConnectivityProjection.resetForTest(demoteClassC = true)
     }
 
     @Test
-    fun completionAxis_independentOfConnectivity_whenRecoveringDemoted() {
-        val projection = EpisodeCompletionProjection(
-            sessionId = "s",
-            remoteModuleId = "M02",
-            obligationGeneration = 1L,
-            completionState = EpisodeCompletionState.OPEN,
-            completionReason = "DELIVERY_PENDING",
-            completionSource = "COMPLETION_OBSERVATION",
-            completionEpochMs = 1L
-        )
+    fun recoveringPeer_mediaOk_projectsSyncing_notReconnecting() {
         val state = MeetingPresenceDisplay.resolveParticipantPresentation(
             MeetingPresenceDisplay.ParticipantPresentationFacts(
                 sessionId = "s",
@@ -48,20 +37,18 @@ class EpisodeCompletionAxisAdapterTest {
                 displayState = ConferenceParticipantDisplayState.VISIBLE_CONNECTED,
                 isRecoveringPeer = true,
                 mediaUnavailablePeer = false,
-                speaking = false,
-                episodeCompletion = projection
+                speaking = false
             )
         )
-        assertEquals(projection, state.episodeCompletion)
         assertEquals(
-            UserVisibleConnectivityProjection.UserVisibleConnectivityState.CONNECTED,
+            UserVisibleConnectivityProjection.UserVisibleConnectivityState.SYNCING,
             state.visibleConnectivity
         )
-        assertEquals(EndpointStatus.ONLINE, state.endpointStatus)
+        assertEquals(EndpointStatus.SYNCING, state.endpointStatus)
     }
 
     @Test
-    fun completionAxis_nullWhenAbsent() {
+    fun stablePeer_mediaOk_projectsConnected() {
         val state = MeetingPresenceDisplay.resolveParticipantPresentation(
             MeetingPresenceDisplay.ParticipantPresentationFacts(
                 sessionId = "s",
@@ -70,14 +57,13 @@ class EpisodeCompletionAxisAdapterTest {
                 displayState = ConferenceParticipantDisplayState.VISIBLE_CONNECTED,
                 isRecoveringPeer = false,
                 mediaUnavailablePeer = false,
-                speaking = false,
-                episodeCompletion = null
+                speaking = false
             )
         )
-        assertNull(state.episodeCompletion)
         assertEquals(
             UserVisibleConnectivityProjection.UserVisibleConnectivityState.CONNECTED,
             state.visibleConnectivity
         )
+        assertEquals(EndpointStatus.ONLINE, state.endpointStatus)
     }
 }

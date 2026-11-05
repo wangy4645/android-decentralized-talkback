@@ -1,5 +1,6 @@
 package com.talkback.appprod.endpointtext
 
+import android.app.Application
 import android.content.Context
 import com.talkback.core.endpointattachment.AttachmentChunker
 import com.talkback.core.endpointattachment.AttachmentKind
@@ -16,7 +17,7 @@ import org.robolectric.annotation.Config
 import java.io.File
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [28])
+@Config(sdk = [28], application = Application::class)
 class InboundAttachmentPersistenceTest {
 
     private lateinit var context: Context
