@@ -1,0 +1,35 @@
+S7 五机 Mesh RCA 索引 — 2026-11-05
+field-logs/s7-endpoint-attachment-20261105-113652/
+
+================================================================================
+两份 RCA 必须独立维护
+================================================================================
+
+| ID | 文件 | 层 | 时间窗 | ICE 是否启动 |
+|----|------|-----|--------|--------------|
+| MESH-NEG-001 | M02_M05_ICE_STUCK_RCA.txt | Pairwise 协商 | ~11:42 | 是 (CHECKING 卡住) |
+| MESH-MEM-001 | M02_MEMBER_PRIMARY_SYNC_RCA.txt | 成员/Primary 同步 | ~11:50–11:56 | 否 |
+
+| 维度 | MESH-NEG-001 | MESH-MEM-001 |
+|------|--------------|--------------|
+| 起始状态 | accepted group session 已在 | 尚未 accepted group session |
+| 主证据 | glare; M05 无 ACCEPT 应用; ROLLBACK_ILLEGAL | NO_ACCEPTED_GROUP_*; NO_MEMBERSHIP_CONTEXT |
+| OPEN | ACCEPT 无线丢失 vs M05 拒收/未应用 | 自动恢复是否覆盖所有杀进程场景 |
+| 后续 Mesh 工作 | ACCEPT 落地; 非法 SDP restart 退出 | 冷启动后成员恢复; primary resync UX |
+| S7 附件 | M02↔M05 BLOCKED_BY_MESH 直至 ICE 再确认 | 未 rejoin 前不得测附件 |
+
+================================================================================
+受控实验标签（勿混用）
+================================================================================
+- Phase A (11:50): MEMBERSHIP_SYNC_FAIL — 非「ICE INCONCLUSIVE」
+- Phase B (ACCEPT): 待 session+ICE 前置满足后执行 RUN-ROUND2-TEMPLATE
+- 11:42 主 RCA: 与 Phase A/B 分开记录
+
+================================================================================
+正向恢复证据
+================================================================================
+m02-ch01-rejoin-20261105-115803/RUN.txt
+  GROUP_RESYNC_REQUEST → M01 → GROUP_INVITE → OPERATIONAL
+
+================================================================================
+S7 附件前置（见 docs/analysis/S7-endpoint-attachment-field-validation-checklist.md）

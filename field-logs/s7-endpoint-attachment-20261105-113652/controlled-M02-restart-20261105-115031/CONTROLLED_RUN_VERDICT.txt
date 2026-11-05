@@ -1,0 +1,73 @@
+受控复现：仅 force-stop M02 — 2026-11-05
+目录：controlled-M02-restart-20261105-115031
+本轮唯一问题：M05 能否收到并应用 M02 发出的 GROUP_ACCEPT？
+
+================================================================================
+操作与约束（与用户裁决一致）
+================================================================================
+- M01/M03/M04：未操作
+- M05：未 force-stop / 未重启（避免污染 11:42 原始 ICE 证据链）
+- M02：11:50:34 force-stop → adb 冷启动 MainActivity（见 M02-launch.txt）
+- 观测窗口 phase1：~11:50:34–11:51:21（M05-logcat-window.txt，M02-talkback-redump.txt）
+- phase2（非用户授权步骤，已记录）：adb start-foreground-service 失败
+  （Requires permission not exported）；清空 logcat 后 90s 无 M02 Talkback 业务 log
+
+================================================================================
+Phase1 结论（更新：拆阶段，不再统称 ICE INCONCLUSIVE）
+================================================================================
+Phase A — 成员/Primary 同步失败（MEMBERSHIP_SYNC_FAIL）
+  见 M02_MEMBER_PRIMARY_SYNC_RCA.txt / MESH-MEM-001
+  11:50 force-stop + 仅 MainActivity：无 Coordinator → 后段亦无 accepted session
+  M05 member_evicted；不能解释成 ACCEPT 丢失
+
+Phase B — M02 发 GROUP_ACCEPT、M05 是否应用（MESH-NEG-001 / 11:42 问题）
+  状态：NOT RUN（Phase A 未满足前置；无 GROUP_ACCEPT 发送事件）
+  不能把 Phase A 记为「ICE 建链 INCONCLUSIVE」
+
+原「INCONCLUSIVE」仅表示：未进入 Phase B 实验设计所要求的发送事件。
+
+================================================================================
+与 11:42 主 RCA 的关系（M02_M05_ICE_STUCK_RCA.txt）
+================================================================================
+主 RCA 仍有效：
+- 故障归属：Mesh 协商/恢复（M02↔M05 ICE FAIL），非附件 S6
+- 已证：M05 对 M02 的 GROUP_ACCEPT 接收/处理计数为 0 → 协商卡在 HAVE_LOCAL_OFFER
+- 未证：仅凭 M02 发送日志不能断言无线丢失；须 M05 ingress（OFFER_DELIVERY / verify / route）对齐
+
+S7 附件：
+- M02↔M05、五机全员频道附件 → BLOCKED_BY_MESH（不是 ATTACHMENT_FAIL）
+- 已通边 M01/M03/M04 私信/频道附件、音频隔离 → 可继续，记录实际可达成员
+
+================================================================================
+建议的下一轮受控复现（需人工一步，仍只动 M02）
+================================================================================
+1. 在 M02 上按与 S7 其它机相同方式恢复：进入频道 / 启动运行时（前台服务），
+   确认 Talkback 业务 log 出现（HELLO、OFFER 或 LATE_PEER 路径）。
+2. 再 force-stop → 冷启动 → **立即恢复运行时**（不要只停 MainActivity）。
+3. 同步抓 M02+M05 Talkback:I ≥120s，计数：
+   - M02：首次 HELLO、ROLE、GROUP_ACCEPT SENT（若有）
+   - M05：OFFER_DELIVERY remote=M02、GROUP_ACCEPT 分类/应用、WEBRTC_NEGOTIATION
+4. 若 M02 已发 GROUP_ACCEPT 且 M05 仍为 0 → 冻结现场，另立 Mesh RCA（ACCEPT 落地关口）
+5. 若 ICE CONNECTED 且稳定 ≥2min 再讨论是否重开 M02↔M05 附件（仍标 BLOCKED 直至通）
+
+不在 feat/endpoint-text-enhancements 修 glare / ACCEPT / ICE restart / ROLLBACK 循环。
+
+================================================================================
+用户确认的证据状态（2026-11-05）
+================================================================================
+| 11:42 glare → ACCEPT 已发出 → M05 未接收/未应用 | 主 RCA 仍成立 |
+| ACCEPT 无线丢失 vs M05 内部拒收              | OPEN |
+| 11:50 单侧冷启动                              | INCONCLUSIVE |
+| M05 被动 HELLO、M02 入站 0                    | 观察证据，非 ACCEPT 丢失证据 |
+| M05 member_evicted                            | 本轮拓扑变化，非协商修复 |
+| S7 已通边附件/音频隔离                        | 可继续 |
+| M02↔M05、五机全员频道附件                     | BLOCKED_BY_MESH |
+
+Round 2 模板：RUN-ROUND2-TEMPLATE.txt（含 M02 UDP 出站 + M05 UDP 收包对齐）
+
+================================================================================
+Agent 约束确认
+================================================================================
+- 未改 Mesh / 附件 / PTT / Meeting 代码
+- 未重启 M05
+- 未将 M02↔M05 失败记为附件可靠性失败

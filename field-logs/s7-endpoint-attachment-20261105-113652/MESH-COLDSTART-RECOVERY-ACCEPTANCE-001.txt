@@ -1,0 +1,76 @@
+MESH-COLDSTART-RECOVERY-ACCEPTANCE-001
+冷启动 / 进程重启 — 成员恢复验收用例（文档 only，不在 S7 分支改 Mesh 代码）
+
+目的：固化 2026-11-05 成功恢复路径，区分三种操作与预期行为。
+
+================================================================================
+环境
+================================================================================
+- 五机 CH-01，M01 primary；至少一台曾被 force-stop 或 evict 的设备（现场曾 M02）
+- Debug 包可选：P1C_FORCE_LEAVE_CHANNEL 仅用于「清空 session」步骤，非生产路径
+- 每步：M02+M01（+ 可选 M05）Talkback:I logcat ≥120s
+
+================================================================================
+Case 1 — UI/Service 冷启动，未重新入会（负向基线）
+================================================================================
+操作：
+  force-stop 目标机 → 仅启动 MainActivity + 前台 Service（不点会议/不 resync）
+
+预期（产品行为待产品确认；现场已观测）：
+  - NO_ACCEPTED_GROUP_SESSION / NO_ACCEPTED_GROUP_MESH 持续
+  - 无 createOffer / GROUP_ACCEPT / ICE_TRANSPORT
+  - UI：等待频道同步…（或等价 copy）
+  - 附件/全员频道测试：BLOCKED_BY_MESH（成员前置不满足）
+
+Pass 标准（验收文档）：行为与上述一致且 log 可复现；UI 不应暗示「ICE 连接中」。
+
+================================================================================
+Case 2 — 产品入口触发 GROUP_RESYNC_REQUEST（正向）
+================================================================================
+操作（M02 现场已验证）：
+  对讲 Tab → 会议模式 → 点频道在线人数/加入区
+  （或等价产品「重新同步/加入」入口）
+
+预期 log：
+  - TransportCapabilityTrace GROUP_RESYNC_REQUEST → M01 (UDP_SENT)
+  - M01 → GROUP_INVITE
+  - sessionAccepted=true; members 含本机; membershipDigestAligned
+
+Pass：resync 发出且 M01 响应 invite；本机 sessionAccepted=true。
+
+================================================================================
+Case 3 — Primary 邀请后 session accept + Mesh 建链（正向）
+================================================================================
+操作：在 Case 2 之后等待或 PTT/会议 join 完成 mesh
+
+预期 log：
+  - TOPOLOGY_SNAPSHOT meshIceConnectedPeers 含预期成员
+  - meshMissingIce 空（或仅 transient）
+  - groupTopologyReadiness=OPERATIONAL; mappedChannelReadiness=READY
+  - 对每条待测附件边：peer ICE CONNECTED（日志或 TOPOLOGY）
+
+Pass：五机 roster 一致 + 待测边 ICE CONNECTED ≥120s 稳定（现场 M02 ~12:00:56 曾满足）。
+
+Fail：长期 NO_MEMBERSHIP_CONTEXT 或 M05 NOT_AUTHORITY 单方面 admit 失败且无 M01 路径。
+
+================================================================================
+记录模板
+================================================================================
+case_id: (1|2|3)
+device:
+t0/t1:
+sessionAccepted: (true|false)
+roster_members:
+meshIceConnectedPeers:
+meshMissingIce:
+ui_hint: (awaiting_sync|connecting|ready|other)
+attachment_test_allowed: (yes|BLOCKED_BY_MESH)
+log_dir:
+
+================================================================================
+与 S7 附件关系
+================================================================================
+仅当 Case 3 Pass 且记录实际拓扑后，方可执行对应边的附件用例；
+结果仍标注 device 集合，三机可达 ≠ 五机频道 PASS。
+
+参考：M02_MEMBER_PRIMARY_SYNC_RCA.txt, m02-ch01-rejoin-20261105-115803/

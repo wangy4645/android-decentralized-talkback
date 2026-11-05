@@ -1,0 +1,86 @@
+Round 2 — M02 单侧晚进（前置：M02 已人工恢复频道 + Talkback 运行时）
+父目录：controlled-M02-restart-20261105-115031 或 sibling controlled-M02-restart-<timestamp>/
+
+================================================================================
+实验问题（唯一）
+================================================================================
+M02 确认发出 GROUP_ACCEPT 时，M05 是否有对应接收/验签/路由/状态机应用记录？
+
+不能回答的情况（标 INCONCLUSIVE）：
+- M02 未恢复 Coordinator → 无 OFFER / GROUP_ACCEPT SENT
+- 不能把「无发送」解释成「发送后丢失」
+
+冻结条件（不再重启 M05）：
+- M02 日志存在 GROUP_ACCEPT SENT（或等价 handoff + TransportCapabilityTrace 出站）
+  且 M05 同时间窗内 OFFER_DELIVERY / GROUP_ACCEPT 接收处理计数仍为 0
+
+================================================================================
+前置（人工，M02 仅）
+================================================================================
+[ ] M01/M03/M04：保持在线，无额外操作
+[ ] M05：不 force-stop、不重启
+[ ] M02：确认已在 CH-01，运行时/前台服务与其它机一致（Talkback:I 有 HELLO/HEARTBEAT/TOPOLOGY）
+[ ] 记录 M02 baseline_ts=_______________
+
+================================================================================
+操作序列
+================================================================================
+1. 新建 run 子目录，写入 RUN.txt（设备 serial、baseline_ts）
+2. 双端清空 logcat（仅本轮开始前一次）：
+   adb -s 192.168.31.115:5555 logcat -c
+   adb -s 192.168.31.188:5555 logcat -c
+3. t0 = 本地时间，写入 RUN.txt
+4. force-stop M02：adb -s 192.168.31.115:5555 shell am force-stop com.talkback.appprod
+5. 确认进程退出（可选：pidof / ps）
+6. 冷启动 + **立即恢复运行时**（与 S7 其它机相同 UI 路径，勿只停 MainActivity）
+7. 同步观测 ≥120s（建议 150s 缓冲）
+8. t1 = 结束时间；双端 dump：
+   adb -s 192.168.31.115:5555 logcat -d -v threadtime Talkback:I *:S → M02-logcat-round2.txt
+   adb -s 192.168.31.188:5555 logcat -d -v threadtime Talkback:I *:S → M05-logcat-round2.txt
+
+禁止：
+- adb 未授权路径强拉 TalkbackForegroundService（round1 已失败）
+- 本轮内重启 M05
+- 反复 force-stop M02（一次为主；失败则冻结保留 log）
+
+================================================================================
+时间窗内对齐计数（post-process grep）
+================================================================================
+M02（发送侧 + 是否真正出 UDP）：
+  - HELLO / OFFER / WEBRTC_NEGOTIATION / ROLE=
+  - GROUP_ACCEPT SENT | GROUP_ACCEPT_HANDOFF | buildSignedEnvelope GROUP_ACCEPT
+  - TransportCapabilityTrace SIGNAL_DATAGRAM_SENT dstIp=192.168.31.188 dstPort=50000
+    signalType=… udpOutcome=UDP_SENT（或 WRITE_ACCEPTED / 失败 outcome）
+  - 目标地址必须为 M05 当前 LAN IP:50000
+
+M05（收包入口 + 业务应用）：
+  - OFFER_DELIVERY stage=UDP_DATAGRAM_RECEIVED src=192.168.31.115:50000
+  - OFFER_DELIVERY … remote=M02 … signalType=GROUP_ACCEPT（及 HELLO/OFFER 分类链）
+  - 验签/路由/拒收类 log（若有 SIGNAL_ENVELOPE / verify / gate / peer-edge）
+  - WEBRTC_NEGOTIATION peer=M02（SRD ANSWER、HAVE_LOCAL_OFFER → stable）
+  - TOPOLOGY / member_evicted（记录但不当作修复）
+
+裁决矩阵：
+  | M02 ACCEPT 发送 | M05 UDP 收包 remote=M02 | M05 GROUP_ACCEPT 应用 | 切分 |
+  | 否              | —                       | —                     | INCONCLUSIVE |
+  | 是              | 否                      | 否                    | 发送未达 / 网络 / M02 未出机 |
+  | 是              | 是                      | 否                    | 收包后拒收或状态机未应用 |
+  | 是              | 是                      | 是                    | 协商过关；再观察 ICE CONNECTED 稳定性 |
+
+注意：业务层 SENT  alone 不能证明无线送达；必须 M02 udpOutcome + M05 UDP_DATAGRAM_RECEIVED 对齐时间戳。
+
+================================================================================
+S7 并行（不阻塞本实验）
+================================================================================
+- 附件仅在与 M05/M02 无关且 ICE 已 CONNECTED 的边上测
+- 结果标注实际 device 集合 + 拓扑；三机可达 ≠ 五机频道 PASS
+- M02↔M05、五机全员频道附件：BLOCKED_BY_MESH
+
+代码：本轮不改 Mesh / 附件 / PTT / Meeting
+
+================================================================================
+Round 1 结论（已确认）
+================================================================================
+11:50 实验 → INCONCLUSIVE（M02 无 Coordinator，无 GROUP_ACCEPT 发送事件）
+11:42 主 RCA（glare → M02 发 ACCEPT → M05 未接收/未应用）仍成立
+ACCEPT 无线丢失 vs M05 内部拒收 → OPEN

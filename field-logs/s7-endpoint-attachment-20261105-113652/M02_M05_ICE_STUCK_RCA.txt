@@ -1,0 +1,58 @@
+M02 ↔ M05 ICE stuck RCA — S7 field 2026-11-05 (~11:42, after hotfix reinstall)
+sessionTraceId M02=b97290f1  M05=497a30db  channel=CH-01
+
+================================================================================
+Verdict
+================================================================================
+Direct fault: M02↔M05 edge never leaves ICE CHECKING; meshMissingIce=M05 on M02;
+  transmitMissingPeers=M02 on M05. Other peers (M01/M03/M04) ICE_CONNECTED OK.
+
+NOT the prior NO_SIGNER / empty gbc-trust fault (M01_SIGNER_STATE_RCA).
+NOT attachment / TalkbackApp lazy-init related (app launched; mesh partially up).
+
+High-confidence root cause:
+  1) Simultaneous OFFERER glare on M02↔M05 after both cold-start into mesh.
+  2) M02 polite-resolves → ANSWERER, SLD ANSWER, sends GROUP_ACCEPT to M05.
+  3) M05 shows no GROUP_ACCEPT receive/process for M02 (0 log hits) → stays HAVE_LOCAL_OFFER.
+     Proven: no ACCEPT applied on M05. NOT proven from sender logs alone whether datagram was
+     lost on Wi‑Fi vs rejected at M05 verify/route/state-machine entry.
+  4) ICE ufrag mismatch (M02 answer RGyi/Fzei vs M05 still on offer-side credentials) →
+     connectivity checks do not succeed (responsesReceived=0 on wifi host pair).
+  5) Recovery on M02: ICE_RESTART while ANSWERER + remoteDesc=OFFER + STABLE →
+     ICE_RESTART_PREPARE_ABORT reason=ROLLBACK_ILLEGAL_STABLE_REMOTE (1103×) +
+     empty offer M05 — restart cannot heal the edge.
+
+================================================================================
+Timeline (decisive)
+================================================================================
+11:42:17.759  M05 ROLE=OFFERER createOffer → M02; GIE_GROUP_INVITE_WIRE_SENT peer=M02
+11:42:18.284  M02 also ROLE=OFFERER createOffer → M05 (glare); MEDIA_SIGNAL_OFFER_SENT×2
+11:42:18.590  M02 ROLE→ANSWERER applyRemoteOffer polite=true (HAVE_LOCAL_OFFER)
+11:42:18.690  M02 SLD ANSWER; ICE→CHECKING; GROUP_ACCEPT SENT → 192.168.31.188
+11:42:18.689  M02 ICE_TRANSPORT_STATS peer=M05: wifi host pair waiting,
+              requestsSent≤1 responsesReceived=0 (never succeeded in entire capture)
+11:42:17.776  M05 last WEBRTC_NEGOTIATION for M02 = HAVE_LOCAL_OFFER
+              (no SRD ANSWER / no GROUP_ACCEPT from M02 for rest of capture)
+11:42:39+     M02 ICE_RESTART_REQUESTED → ABORT ROLLBACK_ILLEGAL_STABLE_REMOTE loop
+
+Counts (M02 focus log):
+  ICE_RESTART_PREPARE_ABORT≈1103  empty offer≈2206  iceConnectionState=CONNECTED for M05=0
+
+================================================================================
+Why it "came back"
+================================================================================
+Hotfix reinstall / force-stop+start brought M02 and M05 into mesh at nearly the
+same time → classic pairwise glare. Prior ICE-restart abort path still cannot
+recover an ANSWERER stuck with remoteDesc=OFFER. ACCEPT loss/drop on M05 closes
+the trap. Same class of mesh negotiation debt; not newly introduced by attachment S6.
+
+Ops workaround (field, not a code fix):
+  Force-stop only M02 or only M05, relaunch so one side joins as late peer
+  (OFFERER/ANSWERER asymmetry without glare), OR full channel leave/rejoin after
+  others are stable.
+
+No attachment code change indicated for this ICE stuck.
+
+Related (separate RCA — do not merge):
+  M02_MEMBER_PRIMARY_SYNC_RCA.txt — membership/Primary sync ~11:50–11:56
+  MESH_RCA_INDEX.txt — MESH-NEG-001 vs MESH-MEM-001

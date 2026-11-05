@@ -1,0 +1,78 @@
+M02 成员/Primary 同步失败 RCA — S7 field 2026-11-05 (11:50–11:56)
+channel=CH-01  关联：controlled-M02-restart-* / m02-ch01-rejoin-* / m02-ice-sync-stuck-*
+
+================================================================================
+ROOT CAUSE IDENTIFIED — 成员准入与 Primary 同步失败
+================================================================================
+（非 ICE CHECKING 阶段卡死；尚未获得进入 pairwise WebRTC 的前置条件。）
+
+故障链条：
+  M02 force-stop
+      ↓
+  仅冷启动 UI / Service（≠ 产品级 leave/rejoin）
+      ↓
+  未恢复本地 accepted group session
+      ↓
+  NO_ACCEPTED_GROUP_SESSION / NO_ACCEPTED_GROUP_MESH
+      ↓
+  M01 authority digest HELLO → AUTHORITY_DIGEST_HELLO_IGNORED (NO_MEMBERSHIP_CONTEXT)
+      ↓
+  无法进入 pairwise WebRTC 协商
+      ↓
+  UI 长期「等待频道同步…」
+
+决定性负证据（整段 capture）：
+  createOffer = 0   GROUP_ACCEPT = 0   ICE_TRANSPORT = 0   TOPOLOGY 长期缺失或 BUILDING 前停滞
+
+================================================================================
+放大因素（已有日志）
+================================================================================
+| M05 canonical roster 已驱逐 M02 (rosterEpoch=7, member_evicted) |
+  → GROUP_LATE_PEER_ADMISSION_SKIPPED NOT_AUTHORITY_OR_OFFERER
+  → FORMERLY_ADMITTED_NOT_IN_CANONICAL
+  → M05 无权单方面恢复 M02 成员身份
+
+| force-stop 后只启动 UI/Service |
+  → 未执行 GROUP_RESYNC / accept invite / join 产品路径
+
+| M01 primary resync/invite（正向证据 ~12:00） |
+  → 会议模式 + 在线区 → GROUP_RESYNC_REQUEST → M01 → GROUP_INVITE
+  → sessionAccepted=true, 五机 roster, meshIceConnectedPeers 全齐, OPERATIONAL/READY
+  → 证明存在可用恢复路径；不证明所有冷启动/杀进程/重启场景自动恢复
+
+================================================================================
+与 11:42 协商 RCA 的关系（必须独立，不可合并）
+================================================================================
+见同目录 MESH_RCA_INDEX.txt
+
+本 RCA：成员/Primary 同步层
+11:42 M02_M05_ICE_STUCK_RCA.txt：Pairwise 协商层（已有 accepted session 后 glare/ACCEPT/ICE）
+
+同一现场可连续出现；不能统称为「ICE 建链失败」。
+
+================================================================================
+受控「单侧晚进」实验 — 阶段拆分（更新 2026-11-05 用户裁决）
+================================================================================
+原 label「INCONCLUSIVE」仅适用于 **未进入 ACCEPT 实验** 的子问题，须拆为：
+
+  Phase A — 11:50 force-stop + MainActivity only
+    结论：MEMBERSHIP_SYNC_FAIL（本 RCA）
+    未产生 GROUP_ACCEPT 发送 → 不能解释为「发送后丢失」
+
+  Phase B — M02↔M05 GROUP_ACCEPT 是否被 M05 接收/应用（11:42 主 RCA 问题）
+    状态：NOT RUN（Phase A 未满足前置）
+    Round 2 模板：controlled-M02-restart-*/RUN-ROUND2-TEMPLATE.txt
+    前置：sessionAccepted=true + 五机 roster + 目标边 ICE 已 CONNECTED（复测前再确认）
+
+================================================================================
+S7 / 附件边界
+================================================================================
+- 本故障：BLOCKED_BY_MESH（成员/session 前置），不是 ATTACHMENT_FAIL
+- S6 附件实现：不降级
+- 修复范围：Mesh 成员恢复 / Primary resync（另立项）；不在 feat/endpoint-text-enhancements 改
+
+================================================================================
+产品行为建议（验收驱动，非本分支实现）
+================================================================================
+若仅启动 Service 而未恢复成员身份，UI 应明确提示需同步/重新加入，
+避免用户误以为 ICE 正在连接。见 MESH-COLDSTART-RECOVERY-ACCEPTANCE-001.txt
