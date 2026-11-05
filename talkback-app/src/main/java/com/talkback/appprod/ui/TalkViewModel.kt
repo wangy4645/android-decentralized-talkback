@@ -20,6 +20,7 @@ import com.talkback.appprod.endpointtext.EndpointTextDirection
 import com.talkback.appprod.endpointtext.EndpointTextRecord
 import com.talkback.appprod.endpointtext.MessageAttachmentInfo
 import com.talkback.appprod.endpointtext.MessageAttachmentStorage
+import com.talkback.core.endpointattachment.AttachmentChunker
 import com.talkback.core.endpointattachment.AttachmentKind
 import com.talkback.core.endpointattachment.ChannelAttachmentEvent
 import com.talkback.core.endpointattachment.EndpointAttachmentEvent
@@ -162,8 +163,13 @@ class TalkViewModel(
         }
     }
 
-    private val endpointAttachmentSink: (EndpointAttachmentEvent) -> Unit = { event ->
-        val file = attachmentStorage.writeBytes(event.attachmentId, event.fileName, event.bytes)
+    private val endpointAttachmentSink: (EndpointAttachmentEvent) -> Unit = sink@{ event ->
+        val file = attachmentStorage.commitVerified(
+            event.attachmentId,
+            event.fileName,
+            event.bytes,
+            event.sha256
+        ) ?: return@sink
         val info = MessageAttachmentInfo(
             kind = event.kind,
             mimeType = event.mimeType,
@@ -186,8 +192,13 @@ class TalkViewModel(
         inboundNotifier.onInbound(event.from.key, label, team)
     }
 
-    private val channelAttachmentSink: (ChannelAttachmentEvent) -> Unit = { event ->
-        val file = attachmentStorage.writeBytes(event.attachmentId, event.fileName, event.bytes)
+    private val channelAttachmentSink: (ChannelAttachmentEvent) -> Unit = sink@{ event ->
+        val file = attachmentStorage.commitVerified(
+            event.attachmentId,
+            event.fileName,
+            event.bytes,
+            event.sha256
+        ) ?: return@sink
         val info = MessageAttachmentInfo(
             kind = event.kind,
             mimeType = event.mimeType,
@@ -1046,7 +1057,7 @@ class TalkViewModel(
         if (!isServiceReady()) return "SERVICE_STOPPED"
         val remote = endpointAddressFromKey(config, remoteKey) ?: return "INVALID_PEER"
         val attachmentId = MessageAttachmentStorage.newAttachmentId()
-        val localFile = attachmentStorage.writeBytes(attachmentId, fileName, bytes)
+        val sha256 = AttachmentChunker.sha256Hex(bytes)
         val error = EndpointTextSendErrorMapper.map(
             manager.sendEndpointAttachment(
                 config,
@@ -1059,6 +1070,12 @@ class TalkViewModel(
             )
         )
         if (error == null) {
+            val localFile = attachmentStorage.commitVerified(
+                attachmentId,
+                fileName,
+                bytes,
+                sha256
+            ) ?: return "FAILED"
             conversationStore.append(
                 EndpointTextRecord(
                     endpointKey = remoteKey,
@@ -1090,7 +1107,7 @@ class TalkViewModel(
         if (!isServiceReady()) return "SERVICE_STOPPED"
         val channelId = config.defaultChannelId
         val attachmentId = MessageAttachmentStorage.newAttachmentId()
-        val localFile = attachmentStorage.writeBytes(attachmentId, fileName, bytes)
+        val sha256 = AttachmentChunker.sha256Hex(bytes)
         val error = EndpointTextSendErrorMapper.map(
             manager.sendChannelAttachment(
                 config,
@@ -1103,6 +1120,12 @@ class TalkViewModel(
             )
         )
         if (error == null) {
+            val localFile = attachmentStorage.commitVerified(
+                attachmentId,
+                fileName,
+                bytes,
+                sha256
+            ) ?: return "FAILED"
             val localKey =
                 "${config.moduleId.trim().uppercase()}-${config.endpointId.trim().uppercase()}"
             channelConversationStore.append(

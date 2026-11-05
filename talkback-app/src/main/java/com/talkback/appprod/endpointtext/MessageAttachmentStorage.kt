@@ -1,21 +1,65 @@
 package com.talkback.appprod.endpointtext
 
 import android.content.Context
+import com.talkback.core.endpointattachment.AttachmentChunker
 import java.io.File
 import java.util.UUID
 
-/** Persists inbound/outbound message attachment bytes under app-private storage. */
+/** Persists message attachment bytes under app-private storage with verified commit. */
 class MessageAttachmentStorage(private val rootDir: File) {
 
     init {
         rootDir.mkdirs()
+        File(rootDir, PARTIAL_SUBDIR).mkdirs()
     }
 
-    fun writeBytes(attachmentId: String, fileName: String, bytes: ByteArray): File {
-        val safeName = fileName.replace(Regex("[^a-zA-Z0-9._-]"), "_").ifBlank { "attachment" }
-        val file = File(rootDir, "${attachmentId}_$safeName")
-        file.writeBytes(bytes)
-        return file
+    /**
+     * Writes [bytes] to a partial file, verifies [expectedSha256Hex], then renames to final path.
+     * Returns null on any failure (partial file removed).
+     */
+    fun commitVerified(
+        attachmentId: String,
+        fileName: String,
+        bytes: ByteArray,
+        expectedSha256Hex: String
+    ): File? {
+        if (expectedSha256Hex.isBlank()) return null
+        val actual = AttachmentChunker.sha256Hex(bytes)
+        if (!actual.equals(expectedSha256Hex, ignoreCase = true)) return null
+        val safeName = sanitizeFileName(fileName)
+        val partialDir = File(rootDir, PARTIAL_SUBDIR)
+        val partial = File(partialDir, "$attachmentId.partial")
+        val final = File(rootDir, "${attachmentId}_$safeName")
+        return runCatching {
+            partial.writeBytes(bytes)
+            if (final.exists()) final.delete()
+            if (!partial.renameTo(final)) {
+                partial.copyTo(final, overwrite = true)
+                partial.delete()
+            }
+            final
+        }.getOrElse {
+            partial.delete()
+            null
+        }
+    }
+
+    fun deleteFileAtPath(path: String) {
+        if (path.isBlank()) return
+        val file = File(path)
+        if (!file.exists()) return
+        if (!file.canonicalPath.startsWith(rootDir.canonicalPath)) return
+        file.delete()
+    }
+
+    /** Removes stale partial files under [PARTIAL_SUBDIR]. */
+    fun sweepPartialFiles(maxAgeMs: Long, nowMs: Long = System.currentTimeMillis()) {
+        val partialDir = File(rootDir, PARTIAL_SUBDIR)
+        partialDir.listFiles()?.forEach { file ->
+            if (nowMs - file.lastModified() > maxAgeMs) {
+                file.delete()
+            }
+        }
     }
 
     fun fileForPath(path: String): File? {
@@ -25,9 +69,14 @@ class MessageAttachmentStorage(private val rootDir: File) {
     }
 
     companion object {
+        private const val PARTIAL_SUBDIR = ".partial"
+
         fun fromContext(context: Context): MessageAttachmentStorage =
             MessageAttachmentStorage(File(context.filesDir, "message_attachments"))
 
         fun newAttachmentId(): String = UUID.randomUUID().toString()
+
+        fun sanitizeFileName(fileName: String): String =
+            fileName.replace(Regex("[^a-zA-Z0-9._-]"), "_").ifBlank { "attachment" }
     }
 }
