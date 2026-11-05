@@ -30,6 +30,7 @@ import com.talkback.core.endpointtext.EndpointTextController
 import com.talkback.core.endpointtext.EndpointTextEvent
 import com.talkback.core.endpointtext.EndpointTextPrepareResult
 import com.talkback.core.endpointattachment.AttachmentKind
+import com.talkback.core.endpointattachment.AttachmentTransferPolicy
 import com.talkback.core.endpointattachment.ChannelAttachmentController
 import com.talkback.core.endpointattachment.ChannelAttachmentEvent
 import com.talkback.core.endpointattachment.ChannelAttachmentPrepareResult
@@ -2830,6 +2831,7 @@ class TalkbackCoordinator(
                         if (!sendSignalHandoff(peer, chunkEnvelope)) {
                             error(EndpointAttachmentController.REASON_SEND_FAILED)
                         }
+                        paceAttachmentChunk()
                     }
                     endpointAttachmentController.markSent(from, to)
                     log(
@@ -2907,6 +2909,7 @@ class TalkbackCoordinator(
                                 lastFail = ChannelAttachmentController.REASON_SEND_FAILED
                                 break
                             }
+                            paceAttachmentChunk()
                         }
                         if (chunkOk) sent++
                     }
@@ -22244,6 +22247,16 @@ class TalkbackCoordinator(
                 observedAtMs = System.currentTimeMillis()
             )
         )
+    }
+
+    private fun paceAttachmentChunk() {
+        val ms = AttachmentTransferPolicy.CHUNK_PACING_MS
+        if (ms <= 0L) return
+        try {
+            Thread.sleep(ms)
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+        }
     }
 
     private fun buildSignedEnvelope(

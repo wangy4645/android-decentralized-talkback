@@ -385,7 +385,7 @@
     <string name="message_attachment_missing">Attachment file missing</string>
     <string name="message_attachment_no_viewer">No app to open this file</string>
     <string name="message_attachment_play_failed">Could not play audio</string>
-    <string name="message_attachment_too_large">Attachment is too large (max 3 MB)</string>
+    <string name="message_attachment_too_large">Attachment is too large (max 512 KB)</string>
     <string name="message_attachment_send_failed">Attachment send failed</string>
     <string name="conversation_input_hint">Type message...</string>
     <string name="conversation_time_yesterday">Yesterday</string>
