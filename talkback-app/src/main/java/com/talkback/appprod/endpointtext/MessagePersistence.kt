@@ -5,6 +5,7 @@ import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import com.talkback.core.endpointattachment.AttachmentKind
+import com.talkback.core.util.TalkbackLog
 
 /**
  * SQLite persistence for Tactical Message threads (direct + channel).
@@ -18,6 +19,14 @@ class MessagePersistence(context: Context) : SQLiteOpenHelper(
 ) {
     /** Invoked with attachment paths removed from SQL by row trim; consumer should GC unreferenced files. */
     var onAttachmentPathsEvicted: ((List<String>) -> Unit)? = null
+
+    /** Test-only: next [insertDirect] returns false without writing. */
+    @Volatile
+    var testForceNextDirectInsertFailure: Boolean = false
+
+    /** Test-only: next [insertChannel] returns false without writing. */
+    @Volatile
+    var testForceNextChannelInsertFailure: Boolean = false
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
             """
@@ -68,7 +77,12 @@ class MessagePersistence(context: Context) : SQLiteOpenHelper(
     }
 
     @Synchronized
-    fun insertDirect(record: EndpointTextRecord, markRead: Boolean) {
+    fun insertDirect(record: EndpointTextRecord, markRead: Boolean): Boolean {
+        if (testForceNextDirectInsertFailure) {
+            testForceNextDirectInsertFailure = false
+            TalkbackLog.w("MESSAGE_PERSIST direct_insert_injected_failure")
+            return false
+        }
         val db = writableDatabase
         db.beginTransaction()
         try {
@@ -90,19 +104,32 @@ class MessagePersistence(context: Context) : SQLiteOpenHelper(
                     if (record.direction == EndpointTextDirection.OUTBOUND || markRead) 1 else 0
                 )
             }
-            db.insert("direct_messages", null, values)
+            val rowId = db.insert("direct_messages", null, values)
+            if (rowId == -1L) {
+                TalkbackLog.w("MESSAGE_PERSIST direct_insert_failed reason=sqlite_insert_minus_one")
+                return false
+            }
             val evicted = trimDirectThread(db, record.endpointKey)
             db.setTransactionSuccessful()
             if (evicted.isNotEmpty()) {
                 onAttachmentPathsEvicted?.invoke(evicted)
             }
+            return true
+        } catch (e: Exception) {
+            TalkbackLog.w("MESSAGE_PERSIST direct_insert_failed err=${e.message}")
+            return false
         } finally {
             db.endTransaction()
         }
     }
 
     @Synchronized
-    fun insertChannel(record: ChannelTextRecord, markRead: Boolean) {
+    fun insertChannel(record: ChannelTextRecord, markRead: Boolean): Boolean {
+        if (testForceNextChannelInsertFailure) {
+            testForceNextChannelInsertFailure = false
+            TalkbackLog.w("MESSAGE_PERSIST channel_insert_injected_failure")
+            return false
+        }
         val db = writableDatabase
         db.beginTransaction()
         try {
@@ -126,12 +153,20 @@ class MessagePersistence(context: Context) : SQLiteOpenHelper(
                     if (record.direction == EndpointTextDirection.OUTBOUND || markRead) 1 else 0
                 )
             }
-            db.insert("channel_messages", null, values)
+            val rowId = db.insert("channel_messages", null, values)
+            if (rowId == -1L) {
+                TalkbackLog.w("MESSAGE_PERSIST channel_insert_failed reason=sqlite_insert_minus_one")
+                return false
+            }
             val evicted = trimChannelThread(db, record.channelId)
             db.setTransactionSuccessful()
             if (evicted.isNotEmpty()) {
                 onAttachmentPathsEvicted?.invoke(evicted)
             }
+            return true
+        } catch (e: Exception) {
+            TalkbackLog.w("MESSAGE_PERSIST channel_insert_failed err=${e.message}")
+            return false
         } finally {
             db.endTransaction()
         }
@@ -305,6 +340,46 @@ class MessagePersistence(context: Context) : SQLiteOpenHelper(
     @Synchronized
     fun countAttachmentPathReferences(path: String): Int {
         if (path.isBlank()) return 0
+        return queryAttachmentPathReferenceCount(path)
+    }
+
+    /**
+     * Counts DB references and deletes [path] under the same lock as inserts, avoiding a race
+     * where another thread inserts a row referencing [path] between count and delete.
+     */
+    @Synchronized
+    fun rollbackAttachmentFileAfterInsertFailure(
+        path: String,
+        storage: MessageAttachmentStorage
+    ): AttachmentInsertRollbackResult {
+        if (path.isBlank()) {
+            return AttachmentInsertRollbackResult(AttachmentInsertRollbackOutcome.Missing)
+        }
+        val refs = queryAttachmentPathReferenceCount(path)
+        if (refs > 0) {
+            return AttachmentInsertRollbackResult(
+                AttachmentInsertRollbackOutcome.KeptSharedReferences,
+                refCount = refs
+            )
+        }
+        val attempt = storage.tryDeleteFileAtPath(path)
+        val outcome = when (attempt.outcome) {
+            MessageAttachmentStorage.DeleteOutcome.Deleted ->
+                AttachmentInsertRollbackOutcome.Deleted
+            MessageAttachmentStorage.DeleteOutcome.Missing ->
+                AttachmentInsertRollbackOutcome.Missing
+            MessageAttachmentStorage.DeleteOutcome.RejectedPath ->
+                AttachmentInsertRollbackOutcome.RejectedPath
+            MessageAttachmentStorage.DeleteOutcome.DeleteFailed ->
+                AttachmentInsertRollbackOutcome.DeleteFailed
+        }
+        return AttachmentInsertRollbackResult(
+            outcome = outcome,
+            deleteDiagnostic = attempt.diagnostic
+        )
+    }
+
+    private fun queryAttachmentPathReferenceCount(path: String): Int {
         val db = readableDatabase
         var total = 0
         db.rawQuery(

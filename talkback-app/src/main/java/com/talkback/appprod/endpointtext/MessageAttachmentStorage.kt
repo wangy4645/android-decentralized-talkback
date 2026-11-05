@@ -44,12 +44,39 @@ class MessageAttachmentStorage(private val rootDir: File) {
         }
     }
 
-    fun deleteFileAtPath(path: String) {
-        if (path.isBlank()) return
+    enum class DeleteOutcome {
+        Missing,
+        RejectedPath,
+        DeleteFailed,
+        Deleted
+    }
+
+    data class DeleteAttempt(
+        val outcome: DeleteOutcome,
+        val diagnostic: String = ""
+    )
+
+    fun deleteFileAtPath(path: String): DeleteOutcome = tryDeleteFileAtPath(path).outcome
+
+    fun tryDeleteFileAtPath(path: String): DeleteAttempt {
+        if (path.isBlank()) {
+            return DeleteAttempt(DeleteOutcome.Missing, "blank_path")
+        }
         val file = File(path)
-        if (!file.exists()) return
-        if (!file.canonicalPath.startsWith(rootDir.canonicalPath)) return
-        file.delete()
+        if (!file.exists()) {
+            return DeleteAttempt(DeleteOutcome.Missing, "not_found")
+        }
+        if (!file.canonicalPath.startsWith(rootDir.canonicalPath)) {
+            return DeleteAttempt(DeleteOutcome.RejectedPath, "outside_attachment_root")
+        }
+        return if (file.delete()) {
+            DeleteAttempt(DeleteOutcome.Deleted)
+        } else {
+            DeleteAttempt(
+                DeleteOutcome.DeleteFailed,
+                "delete_returned_false exists=${file.exists()} canWrite=${file.canWrite()}"
+            )
+        }
     }
 
     /** Removes stale partial files under [PARTIAL_SUBDIR]. */
@@ -78,5 +105,13 @@ class MessageAttachmentStorage(private val rootDir: File) {
 
         fun sanitizeFileName(fileName: String): String =
             fileName.replace(Regex("[^a-zA-Z0-9._-]"), "_").ifBlank { "attachment" }
+
+        /** Log-safe identifier (attachment id prefix); omits user file name suffix. */
+        fun logRefForLocalPath(path: String): String {
+            if (path.isBlank()) return "attachmentKey=unknown"
+            val name = File(path).name
+            if (name.isBlank()) return "attachmentKey=unknown"
+            return "attachmentKey=${name.substringBefore('_')}"
+        }
     }
 }

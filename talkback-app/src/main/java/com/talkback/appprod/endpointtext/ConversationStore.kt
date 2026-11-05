@@ -20,12 +20,13 @@ class ConversationStore(
     private var openConversationKey: String? = null
 
     @Synchronized
-    fun append(record: EndpointTextRecord) {
+    fun append(record: EndpointTextRecord): Boolean {
         val key = record.endpointKey
-        if (key.isBlank()) return
+        if (key.isBlank()) return false
         val markRead = key == openConversationKey
-        persistence?.insertDirect(record, markRead)
-        if (persistence != null) return
+        if (persistence != null) {
+            return persistence.insertDirect(record, markRead)
+        }
         val buffer = byEndpoint.getOrPut(key) { ArrayDeque() }
         buffer.addLast(record)
         while (buffer.size > capacityPerEndpoint) {
@@ -34,6 +35,7 @@ class ConversationStore(
         if (record.direction == EndpointTextDirection.INBOUND && !markRead) {
             unreadByEndpoint[key] = (unreadByEndpoint[key] ?: 0) + 1
         }
+        return true
     }
 
     @Synchronized

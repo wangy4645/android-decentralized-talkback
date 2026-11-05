@@ -19,12 +19,13 @@ class ChannelConversationStore(
     private var openChannelId: String? = null
 
     @Synchronized
-    fun append(record: ChannelTextRecord) {
+    fun append(record: ChannelTextRecord): Boolean {
         val key = record.channelId
-        if (key.isBlank()) return
+        if (key.isBlank()) return false
         val markRead = key == openChannelId
-        persistence?.insertChannel(record, markRead)
-        if (persistence != null) return
+        if (persistence != null) {
+            return persistence.insertChannel(record, markRead)
+        }
         val buffer = byChannel.getOrPut(key) { ArrayDeque() }
         buffer.addLast(record)
         while (buffer.size > capacityPerChannel) {
@@ -33,6 +34,7 @@ class ChannelConversationStore(
         if (record.direction == EndpointTextDirection.INBOUND && !markRead) {
             unreadByChannel[key] = (unreadByChannel[key] ?: 0) + 1
         }
+        return true
     }
 
     @Synchronized

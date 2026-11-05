@@ -18,6 +18,7 @@ import com.talkback.appprod.endpointtext.ConversationSummary
 import com.talkback.appprod.endpointtext.EndpointTextInboundNotifier
 import com.talkback.appprod.endpointtext.EndpointTextDirection
 import com.talkback.appprod.endpointtext.EndpointTextRecord
+import com.talkback.appprod.endpointtext.InboundAttachmentPersistence
 import com.talkback.appprod.endpointtext.MessageAttachmentInfo
 import com.talkback.appprod.endpointtext.MessageAttachmentStorage
 import com.talkback.core.endpointattachment.AttachmentChunker
@@ -67,6 +68,7 @@ class TalkViewModel(
     private val manager get() = app.runtimeManager
     private val conversationStore = app.conversationStore
     private val channelConversationStore = app.channelConversationStore
+    private val messagePersistence = app.messagePersistence
     private val attachmentStorage: MessageAttachmentStorage = app.messageAttachmentStorage
     private val taskProfileManager = TaskProfileManager(appContext)
 
@@ -177,15 +179,22 @@ class TalkViewModel(
             localPath = file.absolutePath,
             sizeBytes = file.length()
         )
-        conversationStore.append(
-            EndpointTextRecord(
-                endpointKey = event.from.key,
-                text = event.caption.orEmpty(),
-                timestampMs = System.currentTimeMillis(),
-                direction = EndpointTextDirection.INBOUND,
-                attachment = info
+        val persisted = InboundAttachmentPersistence.persistAfterCommit(
+            attachmentLocalPath = file.absolutePath,
+            storage = attachmentStorage,
+            persistence = messagePersistence
+        ) {
+            conversationStore.append(
+                EndpointTextRecord(
+                    endpointKey = event.from.key,
+                    text = event.caption.orEmpty(),
+                    timestampMs = System.currentTimeMillis(),
+                    direction = EndpointTextDirection.INBOUND,
+                    attachment = info
+                )
             )
-        )
+        }
+        if (!persisted) return@sink
         refreshConversationUi()
         val label = endpointLabelForKey(event.from.key)
         val team = teamDisplayName()
@@ -207,17 +216,24 @@ class TalkViewModel(
             sizeBytes = file.length()
         )
         val label = endpointLabelForKey(event.from.key)
-        channelConversationStore.append(
-            ChannelTextRecord(
-                channelId = event.channelId,
-                text = event.caption.orEmpty(),
-                timestampMs = System.currentTimeMillis(),
-                direction = EndpointTextDirection.INBOUND,
-                senderKey = event.from.key,
-                senderLabel = label,
-                attachment = info
+        val persisted = InboundAttachmentPersistence.persistAfterCommit(
+            attachmentLocalPath = file.absolutePath,
+            storage = attachmentStorage,
+            persistence = messagePersistence
+        ) {
+            channelConversationStore.append(
+                ChannelTextRecord(
+                    channelId = event.channelId,
+                    text = event.caption.orEmpty(),
+                    timestampMs = System.currentTimeMillis(),
+                    direction = EndpointTextDirection.INBOUND,
+                    senderKey = event.from.key,
+                    senderLabel = label,
+                    attachment = info
+                )
             )
-        )
+        }
+        if (!persisted) return@sink
         refreshConversationUi()
         val team = teamDisplayName()
         if (!channelConversationStore.isOpen(event.channelId)) {
