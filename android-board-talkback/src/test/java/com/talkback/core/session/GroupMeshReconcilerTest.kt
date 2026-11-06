@@ -32,6 +32,25 @@ class GroupMeshReconcilerTest {
     }
 
     @Test
+    fun recentJoinOffer_dedupsWithinWindow_thenExpires() {
+        assertFalse(reconciler.hasRecentJoinOffer("CH-01", "M05"))
+        reconciler.markJoinOffered("CH-01", "M05")
+        val now = System.currentTimeMillis()
+        assertTrue(reconciler.hasRecentJoinOffer("CH-01", "M05", now + 100L))
+        assertFalse(
+            reconciler.hasRecentJoinOffer("CH-01", "M05", now + GroupMeshReconciler.MIN_JOIN_OFFER_DEDUP_MS + 1L)
+        )
+    }
+
+    @Test
+    fun recentJoinOffer_coversReconnectAttempt_notConnectedOrIdle() {
+        reconciler.markReconnectAttempt("CH-01", "M05")
+        assertTrue(reconciler.hasRecentJoinOffer("CH-01", "M05"))
+        reconciler.markConnected("CH-01", "M05")
+        assertFalse(reconciler.hasRecentJoinOffer("CH-01", "M05"))
+    }
+
+    @Test
     fun allowsIceRestartAfterCheckingStuckWindow() {
         reconciler.markIceChecking("CH-01", "M02")
         assertFalse(reconciler.canAcceptIceRestart("CH-01", "M02", "CHECKING"))

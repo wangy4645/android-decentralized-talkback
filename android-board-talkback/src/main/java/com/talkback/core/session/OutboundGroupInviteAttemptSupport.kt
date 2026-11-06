@@ -1,5 +1,7 @@
 package com.talkback.core.session
 
+import com.talkback.core.qos.IceConnectivity
+
 /**
  * Active/terminal evaluation for outbound GROUP_INVITE admission evidence (#180 F2).
  */
@@ -88,15 +90,72 @@ object OutboundGroupInviteAttemptSupport {
         return nowMs - active.issuedAtMs >= timeoutMs
     }
 
+    /**
+     * When mesh signaling/ICE is still incomplete, expire in-flight attempts sooner than
+     * [ATTEMPT_STALE_TIMEOUT_MS] while ICE is settling ([CHECKING]/[NEW]) or lost.
+     */
+    fun staleTimeoutMsForMediaProgress(
+        iceState: String?,
+        meshLinkCompleted: Boolean,
+    ): Long {
+        if (meshLinkCompleted || IceConnectivity.isConnected(iceState)) {
+            return ATTEMPT_STALE_TIMEOUT_MS
+        }
+        return when {
+            IceConnectivity.isNegotiating(iceState) || IceConnectivity.isLost(iceState) ->
+                GroupMeshReconciler.CHECKING_STUCK_MS
+            else -> ATTEMPT_STALE_TIMEOUT_MS
+        }
+    }
+
+    /**
+     * Pairwise mesh re-offer after a failed cycle must ICE-restart when a local engine exists;
+     * otherwise retries leave the PC in HAVE_LOCAL_OFFER while the remote stays CHECKING.
+     */
+    fun shouldIceRestartForPairwiseOffer(
+        session: TalkbackSession,
+        remoteModuleId: String,
+        iceState: String?,
+        hasMeshEngine: Boolean,
+    ): Boolean {
+        if (remoteModuleId in session.meshCompletedModules) return true
+        if (IceConnectivity.isConnected(iceState)) return false
+        if (!hasMeshEngine) return false
+        val attempt = session.outboundGroupInviteAttemptsByRemoteModule[remoteModuleId]
+        if (isActive(attempt)) return false
+        if (attempt?.terminalReason == TERMINAL_REASON_TIMEOUT) return true
+        if (attempt != null && attempt.terminalReason != null && !isDeliverySatisfied(attempt)) {
+            return true
+        }
+        // No attempt history and no ICE snapshot yet means the first offer may still be in flight:
+        // an ICE-restart offer here changes ufrag and fences the pending answer as STALE (11-06).
+        if (iceState == null) return false
+        return IceConnectivity.isNegotiating(iceState) || IceConnectivity.isLost(iceState)
+    }
+
     /** Returns the age of the expired attempt, or null when nothing was expired. */
     fun expireStaleAttempt(
         session: TalkbackSession,
         remoteModuleId: String,
         nowMs: Long,
-        timeoutMs: Long = ATTEMPT_STALE_TIMEOUT_MS
+        timeoutMs: Long = ATTEMPT_STALE_TIMEOUT_MS,
+        iceState: String? = null,
+        meshLinkCompleted: Boolean = false,
+        controllerOwnsNegotiation: Boolean = false,
     ): Long? {
+        // EdgeLinkController already retransmits / restarts / rebuilds this edge; expiring the
+        // attempt would let GIDR mint a new lineage (11-06 deadlock class).
+        if (controllerOwnsNegotiation && isActive(session.outboundGroupInviteAttemptsByRemoteModule[remoteModuleId])) {
+            return null
+        }
         val attempt = session.outboundGroupInviteAttemptsByRemoteModule[remoteModuleId]
-        if (!isStale(attempt, nowMs, timeoutMs)) return null
+        val effectiveTimeout =
+            if (timeoutMs != ATTEMPT_STALE_TIMEOUT_MS) {
+                timeoutMs
+            } else {
+                staleTimeoutMsForMediaProgress(iceState, meshLinkCompleted)
+            }
+        if (!isStale(attempt, nowMs, effectiveTimeout)) return null
         markTerminal(session, remoteModuleId, TERMINAL_REASON_TIMEOUT)
         return nowMs - (attempt?.issuedAtMs ?: nowMs)
     }

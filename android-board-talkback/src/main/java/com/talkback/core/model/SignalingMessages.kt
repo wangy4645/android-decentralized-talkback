@@ -50,6 +50,11 @@ enum class SignalType {
     FACT_RESPONSE_INSUFFICIENT,
     /** ADR-0058: Profile 01 signed fact relay (base64 SignedFact bytes). Shadow ingress only in Phase A. */
     CONFERENCE_SIGNED_FACT,
+    /**
+     * Pairwise mesh: answerer asks the lexicographic offerer to re-offer this edge
+     * (EDGE-LINK-CONTROLLER-001 Phase 2b). Not a membership resync.
+     */
+    GROUP_REOFFER_REQUEST,
 }
 
 data class SignalEnvelope(

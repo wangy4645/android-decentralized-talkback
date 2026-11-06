@@ -45,12 +45,21 @@ object GroupInviteInboundExecutionSupport {
         data object SkippedDuplicate : DispatchOutcome
     }
 
+    /**
+     * A prior GROUP_ACCEPT only suppresses a new inbound offer while it is still doing its job.
+     * On the [AcceptPath.Reconnect] path with ICE not connected the offerer has evidently moved
+     * to a new lineage (our answer was fenced or lost); the answerer must apply the new offer or
+     * the edge can never converge (11-06 M02↔M03/M04 field deadlock).
+     */
     fun evaluateAcceptAttempt(
         acceptComplete: Boolean,
         engineProvisionInFlight: Boolean,
+        acceptPath: AcceptPath = AcceptPath.Fresh,
+        iceConnected: Boolean = true,
     ): AcceptGate =
         when {
-            acceptComplete -> AcceptGate.SkipAcceptComplete
+            acceptComplete && (acceptPath == AcceptPath.Fresh || iceConnected) ->
+                AcceptGate.SkipAcceptComplete
             engineProvisionInFlight -> AcceptGate.SkipEngineProvisionInFlight
             else -> AcceptGate.Proceed
         }

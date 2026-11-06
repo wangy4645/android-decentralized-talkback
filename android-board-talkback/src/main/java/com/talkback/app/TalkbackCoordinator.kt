@@ -78,6 +78,16 @@ import com.talkback.core.ptt.PttEvent
 import com.talkback.core.ptt.PttState
 import com.talkback.core.session.AnchorAuthority
 import com.talkback.core.session.AuthorityMembershipMutationSource
+import com.talkback.core.session.edge.EdgeAction
+import com.talkback.core.session.edge.EdgeFact
+import com.talkback.core.session.edge.EdgeKey
+import com.talkback.core.session.edge.EdgeLinkConfig
+import com.talkback.core.session.edge.EdgeLinkController
+import com.talkback.core.session.edge.EdgeLinkLegacyGateProjection
+import com.talkback.core.session.edge.EdgeLinkMode
+import com.talkback.core.session.edge.EdgeLinkState
+import com.talkback.core.session.edge.EdgeRole
+import com.talkback.core.session.edge.mayExecute
 import com.talkback.core.session.AnchorElection
 import com.talkback.core.session.AnchorHealthSnapshot
 import com.talkback.core.session.AnchorRanking
@@ -261,6 +271,7 @@ import com.talkback.core.model.ChannelAuthorityDigestStore
 import com.talkback.core.model.MembershipAuthorityPlane
 import com.talkback.core.session.HelloAuthorityDigestClassifier
 import com.talkback.core.model.GroupResyncRequestPayload
+import com.talkback.core.model.GroupReofferRequestPayload
 import com.talkback.core.model.MembershipContextExistenceQueryPayload
 import com.talkback.core.model.MembershipContextExistenceResponsePayload
 import com.talkback.core.model.TopologyDigest
@@ -443,6 +454,18 @@ data class TalkbackCoordinatorConfig(
     val moduleStaleMs: Long = 15_000L,
     val floorRetryMs: Long = 400L,
     val iceNegotiationTimeoutMs: Long = 20_000L,
+    /**
+     * EDGE-LINK-CONTROLLER-001 Phase 1: run the per-edge state machine in shadow mode. It only
+     * emits EDGE_LINK / EDGE_LINK_SHADOW_DECISION log lines; it never sends, restarts or rebuilds.
+     */
+    val edgeLinkShadowEnabled: Boolean = true,
+    val edgeLinkShadowTickMs: Long = 1_000L,
+    /**
+     * Phase 2a: which controller decisions are executed against the live signaling path.
+     * [EdgeLinkMode.ACTIVE_OFFERER] drives same-lineage retransmit, ICE-restart offer and PC rebuild
+     * for edges where this node is the offerer; everything else remains shadow-logged.
+     */
+    val edgeLinkMode: EdgeLinkMode = EdgeLinkMode.ACTIVE_OFFERER,
   /** Do not tear down mesh sessions while ICE is still negotiating within this window. */
     val meshNegotiationGraceMs: Long = 15_000L,
     /** Wait this long before ending a conference when the host ICE enters DISCONNECTED. */
@@ -584,6 +607,8 @@ class TalkbackCoordinator(
         null
     private var meshHelloPeerTrustSupplement:
         com.talkback.core.session.gbc.trust.mesh.MeshHelloPeerTrustSupplement? = null
+    private var groupEstablishmentHelloTrust:
+        com.talkback.core.session.gbc.trust.group.GroupEstablishmentHelloTrustService? = null
     private val profile01MediaKeyHeadRepublishRequestDedup =
         java.util.concurrent.ConcurrentHashMap<String, Long>()
     private val sourceDeclarationSameObligationCoalescer =
@@ -715,6 +740,13 @@ class TalkbackCoordinator(
         supplement: com.talkback.core.session.gbc.trust.mesh.MeshHelloPeerTrustSupplement,
     ) {
         meshHelloPeerTrustSupplement = supplement
+    }
+
+    fun attachGroupEstablishmentHelloTrust(
+        service: com.talkback.core.session.gbc.trust.group.GroupEstablishmentHelloTrustService,
+    ) {
+        groupEstablishmentHelloTrust = service
+        service.onRuntimeAttached()
     }
 
     fun onMeetingProfile01MediaSupplementReady(
@@ -2585,6 +2617,14 @@ class TalkbackCoordinator(
             config.cleanupIntervalMs,
             TimeUnit.MILLISECONDS
         )
+        if (config.edgeLinkShadowEnabled) {
+            scheduler.scheduleAtFixedRate(
+                { runOnCoordinator { edgeLinkShadowTick() } },
+                config.edgeLinkShadowTickMs,
+                config.edgeLinkShadowTickMs,
+                TimeUnit.MILLISECONDS
+            )
+        }
         scheduler.scheduleAtFixedRate(
             {
                 runOnCoordinator {
@@ -3442,6 +3482,11 @@ class TalkbackCoordinator(
             )
         ) {
             engine.applyRemoteOffer(payload.sdp, polite)
+        }.also {
+            sessions[sessionId]?.let { session ->
+                edgeLinkShadowFact(session, remoteModuleId, EdgeFact.RemoteOfferApplied(pcGeneration))
+                edgeLinkShadowFact(session, remoteModuleId, EdgeFact.AnswerSent(pcGeneration))
+            }
         }
     }
 
@@ -4140,13 +4185,37 @@ class TalkbackCoordinator(
             GroupInviteInboundExecutionSupport.provisionKey(session.id, moduleId).storageKey()
         val acceptComplete =
             session.accepted && session.meshCompletedModules.contains(moduleId)
+        val iceConnected = IceConnectivity.isConnected(meshIceStateForSession(session, moduleId))
 
-        when (
-            GroupInviteInboundExecutionSupport.evaluateAcceptAttempt(
-                acceptComplete = acceptComplete,
-                engineProvisionInFlight = provisionKey in pendingGroupAcceptEngineProvisionKeys,
+        // Phase 2a: the offerer retransmits the *same* lineage when our GROUP_ACCEPT got lost.
+        // Re-applying the offer would be a no-op (or a rollback); re-send the cached answer instead.
+        if (acceptComplete && !iceConnected && payload.offerLineageId != null) {
+            val cached = edgeLinkLastAcceptByPeer[moduleId]
+            if (cached != null && cached.sessionId == session.id && cached.lineageId == payload.offerLineageId) {
+                val resent = sendSignalHandoff(fromPeer, cached.envelope)
+                log(
+                    "EDGE_LINK_EXEC ch=$channelId peer=$moduleId action=RESEND_ACCEPT " +
+                        "lineage=${cached.lineageId} result=${if (resent) "SENT" else "FAIL"} " +
+                        "ageMs=${System.currentTimeMillis() - cached.sentAtMs}"
+                )
+                return
+            }
+        }
+
+        val gate = GroupInviteInboundExecutionSupport.evaluateAcceptAttempt(
+            acceptComplete = acceptComplete,
+            engineProvisionInFlight = provisionKey in pendingGroupAcceptEngineProvisionKeys,
+            acceptPath = acceptPath,
+            iceConnected = iceConnected,
+        )
+        if (acceptComplete && gate == GroupInviteInboundExecutionSupport.AcceptGate.Proceed) {
+            log(
+                "IGIE_REOFFER_ACCEPTED_ON_INCOMPLETE_EDGE ch=$channelId peer=$moduleId " +
+                    "session=${session.id} lineage=${payload.offerLineageId ?: "NONE"} " +
+                    "ice=${meshIceStateForSession(session, moduleId) ?: "UNKNOWN"}"
             )
-        ) {
+        }
+        when (gate) {
             GroupInviteInboundExecutionSupport.AcceptGate.SkipAcceptComplete -> {
                 log(
                     GroupInviteInboundExecutionLog.provisionSkippedDuplicate(
@@ -4272,7 +4341,10 @@ class TalkbackCoordinator(
         }
         val moduleId = caller.moduleId.value
         if (session.accepted && session.meshCompletedModules.contains(moduleId)) {
-            return
+            val reofferOnIncompleteEdge =
+                acceptPath == GroupInviteInboundExecutionSupport.AcceptPath.Reconnect &&
+                    !IceConnectivity.isConnected(meshIceStateForSession(session, moduleId))
+            if (!reofferOnIncompleteEdge) return
         }
 
         wireIceCallback(session, moduleId, engine)
@@ -4293,16 +4365,19 @@ class TalkbackCoordinator(
                 GroupInviteInboundExecutionSupport.AcceptPath.Fresh -> "INVITE"
                 GroupInviteInboundExecutionSupport.AcceptPath.Reconnect -> "RECONNECT"
             }
-        val handoffOk = sendSignalHandoff(
-            fromPeer,
-            buildSignedEnvelope(
-                SignalType.GROUP_ACCEPT,
-                callee,
-                caller,
-                signal.sessionId,
-                encodeGroupMeshAcceptAnswer(payload, answer)
-            )
+        val acceptEnvelope = buildSignedEnvelope(
+            SignalType.GROUP_ACCEPT,
+            callee,
+            caller,
+            signal.sessionId,
+            encodeGroupMeshAcceptAnswer(payload, answer)
         )
+        val handoffOk = sendSignalHandoff(fromPeer, acceptEnvelope)
+        if (handoffOk && payload.offerLineageId != null) {
+            edgeLinkLastAcceptByPeer[moduleId] = EdgeLinkCachedSignal(
+                session.id, payload.offerLineageId, fromPeer, acceptEnvelope, System.currentTimeMillis()
+            )
+        }
         if (!handoffOk) {
             log(
                 "GROUP_ACCEPT_HANDOFF session=${session.id} remote=$moduleId " +
@@ -4418,10 +4493,15 @@ class TalkbackCoordinator(
         remoteModuleId: String,
         stamped: StampedGroupInvitePayload,
         invitedAtMs: Long = System.currentTimeMillis(),
-        configureParticipant: (ParticipantState) -> Unit = {}
+        configureParticipant: (ParticipantState) -> Unit = {},
+        wire: Pair<PeerTarget, SignalEnvelope>? = null,
     ) {
         val lineageId = stamped.payload.offerLineageId
             ?: error("admission-relevant GROUP_INVITE missing offerLineageId")
+        if (wire != null) {
+            edgeLinkLastInviteByPeer[remoteModuleId] =
+                EdgeLinkCachedSignal(session.id, lineageId, wire.first, wire.second, invitedAtMs)
+        }
         OutboundGroupInviteAttemptSupport.recordSuccessfulHandoff(
             session = session,
             remoteModuleId = remoteModuleId,
@@ -4436,6 +4516,15 @@ class TalkbackCoordinator(
             this.invitedAtMs = invitedAtMs
             configureParticipant(this)
         }
+        edgeLinkShadowFact(
+            session,
+            remoteModuleId,
+            EdgeFact.OfferSent(
+                generation = edgeLinkGeneration(remoteModuleId),
+                lineageId = lineageId,
+                iceRestart = stamped.payload.rejoin
+            )
+        )
     }
 
     /**
@@ -4513,7 +4602,10 @@ class TalkbackCoordinator(
         val ageMs = OutboundGroupInviteAttemptSupport.expireStaleAttempt(
             session,
             moduleId,
-            System.currentTimeMillis()
+            System.currentTimeMillis(),
+            iceState = meshIceStateForSession(session, moduleId),
+            meshLinkCompleted = moduleId in session.meshCompletedModules,
+            controllerOwnsNegotiation = edgeLinkOwnsNegotiation(session, moduleId),
         ) ?: return
         log(
             "OUTBOUND_GROUP_INVITE_ATTEMPT_TERMINAL session=${session.id} peer=$moduleId " +
@@ -4599,6 +4691,12 @@ class TalkbackCoordinator(
                     session = session,
                     local = local,
                     remote = remote,
+                    iceRestartForOffer = OutboundGroupInviteAttemptSupport.shouldIceRestartForPairwiseOffer(
+                        session = session,
+                        remoteModuleId = moduleId,
+                        iceState = meshIceStateForSession(session, moduleId),
+                        hasMeshEngine = mediaRegistry.getMesh(moduleId) != null,
+                    ),
                 )
             ) {
                 dispatched++
@@ -4630,25 +4728,37 @@ class TalkbackCoordinator(
                             moduleId !in session.meshCompletedModules
                         )
             if (!trackedLatePeer) return@filter false
+            val peerIce = meshIceStateForSession(session, moduleId)
+            val owns = edgeLinkOwnsNegotiation(session, moduleId)
             val gate =
                 GroupInviteDeliveryRecoverySupport.evaluateReconciliationGate(
                     session,
                     moduleId,
                     nowMs,
+                    peerIce,
+                    owns,
                 )
             log(
                 GroupInviteDeliveryRecoveryLog.reconcileEvaluated(
                     channelId,
                     moduleId,
                     session.id,
-                    GroupInviteDeliveryRecoverySupport.deliveryPhase(session, moduleId, nowMs),
+                    GroupInviteDeliveryRecoverySupport.deliveryPhase(session, moduleId, nowMs, peerIce, owns),
                     gate,
                 )
             )
             if (gate != GroupInviteDeliveryRecoverySupport.ReconciliationGate.PermitRetry) {
                 return@filter false
             }
-            if (!GroupInviteDeliveryRecoverySupport.isDeliveryRetryEligible(session, moduleId, nowMs)) {
+            if (
+                !GroupInviteDeliveryRecoverySupport.isDeliveryRetryEligible(
+                    session,
+                    moduleId,
+                    nowMs,
+                    peerIce,
+                    owns,
+                )
+            ) {
                 return@filter false
             }
             log(
@@ -4679,6 +4789,20 @@ class TalkbackCoordinator(
         val channelId = session.channelId ?: return false
         val provisionKey =
             GroupInviteExecutionSupport.provisionKey(sessionId, moduleId).storageKey()
+
+        // Pairwise mesh: only the lexicographically smaller module may offer. An answerer-side
+        // offer produces glare where both sides are polite (11-06 run 3, M04↔M05 stuck CHECKING).
+        if (session.mediaTopology == GroupMediaTopology.MESH && localModuleId.value >= moduleId) {
+            log(
+                GroupInviteExecutionLog.provisionSkippedDuplicate(
+                    channelId,
+                    moduleId,
+                    sessionId,
+                    "NOT_OFFERER",
+                )
+            )
+            return false
+        }
 
         when (
             GroupInviteExecutionSupport.evaluateProvisionAttempt(
@@ -4738,6 +4862,20 @@ class TalkbackCoordinator(
                     val live = sessions[sessionId] ?: return@runOnCoordinator
                     if (live.type != SessionType.GROUP) return@runOnCoordinator
                     if (remoteSignalingInFlight(live, moduleId)) return@runOnCoordinator
+                    if (!iceRestartForOffer && groupMeshReconciler.hasRecentJoinOffer(channelId, moduleId)) {
+                        // A GROUP_JOIN offer for this PC was sent moments ago by a coalesced
+                        // provision continuation; minting another lineage here would fence the
+                        // answerer's ACCEPT as STALE. GIDR will re-evaluate on its own timer.
+                        log(
+                            GroupInviteExecutionLog.provisionSkippedDuplicate(
+                                channelId,
+                                moduleId,
+                                sessionId,
+                                "RECENT_JOIN_OFFER",
+                            )
+                        )
+                        return@runOnCoordinator
+                    }
 
                     log(
                         GroupInviteExecutionLog.executionOpportunity(
@@ -4760,23 +4898,22 @@ class TalkbackCoordinator(
                             offerLineageId = offerLineageId,
                         )
                     drainPendingIce(live.id, moduleId, engine, stamped.payload.offerLineageId)
-                    val invited =
-                        sendSignalHandoff(
-                            peer,
-                            buildSignedEnvelope(
-                                SignalType.GROUP_INVITE,
-                                local,
-                                remote,
-                                sessionId,
-                                stamped.payload.encode(),
-                            ),
+                    val inviteEnvelope =
+                        buildSignedEnvelope(
+                            SignalType.GROUP_INVITE,
+                            local,
+                            remote,
+                            sessionId,
+                            stamped.payload.encode(),
                         )
+                    val invited = sendSignalHandoff(peer, inviteEnvelope)
                     if (!invited) return@runOnCoordinator
                     recordInvitingAfterSuccessfulGroupInviteHandoff(
                         live,
                         moduleId,
                         stamped,
                         configureParticipant = configureParticipant,
+                        wire = peer to inviteEnvelope,
                     )
                     reDialByRemoteModule[moduleId] =
                         ReDialRecord(local, remote, channelId, live.groupMembers, SessionType.GROUP)
@@ -5223,16 +5360,25 @@ class TalkbackCoordinator(
                 offerLineageId = offerLineageId,
             )
         drainPendingIce(live.id, remote.moduleId.value, engine, offerLineageId)
-        sendSignalHandoff(
-            peer,
-            buildSignedEnvelope(
-                SignalType.GROUP_INVITE,
-                local,
-                remote,
-                sessionId,
-                stamped.payload.encode()
-            )
+        val inviteEnvelope = buildSignedEnvelope(
+            SignalType.GROUP_INVITE,
+            local,
+            remote,
+            sessionId,
+            stamped.payload.encode()
         )
+        val invited = sendSignalHandoff(peer, inviteEnvelope)
+        // EDGE-LINK-CONTROLLER-001 field finding (11-06 run 2): the bootstrap offer must own an
+        // ACTIVE outbound attempt, otherwise GIDR sees phase=NONE and re-offers ~450 ms later,
+        // the answer to this lineage is fenced STALE and the edge never converges.
+        if (invited) {
+            recordInvitingAfterSuccessfulGroupInviteHandoff(
+                live,
+                remote.moduleId.value,
+                stamped,
+                wire = peer to inviteEnvelope,
+            )
+        }
     }
 
     fun onPttPressed(sessionId: String, priority: EndpointPriority = EndpointPriority.NORMAL): PttState =
@@ -7345,7 +7491,12 @@ class TalkbackCoordinator(
                 local = session.local,
                 remote = remote,
                 rejoin = true,
-                iceRestartForOffer = session.meshCompletedModules.contains(moduleId),
+                iceRestartForOffer = OutboundGroupInviteAttemptSupport.shouldIceRestartForPairwiseOffer(
+                    session = session,
+                    remoteModuleId = moduleId,
+                    iceState = meshIceStateForSession(session, moduleId),
+                    hasMeshEngine = mediaRegistry.getMesh(moduleId) != null,
+                ),
                 configureParticipant = { participant ->
                     participant.media =
                         if (session.meshCompletedModules.contains(moduleId)) {
@@ -9341,6 +9492,7 @@ class TalkbackCoordinator(
             SignalType.GROUP_JOIN -> handleGroupJoin(signal, fromPeer)
             SignalType.GROUP_LEAVE -> handleGroupLeave(signal)
             SignalType.GROUP_RESYNC_REQUEST -> handleGroupResyncRequest(signal, fromPeer)
+            SignalType.GROUP_REOFFER_REQUEST -> handleGroupReofferRequest(signal, fromPeer)
             SignalType.MEMBERSHIP_CONTEXT_EXISTENCE_QUERY ->
                 handleMembershipContextExistenceQuery(signal, fromPeer)
             SignalType.MEMBERSHIP_CONTEXT_EXISTENCE_RESPONSE ->
@@ -9596,20 +9748,36 @@ class TalkbackCoordinator(
         val payload = HelloPayload.decode(signal.payload) ?: return
         val now = System.currentTimeMillis()
         when (
-            val meshTrustResult =
-                meshHelloPeerTrustSupplement?.applyFromHello(payload.moduleId, payload.meshTrust)
+            val gkeResult =
+                groupEstablishmentHelloTrust?.applyFromHello(payload.moduleId, payload.meshTrust)
         ) {
-            is com.talkback.core.session.gbc.trust.mesh.MeshHelloPeerTrustSupplement.ApplyResult.Extended ->
+            is com.talkback.core.session.gbc.trust.group.GroupEstablishmentHelloTrustService.HelloApplyOutcome.GkeApplied ->
+                log("GKE_HELLO applied peer=${payload.moduleId} detail=${gkeResult.detail}")
+            is com.talkback.core.session.gbc.trust.group.GroupEstablishmentHelloTrustService.HelloApplyOutcome.GkeRejected ->
                 log(
-                    "MESH_TRUST_SUPPLEMENT applied peer=${payload.moduleId} " +
-                        "from=hello",
+                    "GKE_HELLO rejected peer=${payload.moduleId} reason=${gkeResult.reason} hello=continues",
                 )
-            is com.talkback.core.session.gbc.trust.mesh.MeshHelloPeerTrustSupplement.ApplyResult.Failed ->
-                log(
-                    "MESH_TRUST_SUPPLEMENT skipped peer=${payload.moduleId} " +
-                        "reason=${meshTrustResult.reason} hello=continues",
-                )
+            is com.talkback.core.session.gbc.trust.group.GroupEstablishmentHelloTrustService.HelloApplyOutcome.SigningExtended ->
+                log("MESH_TRUST_SUPPLEMENT applied peer=${payload.moduleId} from=gke_hello_signing")
             else -> Unit
+        }
+        if (groupEstablishmentHelloTrust == null) {
+            when (
+                val meshTrustResult =
+                    meshHelloPeerTrustSupplement?.applyFromHello(payload.moduleId, payload.meshTrust)
+            ) {
+                is com.talkback.core.session.gbc.trust.mesh.MeshHelloPeerTrustSupplement.ApplyResult.Extended ->
+                    log(
+                        "MESH_TRUST_SUPPLEMENT applied peer=${payload.moduleId} " +
+                            "from=hello",
+                    )
+                is com.talkback.core.session.gbc.trust.mesh.MeshHelloPeerTrustSupplement.ApplyResult.Failed ->
+                    log(
+                        "MESH_TRUST_SUPPLEMENT skipped peer=${payload.moduleId} " +
+                            "reason=${meshTrustResult.reason} hello=continues",
+                    )
+                else -> Unit
+            }
         }
         val wasStale = !isModuleReachable(payload.moduleId, stateSync.get(payload.moduleId))
         rememberSignalPeer(payload.moduleId, fromPeer)
@@ -11319,6 +11487,23 @@ class TalkbackCoordinator(
         val peerId = caller.moduleId.value
         val ice = meshIceStateForSession(session, peerId)
         val channelId = session.channelId
+        // Pairwise mesh glare guard: if we are the offerer for this pair, the peer's offer is a
+        // role violation. Applying it (polite=true) would roll back our own in-flight offer and
+        // leave both PCs with mismatched ICE credentials. Keep our offer and re-drive it instead.
+        if (
+            session.type == SessionType.GROUP &&
+            session.mediaTopology == GroupMediaTopology.MESH &&
+            channelId != null &&
+            localModuleId.value < peerId &&
+            !IceConnectivity.isConnected(ice)
+        ) {
+            log(
+                "GROUP_RECONNECT_OFFER_IGNORED_LOCAL_IS_OFFERER ch=$channelId peer=$peerId " +
+                    "session=${session.id} lineage=${payload.offerLineageId ?: "NONE"} ice=${ice ?: "UNKNOWN"}"
+            )
+            tryReinviteGroupPeerPairwise(peerId)
+            return true
+        }
         // Explicit conference Host rejoin skips GROUP mesh ice-restart throttle; Host already
         // marked recovery intent on the wire (rejoin+SDP). Ordinary GROUP path keeps throttle.
         val conferenceHostRejoin =
@@ -12799,6 +12984,7 @@ class TalkbackCoordinator(
             drainPendingIce(session.id, moduleId, engine, parsed.offerLineageId)
             GroupPcLineageBindingSupport.markSignalingAccepted(session, binding)
             OutboundGroupInviteAttemptSupport.markDeliverySatisfiedFromGroupAccept(session, moduleId)
+            edgeLinkShadowFact(session, moduleId, EdgeFact.AnswerApplied(edgeLinkGeneration(moduleId)))
             session.channelId?.let { channelId ->
                 log(
                     GroupInviteDeliveryRecoveryLog.deliverySatisfied(
@@ -17535,6 +17721,10 @@ class TalkbackCoordinator(
         }
         val channelId = session.channelId ?: return
         val peerId = targetModuleId.value
+        if (session.type == SessionType.GROUP && edgeLinkOwnsNegotiation(session, peerId)) {
+            log("EDGE_LINK_LEGACY_SUPPRESS path=MESH_JOIN ch=$channelId peer=$peerId")
+            return
+        }
         val ice = meshIceStateForSession(session, peerId)
         val meshPeer = session.meshCompletedModules.contains(peerId)
         if (meshPeer && IceConnectivity.isConnected(ice)) return
@@ -17641,6 +17831,30 @@ class TalkbackCoordinator(
         meshPeer: Boolean,
         engine: WebRtcAudioEngine
     ) {
+        if (session.type == SessionType.GROUP) {
+            // Re-evaluate after engine provision: several callers may have been coalesced onto one
+            // engine release, and each continuation would otherwise mint a new offer lineage on the
+            // same PC (run4 M04->M05: GM1..GM4 in 100 ms, answerer ACCEPT for GM2 fenced STALE).
+            val participant = session.participants[peerId]
+            val invitePendingAgeMs = participant
+                ?.takeIf { it.invite == InviteState.INVITING && !meshPeer }
+                ?.let { System.currentTimeMillis() - it.invitedAtMs }
+            val skipReason = when {
+                invitePendingAgeMs != null && invitePendingAgeMs < GROUP_MESH_INVITE_PENDING_TIMEOUT_MS ->
+                    "INVITE_PENDING"
+                groupMeshReconciler.hasRecentJoinOffer(channelId, peerId) -> "RECENT_JOIN_OFFER"
+                engine.negotiationSnapshot().signalingState == "HAVE_LOCAL_OFFER" && !meshPeer ->
+                    "LOCAL_OFFER_OUTSTANDING"
+                else -> null
+            }
+            if (skipReason != null) {
+                log(
+                    "GROUP_JOIN_OFFER_SKIPPED_AFTER_PROVISION ch=$channelId peer=$peerId " +
+                        "session=${session.id} reason=$skipReason restart=$meshPeer ice=${ice ?: "UNKNOWN"}"
+                )
+                return
+            }
+        }
         val payloadBase = groupPayloadBase(session)
         val remote = endpointForModule(session, targetModuleId)
         wireIceCallback(session, peerId, engine)
@@ -17861,7 +18075,9 @@ class TalkbackCoordinator(
             memberHash = digest?.memberHash ?: 0,
             floorSnapshot = floorSnapshot,
             starMediaFacts = starMediaFactsForHello(),
-            meshTrust = meshHelloPeerTrustSupplement?.buildLocalHelloDigest(),
+            meshTrust =
+                groupEstablishmentHelloTrust?.buildLocalHelloDigest()
+                    ?: meshHelloPeerTrustSupplement?.buildLocalHelloDigest(),
         ).encode()
         val from = endpointRegistry.allOnline().firstOrNull()?.address
             ?: EndpointAddress(localModuleId, com.talkback.core.model.EndpointId("E01"))
@@ -18351,6 +18567,13 @@ class TalkbackCoordinator(
             qosMonitor.updateIceState(scope, remoteModuleId, state)
             log("ICE $remoteModuleId scope=$scope state=$state ${qosMonitor.formatSummary()}")
             maybeEmitIceTopologySnapshot(remoteModuleId)
+            if (scope == MediaBearerScope.GROUP) {
+                edgeLinkShadowFactForPeer(
+                    remoteModuleId,
+                    scope,
+                    EdgeFact.IceState(edgeLinkGeneration(remoteModuleId), state)
+                )
+            }
             if (state == "CHECKING" && prevIce != "CHECKING" && prevIce != "NEW") {
                 observeGroupIceEnterChecking(remoteModuleId, state)
             }
@@ -18515,6 +18738,7 @@ class TalkbackCoordinator(
                         )
                     }
                 tryRecoverStuckCheckingPeer(remoteModuleId)
+                tryRecoverStuckOffererPairwiseMeshPeer(remoteModuleId)
                 tryRecoverStuckCheckingConferencePeer(remoteModuleId)
             }
             if (state == "FAILED" || state == "DISCONNECTED") {
@@ -19840,8 +20064,11 @@ class TalkbackCoordinator(
         discoveredByModule[moduleId]?.let { rememberSignalPeer(moduleId, it) }
         val channelId = mesh.channelId
         val nowMs = System.currentTimeMillis()
-        val phase = GroupInviteDeliveryRecoverySupport.deliveryPhase(mesh, moduleId, nowMs)
-        val gate = GroupInviteDeliveryRecoverySupport.evaluateReconciliationGate(mesh, moduleId, nowMs)
+        val peerIce = meshIceStateForSession(mesh, moduleId)
+        val owns = edgeLinkOwnsNegotiation(mesh, moduleId)
+        val phase = GroupInviteDeliveryRecoverySupport.deliveryPhase(mesh, moduleId, nowMs, peerIce, owns)
+        val gate =
+            GroupInviteDeliveryRecoverySupport.evaluateReconciliationGate(mesh, moduleId, nowMs, peerIce, owns)
         if (channelId != null) {
             log(
                 GroupInviteDeliveryRecoveryLog.reconcileEvaluated(
@@ -19906,6 +20133,17 @@ class TalkbackCoordinator(
      * on the remote sending GROUP_JOIN.
      */
     private fun tryRecoverStuckCheckingPeer(moduleId: String) {
+        val owned = sessions.values.firstOrNull {
+            it.type == SessionType.GROUP &&
+                it.accepted &&
+                !it.isForegroundSuspended() &&
+                moduleId in remoteModuleIds(it) &&
+                edgeLinkOwnsNegotiation(it, moduleId)
+        }
+        if (owned != null) {
+            log("EDGE_LINK_LEGACY_SUPPRESS path=L0_CHECKING_RECOVER peer=$moduleId")
+            return
+        }
         val snap = qosMonitor.snapshot(MediaBearerScope.GROUP, moduleId) ?: return
         val ice = snap.iceState
         if (ice != "CHECKING" && ice != "NEW") return
@@ -19929,6 +20167,406 @@ class TalkbackCoordinator(
             observeGroupRecoveryAction(session, moduleId, "L0", "ICE_RESTART", "CHECKING_TIMEOUT", ice)
             log("${sessionTag(session)} Forcing ICE-restart offer for $moduleId stuck in $ice")
         }
+    }
+
+    /**
+     * Offerer-side recovery when the answerer is wedged (CHECKING/UNKNOWN) but perfect-negotiation
+     * forbids the answerer from re-inviting — clears stale GIDR/SIF gates and re-issues with ICE restart.
+     */
+    private fun tryRecoverStuckOffererPairwiseMeshPeer(remoteModuleId: String) {
+        sessions.values
+            .filter {
+                it.type == SessionType.GROUP &&
+                    it.accepted &&
+                    !it.isForegroundSuspended() &&
+                    remoteModuleId in remoteModuleIds(it)
+            }
+            .forEach { session ->
+                val obligation =
+                    PairwiseMeshAdmissionSupport.obligationForRemotePeer(
+                        session,
+                        ModuleId(remoteModuleId)
+                    ) ?: return@forEach
+                if (obligation.signalingSatisfied || obligation.offerer != session.local.moduleId) {
+                    return@forEach
+                }
+                if (edgeLinkOwnsNegotiation(session, remoteModuleId)) {
+                    log("EDGE_LINK_LEGACY_SUPPRESS path=L0_OFFERER_PAIRWISE peer=$remoteModuleId")
+                    return@forEach
+                }
+                val ice = meshIceStateForSession(session, remoteModuleId)
+                if (IceConnectivity.isConnected(ice)) return@forEach
+                expireStaleOutboundGroupInviteAttempt(session, remoteModuleId)
+                if (remoteSignalingInFlight(session, remoteModuleId)) return@forEach
+                val channelId = session.channelId ?: return@forEach
+                if (
+                    ice != null &&
+                    (ice == "CHECKING" || ice == "NEW") &&
+                    groupMeshReconciler.checkingAgeMs(channelId, remoteModuleId) <
+                    GroupMeshReconciler.CHECKING_STUCK_MS
+                ) {
+                    return@forEach
+                }
+                if (tryReinviteGroupPeerPairwise(remoteModuleId)) {
+                    observeGroupRecoveryAction(
+                        session,
+                        remoteModuleId,
+                        "L0",
+                        "ICE_RESTART",
+                        "OFFERER_PAIRWISE_STALL",
+                        ice
+                    )
+                } else {
+                    evaluatePairwiseMeshAdmissionActivation(session, remoteModuleId)
+                }
+            }
+    }
+
+    // ---- EDGE-LINK-CONTROLLER-001 Phase 1 (shadow) ------------------------------------------
+    //
+    // One authoritative-to-be state machine per (channel, peer) mesh edge. In this phase it is
+    // fed real facts and its decisions are logged next to what the legacy gates actually did, so
+    // field logs can show divergence before Phase 2 makes it authoritative. Every entry point is
+    // wrapped so a bug here can never affect call behaviour.
+
+    private val edgeLinkShadow: EdgeLinkController by lazy {
+        EdgeLinkController(
+            config = EdgeLinkConfig(),
+            clock = { System.currentTimeMillis() },
+            onTransition = { log(EdgeLinkController.formatTransition(it)) }
+        )
+    }
+
+    private fun edgeLinkOwnsNegotiation(session: TalkbackSession, remoteModuleId: String): Boolean {
+        val channelId = session.channelId ?: return false
+        if (!config.edgeLinkShadowEnabled) return false
+        return EdgeLinkLegacyGateProjection.controllerOwnsNegotiation(
+            config.edgeLinkMode,
+            edgeLinkShadow.state(EdgeKey(channelId, remoteModuleId)),
+        )
+    }
+
+    private fun edgeLinkUnreachablePeers(session: TalkbackSession): Set<String> {
+        val channelId = session.channelId ?: return emptySet()
+        if (!config.edgeLinkShadowEnabled) return emptySet()
+        return edgeLinkShadow.snapshot()
+            .filter { it.key.channelId == channelId && it.value == EdgeLinkState.FAILED }
+            .map { it.key.peerModuleId }
+            .toSet()
+    }
+
+    private fun edgeLinkRoleFor(session: TalkbackSession, remoteModuleId: String): EdgeRole {
+        val obligation = PairwiseMeshAdmissionSupport.obligationForRemotePeer(session, ModuleId(remoteModuleId))
+        val localIsOfferer = obligation?.let { it.offerer == session.local.moduleId }
+            ?: !isPoliteNegotiator(remoteModuleId)
+        return if (localIsOfferer) EdgeRole.OFFERER else EdgeRole.ANSWERER
+    }
+
+    /** Same precondition [sendSignalHandoff] enforces for GROUP_INVITE, evaluated up front. */
+    private fun edgeLinkPeerReachable(remoteModuleId: String): Boolean =
+        isModuleDialable(remoteModuleId) && (peerEdgeSignalingReadiness?.isReady(remoteModuleId) ?: true)
+
+    private fun edgeLinkGeneration(remoteModuleId: String): Long =
+        mediaRegistry.meshSessionState(remoteModuleId)?.generation ?: EdgeLinkController.UNKNOWN_GENERATION
+
+    private fun edgeLinkShadowSessionsFor(remoteModuleId: String): List<TalkbackSession> =
+        sessions.values.filter {
+            it.type == SessionType.GROUP && it.channelId != null && remoteModuleId in remoteModuleIds(it)
+        }
+
+    /** Feed one fact for one edge; also keeps the edge's desired role in sync. */
+    private fun edgeLinkShadowFact(session: TalkbackSession, remoteModuleId: String, fact: EdgeFact) {
+        if (!config.edgeLinkShadowEnabled || session.type != SessionType.GROUP) return
+        val channelId = session.channelId ?: return
+        if (remoteModuleId == localModuleId.value) return
+        runCatching {
+            val key = EdgeKey(channelId, remoteModuleId)
+            val actions = mutableListOf<EdgeAction>()
+            actions += edgeLinkShadow.onFact(key, EdgeFact.Desired(edgeLinkRoleFor(session, remoteModuleId)))
+            actions += edgeLinkShadow.onFact(key, fact)
+            logEdgeLinkShadowActions(actions, "FACT")
+        }.onFailure { log("EDGE_LINK_SHADOW_ERROR path=FACT err=${it.javaClass.simpleName}:${it.message}") }
+    }
+
+    private fun edgeLinkShadowFactForPeer(remoteModuleId: String, scope: MediaBearerScope?, fact: EdgeFact) {
+        if (!config.edgeLinkShadowEnabled) return
+        edgeLinkShadowSessionsFor(remoteModuleId)
+            .filter { scope == null || mediaBearerScopeFor(it) == scope }
+            .forEach { edgeLinkShadowFact(it, remoteModuleId, fact) }
+    }
+
+    /** Periodic: reconcile desired edge set with live group sessions, expire deadlines, log decisions. */
+    private fun edgeLinkShadowTick() {
+        if (!config.edgeLinkShadowEnabled) return
+        runCatching {
+            val desired = HashSet<EdgeKey>()
+            val actions = mutableListOf<EdgeAction>()
+            sessions.values
+                .filter { it.type == SessionType.GROUP && it.accepted && it.channelId != null && !it.isForegroundSuspended() }
+                .forEach { session ->
+                    val channelId = session.channelId!!
+                    remoteModuleIds(session).forEach { remote ->
+                        if (remote == localModuleId.value) return@forEach
+                        val key = EdgeKey(channelId, remote)
+                        desired += key
+                        actions += edgeLinkShadow.onFact(key, EdgeFact.PeerReachability(edgeLinkPeerReachable(remote)))
+                        actions += edgeLinkShadow.onFact(key, EdgeFact.Desired(edgeLinkRoleFor(session, remote)))
+                        val gen = edgeLinkGeneration(remote)
+                        meshIceStateForSession(session, remote)?.let { ice ->
+                            actions += edgeLinkShadow.onFact(key, EdgeFact.IceState(gen, ice))
+                        }
+                        if (gen != EdgeLinkController.UNKNOWN_GENERATION) {
+                            val legal = computeIceRestartGateProbe(session.id, remote).executable
+                            actions += edgeLinkShadow.onFact(key, EdgeFact.RestartCapability(gen, legal))
+                        }
+                    }
+                }
+            edgeLinkShadow.snapshot().keys.filterNot { it in desired }.forEach { stale ->
+                actions += edgeLinkShadow.onFact(stale, EdgeFact.Undesired)
+            }
+            actions += edgeLinkShadow.tick()
+            logEdgeLinkShadowActions(actions, "TICK")
+        }.onFailure { log("EDGE_LINK_SHADOW_ERROR path=TICK err=${it.javaClass.simpleName}:${it.message}") }
+    }
+
+    private fun logEdgeLinkShadowActions(actions: List<EdgeAction>, path: String) {
+        actions.forEach { action ->
+            val legacyIce = meshIceState(MediaBearerScope.GROUP, action.key.peerModuleId) ?: "UNKNOWN"
+            val detail = when (action) {
+                is EdgeAction.SendOffer ->
+                    "action=SEND_OFFER gen=${action.generation} iceRestart=${action.iceRestart} " +
+                        "retransmitOf=${action.retransmitOfLineage ?: "NONE"}"
+                is EdgeAction.RequestReoffer -> "action=REQUEST_REOFFER gen=${action.generation}"
+                is EdgeAction.RebuildPeerConnection -> "action=REBUILD_PC fromGen=${action.fromGeneration}"
+                is EdgeAction.MarkFailed -> "action=MARK_FAILED reason=${action.reason} retryAt=${action.retryAtMs}"
+                is EdgeAction.Release -> "action=RELEASE"
+            }
+            val execute = config.edgeLinkMode.mayExecute(action)
+            log(
+                "EDGE_LINK_SHADOW_DECISION ch=${action.key.channelId} peer=${action.key.peerModuleId} " +
+                    "path=$path $detail legacyIce=$legacyIce mode=${if (execute) config.edgeLinkMode else EdgeLinkMode.SHADOW}"
+            )
+            if (execute) {
+                runCatching { executeEdgeLinkAction(action) }
+                    .onFailure { log("EDGE_LINK_EXEC_ERROR ch=${action.key.channelId} peer=${action.key.peerModuleId} err=${it.javaClass.simpleName}:${it.message}") }
+            }
+        }
+    }
+
+    // ---- Phase 2a executor --------------------------------------------------------------
+    //
+    // Offerer-side only. Every branch goes through the existing GROUP_INVITE dispatch (with its
+    // WIRE_IN_FLIGHT / provision / RECENT_JOIN_OFFER gates) so the controller cannot create an
+    // offer storm of its own; the one thing it is allowed to do that legacy never did is
+    // retransmit the *same* lineage and recycle the PeerConnection on a deadline.
+
+    private data class EdgeLinkCachedSignal(
+        val sessionId: String,
+        val lineageId: String,
+        val target: PeerTarget,
+        val envelope: SignalEnvelope,
+        val sentAtMs: Long,
+    )
+
+    private val edgeLinkLastInviteByPeer = ConcurrentHashMap<String, EdgeLinkCachedSignal>()
+    private val edgeLinkLastAcceptByPeer = ConcurrentHashMap<String, EdgeLinkCachedSignal>()
+    private val edgeLinkLastOutboundReofferAtMs = ConcurrentHashMap<String, Long>()
+    private val edgeLinkLastInboundReofferAtMs = ConcurrentHashMap<String, Long>()
+
+    private fun edgeLinkExecLog(key: EdgeKey, action: String, result: String, detail: String = "") {
+        log("EDGE_LINK_EXEC ch=${key.channelId} peer=${key.peerModuleId} action=$action result=$result $detail".trimEnd())
+    }
+
+    private fun executeEdgeLinkAction(action: EdgeAction) {
+        val key = action.key
+        val peerId = key.peerModuleId
+        val session = sessions.values.firstOrNull {
+            it.type == SessionType.GROUP && it.accepted && it.channelId == key.channelId && !it.isForegroundSuspended()
+        } ?: return edgeLinkExecLog(key, action.javaClass.simpleName, "SKIP", "reason=NO_SESSION")
+        if (session.mediaTopology != GroupMediaTopology.MESH) {
+            return edgeLinkExecLog(key, action.javaClass.simpleName, "SKIP", "reason=TOPOLOGY_${session.mediaTopology}")
+        }
+        if (action is EdgeAction.MarkFailed) {
+            edgeLinkExecLog(key, "MARK_FAILED", "LOGGED", "reason=${action.reason} retryAt=${action.retryAtMs}")
+            return
+        }
+        if (IceConnectivity.isConnected(meshIceStateForSession(session, peerId))) {
+            return edgeLinkExecLog(key, action.javaClass.simpleName, "SKIP", "reason=ALREADY_CONNECTED")
+        }
+        val role = edgeLinkRoleFor(session, peerId)
+        val local = session.local
+        val remote = endpointForModule(session, ModuleId(peerId))
+        when (action) {
+            is EdgeAction.SendOffer -> {
+                if (role != EdgeRole.OFFERER) {
+                    return edgeLinkExecLog(key, "SEND_OFFER", "SKIP", "reason=NOT_OFFERER")
+                }
+                executeEdgeLinkSendOffer(session, key, local, remote, action)
+            }
+            is EdgeAction.RebuildPeerConnection ->
+                executeEdgeLinkRebuild(session, key, local, remote, role, action)
+            is EdgeAction.RequestReoffer -> {
+                if (role != EdgeRole.ANSWERER) {
+                    return edgeLinkExecLog(key, "REQUEST_REOFFER", "SKIP", "reason=NOT_ANSWERER")
+                }
+                executeEdgeLinkRequestReoffer(session, key, local, remote, action)
+            }
+            else -> Unit
+        }
+    }
+
+    private fun executeEdgeLinkRebuild(
+        session: TalkbackSession,
+        key: EdgeKey,
+        local: EndpointAddress,
+        remote: EndpointAddress,
+        role: EdgeRole,
+        action: EdgeAction.RebuildPeerConnection,
+    ) {
+        val peerId = key.peerModuleId
+        OutboundGroupInviteAttemptSupport.markTerminal(session, peerId, "EDGE_LINK_REBUILD")
+        session.meshCompletedModules.remove(peerId)
+        val hadEngine = mediaRegistry.getMesh(peerId) != null
+        if (hadEngine) mediaRegistry.releaseGroup(peerId, session.id)
+        if (role == EdgeRole.OFFERER) {
+            val dispatched = dispatchGroupInviteAfterEngineProvision(session, local, remote)
+            edgeLinkExecLog(
+                key,
+                "REBUILD_PC",
+                if (dispatched) "DISPATCHED" else "NOT_DISPATCHED",
+                "fromGen=${action.fromGeneration} released=$hadEngine role=OFFERER",
+            )
+            return
+        }
+        // Answerer: drop the stuck PC and wait for the offerer's next offer (which provisions).
+        edgeLinkExecLog(
+            key,
+            "REBUILD_PC",
+            "RELEASED_WAITING_OFFER",
+            "fromGen=${action.fromGeneration} released=$hadEngine role=ANSWERER",
+        )
+    }
+
+    private fun executeEdgeLinkRequestReoffer(
+        session: TalkbackSession,
+        key: EdgeKey,
+        local: EndpointAddress,
+        remote: EndpointAddress,
+        action: EdgeAction.RequestReoffer,
+    ) {
+        val peerId = key.peerModuleId
+        val nowMs = System.currentTimeMillis()
+        val lastAt = edgeLinkLastOutboundReofferAtMs[peerId] ?: 0L
+        if (nowMs - lastAt < EDGE_LINK_REOFFER_DEBOUNCE_MS) {
+            return edgeLinkExecLog(
+                key,
+                "REQUEST_REOFFER",
+                "SKIP",
+                "reason=DEBOUNCE ageMs=${nowMs - lastAt}",
+            )
+        }
+        val peer = resolvePeerForModule(peerId) ?: return edgeLinkExecLog(
+            key,
+            "REQUEST_REOFFER",
+            "SKIP",
+            "reason=PEER_UNRESOLVED",
+        )
+        val payload = GroupReofferRequestPayload(
+            channelId = key.channelId,
+            generation = action.generation,
+        )
+        val sent = sendSignalHandoff(
+            peer,
+            buildSignedEnvelope(
+                SignalType.GROUP_REOFFER_REQUEST,
+                local,
+                remote,
+                session.id,
+                payload.encode(),
+            ),
+        )
+        if (sent) edgeLinkLastOutboundReofferAtMs[peerId] = nowMs
+        edgeLinkExecLog(
+            key,
+            "REQUEST_REOFFER",
+            if (sent) "SENT" else "FAIL",
+            "gen=${action.generation}",
+        )
+    }
+
+    private fun handleGroupReofferRequest(signal: SignalEnvelope, @Suppress("UNUSED_PARAMETER") fromPeer: PeerTarget) {
+        val peerId = signal.from.moduleId.value
+        val payload = GroupReofferRequestPayload.decode(signal.payload)
+        val channelId = payload?.channelId
+        val session = sessions[signal.sessionId]?.takeIf {
+            it.type == SessionType.GROUP && it.accepted && !it.isForegroundSuspended()
+        } ?: sessions.values.firstOrNull {
+            it.type == SessionType.GROUP &&
+                it.accepted &&
+                !it.isForegroundSuspended() &&
+                (channelId == null || it.channelId == channelId)
+        }
+        if (session == null) {
+            log("EDGE_LINK_EXEC ch=${channelId ?: "NONE"} peer=$peerId action=INBOUND_REOFFER result=SKIP reason=NO_SESSION")
+            return
+        }
+        val ch = session.channelId ?: channelId ?: "NONE"
+        if (edgeLinkRoleFor(session, peerId) != EdgeRole.OFFERER) {
+            log("EDGE_LINK_EXEC ch=$ch peer=$peerId action=INBOUND_REOFFER result=SKIP reason=NOT_OFFERER")
+            return
+        }
+        if (IceConnectivity.isConnected(meshIceStateForSession(session, peerId))) {
+            log("EDGE_LINK_EXEC ch=$ch peer=$peerId action=INBOUND_REOFFER result=SKIP reason=ALREADY_CONNECTED")
+            return
+        }
+        val nowMs = System.currentTimeMillis()
+        val lastAt = edgeLinkLastInboundReofferAtMs[peerId] ?: 0L
+        if (nowMs - lastAt < EDGE_LINK_REOFFER_DEBOUNCE_MS) {
+            log("EDGE_LINK_EXEC ch=$ch peer=$peerId action=INBOUND_REOFFER result=SKIP reason=DEBOUNCE ageMs=${nowMs - lastAt}")
+            return
+        }
+        edgeLinkLastInboundReofferAtMs[peerId] = nowMs
+        val gen = payload?.generation?.takeIf { it > 0L } ?: edgeLinkGeneration(peerId)
+        log("EDGE_LINK_EXEC ch=$ch peer=$peerId action=INBOUND_REOFFER result=ACCEPTED gen=$gen")
+        edgeLinkShadowFact(session, peerId, EdgeFact.ReofferRequested(gen))
+    }
+
+    private fun executeEdgeLinkSendOffer(
+        session: TalkbackSession,
+        key: EdgeKey,
+        local: EndpointAddress,
+        remote: EndpointAddress,
+        action: EdgeAction.SendOffer,
+    ) {
+        val peerId = key.peerModuleId
+        val retransmitOf = action.retransmitOfLineage
+        if (retransmitOf != null) {
+            val cached = edgeLinkLastInviteByPeer[peerId]
+            if (cached != null && cached.sessionId == session.id && cached.lineageId == retransmitOf) {
+                val sent = sendSignalHandoff(cached.target, cached.envelope)
+                edgeLinkExecLog(key, "RETRANSMIT_OFFER", if (sent) "SENT" else "FAIL", "lineage=$retransmitOf ageMs=${System.currentTimeMillis() - cached.sentAtMs}")
+                return
+            }
+            edgeLinkExecLog(key, "RETRANSMIT_OFFER", "SKIP", "reason=NO_CACHED_ENVELOPE lineage=$retransmitOf cached=${cached?.lineageId ?: "NONE"}")
+            return
+        }
+        val attempt = OutboundGroupInviteAttemptSupport.activeAttempt(session, peerId)
+        if (attempt != null) {
+            val ageMs = System.currentTimeMillis() - attempt.issuedAtMs
+            if (!action.iceRestart && ageMs < EdgeLinkConfig().answerTimeoutMs) {
+                edgeLinkExecLog(key, "SEND_OFFER", "SKIP", "reason=ATTEMPT_YOUNG ageMs=$ageMs lineage=${attempt.offerLineageId}")
+                return
+            }
+            OutboundGroupInviteAttemptSupport.markTerminal(session, peerId, if (action.iceRestart) "EDGE_LINK_RESTART" else "EDGE_LINK_REOFFER")
+        }
+        val dispatched = dispatchGroupInviteAfterEngineProvision(
+            session = session,
+            local = local,
+            remote = remote,
+            rejoin = action.iceRestart,
+            iceRestartForOffer = action.iceRestart,
+        )
+        edgeLinkExecLog(key, if (action.iceRestart) "ICE_RESTART_OFFER" else "SEND_OFFER", if (dispatched) "DISPATCHED" else "NOT_DISPATCHED", "gen=${action.generation}")
     }
 
     /**
@@ -21915,6 +22553,8 @@ class TalkbackCoordinator(
         private const val BOOTSTRAP_ADMISSION_EDGE_RETRY_COOLDOWN_MS = 5_000L
         private const val PAIRWISE_MESH_ADMISSION_ACTIVATION_COOLDOWN_MS = 5_000L
         private const val GROUP_MESH_INVITE_PENDING_TIMEOUT_MS = 10_000L
+        /** Drop duplicate GROUP_REOFFER_REQUEST (UDP) without burning the offerer's restart/rebuild budget. */
+        private const val EDGE_LINK_REOFFER_DEBOUNCE_MS = 2_000L
         private const val BLOCKED_GROUP_ACCEPT_RETRY_BUDGET_MS = 60_000L
         private const val PROFILE01_COMMIT_RESYNC_MIN_INTERVAL_MS = 1_000L
     }
@@ -22477,6 +23117,7 @@ class TalkbackCoordinator(
             dialablePeerCount = countDialableRemoteModules(),
             membershipDigestAlignedWithAuthority = membershipDigestAlignedWithAuthority(session),
             peerMediaConnected = peerMediaConnectedForSession(session),
+            edgeUnreachablePeers = edgeLinkUnreachablePeers(session),
             iceStateForModule = ::iceStateForModule,
             channelGated = isChannelGatedForGroup(session),
             convergenceAgeMs = convergenceAge

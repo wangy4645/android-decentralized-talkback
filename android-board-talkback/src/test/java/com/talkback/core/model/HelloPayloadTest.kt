@@ -151,4 +151,26 @@ class HelloPayloadTest {
         assertTrue(decoded!!.meshTrust!!.hasSigningMaterial())
         assertTrue(decoded.meshTrust!!.hasEstablishmentMaterial())
     }
+
+    @Test
+    fun encodeDecode_meshTrust_gkeProofRoundTrip() {
+        val digest =
+            MeshPeerTrustHelloDigest(
+                signingPublicKeySpki = byteArrayOf(1),
+                signingKeyVersion = 1L,
+                establishmentPublicKeySpki = byteArrayOf(2),
+                establishmentKeyVersion = 1L,
+                gkeNonceHex = "aabbcc",
+                gkeProofHex = "deadbeef",
+            )
+        val payload =
+            HelloPayload(
+                moduleId = "M05",
+                endpoints = emptyList(),
+                meshTrust = digest,
+            )
+        val decoded = HelloPayload.decode(payload.encode())
+        assertNotNull(decoded?.meshTrust)
+        assertTrue(decoded!!.meshTrust!!.hasGkeEstablishmentProof())
+    }
 }

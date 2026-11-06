@@ -71,6 +71,7 @@ import com.talkback.core.session.gbc.issuance.GbcFieldEstablishedSignerSupport
 import com.talkback.core.session.gbc.issuance.GenerationFactSignerPersistenceState
 import com.talkback.core.conference.transport.Slice4MulticastNetworkConstants
 import com.talkback.core.session.gbc.trust.GenerationFactKeyState
+import com.talkback.core.session.gbc.trust.group.GroupEstablishmentHelloTrustService
 import com.talkback.core.session.gbc.trust.mesh.MeshHelloPeerTrustSupplement
 import com.talkback.core.session.gbc.trust.profile.AcceptedLocalTrustStateStore
 import com.talkback.core.signaling.prr.LocalEndpointSnapshot
@@ -121,6 +122,10 @@ object TalkbackRuntimeFactory {
         gbcTrustWiring: GbcTrustWiring? = null,
         onLog: ((String) -> Unit)? = null,
         /**
+         * When set (App enrollment runtime), shares one establishment store + keystore with coordinator.
+         */
+        sharedEstablishmentProductionRuntime: EstablishmentProductionComposition.EstablishmentProductionRuntime? = null,
+        /**
          * JVM multi-node tests share one process-global F8 registry instance; production leaves null.
          */
         selectedOperationalNetworkRegistry: SelectedOperationalNetworkRegistry? = null,
@@ -136,6 +141,7 @@ object TalkbackRuntimeFactory {
             signalingChannel = signalingChannel,
             gbcTrustWiring = gbcTrustWiring,
             onLog = onLog,
+            sharedEstablishmentProductionRuntime = sharedEstablishmentProductionRuntime,
             selectedOperationalNetworkRegistry = selectedOperationalNetworkRegistry,
         ).runtime
     }
@@ -151,6 +157,7 @@ object TalkbackRuntimeFactory {
         signalingChannel: SignalingChannel? = null,
         gbcTrustWiring: GbcTrustWiring? = null,
         onLog: ((String) -> Unit)? = null,
+        sharedEstablishmentProductionRuntime: EstablishmentProductionComposition.EstablishmentProductionRuntime? = null,
         selectedOperationalNetworkRegistry: SelectedOperationalNetworkRegistry? = null,
     ): TalkbackRuntimeBundle {
         val endpointRegistry = EndpointRegistry(config.localModuleId)
@@ -365,26 +372,42 @@ object TalkbackRuntimeFactory {
                 is ProductionGbcTrustWiring -> resolvedGbcTrustWiring.runtime.trustStore
                 else -> AcceptedLocalTrustStateStore()
             }
-        val profile01EstablishmentAuthority =
-            composeProfile01EstablishmentAuthority(
+        val profile01EstablishmentProductionRuntime =
+            resolveEstablishmentProductionRuntime(
                 context = context,
                 config = config,
                 gbcTrustWiring = resolvedGbcTrustWiring,
+                sharedRuntime = sharedEstablishmentProductionRuntime,
             )
+        val profile01EstablishmentAuthority = profile01EstablishmentProductionRuntime.authoritySurface
         val deploymentTrustDomainId =
             config.deploymentTrustDomainId.ifBlank {
                 GbcProductionTrustComposition.DEFAULT_DEPLOYMENT_TRUST_DOMAIN
             }
         if (resolvedGbcTrustWiring is ProductionGbcTrustWiring) {
-            coordinator.attachMeshHelloPeerTrustSupplement(
-                MeshHelloPeerTrustSupplement(
-                    signingTrustStore = profile01TrustStore,
-                    establishmentTrustStore = profile01EstablishmentAuthority.establishmentTrustStore,
-                    localModuleId = config.localModuleId.value,
-                    deploymentTrustDomainId = deploymentTrustDomainId,
-                    onLog = { message -> onLog?.invoke(message) },
-                ),
-            )
+            if (config.sharedSecret.isNotBlank()) {
+                coordinator.attachGroupEstablishmentHelloTrust(
+                    GroupEstablishmentHelloTrustService(
+                        signingTrustStore = profile01TrustStore,
+                        establishmentTrustStore = profile01EstablishmentAuthority.establishmentTrustStore,
+                        keystoreStore = profile01EstablishmentProductionRuntime.keystoreIdentityStore,
+                        localModuleId = config.localModuleId.value,
+                        deploymentTrustDomainId = deploymentTrustDomainId,
+                        sharedSecret = config.sharedSecret,
+                        onLog = { message -> onLog?.invoke(message) },
+                    ),
+                )
+            } else {
+                coordinator.attachMeshHelloPeerTrustSupplement(
+                    MeshHelloPeerTrustSupplement(
+                        signingTrustStore = profile01TrustStore,
+                        establishmentTrustStore = profile01EstablishmentAuthority.establishmentTrustStore,
+                        localModuleId = config.localModuleId.value,
+                        deploymentTrustDomainId = deploymentTrustDomainId,
+                        onLog = { message -> onLog?.invoke(message) },
+                    ),
+                )
+            }
         }
         val profile01MediaKeyDecrypt =
             Profile01ProductionMediaKeyDecryptComposition.compose(profile01EstablishmentAuthority)
@@ -674,11 +697,16 @@ object TalkbackRuntimeFactory {
         )
     }
 
-    private fun composeProfile01EstablishmentAuthority(
+    private fun resolveEstablishmentProductionRuntime(
         context: Context,
         config: TalkbackRuntimeConfig,
         gbcTrustWiring: GbcTrustWiring,
-    ): Profile01EstablishmentAuthoritySurface {
+        sharedRuntime: EstablishmentProductionComposition.EstablishmentProductionRuntime?,
+    ): EstablishmentProductionComposition.EstablishmentProductionRuntime {
+        if (sharedRuntime != null) {
+            sharedRuntime.establishmentTrustStore.reloadFromPersistence()
+            return sharedRuntime
+        }
         val domain =
             config.deploymentTrustDomainId.ifBlank {
                 GbcProductionTrustComposition.DEFAULT_DEPLOYMENT_TRUST_DOMAIN
@@ -692,7 +720,7 @@ object TalkbackRuntimeFactory {
                     localModuleId = config.localModuleId.value,
                     establishmentStateFile =
                         trustDir.resolve("accepted-local-establishment-trust-state.bin").toPath(),
-                ).authoritySurface
+                )
             }
             else ->
                 EstablishmentProductionComposition.create(
@@ -700,8 +728,21 @@ object TalkbackRuntimeFactory {
                     anchorSource = OperationalTrustAnchorSource { null },
                     localModuleId = config.localModuleId.value,
                     establishmentStateFile = null,
-                ).authoritySurface
+                )
         }
+    }
+
+    private fun composeProfile01EstablishmentAuthority(
+        context: Context,
+        config: TalkbackRuntimeConfig,
+        gbcTrustWiring: GbcTrustWiring,
+    ): Profile01EstablishmentAuthoritySurface {
+        return resolveEstablishmentProductionRuntime(
+            context = context,
+            config = config,
+            gbcTrustWiring = gbcTrustWiring,
+            sharedRuntime = null,
+        ).authoritySurface
     }
 
     private fun localActiveSignerKeyVersion(

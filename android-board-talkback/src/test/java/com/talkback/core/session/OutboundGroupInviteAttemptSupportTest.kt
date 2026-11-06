@@ -151,6 +151,115 @@ class OutboundGroupInviteAttemptSupportTest {
     }
 
     @Test
+    fun controllerOwnsNegotiation_doesNotExpireCheckingAttempt() {
+        val session = session()
+        OutboundGroupInviteAttemptSupport.recordSuccessfulHandoff(
+            session = session,
+            remoteModuleId = "M03",
+            sessionId = session.id,
+            semantic = GroupInvitePayloadSemantic.PAIRWISE_MESH_SDP_INVITE,
+            offerLineageId = "GM2",
+            deliveryAttemptId = 1L,
+            issuedAtMs = 1000L,
+        )
+        val lateMs = 1000L + OutboundGroupInviteAttemptSupport.ATTEMPT_STALE_TIMEOUT_MS + 1L
+        assertNull(
+            OutboundGroupInviteAttemptSupport.expireStaleAttempt(
+                session = session,
+                remoteModuleId = "M03",
+                nowMs = lateMs,
+                iceState = "CHECKING",
+                meshLinkCompleted = false,
+                controllerOwnsNegotiation = true,
+            )
+        )
+        assertTrue(OutboundGroupInviteAttemptSupport.isRemoteSignalingInFlight(session, "M03"))
+    }
+
+    @Test
+    fun staleAttempt_expiresEarlyWhenIceCheckingAndMeshIncomplete() {
+        val session = session()
+        OutboundGroupInviteAttemptSupport.recordSuccessfulHandoff(
+            session = session,
+            remoteModuleId = "M03",
+            sessionId = session.id,
+            semantic = GroupInvitePayloadSemantic.PAIRWISE_MESH_SDP_INVITE,
+            offerLineageId = "GM2",
+            deliveryAttemptId = 1L,
+            issuedAtMs = 1000L,
+        )
+        val earlyMs = 1000L + GroupMeshReconciler.CHECKING_STUCK_MS
+        assertEquals(
+            GroupMeshReconciler.CHECKING_STUCK_MS,
+            OutboundGroupInviteAttemptSupport.expireStaleAttempt(
+                session = session,
+                remoteModuleId = "M03",
+                nowMs = earlyMs,
+                iceState = "CHECKING",
+                meshLinkCompleted = false,
+            )
+        )
+        assertFalse(OutboundGroupInviteAttemptSupport.isRemoteSignalingInFlight(session, "M03"))
+    }
+
+    @Test
+    fun shouldIceRestartAfterTimeoutWithEngine() {
+        val session = session()
+        OutboundGroupInviteAttemptSupport.recordSuccessfulHandoff(
+            session = session,
+            remoteModuleId = "M04",
+            sessionId = session.id,
+            semantic = GroupInvitePayloadSemantic.PAIRWISE_MESH_SDP_INVITE,
+            offerLineageId = "GM1",
+            deliveryAttemptId = 1L,
+            issuedAtMs = 1000L,
+        )
+        OutboundGroupInviteAttemptSupport.expireStaleAttempt(
+            session = session,
+            remoteModuleId = "M04",
+            nowMs = 1000L + OutboundGroupInviteAttemptSupport.ATTEMPT_STALE_TIMEOUT_MS,
+        )
+        assertTrue(
+            OutboundGroupInviteAttemptSupport.shouldIceRestartForPairwiseOffer(
+                session = session,
+                remoteModuleId = "M04",
+                iceState = "CHECKING",
+                hasMeshEngine = true,
+            )
+        )
+        assertFalse(
+            OutboundGroupInviteAttemptSupport.shouldIceRestartForPairwiseOffer(
+                session = session,
+                remoteModuleId = "M04",
+                iceState = null,
+                hasMeshEngine = false,
+            )
+        )
+    }
+
+    @Test
+    fun firstOffer_noAttemptNoIceSnapshot_doesNotIceRestart() {
+        // 11-06 run 2: bootstrap offer in flight, GIDR retry 450 ms later must not change ufrag.
+        val session = session()
+        assertFalse(
+            OutboundGroupInviteAttemptSupport.shouldIceRestartForPairwiseOffer(
+                session = session,
+                remoteModuleId = "M04",
+                iceState = null,
+                hasMeshEngine = true,
+            )
+        )
+        assertTrue(
+            OutboundGroupInviteAttemptSupport.shouldIceRestartForPairwiseOffer(
+                session = session,
+                remoteModuleId = "M04",
+                iceState = "CHECKING",
+                hasMeshEngine = true,
+            )
+        )
+    }
+
+    @Test
     fun localOfferAlone_doesNotAffectSupportEvaluation() {
         val session = session()
         assertFalse(OutboundGroupInviteAttemptSupport.isRemoteSignalingInFlight(session, "M03"))

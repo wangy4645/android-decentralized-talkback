@@ -47,7 +47,7 @@ class TopologySnapshotLoggerTest {
                 "topologyKind=MESH members=M01,M02,M03 rosterEpoch=2 memberHash=42 sessionAccepted=true " +
                 "membershipDigestAligned=true suspectPeers= membershipReconciled=true " +
                 "meshDesiredLinks=M02->M03 meshSignaledPeers=M01 meshIceConnectedPeers=M01,M03 " +
-                "meshMissingSignal=M03 meshMissingIce= transmitRequiredPeers=M01,M03 " +
+                "meshMissingSignal=M03 meshMissingIce= meshUnreachablePeers= transmitRequiredPeers=M01,M03 " +
                 "transmitReadyPeers=M01 transmitMissingPeers=M03 groupTopologyReadiness=BUILDING " +
                 "mappedChannelReadiness=DIRECTORY_SYNC convergenceAgeMs=1500 floorOwner=M01-E01 " +
                 "floorEpoch=1 floorVersion=2 channelGated=false",

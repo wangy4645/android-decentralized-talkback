@@ -67,6 +67,18 @@ class GroupMeshReconciler {
         markReconnectAttempt(channelId, peerModuleId)
     }
 
+    /**
+     * Offerer-side guard evaluated *after* engine provision: a join/reconnect offer was already
+     * sent for this peer within [MIN_JOIN_OFFER_DEDUP_MS]. Coalesced provision continuations
+     * (several callers waiting on the same engine release) must not each emit a fresh offer
+     * lineage, or the answerer's GROUP_ACCEPT for the first lineage is fenced as STALE.
+     */
+    fun hasRecentJoinOffer(channelId: String, peerModuleId: String, nowMs: Long = System.currentTimeMillis()): Boolean {
+        val record = record(channelId, peerModuleId)
+        if (record.state != PeerMeshState.INVITING && record.state != PeerMeshState.CONNECTING) return false
+        return nowMs - record.lastAttemptMs < MIN_JOIN_OFFER_DEDUP_MS
+    }
+
     fun markJoinOffered(channelId: String, peerModuleId: String) {
         val record = record(channelId, peerModuleId)
         record.state = PeerMeshState.INVITING
@@ -201,6 +213,9 @@ class GroupMeshReconciler {
         private const val MAX_BACKOFF_MS = 30_000L
         private const val MIN_ICE_RESTART_ACCEPT_MS = 3_000L
         private const val MIN_RECONNECT_OFFER_MS = 5_000L
+
+        /** Exposed for tests. Matches EdgeLinkConfig.answerTimeoutMs. */
+        const val MIN_JOIN_OFFER_DEDUP_MS = 3_000L
 
         /** Exposed for tests. */
         const val CHECKING_STUCK_MS = 6_000L

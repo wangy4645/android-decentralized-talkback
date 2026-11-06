@@ -26,6 +26,7 @@ class MeshHelloPeerTrustSupplement(
     private val establishmentTrustStore: AcceptedLocalEstablishmentTrustStateStore,
     private val localModuleId: String,
     private val deploymentTrustDomainId: String,
+    private val allowUntrustedEstablishmentHelloExtension: Boolean = true,
     private val onLog: (String) -> Unit = {},
 ) {
     sealed class ApplyResult {
@@ -63,7 +64,9 @@ class MeshHelloPeerTrustSupplement(
             if (!peerHasSigningBinding(peerModuleId)) {
                 signingAdded = extendSigning(peerModuleId, digest)
             }
-            if (!peerHasEstablishmentBinding(peerModuleId)) {
+            if (allowUntrustedEstablishmentHelloExtension &&
+                !peerHasEstablishmentBinding(peerModuleId)
+            ) {
                 establishmentAdded = extendEstablishment(peerModuleId, digest)
             }
             if (signingAdded || establishmentAdded) {

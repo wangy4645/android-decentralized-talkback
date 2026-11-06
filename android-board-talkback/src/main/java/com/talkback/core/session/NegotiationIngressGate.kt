@@ -47,7 +47,8 @@ internal object NegotiationIngressGate {
         SignalType.FACT_REQUEST,
         SignalType.FACT_RESPONSE_CANDIDATE,
         SignalType.FACT_RESPONSE_INSUFFICIENT,
-        SignalType.CONFERENCE_SIGNED_FACT -> true
+        SignalType.CONFERENCE_SIGNED_FACT,
+        SignalType.GROUP_REOFFER_REQUEST -> true
     }
 
     /**

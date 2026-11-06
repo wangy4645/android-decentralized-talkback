@@ -35,6 +35,7 @@ object TopologySnapshotLogger {
             append(" meshIceConnectedPeers=").append(joinCsv(health.meshIceConnectedPeers.sorted()))
             append(" meshMissingSignal=").append(joinCsv(health.meshMissingSignal.sorted()))
             append(" meshMissingIce=").append(joinCsv(health.meshMissingIce.sorted()))
+            append(" meshUnreachablePeers=").append(joinCsv(health.meshUnreachablePeers.sorted()))
             append(" transmitRequiredPeers=").append(joinCsv(health.transmitRequiredPeers.sorted()))
             append(" transmitReadyPeers=").append(joinCsv(health.transmitReadyPeers.sorted()))
             append(" transmitMissingPeers=").append(joinCsv(health.transmitMissingPeers.sorted()))

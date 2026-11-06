@@ -74,6 +74,10 @@
                 layout="@layout/item_settings_row" />
 
             <include
+                android:id="@+id/rowEnrollment"
+                layout="@layout/item_settings_row" />
+
+            <include
                 android:id="@+id/rowSecurity"
                 layout="@layout/item_settings_row" />
         </LinearLayout>

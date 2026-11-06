@@ -27,6 +27,9 @@ import com.talkback.core.qos.QosSnapshot
 import com.talkback.core.session.ChannelMeshHostElection
 import com.talkback.core.session.ChannelReadiness
 import com.talkback.core.session.SessionType
+import com.talkback.appprod.enrollment.EstablishmentEnrollmentCoordinator
+import com.talkback.appprod.enrollment.EstablishmentEnrollmentPolicy
+import com.talkback.appprod.enrollment.EstablishmentEnrollmentServices
 import com.talkback.core.session.gbc.bootstrap.LabDeploymentTrustBootstrap
 import com.talkback.governance.transition.MeetingMode
 
@@ -110,8 +113,17 @@ class TalkbackRuntimeManager(private val appContext: Context) {
     fun pendingConferenceInvite(channelId: String): ConferenceInviteSnapshot? =
         runtime?.pendingConferenceInvite(channelId)
 
-    fun acceptPendingConferenceInvite(channelId: String): Boolean =
-        runtime?.acceptPendingConferenceInvite(channelId) == true
+    fun acceptPendingConferenceInvite(channelId: String): Boolean {
+        val config = configStore.load()
+        if (!isLocalEstablishmentReady(config)) {
+            TalkbackLog.w(
+                "Blocked conference accept: LOCAL_ESTABLISHMENT not ready module=${config.moduleId} " +
+                    "phase=${EstablishmentEnrollmentServices.coordinator?.currentPhase()}",
+            )
+            return false
+        }
+        return runtime?.acceptPendingConferenceInvite(channelId) == true
+    }
 
     fun rejectPendingConferenceInvite(channelId: String, reason: String = "DECLINED"): Boolean =
         runtime?.rejectPendingConferenceInvite(channelId, reason) == true
@@ -121,6 +133,21 @@ class TalkbackRuntimeManager(private val appContext: Context) {
             appContext,
             config.moduleId,
         )
+
+    fun isLocalEstablishmentReady(config: AppConfig): Boolean {
+        if (EstablishmentEnrollmentPolicy.normalizeModuleId(config.moduleId).isBlank()) return false
+        return EstablishmentEnrollmentServices.coordinator?.isLocalEstablishmentReady() == true
+    }
+
+    fun enrollmentCoordinatorPhase() =
+        EstablishmentEnrollmentServices.coordinator?.currentPhase()
+
+    fun submitEstablishmentEnrollmentBase64(signedDeliveryBase64: String) =
+        EstablishmentEnrollmentServices.coordinator?.submitSignedDeliveryBase64(signedDeliveryBase64)
+            ?: EstablishmentEnrollmentCoordinator.SubmitResult.Failed(
+                "E_ENROLL_PERSIST_FAILED",
+                "runtime not started",
+            )
 
     fun start(config: AppConfig): Result<Unit> {
         return runCatching {
@@ -137,6 +164,13 @@ class TalkbackRuntimeManager(private val appContext: Context) {
                     TalkbackLog.w("DEPLOYMENT_TRUST bootstrap failed: ${trust.reason}")
                 else -> Unit
             }
+            val enrollmentCoordinator =
+                EstablishmentEnrollmentServices.createCoordinator(
+                    context = appContext,
+                    moduleId = config.moduleId,
+                )
+            enrollmentCoordinator.onRuntimeStarting()
+            EstablishmentEnrollmentServices.attachCoordinator(enrollmentCoordinator)
             val created = TalkbackRuntimeFactory.create(
                 context = appContext,
                 config = TalkbackRuntimeConfig(
@@ -155,7 +189,8 @@ class TalkbackRuntimeManager(private val appContext: Context) {
                 ),
                 mode = AudioEngineMode.REAL_WEBRTC,
                 staticPeers = config.staticPeers(),
-                onLog = { TalkbackLog.i(it) }
+                onLog = { TalkbackLog.i(it) },
+                sharedEstablishmentProductionRuntime = enrollmentCoordinator.sharedProductionRuntime(),
             )
             created.onEndpointTextReceived = { event ->
                 onEndpointTextReceived?.invoke(event)
@@ -171,6 +206,7 @@ class TalkbackRuntimeManager(private val appContext: Context) {
             }
             created.start()
             runtime = created
+            enrollmentCoordinator.onRuntimeStarted()
             skipNextMeshBackoff = true
             hadReachableTeammates = false
             lastMeshCallAttemptMs = 0L
@@ -189,6 +225,7 @@ class TalkbackRuntimeManager(private val appContext: Context) {
         runtime?.onChannelAttachmentReceived = null
         runtime?.stop()
         runtime = null
+        EstablishmentEnrollmentServices.clear()
         skipNextMeshBackoff = true
         hadReachableTeammates = false
         lastMeshCallAttemptMs = 0L
@@ -293,6 +330,43 @@ class TalkbackRuntimeManager(private val appContext: Context) {
                     "Blocked conference create: DEPLOYMENT_TRUST not ready module=${config.moduleId}",
                 )
                 return null
+            }
+            if (!isLocalEstablishmentReady(config)) {
+                TalkbackLog.w(
+                    "Blocked conference create: LOCAL_ESTABLISHMENT not ready module=${config.moduleId} " +
+                        "phase=${enrollmentCoordinatorPhase()}",
+                )
+                return null
+            }
+            val inviteModuleIds =
+                remotes?.map { it.moduleId.value.trim().uppercase() }?.distinct().orEmpty()
+            if (inviteModuleIds.isNotEmpty()) {
+                val gate = EstablishmentEnrollmentServices.readinessGate
+                if (gate != null) {
+                    val conferenceReady =
+                        gate.conferenceReadiness(
+                            snapshot =
+                                com.talkback.core.session.ConferenceTopologySnapshot(
+                                    conferenceId = config.defaultChannelId,
+                                    rosterEpoch = 0L,
+                                    anchorEpoch = 0L,
+                                    anchorId = null,
+                                    meshGeneration = 0L,
+                                    topologyMode = com.talkback.core.session.ConferenceTopologyMode.MESH,
+                                    hostModuleId = EstablishmentEnrollmentPolicy.normalizeModuleId(config.moduleId),
+                                    members = listOf(EstablishmentEnrollmentPolicy.normalizeModuleId(config.moduleId)) + inviteModuleIds,
+                                    actualMediaEdges = emptySet(),
+                                ),
+                            peerModuleIds = inviteModuleIds,
+                        )
+                    if (!conferenceReady.ready) {
+                        TalkbackLog.w(
+                            "Blocked conference create: CONFERENCE_ESTABLISHMENT not ready " +
+                                "missing=${conferenceReady.missingPeerModuleIds} code=${conferenceReady.reasonCode}",
+                        )
+                        return null
+                    }
+                }
             }
             val now = System.currentTimeMillis()
             if (!skipNextMeshBackoff && now - lastMeshCallAttemptMs < MESH_CALL_BACKOFF_MS) {

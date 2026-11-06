@@ -11,6 +11,9 @@ data class MeshPeerTrustHelloDigest(
     val signingKeyVersion: Long = 0L,
     val establishmentPublicKeySpki: ByteArray? = null,
     val establishmentKeyVersion: Long = 0L,
+    /** Phase 0 GKE: HMAC proof over moduleId|version|spkiHash|nonce (see [GroupMemberEstablishmentProof]). */
+    val gkeNonceHex: String? = null,
+    val gkeProofHex: String? = null,
 ) {
     fun hasSigningMaterial(): Boolean =
         signingPublicKeySpki != null && signingPublicKeySpki.isNotEmpty() && signingKeyVersion > 0L
@@ -19,6 +22,11 @@ data class MeshPeerTrustHelloDigest(
         establishmentPublicKeySpki != null &&
             establishmentPublicKeySpki.isNotEmpty() &&
             establishmentKeyVersion > 0L
+
+    fun hasGkeEstablishmentProof(): Boolean =
+        hasEstablishmentMaterial() &&
+            !gkeNonceHex.isNullOrBlank() &&
+            !gkeProofHex.isNullOrBlank()
 
     fun encodeJson(): JSONObject {
         val json = JSONObject()
@@ -30,6 +38,8 @@ data class MeshPeerTrustHelloDigest(
             json.put("establishmentSpkiB64", Base64.encodeToString(it, Base64.NO_WRAP))
             json.put("establishmentKeyVersion", establishmentKeyVersion)
         }
+        gkeNonceHex?.takeIf { it.isNotBlank() }?.let { json.put("gkeNonceHex", it) }
+        gkeProofHex?.takeIf { it.isNotBlank() }?.let { json.put("gkeProofHex", it) }
         return json
     }
 
@@ -50,6 +60,8 @@ data class MeshPeerTrustHelloDigest(
                 signingKeyVersion = json.optLong("signingKeyVersion", 0L),
                 establishmentPublicKeySpki = establishmentSpki,
                 establishmentKeyVersion = json.optLong("establishmentKeyVersion", 0L),
+                gkeNonceHex = json.optString("gkeNonceHex").takeIf { it.isNotBlank() },
+                gkeProofHex = json.optString("gkeProofHex").takeIf { it.isNotBlank() },
             )
         }
     }

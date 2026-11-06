@@ -12,6 +12,8 @@ data class GroupRuntimeHealthInput(
     val dialablePeerCount: Int = 0,
     val membershipDigestAlignedWithAuthority: Boolean = false,
     val peerMediaConnected: Set<String> = emptySet(),
+    /** Peers whose mesh edge is EdgeLinkState.FAILED (member unreachable, channel still usable). */
+    val edgeUnreachablePeers: Set<String> = emptySet(),
     val iceStateForModule: (String) -> String? = { null },
     val channelGated: Boolean = false,
     val convergenceAgeMs: Long = 0L

@@ -82,6 +82,76 @@ class GroupInviteDeliveryRecoverySupportTest {
     }
 
     @Test
+    fun activeAttempt_suppressActiveUntilCheckingStallWhenIceChecking() {
+        val session = session()
+        OutboundGroupInviteAttemptSupport.recordSuccessfulHandoff(
+            session = session,
+            remoteModuleId = "M03",
+            sessionId = session.id,
+            semantic = GroupInvitePayloadSemantic.PAIRWISE_MESH_SDP_INVITE,
+            offerLineageId = "GM1",
+            deliveryAttemptId = 1L,
+            issuedAtMs = 1000L,
+        )
+        assertEquals(
+            GroupInviteDeliveryRecoverySupport.DeliveryPhase.ACTIVE,
+            GroupInviteDeliveryRecoverySupport.deliveryPhase(session, "M03", 1500L, "CHECKING"),
+        )
+        val stalledAt = 1000L + GroupMeshReconciler.CHECKING_STUCK_MS + 1L
+        assertEquals(
+            GroupInviteDeliveryRecoverySupport.DeliveryPhase.STALE_RETRY_ELIGIBLE,
+            GroupInviteDeliveryRecoverySupport.deliveryPhase(session, "M03", stalledAt, "CHECKING"),
+        )
+        assertTrue(
+            GroupInviteDeliveryRecoverySupport.isDeliveryRetryEligible(session, "M03", stalledAt, "CHECKING"),
+        )
+    }
+
+    @Test
+    fun controllerOwnsNegotiation_keepsActivePastCheckingStall() {
+        val session = session()
+        OutboundGroupInviteAttemptSupport.recordSuccessfulHandoff(
+            session = session,
+            remoteModuleId = "M03",
+            sessionId = session.id,
+            semantic = GroupInvitePayloadSemantic.PAIRWISE_MESH_SDP_INVITE,
+            offerLineageId = "GM1",
+            deliveryAttemptId = 1L,
+            issuedAtMs = 1000L,
+        )
+        val stalledAt = 1000L + GroupMeshReconciler.CHECKING_STUCK_MS + 1L
+        assertEquals(
+            GroupInviteDeliveryRecoverySupport.DeliveryPhase.ACTIVE,
+            GroupInviteDeliveryRecoverySupport.deliveryPhase(
+                session,
+                "M03",
+                stalledAt,
+                "CHECKING",
+                controllerOwnsNegotiation = true,
+            ),
+        )
+        assertEquals(
+            GroupInviteDeliveryRecoverySupport.ReconciliationGate.SuppressActive,
+            GroupInviteDeliveryRecoverySupport.evaluateReconciliationGate(
+                session,
+                "M03",
+                stalledAt,
+                "CHECKING",
+                controllerOwnsNegotiation = true,
+            ),
+        )
+        assertFalse(
+            GroupInviteDeliveryRecoverySupport.isDeliveryRetryEligible(
+                session,
+                "M03",
+                stalledAt,
+                "CHECKING",
+                controllerOwnsNegotiation = true,
+            ),
+        )
+    }
+
+    @Test
     fun groupAcceptMarked_satisfied() {
         val session = session()
         OutboundGroupInviteAttemptSupport.recordSuccessfulHandoff(

@@ -106,6 +106,26 @@ class GroupRuntimeHealthProjectorTest {
     }
 
     @Test
+    fun failedEdge_doesNotHoldChannelBuilding() {
+        val session = groupSession(m02, "M01", "M02", "M03")
+        val health = GroupRuntimeHealthProjector.project(
+            GroupRuntimeHealthInput(
+                localModuleId = m02,
+                session = session,
+                membershipDigestAlignedWithAuthority = true,
+                peerMediaConnected = setOf("M01"),
+                edgeUnreachablePeers = setOf("M03"),
+                iceStateForModule = { "CONNECTED" },
+            )
+        )
+        assertEquals(setOf("M03"), health.meshUnreachablePeers)
+        assertEquals(setOf("M01"), health.transmitRequiredPeers)
+        assertTrue(health.transmitMissingPeers.isEmpty())
+        assertEquals(GroupTopologyReadiness.OPERATIONAL, health.groupTopologyReadiness)
+        assertEquals(ChannelReadiness.READY, health.mappedChannelReadiness)
+    }
+
+    @Test
     fun allTransmitConnected_operational_despiteMeshGap() {
         val session = groupSession(m02, "M01", "M02", "M03")
         val health = GroupRuntimeHealthProjector.project(

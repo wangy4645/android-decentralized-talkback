@@ -67,6 +67,20 @@ class SettingsHomeFragment : Fragment() {
             showDivider = true
         ) { host?.openDetail(TaskProfilesListFragment()) }
 
+        val app = TalkbackApp.get(requireContext())
+        val enrollmentReady = app.runtimeManager.isLocalEstablishmentReady(config)
+        view.findViewById<View>(R.id.rowEnrollment).setupSettingsNavRow(
+            iconRes = R.drawable.ic_settings_shield,
+            title = getString(R.string.settings_enrollment_title),
+            value =
+                if (enrollmentReady) {
+                    getString(R.string.settings_enrollment_ready_yes)
+                } else {
+                    getString(R.string.settings_enrollment_ready_no)
+                },
+            showDivider = true,
+        ) { host?.openDetail(EstablishmentEnrollmentSettingsFragment()) }
+
         val securityValue = when {
             !config.whitelistEnabled -> getString(R.string.settings_security_subtitle_open)
             config.allowedModuleIds.isEmpty() -> getString(R.string.settings_allowed_devices_count, 0)

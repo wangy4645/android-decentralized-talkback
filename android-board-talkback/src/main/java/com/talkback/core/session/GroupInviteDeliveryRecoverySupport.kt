@@ -33,8 +33,10 @@ object GroupInviteDeliveryRecoverySupport {
         session: TalkbackSession,
         remoteModuleId: String,
         nowMs: Long = System.currentTimeMillis(),
+        iceState: String? = null,
+        controllerOwnsNegotiation: Boolean = false,
     ): ReconciliationGate =
-        when (deliveryPhase(session, remoteModuleId, nowMs)) {
+        when (deliveryPhase(session, remoteModuleId, nowMs, iceState, controllerOwnsNegotiation)) {
             DeliveryPhase.ACTIVE -> ReconciliationGate.SuppressActive
             DeliveryPhase.SATISFIED -> ReconciliationGate.SuppressSatisfied
             DeliveryPhase.NONE,
@@ -46,8 +48,17 @@ object GroupInviteDeliveryRecoverySupport {
         session: TalkbackSession,
         remoteModuleId: String,
         nowMs: Long = System.currentTimeMillis(),
+        iceState: String? = null,
+        controllerOwnsNegotiation: Boolean = false,
     ): DeliveryPhase {
-        OutboundGroupInviteAttemptSupport.expireStaleAttempt(session, remoteModuleId, nowMs)
+        OutboundGroupInviteAttemptSupport.expireStaleAttempt(
+            session,
+            remoteModuleId,
+            nowMs,
+            iceState = iceState,
+            meshLinkCompleted = remoteModuleId in session.meshCompletedModules,
+            controllerOwnsNegotiation = controllerOwnsNegotiation,
+        )
         val attempt = session.outboundGroupInviteAttemptsByRemoteModule[remoteModuleId]
         return when {
             OutboundGroupInviteAttemptSupport.isActive(attempt) -> DeliveryPhase.ACTIVE
@@ -63,11 +74,18 @@ object GroupInviteDeliveryRecoverySupport {
         session: TalkbackSession,
         remoteModuleId: String,
         nowMs: Long = System.currentTimeMillis(),
+        iceState: String? = null,
+        controllerOwnsNegotiation: Boolean = false,
     ): Boolean {
         if (!GroupBootstrapAdmissionSupport.peerAdmissionIncomplete(session, remoteModuleId)) {
             return false
         }
-        return evaluateReconciliationGate(session, remoteModuleId, nowMs) ==
-            ReconciliationGate.PermitRetry
+        return evaluateReconciliationGate(
+            session,
+            remoteModuleId,
+            nowMs,
+            iceState,
+            controllerOwnsNegotiation,
+        ) == ReconciliationGate.PermitRetry
     }
 }

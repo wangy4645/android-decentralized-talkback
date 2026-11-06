@@ -32,5 +32,7 @@ data class GroupRuntimeHealth(
     val floorOwnerKey: String?,
     val floorEpoch: Long,
     val floorVersion: Long,
-    val channelGated: Boolean
+    val channelGated: Boolean,
+    /** Edges the EdgeLinkController has marked FAILED — member-level, must not hold the channel BUILDING. */
+    val meshUnreachablePeers: Set<String> = emptySet(),
 )

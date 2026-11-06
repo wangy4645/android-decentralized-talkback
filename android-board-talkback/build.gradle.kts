@@ -256,6 +256,21 @@ android {
                     "com/talkback/core/conference/session/D1EmptyTickPlayoutFillDeskTest.kt",
                     "com/talkback/core/conference/session/integration/ProductionPlayoutDeadlinePumpTest.kt",
                 ),
+            "gkeDeskOnly" to
+                listOf(
+                    "com/talkback/core/session/gbc/trust/group/**",
+                ),
+            "edgeLinkDeskOnly" to
+                listOf(
+                    "com/talkback/core/session/edge/**",
+                    "com/talkback/core/session/OutboundGroupInviteAttemptSupportTest.kt",
+                    "com/talkback/core/session/GroupInviteDeliveryRecoverySupportTest.kt",
+                    "com/talkback/core/session/GroupInviteInboundExecutionSupportTest.kt",
+                    "com/talkback/core/session/GroupMeshReconcilerTest.kt",
+                    "com/talkback/core/model/GroupReofferRequestPayloadTest.kt",
+                    "com/talkback/core/grouphealth/GroupRuntimeHealthProjectorTest.kt",
+                    "com/talkback/core/grouphealth/TopologySnapshotLoggerTest.kt",
+                ),
         )
     unitTestFileGates.forEach { (gate, files) ->
         if (project.hasProperty(gate)) {

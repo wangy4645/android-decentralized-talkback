@@ -59,7 +59,9 @@ object GroupRuntimeHealthProjector {
         val meshMissingSignal = meshDesiredPeerIds - meshSignaledPeers
         val meshMissingIce = meshDesiredPeerIds - meshIceConnectedPeers
 
-        val transmitRequiredPeers = topology.transmitPeerIds(local, anchor, activeMembers)
+        val unreachable = input.edgeUnreachablePeers
+        val transmitRequiredPeers =
+            topology.transmitPeerIds(local, anchor, activeMembers) - unreachable
         val transmitReadyPeers = transmitRequiredPeers.filter { input.peerMediaConnected.contains(it) }.toSet()
         val transmitMissingPeers = transmitRequiredPeers - transmitReadyPeers
 
@@ -87,6 +89,7 @@ object GroupRuntimeHealthProjector {
             meshIceConnectedPeers = meshIceConnectedPeers,
             meshMissingSignal = meshMissingSignal,
             meshMissingIce = meshMissingIce,
+            meshUnreachablePeers = unreachable,
             transmitRequiredPeers = transmitRequiredPeers,
             transmitReadyPeers = transmitReadyPeers,
             transmitMissingPeers = transmitMissingPeers,
@@ -144,8 +147,9 @@ object GroupRuntimeHealthProjector {
         meshSignaledPeers = emptySet(),
         meshIceConnectedPeers = emptySet(),
         meshMissingSignal = emptySet(),
-        meshMissingIce = emptySet(),
-        transmitRequiredPeers = emptySet(),
+            meshMissingIce = emptySet(),
+            meshUnreachablePeers = emptySet(),
+            transmitRequiredPeers = emptySet(),
         transmitReadyPeers = emptySet(),
         transmitMissingPeers = emptySet(),
         groupTopologyReadiness = readiness,
