@@ -260,6 +260,12 @@ android {
                 listOf(
                     "com/talkback/core/session/gbc/trust/group/**",
                 ),
+            "a7LifecycleDeskOnly" to
+                listOf(
+                    "com/talkback/core/conference/lifecycle/ConferenceGroupReclaimDecisionTest.kt",
+                    "com/talkback/core/conference/lifecycle/ConferenceInboundHangupDecisionTest.kt",
+                    "com/talkback/governance/transition/MeetingStartTerminalHandoffDeskTest.kt",
+                ),
             "edgeLinkDeskOnly" to
                 listOf(
                     "com/talkback/core/session/edge/**",

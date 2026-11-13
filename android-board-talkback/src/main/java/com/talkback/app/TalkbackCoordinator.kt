@@ -387,6 +387,8 @@ import com.talkback.core.webrtc.conferenceaudio.ParticipantMediaModePolicy
 import com.talkback.core.webrtc.conferenceaudio.PcmInjectionFailure
 import com.talkback.core.webrtc.MediaBearerScope
 import com.talkback.core.webrtc.SessionMediaRegistry
+import com.talkback.core.conference.lifecycle.ConferenceGroupReclaimDecision
+import com.talkback.core.conference.lifecycle.ConferenceInboundHangupDecision
 import com.talkback.core.conference.session.ConferenceSessionMediaCoordinatorDelegate
 import com.talkback.core.conference.session.integration.AcceptBindDrainAttribution
 import com.talkback.core.conference.session.integration.MeetingProfile01ConferenceSessionIndex
@@ -2189,6 +2191,7 @@ class TalkbackCoordinator(
             "AUTHORITY_DIGEST_PLANE_CLEARED channel=$channelId plane=CONFERENCE " +
                 "reason=$reason path=authorized_meeting_end"
         )
+        failMeetingStartIfConferenceTerminal(channelId)
         channelGovernance.beginTransition(TransitionTrigger.MEETING_END, channelId)
         val meetingEndBaseline = (dialableRemoteModuleIds().map { it.value } + localModuleId.value)
             .distinct()
@@ -6793,6 +6796,9 @@ class TalkbackCoordinator(
                 remainingSessionIds = remainingAfter,
                 writer = writer
             )
+            if (channelId != null && remainingAfter.isEmpty()) {
+                failMeetingStartIfConferenceTerminal(channelId)
+            }
         }
         return removed
     }
@@ -14247,7 +14253,25 @@ class TalkbackCoordinator(
 
     private fun handleHangup(signal: SignalEnvelope) {
         val pendingInvite = findPendingConferenceInviteBySessionId(signal.sessionId)
-        sessions[signal.sessionId]?.let { pending ->
+        val live = sessions[signal.sessionId]
+        if (live?.type == SessionType.CONFERENCE) {
+            when (
+                ConferenceInboundHangupDecision.decide(
+                    wireSessionId = signal.sessionId,
+                    liveSessionId = live.id,
+                    initiatorModuleId = live.initiatorModuleId?.value,
+                    senderModuleId = signal.from.moduleId.value
+                )
+            ) {
+                ConferenceInboundHangupDecision.Action.NO_OP -> return
+                ConferenceInboundHangupDecision.Action.PRUNE_PEER -> {
+                    pruneConferencePeerLeave(live, signal.from.moduleId.value)
+                    return
+                }
+                ConferenceInboundHangupDecision.Action.TERMINATE_CONFERENCE -> Unit
+            }
+        }
+        live?.let { pending ->
             if (pending.type == SessionType.CONFERENCE) {
                 ConferenceAuditTimelineLog.sessionTerminated(
                     sessionId = signal.sessionId,
@@ -14370,6 +14394,12 @@ class TalkbackCoordinator(
                 session.rosterEpochMs = payload.rosterEpochMs
             }
         }
+        pruneConferencePeerLeave(session, leavingModuleId)
+    }
+
+    private fun pruneConferencePeerLeave(session: TalkbackSession, leavingModuleId: String) {
+        if (session.type != SessionType.CONFERENCE) return
+        if (leavingModuleId == localModuleId.value) return
         markConferenceParticipantLeft(session, leavingModuleId)
         emitConferenceRuntimeProjection(session)
         repairConferenceMeshAfterLeave(session)
@@ -21434,6 +21464,40 @@ class TalkbackCoordinator(
         return false
     }
 
+    private fun hasEstablishingConferenceInvite(session: TalkbackSession): Boolean {
+        val establishing: (ParticipantState) -> Boolean = { ps ->
+            ps.invite == InviteState.INVITING ||
+                ps.invite == InviteState.RINGING ||
+                (
+                    ps.invite == InviteState.ACCEPTED &&
+                        (
+                            ps.media == MediaState.NONE ||
+                                ps.media == MediaState.CONNECTING ||
+                                ps.media == MediaState.RECONNECTING
+                            )
+                    )
+        }
+        if (isConferenceSession(session) &&
+            conferenceParticipantManager.participants(session.id).any(establishing)
+        ) {
+            return true
+        }
+        return session.participants.values.any(establishing)
+    }
+
+    private fun groupReclaimSnapshot(session: TalkbackSession): ConferenceGroupReclaimDecision.Snapshot {
+        val hostId = session.initiatorModuleId?.value
+        return ConferenceGroupReclaimDecision.Snapshot(
+            candidateSessionId = session.id,
+            liveSessionId = sessions[session.id]?.id,
+            accepted = session.accepted,
+            isHostOwned = isConferenceHostSession(session),
+            hostIceState = hostId?.let { meshIceState(MediaBearerScope.CONFERENCE, it) },
+            hasEstablishingInvite = hasEstablishingConferenceInvite(session),
+            operational = conferenceSessionOperational(session)
+        )
+    }
+
     /**
      * After meeting tests, a lingering CONFERENCE session blocks GROUP on the same channel.
      * Reclaim only non-host zombie sessions; host-owned conferences are never reclaimed (ADR-0014 R-L5).
@@ -21445,8 +21509,19 @@ class TalkbackCoordinator(
             it.channelId == channelId && it.type == SessionType.CONFERENCE
         }
         if (stale.isEmpty()) return
-        if (stale.any(::conferenceSessionExists)) return
-        if (stale.any(::conferenceSessionOperational)) return
+        val protected = stale.filter { session ->
+            val verdict = ConferenceGroupReclaimDecision.verdict(groupReclaimSnapshot(session))
+            if (verdict != ConferenceGroupReclaimDecision.Verdict.RECLAIM) {
+                log(
+                    "GROUP_RECLAIM_SKIPPED session=${session.id} ch=$channelId " +
+                        "reason=$verdict"
+                )
+                true
+            } else {
+                false
+            }
+        }
+        if (protected.isNotEmpty()) return
         stale.forEach { session ->
             log("[${session.traceId}] Ending stale conference on $channelId for GROUP reclaim")
             hangupInternal(session.id)
@@ -23593,6 +23668,11 @@ class TalkbackCoordinator(
 
     private fun failMeetingStartDeclaration(channelId: String, reason: String) {
         channelGovernance.failMeetingStart(channelId, reason)
+        clearMeetingStartDeclaration(channelId)
+    }
+
+    private fun failMeetingStartIfConferenceTerminal(channelId: String) {
+        channelGovernance.failMeetingStart(channelId, "CONFERENCE_TERMINATED")
         clearMeetingStartDeclaration(channelId)
     }
 
