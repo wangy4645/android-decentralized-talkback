@@ -109,4 +109,15 @@ interface WebRtcAudioEngine {
 
     /** Local/remote SDP ice-ufrag for transport diagnostics (observation only). */
     fun diagnosticIceUfrags(): Pair<String?, String?> = null to null
+
+  /** Endpoint bulk attachment over WebRTC DataChannel (tb-bulk-v1). */
+    fun setBulkDataChannelMessageListener(listener: ((ByteArray) -> Unit)?) = Unit
+
+    fun openBulkDataChannel(): Boolean = false
+
+    fun sendBulkDataChannel(data: ByteArray): Boolean = false
+
+    fun isBulkDataChannelOpen(): Boolean = false
+
+    fun closeBulkDataChannel() = Unit
 }

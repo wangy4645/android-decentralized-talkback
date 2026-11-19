@@ -98,6 +98,7 @@ private fun ChannelTextRecord.previewText(): String {
         com.talkback.core.endpointattachment.AttachmentKind.IMAGE -> "[Image]"
         com.talkback.core.endpointattachment.AttachmentKind.VOICE -> "[Voice]"
         com.talkback.core.endpointattachment.AttachmentKind.FILE -> "[File]"
+        com.talkback.core.endpointattachment.AttachmentKind.LOCATION -> "[Location]"
         null -> text
     }
 }

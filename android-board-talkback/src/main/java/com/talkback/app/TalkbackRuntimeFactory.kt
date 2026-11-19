@@ -343,6 +343,11 @@ object TalkbackRuntimeFactory {
             gbcTrustWiring = resolvedGbcTrustWiring,
             onLog = onLog
         )
+        val messageAttachRoot = java.io.File(context.filesDir, "message_attachments").apply { mkdirs() }
+        coordinator.installBulkEndpointAttachmentStorage(
+            java.io.File(messageAttachRoot, ".bulk_partial"),
+            messageAttachRoot,
+        )
         if (peerEdgeSignalingReadiness != null) {
             peerEdgeSignalingReadiness.onPeerEdgeSignalingReady = { moduleId ->
                 coordinator.onPeerEdgeSignalingReady(moduleId)

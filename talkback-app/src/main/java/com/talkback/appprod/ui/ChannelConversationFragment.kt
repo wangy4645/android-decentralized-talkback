@@ -36,9 +36,20 @@ class ChannelConversationFragment : Fragment() {
         super.onCreate(savedInstanceState)
         channelId = requireArguments().getString(ARG_CHANNEL_ID).orEmpty()
         channelLabel = requireArguments().getString(ARG_CHANNEL_LABEL).orEmpty()
-        attachmentActions = ConversationAttachmentActions(this) { bytes, kind, mimeType, fileName ->
-            sendAttachment(bytes, kind, mimeType, fileName)
-        }
+        attachmentActions =
+            ConversationAttachmentActions(
+                fragment = this,
+                onBytesReady = { bytes, kind, mimeType, fileName ->
+                    sendAttachment(bytes, kind, mimeType, fileName)
+                },
+                onLargeUriReady = { _, _, _, _, _ ->
+                    Toast.makeText(
+                        requireContext(),
+                        R.string.message_bulk_channel_unsupported,
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                },
+            )
     }
 
     override fun onCreateView(
@@ -167,8 +178,16 @@ class ChannelConversationFragment : Fragment() {
             views.body,
             views.attachmentContainer,
             views.attachmentPreview,
+            views.attachmentVoice,
+            views.attachmentLocation,
+            views.attachmentLocationText,
             views.attachmentAction,
-            record
+            views.attachmentProgress,
+            record,
+            views.imageContainer,
+            views.imageProgressOverlay,
+            views.imageProgressBar,
+            views.imageProgressText,
         )
         return views.row
     }

@@ -39,6 +39,10 @@ enum class SignalType {
     /** Data-plane attachment meta for 1:1 Endpoint messages (V2). Chunks follow on ENDPOINT_ATTACHMENT_CHUNK. */
     ENDPOINT_ATTACHMENT_META,
     ENDPOINT_ATTACHMENT_CHUNK,
+    /** Bulk endpoint attachment meta (payload on DataChannel). */
+    ENDPOINT_BULK_OPEN,
+    ENDPOINT_BULK_READY,
+    ENDPOINT_BULK_ABORT,
     /** Channel-scoped attachment broadcast (fan-out meta + chunks per member). */
     CHANNEL_ATTACHMENT_META,
     CHANNEL_ATTACHMENT_CHUNK,

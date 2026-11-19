@@ -25,6 +25,7 @@ import androidx.lifecycle.repeatOnLifecycle
 import com.talkback.appprod.R
 import com.talkback.appprod.endpointtext.EndpointTextDirection
 import com.talkback.appprod.endpointtext.EndpointTextRecord
+import android.net.Uri
 import com.talkback.core.endpointattachment.AttachmentKind
 import com.talkback.appprod.ui.call.CallLaunchContext
 import com.talkback.appprod.ui.call.CallReturnTarget
@@ -43,9 +44,16 @@ class ConversationFragment : Fragment() {
         super.onCreate(savedInstanceState)
         remoteKey = requireArguments().getString(ARG_KEY).orEmpty()
         remoteLabel = requireArguments().getString(ARG_LABEL).orEmpty()
-        attachmentActions = ConversationAttachmentActions(this) { bytes, kind, mimeType, fileName ->
-            sendAttachment(bytes, kind, mimeType, fileName)
-        }
+        attachmentActions =
+            ConversationAttachmentActions(
+                fragment = this,
+                onBytesReady = { bytes, kind, mimeType, fileName ->
+                    sendAttachment(bytes, kind, mimeType, fileName)
+                },
+                onLargeUriReady = { uri, kind, mimeType, fileName, sizeBytes ->
+                    sendLargeAttachment(uri, kind, mimeType, fileName, sizeBytes)
+                },
+            )
     }
 
     override fun onCreateView(
@@ -79,13 +87,15 @@ class ConversationFragment : Fragment() {
         ConversationAttachPanelBack.install(this, view)
 
         fun renderMessages(messages: List<EndpointTextRecord>) {
-            val hasMessages = messages.isNotEmpty()
+            val outbox = viewModel.bulkOutboxFor(remoteKey).map { it.toRecord() }
+            val merged = messages + outbox
+            val hasMessages = merged.isNotEmpty()
             empty.isVisible = !hasMessages
             scroll.isVisible = hasMessages
             container.removeAllViews()
             if (!hasMessages) return
             val inflater = LayoutInflater.from(requireContext())
-            messages.forEach { record ->
+            merged.forEach { record ->
                 container.addView(bindMessageRow(inflater, container, record))
             }
             scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
@@ -115,6 +125,13 @@ class ConversationFragment : Fragment() {
         viewLifecycleOwner.lifecycleScope.launch {
             viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
                 viewModel.conversationUi.collect {
+                    renderMessages(viewModel.conversationMessages(remoteKey))
+                }
+            }
+        }
+        viewLifecycleOwner.lifecycleScope.launch {
+            viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                viewModel.bulkOutbox.collect {
                     renderMessages(viewModel.conversationMessages(remoteKey))
                 }
             }
@@ -202,10 +219,48 @@ class ConversationFragment : Fragment() {
             views.body,
             views.attachmentContainer,
             views.attachmentPreview,
+            views.attachmentVoice,
+            views.attachmentLocation,
+            views.attachmentLocationText,
             views.attachmentAction,
-            record
+            views.attachmentProgress,
+            record,
+            views.imageContainer,
+            views.imageProgressOverlay,
+            views.imageProgressBar,
+            views.imageProgressText,
         )
         return views.row
+    }
+
+    private fun sendLargeAttachment(
+        uri: Uri,
+        kind: AttachmentKind,
+        mimeType: String,
+        fileName: String,
+        sizeBytes: Long,
+    ) {
+        val caption = view?.findViewById<EditText>(R.id.editConversationInput)?.text?.toString()?.trim()
+        viewModel.syncServiceState()
+        when (
+            val err = viewModel.enqueueEndpointBulkAttachment(
+                remoteKey,
+                uri,
+                kind,
+                mimeType,
+                fileName,
+                sizeBytes,
+                caption?.takeIf { it.isNotEmpty() },
+            )
+        ) {
+            null -> view?.findViewById<EditText>(R.id.editConversationInput)?.text?.clear()
+            "SERVICE_STOPPED" -> toast(R.string.service_not_running)
+            "UNREACHABLE" -> toast(R.string.endpoint_text_unreachable)
+            "ATTACHMENT_TOO_LARGE" -> toast(R.string.message_attachment_too_large)
+            "BULK_PTT_PAUSED" -> toast(R.string.message_bulk_ptt_paused)
+            "SEND_FAILED", "ATTACHMENT_EMPTY" -> toast(R.string.message_attachment_send_failed)
+            else -> toast(R.string.endpoint_text_failed)
+        }
     }
 
     private fun sendAttachment(

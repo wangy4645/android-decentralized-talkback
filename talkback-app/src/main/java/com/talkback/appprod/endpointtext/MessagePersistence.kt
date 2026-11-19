@@ -459,6 +459,7 @@ class MessagePersistence(context: Context) : SQLiteOpenHelper(
             AttachmentKind.IMAGE.name -> "[Image]"
             AttachmentKind.VOICE.name -> "[Voice]"
             AttachmentKind.FILE.name -> "[File]"
+            AttachmentKind.LOCATION.name -> "[Location]"
             else -> text
         }
     }

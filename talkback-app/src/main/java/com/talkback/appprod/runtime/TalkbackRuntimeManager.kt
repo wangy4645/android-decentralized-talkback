@@ -70,6 +70,10 @@ class TalkbackRuntimeManager(private val appContext: Context) {
     @Volatile
     var onChannelAttachmentReceived: ((ChannelAttachmentEvent) -> Unit)? = null
 
+    @Volatile
+    var onEndpointBulkAttachmentReceived: ((com.talkback.core.endpointattachment.bulk.EndpointBulkAttachmentEvent) -> Unit)? =
+        null
+
     private companion object {
         const val MESH_CALL_BACKOFF_MS = 3_000L
         val WARMUP_BACKOFF_MS = longArrayOf(3_000L, 8_000L, 15_000L)
@@ -204,6 +208,9 @@ class TalkbackRuntimeManager(private val appContext: Context) {
             created.onChannelAttachmentReceived = { event ->
                 onChannelAttachmentReceived?.invoke(event)
             }
+            created.onEndpointBulkAttachmentReceived = { event ->
+                onEndpointBulkAttachmentReceived?.invoke(event)
+            }
             created.start()
             runtime = created
             enrollmentCoordinator.onRuntimeStarted()
@@ -223,6 +230,7 @@ class TalkbackRuntimeManager(private val appContext: Context) {
         runtime?.onChannelTextReceived = null
         runtime?.onEndpointAttachmentReceived = null
         runtime?.onChannelAttachmentReceived = null
+        runtime?.onEndpointBulkAttachmentReceived = null
         runtime?.stop()
         runtime = null
         EstablishmentEnrollmentServices.clear()
@@ -698,6 +706,33 @@ class TalkbackRuntimeManager(private val appContext: Context) {
             mimeType,
             fileName,
             caption
+        )
+    }
+
+    fun sendEndpointBulkAttachment(
+        config: AppConfig,
+        remote: EndpointAddress,
+        tempFile: java.io.File,
+        totalBytes: Long,
+        sha256Hex: String,
+        kind: AttachmentKind,
+        mimeType: String,
+        fileName: String,
+        caption: String?,
+        onProgress: ((sentBytes: Long, totalBytes: Long) -> Unit)? = null,
+    ): Result<Unit> {
+        val rt = runtime ?: return Result.failure(IllegalStateException("SERVICE_STOPPED"))
+        return rt.sendEndpointBulkAttachment(
+            localAddress(config),
+            remote,
+            tempFile,
+            totalBytes,
+            sha256Hex,
+            kind,
+            mimeType,
+            fileName,
+            caption,
+            onProgress = onProgress,
         )
     }
 

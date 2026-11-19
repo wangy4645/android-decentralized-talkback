@@ -63,14 +63,135 @@
             android:paddingTop="6dp"
             android:visibility="gone">
 
-            <ImageView
-                android:id="@+id/imgMessageAttachment"
+            <FrameLayout
+                android:id="@+id/containerMessageImage"
                 android:layout_width="200dp"
                 android:layout_height="140dp"
-                android:adjustViewBounds="true"
-                android:scaleType="centerCrop"
-                android:visibility="gone"
-                android:contentDescription="@string/message_attachment_image_cd" />
+                android:visibility="gone">
+
+                <ImageView
+                    android:id="@+id/imgMessageAttachment"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:adjustViewBounds="true"
+                    android:clickable="true"
+                    android:contentDescription="@string/message_attachment_image_cd"
+                    android:focusable="true"
+                    android:foreground="?attr/selectableItemBackground"
+                    android:scaleType="centerCrop" />
+
+                <LinearLayout
+                    android:id="@+id/containerMessageImageProgress"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:background="@drawable/bg_message_attachment_progress_scrim"
+                    android:gravity="center"
+                    android:orientation="vertical"
+                    android:padding="12dp"
+                    android:visibility="gone">
+
+                    <ProgressBar
+                        android:id="@+id/progressMessageAttachment"
+                        style="?android:attr/progressBarStyleHorizontal"
+                        android:layout_width="match_parent"
+                        android:layout_height="4dp"
+                        android:indeterminate="false"
+                        android:max="100"
+                        android:progress="0"
+                        android:progressTint="@color/tb_primary" />
+
+                    <TextView
+                        android:id="@+id/txtMessageImageProgress"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:textColor="@color/tb_white"
+                        android:textSize="13sp" />
+                </LinearLayout>
+            </FrameLayout>
+
+            <FrameLayout
+                android:id="@+id/containerMessageLocation"
+                android:layout_width="200dp"
+                android:layout_height="128dp"
+                android:background="@drawable/bg_message_location_card"
+                android:clickable="true"
+                android:contentDescription="@string/message_attachment_location_cd"
+                android:focusable="true"
+                android:foreground="?attr/selectableItemBackground"
+                android:visibility="gone">
+
+                <ImageView
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:importantForAccessibility="no"
+                    android:scaleType="centerCrop"
+                    android:src="@drawable/bg_message_location_map" />
+
+                <ImageView
+                    android:layout_width="28dp"
+                    android:layout_height="36dp"
+                    android:layout_gravity="center"
+                    android:layout_marginBottom="10dp"
+                    android:importantForAccessibility="no"
+                    android:src="@drawable/ic_message_location_pin" />
+
+                <TextView
+                    android:id="@+id/txtMessageLocation"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="bottom"
+                    android:background="@drawable/bg_message_location_caption"
+                    android:ellipsize="end"
+                    android:maxLines="2"
+                    android:paddingHorizontal="10dp"
+                    android:paddingVertical="8dp"
+                    android:textColor="@color/tb_text_primary"
+                    android:textSize="11sp" />
+            </FrameLayout>
+
+            <LinearLayout
+                android:id="@+id/containerMessageVoice"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:background="@drawable/bg_message_attachment_voice"
+                android:clickable="true"
+                android:contentDescription="@string/message_attachment_voice_cd"
+                android:focusable="true"
+                android:foreground="?attr/selectableItemBackground"
+                android:gravity="center_vertical"
+                android:minHeight="44dp"
+                android:minWidth="140dp"
+                android:orientation="horizontal"
+                android:paddingHorizontal="10dp"
+                android:paddingVertical="8dp"
+                android:visibility="gone">
+
+                <ImageView
+                    android:layout_width="22dp"
+                    android:layout_height="22dp"
+                    android:importantForAccessibility="no"
+                    android:src="@drawable/ic_message_attach_mic"
+                    android:tint="@color/tb_primary" />
+
+                <ImageView
+                    android:layout_width="72dp"
+                    android:layout_height="20dp"
+                    android:layout_marginStart="8dp"
+                    android:importantForAccessibility="no"
+                    android:scaleType="fitCenter"
+                    android:src="@drawable/ic_waveform"
+                    android:tint="@color/tb_text_secondary" />
+            </LinearLayout>
+
+            <TextView
+                android:id="@+id/txtMessageAttachmentProgress"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:paddingTop="4dp"
+                android:textColor="@color/tb_text_secondary"
+                android:textSize="12sp"
+                android:visibility="gone" />
 
             <TextView
                 android:id="@+id/btnMessageAttachmentAction"

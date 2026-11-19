@@ -122,6 +122,31 @@ class TalkbackRuntime(
     ): Result<Unit> =
         coordinator.sendEndpointAttachment(from, to, data, kind, mimeType, fileName, caption)
 
+    fun sendEndpointBulkAttachment(
+        from: EndpointAddress,
+        to: EndpointAddress,
+        tempFile: java.io.File,
+        totalBytes: Long,
+        sha256Hex: String,
+        kind: AttachmentKind,
+        mimeType: String,
+        fileName: String,
+        caption: String?,
+        onProgress: ((sentBytes: Long, totalBytes: Long) -> Unit)? = null,
+    ): Result<Unit> =
+        coordinator.sendEndpointBulkAttachment(
+            from,
+            to,
+            tempFile,
+            totalBytes,
+            sha256Hex,
+            kind,
+            mimeType,
+            fileName,
+            caption,
+            onProgress = onProgress,
+        )
+
     fun sendChannelAttachment(
         from: EndpointAddress,
         channelId: String,
@@ -165,6 +190,12 @@ class TalkbackRuntime(
         get() = coordinator.onChannelAttachmentReceived
         set(value) {
             coordinator.onChannelAttachmentReceived = value
+        }
+
+    var onEndpointBulkAttachmentReceived: ((com.talkback.core.endpointattachment.bulk.EndpointBulkAttachmentEvent) -> Unit)?
+        get() = coordinator.onEndpointBulkAttachmentReceived
+        set(value) {
+            coordinator.onEndpointBulkAttachmentReceived = value
         }
 
     fun groupCall(

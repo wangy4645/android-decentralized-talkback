@@ -591,6 +591,10 @@ class TalkbackCoordinator(
     @Volatile
     var onChannelAttachmentReceived: ((ChannelAttachmentEvent) -> Unit)? = null
 
+    @Volatile
+    var onEndpointBulkAttachmentReceived: ((com.talkback.core.endpointattachment.bulk.EndpointBulkAttachmentEvent) -> Unit)? =
+        null
+
     private var meetingProfile01FactWireIngress: MeetingProfile01FactWireIngress? = null
     private var meetingProfile01SessionIndex: MeetingProfile01ConferenceSessionIndex? = null
     private var meetingProfile01CreationOriginBridge: MeetingProfile01CreationOriginBridge? = null
@@ -2001,6 +2005,37 @@ class TalkbackCoordinator(
     private val floorArbitrator = FloorArbitrator()
     private val pendingGroupPttRecoveryByChannel = ConcurrentHashMap<String, Boolean>()
     private val sessions = ConcurrentHashMap<String, TalkbackSession>()
+
+    private val bulkAttachmentBridge: BulkAttachmentCoordinatorBridge by lazy {
+        BulkAttachmentCoordinatorBridge(
+            onLog = { message -> log(message) },
+            iceState = { moduleId -> meshIceState(MediaBearerScope.GROUP, moduleId) },
+            peerKeyForModule = { moduleId ->
+                endpointRegistry.allOnline()
+                    .firstOrNull { it.address.moduleId.value == moduleId }
+                    ?.address?.key
+            },
+            getGroupEngine = { moduleId -> mediaRegistry.getGroup(moduleId) },
+            isPttPaused = { sessions.values.any { isLocalFloorHolder(it) } },
+            sendSignal = { peer, envelope -> sendSignalHandoff(peer, envelope) },
+            buildEnvelope = { type, from, to, payload ->
+                buildSignedEnvelope(
+                    type,
+                    from,
+                    to,
+                    sessionId = "",
+                    payload = payload,
+                )
+            },
+            resolvePeer = { moduleId -> resolvePeerForModule(moduleId) },
+            isDialable = { moduleId -> isModuleDialable(moduleId) },
+            onBulkReceived = { event -> onEndpointBulkAttachmentReceived?.invoke(event) },
+        )
+    }
+
+    fun installBulkEndpointAttachmentStorage(partialDir: java.io.File, finalDir: java.io.File) {
+        bulkAttachmentBridge.install(partialDir, finalDir)
+    }
     private val conferenceLateSpokeDispatchKeys = ConcurrentHashMap.newKeySet<String>()
     private val discoveredByModule = ConcurrentHashMap<String, PeerTarget>()
     /** Modules verified via gossip or signed HELLO — Callable Roster gate (ADR-0005). */
@@ -2883,6 +2918,36 @@ class TalkbackCoordinator(
                     )
                 }
             }
+        }
+    }
+
+    fun sendEndpointBulkAttachment(
+        from: EndpointAddress,
+        to: EndpointAddress,
+        tempFile: java.io.File,
+        totalBytes: Long,
+        sha256Hex: String,
+        kind: AttachmentKind,
+        mimeType: String,
+        fileName: String,
+        caption: String?,
+        onProgress: ((sentBytes: Long, totalBytes: Long) -> Unit)? = null,
+    ): Result<Unit> {
+        return try {
+            bulkAttachmentBridge.send(
+                from,
+                to,
+                tempFile,
+                totalBytes,
+                sha256Hex,
+                kind,
+                mimeType,
+                fileName,
+                caption,
+                onProgress = onProgress,
+            )
+        } catch (t: Throwable) {
+            Result.failure(t)
         }
     }
 
@@ -9447,6 +9512,24 @@ class TalkbackCoordinator(
             onEndpointAttachmentReceived?.invoke(event)
             return
         }
+        if (signal.type == SignalType.ENDPOINT_BULK_OPEN) {
+            observePeerInboundAfterAuth(signal)
+            callableModuleGate.markVerified(signal.from.moduleId.value)
+            rememberSignalPeer(signal.from.moduleId.value, fromPeer)
+            bulkAttachmentBridge.onReceiveOpen(signal)
+            return
+        }
+        if (signal.type == SignalType.ENDPOINT_BULK_READY) {
+            observePeerInboundAfterAuth(signal)
+            callableModuleGate.markVerified(signal.from.moduleId.value)
+            rememberSignalPeer(signal.from.moduleId.value, fromPeer)
+            bulkAttachmentBridge.onReceiveReady(signal)
+            return
+        }
+        if (signal.type == SignalType.ENDPOINT_BULK_ABORT) {
+            observePeerInboundAfterAuth(signal)
+            return
+        }
         if (signal.type == SignalType.CHANNEL_ATTACHMENT_META) {
             observePeerInboundAfterAuth(signal)
             callableModuleGate.markVerified(signal.from.moduleId.value)
@@ -9525,6 +9608,9 @@ class TalkbackCoordinator(
             SignalType.CHANNEL_TEXT -> Unit // handled above; keep exhaustive
             SignalType.ENDPOINT_ATTACHMENT_META -> Unit // handled above
             SignalType.ENDPOINT_ATTACHMENT_CHUNK -> Unit // handled above
+            SignalType.ENDPOINT_BULK_OPEN -> Unit // handled above
+            SignalType.ENDPOINT_BULK_READY -> Unit // handled above
+            SignalType.ENDPOINT_BULK_ABORT -> Unit // handled above
             SignalType.CHANNEL_ATTACHMENT_META -> Unit // handled above
             SignalType.CHANNEL_ATTACHMENT_CHUNK -> Unit // handled above
             SignalType.CONFERENCE_SIGNED_FACT -> Unit // handled above; keep exhaustive

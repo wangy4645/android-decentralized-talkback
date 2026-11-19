@@ -44,6 +44,33 @@ class MessageAttachmentStorage(private val rootDir: File) {
         }
     }
 
+    /** Moves an on-disk file into attachment storage after SHA-256 verification (bulk / streaming). */
+    fun commitVerifiedFile(
+        attachmentId: String,
+        fileName: String,
+        source: File,
+        expectedSha256Hex: String,
+    ): File? {
+        if (!source.isFile || expectedSha256Hex.isBlank()) return null
+        val actual =
+            source.inputStream().use { input ->
+                StreamingFileHasher.sha256Hex(input)
+            }
+        if (!actual.equals(expectedSha256Hex, ignoreCase = true)) return null
+        val safeName = sanitizeFileName(fileName)
+        val final = File(rootDir, "${attachmentId}_$safeName")
+        return runCatching {
+            if (final.exists()) final.delete()
+            if (source.renameTo(final)) {
+                final
+            } else {
+                source.copyTo(final, overwrite = true)
+                source.delete()
+                final
+            }
+        }.getOrNull()
+    }
+
     enum class DeleteOutcome {
         Missing,
         RejectedPath,

@@ -21,7 +21,14 @@ import com.talkback.appprod.endpointtext.EndpointTextRecord
 import com.talkback.appprod.endpointtext.InboundAttachmentPersistence
 import com.talkback.appprod.endpointtext.MessageAttachmentInfo
 import com.talkback.appprod.endpointtext.MessageAttachmentStorage
+import android.net.Uri
 import com.talkback.core.endpointattachment.AttachmentChunker
+import com.talkback.core.endpointattachment.bulk.EndpointBulkAttachmentEvent
+import com.talkback.appprod.endpointtext.AttachmentTransferStage
+import com.talkback.appprod.endpointtext.BulkOutboxItem
+import com.talkback.appprod.endpointtext.StreamingFileHasher
+import java.io.File
+import java.util.UUID
 import com.talkback.core.endpointattachment.AttachmentKind
 import com.talkback.core.endpointattachment.ChannelAttachmentEvent
 import com.talkback.core.endpointattachment.EndpointAttachmentEvent
@@ -53,10 +60,12 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
 class TalkViewModel(
     private val appContext: Context,
@@ -122,6 +131,9 @@ class TalkViewModel(
     private val _conversationUi = MutableStateFlow(ConversationListUiState())
     val conversationUi: StateFlow<ConversationListUiState> = _conversationUi.asStateFlow()
 
+    private val _bulkOutbox = MutableStateFlow<List<BulkOutboxItem>>(emptyList())
+    val bulkOutbox: StateFlow<List<BulkOutboxItem>> = _bulkOutbox.asStateFlow()
+
     private val inboundNotifier = app.endpointTextInboundNotifier
 
     private val endpointTextSink: (EndpointTextEvent) -> Unit = { event ->
@@ -163,6 +175,35 @@ class TalkViewModel(
         if (!channelConversationStore.isOpen(event.channelId)) {
             inboundNotifier.onChannelInbound(event.channelId, team)
         }
+    }
+
+    private val endpointBulkAttachmentSink: (EndpointBulkAttachmentEvent) -> Unit = sink@{ event ->
+        val info = MessageAttachmentInfo(
+            kind = event.kind,
+            mimeType = event.mimeType,
+            fileName = event.fileName,
+            localPath = event.localFile.absolutePath,
+            sizeBytes = event.localFile.length(),
+        )
+        val persisted = InboundAttachmentPersistence.persistAfterCommit(
+            attachmentLocalPath = event.localFile.absolutePath,
+            storage = attachmentStorage,
+            persistence = messagePersistence,
+        ) {
+            conversationStore.append(
+                EndpointTextRecord(
+                    endpointKey = event.from.key,
+                    text = event.caption.orEmpty(),
+                    timestampMs = System.currentTimeMillis(),
+                    direction = EndpointTextDirection.INBOUND,
+                    attachment = info,
+                )
+            )
+        }
+        if (!persisted) return@sink
+        refreshConversationUi()
+        val label = endpointLabelForKey(event.from.key)
+        inboundNotifier.onInbound(event.from.key, label, teamDisplayName())
     }
 
     private val endpointAttachmentSink: (EndpointAttachmentEvent) -> Unit = sink@{ event ->
@@ -247,6 +288,7 @@ class TalkViewModel(
         manager.onEndpointTextReceived = endpointTextSink
         manager.onChannelTextReceived = channelTextSink
         manager.onEndpointAttachmentReceived = endpointAttachmentSink
+        manager.onEndpointBulkAttachmentReceived = endpointBulkAttachmentSink
         manager.onChannelAttachmentReceived = channelAttachmentSink
         refreshConversationUi()
         taskProfileManager.ensureInitialized()
@@ -1112,6 +1154,168 @@ class TalkViewModel(
         return error
     }
 
+    /**
+     * Starts a bulk send on a background thread. Returns a quick UI error code, or null if accepted.
+     * Progress appears in [bulkOutbox] until success (persisted message) or failure.
+     */
+    fun enqueueEndpointBulkAttachment(
+        remoteKey: String,
+        uri: Uri,
+        kind: AttachmentKind,
+        mimeType: String,
+        fileName: String,
+        sizeBytes: Long,
+        caption: String?,
+    ): String? {
+        syncServiceState()
+        if (!isServiceReady()) return "SERVICE_STOPPED"
+        val config = configStore.load()
+        val remote = endpointAddressFromKey(config, remoteKey) ?: return "INVALID_PEER"
+        val localId = UUID.randomUUID().toString()
+        val workTemp = File(appContext.cacheDir, "bulk_tx_$localId.part")
+        val outbox = BulkOutboxItem(
+            localId = localId,
+            endpointKey = remoteKey,
+            kind = kind,
+            mimeType = mimeType,
+            fileName = fileName,
+            localPath = workTemp.absolutePath,
+            sizeBytes = sizeBytes,
+            caption = caption,
+            timestampMs = System.currentTimeMillis(),
+            progressPercent = 0,
+            stage = AttachmentTransferStage.PREPARING,
+        )
+        upsertOutbox(outbox)
+        viewModelScope.launch(Dispatchers.IO) {
+            val sha256 = StreamingFileHasher.sha256Hex(appContext, uri)
+            if (sha256 == null) {
+                markOutboxFailed(localId)
+                return@launch
+            }
+            val copied = runCatching {
+                StreamingFileHasher.copyToTempFile(appContext, uri, workTemp)
+            }.getOrElse {
+                workTemp.delete()
+                markOutboxFailed(localId)
+                return@launch
+            }
+            if (copied != sizeBytes) {
+                workTemp.delete()
+                markOutboxFailed(localId)
+                return@launch
+            }
+            upsertOutbox(
+                outbox.copy(
+                    progressPercent = 0,
+                    localPath = workTemp.absolutePath,
+                    stage = AttachmentTransferStage.WAITING_PEER,
+                ),
+            )
+            var lastUiPct = -1
+            val result = manager.sendEndpointBulkAttachment(
+                config,
+                remote,
+                workTemp,
+                sizeBytes,
+                sha256,
+                kind,
+                mimeType,
+                fileName,
+                caption,
+            ) { sent, total ->
+                val pct = if (total <= 0L) 100 else ((sent * 100L) / total).toInt().coerceIn(0, 99)
+                val stage = if (sent <= 0L) {
+                    AttachmentTransferStage.WAITING_PEER
+                } else {
+                    AttachmentTransferStage.SENDING
+                }
+                if (stage == AttachmentTransferStage.WAITING_PEER ||
+                    pct >= 99 ||
+                    pct - lastUiPct >= 5
+                ) {
+                    lastUiPct = pct
+                    upsertOutboxProgress(localId, pct, stage)
+                }
+            }
+            val error = EndpointTextSendErrorMapper.map(result)
+            if (error != null) {
+                markOutboxFailed(localId)
+                return@launch
+            }
+            val attachmentId = MessageAttachmentStorage.newAttachmentId()
+            val localFile = attachmentStorage.commitVerifiedFile(
+                attachmentId,
+                fileName,
+                workTemp,
+                sha256,
+            )
+            if (localFile == null) {
+                markOutboxFailed(localId)
+                return@launch
+            }
+            conversationStore.append(
+                EndpointTextRecord(
+                    endpointKey = remoteKey,
+                    text = caption.orEmpty(),
+                    timestampMs = System.currentTimeMillis(),
+                    direction = EndpointTextDirection.OUTBOUND,
+                    attachment = MessageAttachmentInfo(
+                        kind = kind,
+                        mimeType = mimeType,
+                        fileName = fileName,
+                        localPath = localFile.absolutePath,
+                        sizeBytes = localFile.length(),
+                    ),
+                ),
+            )
+            removeOutbox(localId)
+            withContext(Dispatchers.Main.immediate) { refreshConversationUi() }
+        }
+        return null
+    }
+
+    fun bulkOutboxFor(endpointKey: String): List<BulkOutboxItem> =
+        _bulkOutbox.value.filter { it.endpointKey == endpointKey }
+
+    private fun upsertOutbox(item: BulkOutboxItem) {
+        _bulkOutbox.update { list ->
+            val without = list.filterNot { it.localId == item.localId }
+            without + item
+        }
+        refreshConversationUi()
+    }
+
+    private fun upsertOutboxProgress(
+        localId: String,
+        percent: Int,
+        stage: AttachmentTransferStage = AttachmentTransferStage.SENDING,
+    ) {
+        _bulkOutbox.update { list ->
+            list.map {
+                if (it.localId == localId && !it.failed) {
+                    it.copy(progressPercent = percent, stage = stage)
+                } else {
+                    it
+                }
+            }
+        }
+        refreshConversationUi()
+    }
+
+    private fun markOutboxFailed(localId: String) {
+        _bulkOutbox.update { list ->
+            list.map {
+                if (it.localId == localId) it.copy(failed = true, progressPercent = 0) else it
+            }
+        }
+        refreshConversationUi()
+    }
+
+    private fun removeOutbox(localId: String) {
+        _bulkOutbox.update { list -> list.filterNot { it.localId == localId } }
+    }
+
     fun sendChannelAttachment(
         bytes: ByteArray,
         kind: AttachmentKind,
@@ -1242,6 +1446,9 @@ class TalkViewModel(
         }
         if (manager.onEndpointAttachmentReceived === endpointAttachmentSink) {
             manager.onEndpointAttachmentReceived = null
+        }
+        if (manager.onEndpointBulkAttachmentReceived === endpointBulkAttachmentSink) {
+            manager.onEndpointBulkAttachmentReceived = null
         }
         if (manager.onChannelAttachmentReceived === channelAttachmentSink) {
             manager.onChannelAttachmentReceived = null

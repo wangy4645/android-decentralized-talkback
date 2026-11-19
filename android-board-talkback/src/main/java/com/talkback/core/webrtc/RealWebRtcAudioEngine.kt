@@ -59,6 +59,8 @@ class RealWebRtcAudioEngine(
     override var remoteTrackDiagnosticLogger: ((Boolean) -> Unit)? = null
     override var transportDiagnosticOfferLineageId: String? = null
     override var transportDiagnosticPcGeneration: Long? = null
+    private val bulkDataChannelSeam = BulkDataChannelSeam(observedModuleId)
+
     @Volatile
     private var inboundLevel = 0f
     @Volatile
@@ -122,7 +124,9 @@ class RealWebRtcAudioEngine(
                     override fun onIceCandidatesRemoved(candidates: Array<out IceCandidate>) = Unit
                     override fun onAddStream(stream: org.webrtc.MediaStream) = Unit
                     override fun onRemoveStream(stream: org.webrtc.MediaStream) = Unit
-                    override fun onDataChannel(channel: org.webrtc.DataChannel) = Unit
+                    override fun onDataChannel(channel: org.webrtc.DataChannel) {
+                        bulkDataChannelSeam.attachInbound(channel)
+                    }
                     override fun onRenegotiationNeeded() = Unit
                     override fun onAddTrack(receiver: RtpReceiver, mediaStreams: Array<out org.webrtc.MediaStream>) {
                         attachRemoteAudioTrack(receiver.track())
@@ -144,6 +148,8 @@ class RealWebRtcAudioEngine(
         )
         SharedLocalAudio.notePeerAttached()
         localAudioTrack.setEnabled(false)
+        // Seed SCTP into the first offer/answer so negotiated bulk DC can reach OPEN.
+        bulkDataChannelSeam.openOutbound(peerConnection)
     }
 
     private fun warnJni(op: String) {
@@ -528,6 +534,24 @@ class RealWebRtcAudioEngine(
         }.getOrElse { ProgramSenderSnapshot.NONE }
     }
 
+    override fun setBulkDataChannelMessageListener(listener: ((ByteArray) -> Unit)?) {
+        bulkDataChannelSeam.messageListener = listener
+    }
+
+    override fun openBulkDataChannel(): Boolean {
+        if (released) return false
+        return bulkDataChannelSeam.openOutbound(peerConnection)
+    }
+
+    override fun sendBulkDataChannel(data: ByteArray): Boolean =
+        bulkDataChannelSeam.send(data)
+
+    override fun isBulkDataChannelOpen(): Boolean = bulkDataChannelSeam.isOpen()
+
+    override fun closeBulkDataChannel() {
+        bulkDataChannelSeam.close()
+    }
+
     override fun release() {
         warnJni("release")
         if (released) {
@@ -548,6 +572,7 @@ class RealWebRtcAudioEngine(
             return
         }
         released = true
+        bulkDataChannelSeam.close()
         val moduleTag = observedModuleId ?: "unknown"
         iceConnectionStateName = "CLOSED"
         clearNegotiationSettling()

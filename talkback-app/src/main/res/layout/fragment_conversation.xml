@@ -247,6 +247,13 @@
             android:id="@+id/conversationMoreFile"
             layout="@layout/item_conversation_more_action"
             android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginEnd="16dp" />
+
+        <include
+            android:id="@+id/conversationMoreLocation"
+            layout="@layout/item_conversation_more_action"
+            android:layout_width="wrap_content"
             android:layout_height="wrap_content" />
     </LinearLayout>
 

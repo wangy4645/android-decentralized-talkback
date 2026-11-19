@@ -33,6 +33,12 @@ object EndpointTextSendErrorMapper {
             message.contains(EndpointAttachmentController.REASON_EMPTY, ignoreCase = true) ||
                 message.contains(ChannelAttachmentController.REASON_EMPTY, ignoreCase = true) ->
                 "ATTACHMENT_EMPTY"
+            message.contains("BULK_TOO_LARGE", ignoreCase = true) -> "ATTACHMENT_TOO_LARGE"
+            message.contains("BULK_ICE_NOT_READY", ignoreCase = true) -> "UNREACHABLE"
+            message.contains("BULK_PTT_PAUSED", ignoreCase = true) -> "BULK_PTT_PAUSED"
+            message.contains("BULK_DC_OPEN_FAILED", ignoreCase = true) ||
+                message.contains("BULK_READY_TIMEOUT", ignoreCase = true) ||
+                message.contains("BULK_SEND_FAILED", ignoreCase = true) -> "SEND_FAILED"
             else -> "FAILED"
         }
     }

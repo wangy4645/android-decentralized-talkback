@@ -32,6 +32,15 @@ object ConversationMorePanelBinder {
             actions.pickFile()
         }
 
+        bindTile(
+            root.findViewById(R.id.conversationMoreLocation),
+            R.drawable.ic_message_attach_location,
+            R.string.message_attach_pick_location
+        ) {
+            setPanelVisible(root, false)
+            actions.shareLocation()
+        }
+
         btnPlus.setOnClickListener {
             setPanelVisible(root, !panel.isVisible)
         }

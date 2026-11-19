@@ -182,4 +182,10 @@ class StubWebRtcAudioEngine(
     override fun outboundAudioLevel(): Float = 0f
 
     override fun isCapturing(): Boolean = capturing.get()
+
+    override fun openBulkDataChannel(): Boolean = !released.get()
+
+    override fun sendBulkDataChannel(data: ByteArray): Boolean = false
+
+    override fun isBulkDataChannelOpen(): Boolean = false
 }
