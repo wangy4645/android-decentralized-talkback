@@ -94,7 +94,13 @@ internal class BulkAttachmentCoordinatorBridge(
         onProgress: ((sentBytes: Long, totalBytes: Long) -> Unit)? = null,
     ): Result<Unit> = runCatching {
         if (controller == null) error("BULK_NOT_INSTALLED")
-        if (isPttPaused()) error(BulkEndpointAttachmentController.REASON_PTT_PAUSED)
+        val pauseDeadline = System.currentTimeMillis() + com.talkback.core.video.VideoMediaPolicy.BULK_PAUSE_WAIT_MS
+        while (isPttPaused()) {
+            if (System.currentTimeMillis() > pauseDeadline) {
+                error(BulkEndpointAttachmentController.REASON_PTT_PAUSED)
+            }
+            Thread.sleep(50)
+        }
         when (AttachmentSizePolicy.route(totalBytes)) {
             AttachmentSizePolicy.Route.REJECT_TOO_LARGE ->
                 error(BulkEndpointAttachmentController.REASON_TOO_LARGE)
@@ -150,6 +156,8 @@ internal class BulkAttachmentCoordinatorBridge(
             engine,
             tempFile,
             totalBytes,
+            isPaused = isPttPaused,
+            pauseWaitMs = com.talkback.core.video.VideoMediaPolicy.BULK_PAUSE_WAIT_MS,
             onProgress = onProgress,
         ).getOrThrow()
         onLog(

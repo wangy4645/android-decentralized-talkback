@@ -11,6 +11,7 @@ import com.talkback.app.TalkbackRuntimeFactory
 import com.talkback.app.TalkbackSessionSnapshot
 import com.talkback.appprod.data.AppConfig
 import com.talkback.appprod.data.AppConfigStore
+import com.talkback.appprod.ui.LiveVideoUiState
 import com.talkback.core.endpointtext.EndpointTextEvent
 import com.talkback.core.channeltext.ChannelTextEvent
 import com.talkback.core.endpointattachment.AttachmentKind
@@ -60,6 +61,8 @@ class TalkbackRuntimeManager(private val appContext: Context) {
      */
     @Volatile
     var onEndpointTextReceived: ((EndpointTextEvent) -> Unit)? = null
+    var onRemoteLiveVideoTrack: ((org.webrtc.VideoTrack) -> Unit)? = null
+    var onChannelTaskUpdated: ((com.talkback.core.channeltask.ChannelTaskSnapshot) -> Unit)? = null
 
     @Volatile
     var onChannelTextReceived: ((ChannelTextEvent) -> Unit)? = null
@@ -211,6 +214,12 @@ class TalkbackRuntimeManager(private val appContext: Context) {
             created.onEndpointBulkAttachmentReceived = { event ->
                 onEndpointBulkAttachmentReceived?.invoke(event)
             }
+            created.onRemoteLiveVideoTrack = { track ->
+                onRemoteLiveVideoTrack?.invoke(track)
+            }
+            created.onChannelTaskUpdated = { snap ->
+                onChannelTaskUpdated?.invoke(snap)
+            }
             created.start()
             runtime = created
             enrollmentCoordinator.onRuntimeStarted()
@@ -231,6 +240,8 @@ class TalkbackRuntimeManager(private val appContext: Context) {
         runtime?.onEndpointAttachmentReceived = null
         runtime?.onChannelAttachmentReceived = null
         runtime?.onEndpointBulkAttachmentReceived = null
+        runtime?.onRemoteLiveVideoTrack = null
+        runtime?.onChannelTaskUpdated = null
         runtime?.stop()
         runtime = null
         EstablishmentEnrollmentServices.clear()
@@ -647,6 +658,38 @@ class TalkbackRuntimeManager(private val appContext: Context) {
         return rt.unicastCallAudioLevels(sessionId)
     }
 
+    fun liveVideoPublish(sessionId: String): Boolean =
+        runtime?.liveVideoPublish(sessionId) == true
+
+    fun liveVideoStop(sessionId: String): Boolean =
+        runtime?.liveVideoStop(sessionId) == true
+
+    fun liveVideoWatch(sessionId: String): Boolean =
+        runtime?.liveVideoWatch(sessionId) == true
+
+    fun liveVideoUnwatch(sessionId: String) {
+        runtime?.liveVideoUnwatch(sessionId)
+    }
+
+    fun liveVideoUiState(): LiveVideoUiState {
+        val rt = runtime ?: return LiveVideoUiState()
+        val publisher = rt.liveVideoCanonicalPublisher()
+        return LiveVideoUiState(
+            active = publisher != null,
+            publisherModuleId = publisher,
+            localPublishing = rt.isLocalLiveVideoPublishing(),
+            watching = rt.isLiveVideoWatching(),
+        )
+    }
+
+    fun attachLocalLivePreview(sink: org.webrtc.VideoSink) {
+        runtime?.attachLocalLivePreview(sink)
+    }
+
+    fun detachLocalLivePreview(sink: org.webrtc.VideoSink) {
+        runtime?.detachLocalLivePreview(sink)
+    }
+
     fun pressPtt(sessionId: String): PttState {
         val config = configStore.load()
         val local = config.moduleId.trim().uppercase()
@@ -686,6 +729,35 @@ class TalkbackRuntimeManager(private val appContext: Context) {
         val rt = runtime ?: return Result.failure(IllegalStateException("SERVICE_STOPPED"))
         val remotes = collectChannelRemotes(config).orEmpty()
         return rt.sendChannelText(localAddress(config), channelId, remotes, text)
+    }
+
+    fun issueChannelTask(
+        config: AppConfig,
+        title: String,
+        body: String,
+        deadlineEpochMs: Long,
+    ) = runtime?.issueChannelTask(
+        localAddress(config),
+        config.defaultChannelId,
+        collectChannelRemotes(config).orEmpty(),
+        title,
+        body,
+        deadlineEpochMs,
+    ) ?: Result.failure(IllegalStateException("SERVICE_STOPPED"))
+
+    fun ackChannelTask(config: AppConfig, taskId: String) =
+        runtime?.ackChannelTask(localAddress(config), taskId)
+            ?: Result.failure(IllegalStateException("SERVICE_STOPPED"))
+
+    fun closeChannelTask(config: AppConfig, taskId: String) =
+        runtime?.closeChannelTask(localAddress(config), taskId)
+            ?: Result.failure(IllegalStateException("SERVICE_STOPPED"))
+
+    fun listChannelTasks(config: AppConfig) =
+        runtime?.listChannelTasks(config.defaultChannelId, config.moduleId.trim().uppercase()).orEmpty()
+
+    fun retryOpenChannelTasks(config: AppConfig) {
+        runtime?.retryOpenChannelTasks(localAddress(config))
     }
 
     fun sendEndpointAttachment(

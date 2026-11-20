@@ -120,4 +120,10 @@ interface WebRtcAudioEngine {
     fun isBulkDataChannelOpen(): Boolean = false
 
     fun closeBulkDataChannel() = Unit
+
+    fun setVideoSendEnabled(enabled: Boolean) = Unit
+
+    fun setVideoMaxBitrateBps(bps: Int) = Unit
+
+    fun setOnRemoteVideoTrack(listener: ((org.webrtc.VideoTrack) -> Unit)?) = Unit
 }

@@ -12,6 +12,8 @@ object BulkEndpointAttachmentSender {
         waitOpenMs: Long = 20_000L,
         paceEveryFrames: Int = 4,
         paceMs: Long = 1L,
+        isPaused: () -> Boolean = { false },
+        pauseWaitMs: Long = 30_000L,
         onProgress: ((sentBytes: Long, totalBytes: Long) -> Unit)? = null,
     ): Result<Unit> = runCatching {
         require(file.isFile)
@@ -33,6 +35,7 @@ object BulkEndpointAttachmentSender {
         var lastReportedPct = -1
         FileInputStream(file).use { input ->
             while (sent < expectedBytes) {
+                awaitUnpaused(isPaused, pauseWaitMs)
                 val toRead = minOf(buf.size.toLong(), expectedBytes - sent).toInt()
                 val read = input.read(buf, 0, toRead)
                 if (read <= 0) error(BulkEndpointAttachmentController.REASON_SEND_FAILED)
@@ -56,5 +59,16 @@ object BulkEndpointAttachmentSender {
             error(BulkEndpointAttachmentController.REASON_SEND_FAILED)
         }
         onProgress?.invoke(expectedBytes, expectedBytes)
+    }
+
+    private fun awaitUnpaused(isPaused: () -> Boolean, pauseWaitMs: Long) {
+        if (!isPaused()) return
+        val deadline = System.currentTimeMillis() + pauseWaitMs
+        while (isPaused()) {
+            if (System.currentTimeMillis() > deadline) {
+                error(BulkEndpointAttachmentController.REASON_PTT_PAUSED)
+            }
+            Thread.sleep(50)
+        }
     }
 }

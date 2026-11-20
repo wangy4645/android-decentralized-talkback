@@ -8,6 +8,7 @@ import com.talkback.core.media.MediaSessionManager
 import com.talkback.core.media.MediaSessionState
 import com.talkback.core.media.MeshMediaAsyncRelease
 import com.talkback.core.media.MeshMediaCoordinatorDeferral
+import com.talkback.core.video.VideoNegotiationKey
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -18,11 +19,15 @@ class SessionMediaRegistry(
     context: Context,
     private val useStub: Boolean = false,
     onMeshIce: (MediaBearerScope, String, String) -> Unit,
-    private val onUnicastIce: (String, String) -> Unit
+    private val onUnicastIce: (String, String) -> Unit,
+    private val onVideoIce: ((String, String) -> Unit)? = null,
 ) {
     private val appContext = context.applicationContext
     val sessionManager: MediaSessionManager
     private val unicastEngines = ConcurrentHashMap<String, WebRtcAudioEngine>()
+    private val videoEngines = ConcurrentHashMap<String, Pair<VideoNegotiationKey, WebRtcAudioEngine>>()
+    @Volatile
+    private var localVideoPreviewFactoryHeld = false
 
     init {
         lateinit var manager: MediaSessionManager
@@ -136,10 +141,79 @@ class SessionMediaRegistry(
         unicastEngines.remove(sessionId)?.release()
     }
 
+    fun startLocalVideoKeepAlive() {
+        if (useStub) return
+        SharedLocalVideo.setKeepAlive(true)
+        if (localVideoPreviewFactoryHeld) return
+        val factory = WebRtcSharedFactory.acquire(appContext)
+        val track = SharedLocalVideo.acquireLocalTrack(appContext, factory)
+        if (track == null) {
+            WebRtcSharedFactory.release("video-preview")
+            SharedLocalVideo.setKeepAlive(false)
+            return
+        }
+        localVideoPreviewFactoryHeld = true
+    }
+
+    fun stopLocalVideoKeepAlive() {
+        SharedLocalVideo.setKeepAlive(false)
+        if (localVideoPreviewFactoryHeld) {
+            WebRtcSharedFactory.release("video-preview")
+            localVideoPreviewFactoryHeld = false
+        }
+    }
+
+    fun attachLocalVideoPreview(sink: org.webrtc.VideoSink) {
+        SharedLocalVideo.addPreviewSink(sink)
+    }
+
+    fun detachLocalVideoPreview(sink: org.webrtc.VideoSink) {
+        SharedLocalVideo.removePreviewSink(sink)
+    }
+
+    fun obtainVideoEngine(key: VideoNegotiationKey, role: VideoPcRole): WebRtcAudioEngine {
+        val existing = videoEngines[key.negotiationId]
+        if (existing != null) return existing.second
+        val engine = if (useStub) {
+            StubWebRtcAudioEngine(observedModuleId = "v:${key.negotiationId}")
+        } else {
+            RealWebRtcVideoEngine(
+                context = appContext,
+                observedId = "v:${key.negotiationId}",
+                role = role,
+            ) { state ->
+                onVideoIce?.invoke(key.negotiationId, state)
+            }
+        }
+        videoEngines[key.negotiationId] = key to engine
+        return engine
+    }
+
+    fun getVideoEngine(key: VideoNegotiationKey): WebRtcAudioEngine? =
+        videoEngines[key.negotiationId]?.second
+
+    fun releaseVideoEngine(key: VideoNegotiationKey) {
+        videoEngines.remove(key.negotiationId)?.second?.release()
+    }
+
+    fun forEachVideoEngine(block: (WebRtcAudioEngine) -> Unit) {
+        videoEngines.values.forEach { block(it.second) }
+    }
+
+    fun releaseVideoForSession(sessionId: String) {
+        val stale = videoEngines.filterValues { it.first.sessionId == sessionId }.keys
+        stale.forEach { id ->
+            videoEngines.remove(id)?.second?.release()
+        }
+    }
+
     fun releaseAll() {
         sessionManager.closeAll()
         unicastEngines.values.forEach { runCatching { it.release() } }
         unicastEngines.clear()
+        videoEngines.values.forEach { runCatching { it.second.release() } }
+        videoEngines.clear()
+        stopLocalVideoKeepAlive()
     }
 
     private fun createUnicastEngine(

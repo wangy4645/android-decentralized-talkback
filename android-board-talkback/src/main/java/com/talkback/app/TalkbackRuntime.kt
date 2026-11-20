@@ -111,6 +111,32 @@ class TalkbackRuntime(
         text: String
     ): Result<Unit> = coordinator.sendChannelText(from, channelId, remotes, text)
 
+    fun issueChannelTask(
+        from: EndpointAddress,
+        channelId: String,
+        remotes: List<EndpointAddress>,
+        title: String,
+        body: String,
+        deadlineEpochMs: Long,
+    ) = coordinator.issueChannelTask(from, channelId, remotes, title, body, deadlineEpochMs)
+
+    fun ackChannelTask(from: EndpointAddress, taskId: String) =
+        coordinator.ackChannelTask(from, taskId)
+
+    fun closeChannelTask(from: EndpointAddress, taskId: String) =
+        coordinator.closeChannelTask(from, taskId)
+
+    fun listChannelTasks(channelId: String, localModuleId: String) =
+        coordinator.listChannelTasks(channelId, localModuleId)
+
+    fun retryOpenChannelTasks(from: EndpointAddress) = coordinator.retryOpenChannelTasks(from)
+
+    var onChannelTaskUpdated: ((com.talkback.core.channeltask.ChannelTaskSnapshot) -> Unit)?
+        get() = coordinator.onChannelTaskUpdated
+        set(value) {
+            coordinator.onChannelTaskUpdated = value
+        }
+
     fun sendEndpointAttachment(
         from: EndpointAddress,
         to: EndpointAddress,
@@ -209,6 +235,31 @@ class TalkbackRuntime(
         remoteEndpoints: List<EndpointAddress>,
         channelId: String
     ): String? = coordinator.conferenceCall(from, remoteEndpoints, channelId)
+
+    fun liveVideoPublish(sessionId: String, streamId: String = "live"): Boolean =
+        coordinator.liveVideoPublish(sessionId, streamId)
+
+    fun liveVideoStop(sessionId: String): Boolean = coordinator.liveVideoStop(sessionId)
+
+    fun liveVideoWatch(sessionId: String): Boolean = coordinator.liveVideoWatch(sessionId)
+
+    fun liveVideoUnwatch(sessionId: String) = coordinator.liveVideoUnwatch(sessionId)
+
+    fun liveVideoCanonicalPublisher(): String? = coordinator.liveVideoCanonicalPublisher()
+
+    fun isLocalLiveVideoPublishing(): Boolean = coordinator.isLocalLiveVideoPublishing()
+
+    fun isLiveVideoWatching(): Boolean = coordinator.isLiveVideoWatching()
+
+    fun attachLocalLivePreview(sink: org.webrtc.VideoSink) = coordinator.attachLocalLivePreview(sink)
+
+    fun detachLocalLivePreview(sink: org.webrtc.VideoSink) = coordinator.detachLocalLivePreview(sink)
+
+    var onRemoteLiveVideoTrack: ((org.webrtc.VideoTrack) -> Unit)?
+        get() = coordinator.onRemoteLiveVideoTrack
+        set(value) {
+            coordinator.onRemoteLiveVideoTrack = value
+        }
 
     fun submitMeetingStartIntent(
         channelId: String,

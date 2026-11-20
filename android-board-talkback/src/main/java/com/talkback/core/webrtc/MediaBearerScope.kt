@@ -7,5 +7,7 @@ package com.talkback.core.webrtc
 enum class MediaBearerScope {
     GROUP,
     UNICAST,
-    CONFERENCE
+    CONFERENCE,
+    /** Independent video PC; must never reuse GROUP/CONFERENCE/UNICAST engines. */
+    VIDEO
 }

@@ -83,6 +83,10 @@ android {
 
 dependencies {
     implementation(project(":android-board-talkback"))
+    val prodWebrtcAar = rootProject.file("libs/talkback-production-stream-webrtc-android.aar")
+    if (prodWebrtcAar.exists()) {
+        compileOnly(files(prodWebrtcAar))
+    }
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("com.google.android.material:material:1.12.0")

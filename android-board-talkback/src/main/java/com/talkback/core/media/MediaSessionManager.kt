@@ -106,6 +106,10 @@ class MediaSessionManager(
         intent: EngineRequestIntent = EngineRequestIntent.DEFAULT,
     ) {
         val existing = entries[moduleId]
+        if (scope == MediaBearerScope.VIDEO) {
+            onFailed?.invoke()
+            return
+        }
         if (existing != null && shouldReuseLivePeerConnection(existing, scope)) {
             onReady(existing.engine)
             return
@@ -770,7 +774,7 @@ class MediaSessionManager(
         when (scope) {
             MediaBearerScope.CONFERENCE -> engineOwnershipGate.onConferenceEngineProvisioned(moduleId)
             MediaBearerScope.GROUP -> engineOwnershipGate.onGroupEngineProvisioned(moduleId)
-            MediaBearerScope.UNICAST -> Unit
+            MediaBearerScope.UNICAST, MediaBearerScope.VIDEO -> Unit
         }
         logLifecycle(entry)
         return ProvisionedEngine(engine, generation, created.factoryHit)

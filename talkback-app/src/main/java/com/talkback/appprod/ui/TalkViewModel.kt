@@ -123,6 +123,16 @@ class TalkViewModel(
     private val _toastMessageRes = MutableSharedFlow<Int>(extraBufferCapacity = 1)
     val toastMessageRes: SharedFlow<Int> = _toastMessageRes.asSharedFlow()
 
+    private val _liveRemoteTrack = MutableStateFlow<org.webrtc.VideoTrack?>(null)
+    val liveRemoteTrack: StateFlow<org.webrtc.VideoTrack?> = _liveRemoteTrack.asStateFlow()
+
+    private val _channelTasks =
+        MutableStateFlow<List<com.talkback.core.channeltask.ChannelTaskSnapshot>>(emptyList())
+    val channelTasks: StateFlow<List<com.talkback.core.channeltask.ChannelTaskSnapshot>> =
+        _channelTasks.asStateFlow()
+    private val _selectedChannelTaskId = MutableStateFlow<String?>(null)
+    val selectedChannelTaskId: StateFlow<String?> = _selectedChannelTaskId.asStateFlow()
+
     private val _endpointTextReceived =
         MutableSharedFlow<EndpointTextUiEvent>(extraBufferCapacity = 16)
     val endpointTextReceived: SharedFlow<EndpointTextUiEvent> =
@@ -290,6 +300,12 @@ class TalkViewModel(
         manager.onEndpointAttachmentReceived = endpointAttachmentSink
         manager.onEndpointBulkAttachmentReceived = endpointBulkAttachmentSink
         manager.onChannelAttachmentReceived = channelAttachmentSink
+        manager.onRemoteLiveVideoTrack = { track ->
+            _liveRemoteTrack.value = track
+        }
+        manager.onChannelTaskUpdated = {
+            viewModelScope.launch(Dispatchers.Default) { refreshInternal() }
+        }
         refreshConversationUi()
         taskProfileManager.ensureInitialized()
         val config = configStore.load()
@@ -1017,6 +1033,101 @@ class TalkViewModel(
         return manager.activeChannelSession(config)?.sessionId
     }
 
+    fun toggleLivePublish() {
+        val sessionId = currentSessionId() ?: initiateGroupCall() ?: return
+        if (manager.liveVideoUiState().localPublishing) {
+            manager.liveVideoStop(sessionId)
+            _liveRemoteTrack.value = null
+        } else if (!manager.liveVideoPublish(sessionId)) {
+            viewModelScope.launch { _toastMessageRes.emit(R.string.live_busy) }
+        }
+        refresh()
+    }
+
+    fun watchLive() {
+        val sessionId = currentSessionId() ?: return
+        if (!manager.liveVideoWatch(sessionId)) {
+            viewModelScope.launch { _toastMessageRes.emit(R.string.live_watch_failed) }
+        }
+        refresh()
+    }
+
+    fun issueChannelTask(title: String, body: String, deadlineMinutes: Int = 5): String? {
+        val config = configStore.load()
+        if (!isServiceReady()) return "SERVICE_STOPPED"
+        val deadline = System.currentTimeMillis() + deadlineMinutes * 60_000L
+        val result = manager.issueChannelTask(config, title, body, deadline)
+        result.onSuccess { snap ->
+            _selectedChannelTaskId.value = snap.taskId
+            refresh()
+        }
+        return result.exceptionOrNull()?.message
+    }
+
+    fun ackChannelTask(taskId: String) {
+        val config = configStore.load()
+        manager.ackChannelTask(config, taskId)
+        refresh()
+    }
+
+    fun closeChannelTask(taskId: String) {
+        val config = configStore.load()
+        manager.closeChannelTask(config, taskId)
+        refresh()
+    }
+
+    fun selectChannelTask(taskId: String?) {
+        _selectedChannelTaskId.value = taskId
+    }
+
+    fun localModuleId(): String = configStore.load().moduleId.trim().uppercase()
+
+    private fun channelTaskBanner(config: AppConfig): ChannelTaskBannerUi {
+        runCatching { manager.retryOpenChannelTasks(config) }
+        val list = manager.listChannelTasks(config)
+        _channelTasks.value = list
+        val local = config.moduleId.trim().uppercase()
+        val needs = list.firstOrNull { it.needsLocalAck }
+        val open = needs ?: list.firstOrNull {
+            it.phase == com.talkback.core.model.ChannelTaskPhase.OPEN
+        }
+        if (_selectedChannelTaskId.value == null) {
+            _selectedChannelTaskId.value = open?.taskId ?: list.firstOrNull()?.taskId
+        }
+        val openCount = list.count {
+            it.phase == com.talkback.core.model.ChannelTaskPhase.OPEN
+        }
+        val pendingAckCount = list.count { it.needsLocalAck }
+        return ChannelTaskBannerUi(
+            visible = open != null,
+            taskId = open?.taskId,
+            title = open?.title.orEmpty(),
+            needsAck = open?.needsLocalAck == true,
+            collecting = open != null && open.issuerModuleId == local &&
+                open.phase == com.talkback.core.model.ChannelTaskPhase.OPEN,
+            ackedCount = open?.ackedCount ?: 0,
+            targetCount = open?.targetCount ?: 0,
+            tileBadge = list.any { it.needsLocalAck },
+            openTaskCount = openCount,
+            pendingAckCount = pendingAckCount,
+            totalTaskCount = list.size,
+        )
+    }
+
+    fun unwatchLive() {
+        currentSessionId()?.let { manager.liveVideoUnwatch(it) }
+        _liveRemoteTrack.value = null
+        refresh()
+    }
+
+    fun attachLocalLivePreview(sink: org.webrtc.VideoSink) {
+        manager.attachLocalLivePreview(sink)
+    }
+
+    fun detachLocalLivePreview(sink: org.webrtc.VideoSink) {
+        manager.detachLocalLivePreview(sink)
+    }
+
     fun preparePttSession(): String? = initiateGroupCall()
 
     fun precheckPrivateCall(remoteKey: String): String? {
@@ -1453,6 +1564,8 @@ class TalkViewModel(
         if (manager.onChannelAttachmentReceived === channelAttachmentSink) {
             manager.onChannelAttachmentReceived = null
         }
+        manager.onRemoteLiveVideoTrack = null
+        manager.onChannelTaskUpdated = null
         super.onCleared()
     }
 
@@ -1895,7 +2008,9 @@ class TalkViewModel(
                 locked = config.meetingLocked
             ),
             conferenceDisplay = conferenceDisplay,
-            conferenceNetworkPresentation = conferenceNetworkPresentation
+            conferenceNetworkPresentation = conferenceNetworkPresentation,
+            live = manager.liveVideoUiState(),
+            task = channelTaskBanner(config)
         )
     }
 

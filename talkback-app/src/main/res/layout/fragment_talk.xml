@@ -1,10 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@color/tb_bg"
-    android:orientation="vertical">
+    android:background="@color/tb_bg">
+
+    <LinearLayout
+        android:id="@+id/talkColumn"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical">
 
     <FrameLayout
         android:layout_width="match_parent"
@@ -199,6 +204,64 @@
                         android:contentDescription="@null"
                         android:src="@drawable/ic_chevron_right" />
                 </LinearLayout>
+            </LinearLayout>
+
+            <LinearLayout
+                android:id="@+id/layoutLiveBanner"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:background="@drawable/bg_live_banner"
+                android:orientation="vertical"
+                android:paddingHorizontal="12dp"
+                android:paddingVertical="10dp"
+                android:visibility="gone">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <View
+                        android:layout_width="8dp"
+                        android:layout_height="8dp"
+                        android:layout_marginEnd="8dp"
+                        android:background="@drawable/bg_live_dot" />
+
+                    <TextView
+                        android:id="@+id/txtLiveBanner"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:ellipsize="end"
+                        android:maxLines="1"
+                        android:textColor="@color/tb_text_primary"
+                        android:textSize="13sp" />
+
+                    <TextView
+                        android:id="@+id/txtLiveBannerAction"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="8dp"
+                        android:background="?attr/selectableItemBackgroundBorderless"
+                        android:clickable="true"
+                        android:focusable="true"
+                        android:paddingHorizontal="4dp"
+                        android:paddingVertical="2dp"
+                        android:textColor="@color/tb_success"
+                        android:textSize="12sp" />
+                </LinearLayout>
+
+                <TextView
+                    android:id="@+id/txtLiveBannerSub"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="16dp"
+                    android:layout_marginTop="4dp"
+                    android:textColor="@color/tb_primary"
+                    android:textSize="11sp"
+                    android:visibility="gone" />
             </LinearLayout>
 
             <!-- Floor Owner | Talking | Network — three columns, label above value -->
@@ -557,6 +620,43 @@
                     </LinearLayout>
                 </FrameLayout>
                 </FrameLayout>
+
+                <LinearLayout
+                    android:id="@+id/layoutLivePip"
+                    android:layout_width="128dp"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="end|top"
+                    android:layout_marginTop="8dp"
+                    android:layout_marginEnd="8dp"
+                    android:orientation="vertical"
+                    android:visibility="gone">
+
+                    <TextView
+                        android:id="@+id/btnLivePipClose"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_gravity="end"
+                        android:padding="4dp"
+                        android:text="X"
+                        android:textColor="@color/tb_text_primary"
+                        android:textSize="12sp" />
+
+                    <org.webrtc.SurfaceViewRenderer
+                        android:id="@+id/livePipRenderer"
+                        android:layout_width="120dp"
+                        android:layout_height="160dp"
+                        android:layout_gravity="end" />
+
+                    <TextView
+                        android:id="@+id/txtLivePipCaption"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="4dp"
+                        android:ellipsize="end"
+                        android:maxLines="1"
+                        android:textColor="@color/tb_text_secondary"
+                        android:textSize="10sp" />
+                </LinearLayout>
                 </FrameLayout>
 
                 <FrameLayout
@@ -855,4 +955,114 @@
                 android:visibility="gone" />
         </LinearLayout>
     </ScrollView>
-</LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/layoutTaskDock"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginHorizontal="16dp"
+            android:layout_marginTop="4dp"
+            android:layout_marginBottom="8dp"
+            android:background="@drawable/bg_card"
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <LinearLayout
+                android:id="@+id/layoutTaskDockHeader"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:background="?attr/selectableItemBackground"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:paddingHorizontal="12dp"
+                android:paddingVertical="10dp">
+
+                <TextView
+                    android:id="@+id/txtTaskDockTitle"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:textColor="@color/tb_text_primary"
+                    android:textSize="12sp" />
+
+                <ImageView
+                    android:layout_width="10dp"
+                    android:layout_height="10dp"
+                    android:contentDescription="@null"
+                    android:src="@drawable/ic_chevron_right"
+                    app:tint="@color/tb_text_muted" />
+            </LinearLayout>
+
+            <View
+                android:id="@+id/layoutTaskDockDivider"
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:layout_marginHorizontal="12dp"
+                android:background="@color/tb_divider" />
+
+            <LinearLayout
+                android:id="@+id/layoutTaskDockAlert"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:background="?attr/selectableItemBackground"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:paddingHorizontal="12dp"
+                android:paddingVertical="10dp">
+
+                <View
+                    android:layout_width="6dp"
+                    android:layout_height="6dp"
+                    android:layout_marginEnd="8dp"
+                    android:background="@drawable/bg_task_dot" />
+
+                <TextView
+                    android:id="@+id/txtTaskDockAlert"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:ellipsize="end"
+                    android:maxLines="1"
+                    android:textColor="@color/tb_text_primary"
+                    android:textSize="12sp" />
+
+                <TextView
+                    android:id="@+id/txtTaskDockAlertAction"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:textSize="12sp" />
+            </LinearLayout>
+        </LinearLayout>
+    </LinearLayout>
+
+    <LinearLayout
+        android:id="@+id/layoutLiveFullscreen"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#FF000000"
+        android:clickable="true"
+        android:focusable="true"
+        android:orientation="vertical"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/btnLiveFullscreenClose"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:padding="16dp"
+            android:text="X"
+            android:textColor="#FFFFFFFF"
+            android:textSize="16sp" />
+
+        <org.webrtc.SurfaceViewRenderer
+            android:id="@+id/liveFullRenderer"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1" />
+    </LinearLayout>
+</FrameLayout>

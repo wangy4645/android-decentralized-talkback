@@ -105,6 +105,27 @@ data class CallUiState(
     val codecLabel: String = "OPUS"
 )
 
+data class ChannelTaskBannerUi(
+    val visible: Boolean = false,
+    val taskId: String? = null,
+    val title: String = "",
+    val needsAck: Boolean = false,
+    val collecting: Boolean = false,
+    val ackedCount: Int = 0,
+    val targetCount: Int = 0,
+    val tileBadge: Boolean = false,
+    val openTaskCount: Int = 0,
+    val pendingAckCount: Int = 0,
+    val totalTaskCount: Int = 0,
+)
+
+data class LiveVideoUiState(
+    val active: Boolean = false,
+    val publisherModuleId: String? = null,
+    val localPublishing: Boolean = false,
+    val watching: Boolean = false
+)
+
 data class TalkUiState(
     val serviceRunning: Boolean,
     val serviceDetail: String,
@@ -167,7 +188,9 @@ data class TalkUiState(
     ),
     /** P1a — meeting poor-network banner / pill (ConferenceNetworkBannerProjection). */
     val conferenceNetworkPresentation: ConferenceNetworkPresentation.State =
-        ConferenceNetworkPresentation.State()
+        ConferenceNetworkPresentation.State(),
+    val live: LiveVideoUiState = LiveVideoUiState(),
+    val task: ChannelTaskBannerUi = ChannelTaskBannerUi()
 )
 
 data class ConversationListUiState(

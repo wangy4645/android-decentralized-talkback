@@ -59,6 +59,19 @@ enum class SignalType {
      * (EDGE-LINK-CONTROLLER-001 Phase 2b). Not a membership resync.
      */
     GROUP_REOFFER_REQUEST,
+    /** Conference-scoped live video: non-authoritative request or authority echo. */
+    VIDEO_PUBLISH,
+    /** Authority denies a second publisher for the same conference slot. */
+    VIDEO_PUBLISH_DENY,
+    VIDEO_STOP,
+    /** Viewer-initiated recvonly offer after tap-to-watch. Not a subscribe grant. */
+    VIDEO_OFFER,
+    VIDEO_ANSWER,
+    VIDEO_ICE,
+    /** Channel task dispatch. Target snapshot is in payload; not a Session. */
+    TASK_ISSUE,
+    TASK_ACK,
+    TASK_CLOSE,
 }
 
 data class SignalEnvelope(

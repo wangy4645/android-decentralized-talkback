@@ -26,6 +26,16 @@ class NegotiationIngressGateTest {
     }
 
     @Test
+    fun videoSignals_doNotEvidenceAudioNegotiationIngress() {
+        assertFalse(NegotiationIngressGate.isNegotiationCapableSignal(SignalType.VIDEO_PUBLISH))
+        assertFalse(NegotiationIngressGate.isNegotiationCapableSignal(SignalType.VIDEO_PUBLISH_DENY))
+        assertFalse(NegotiationIngressGate.isNegotiationCapableSignal(SignalType.VIDEO_STOP))
+        assertFalse(NegotiationIngressGate.isNegotiationCapableSignal(SignalType.VIDEO_OFFER))
+        assertFalse(NegotiationIngressGate.isNegotiationCapableSignal(SignalType.VIDEO_ANSWER))
+        assertFalse(NegotiationIngressGate.isNegotiationCapableSignal(SignalType.VIDEO_ICE))
+    }
+
+    @Test
     fun isReady_requiresPostRecoveryFreshInbound() {
         assertFalse(
             NegotiationIngressGate.isReady(

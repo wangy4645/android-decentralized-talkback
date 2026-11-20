@@ -15,7 +15,16 @@ internal object NegotiationIngressGate {
         SignalType.HELLO,
         SignalType.HEARTBEAT,
         SignalType.DISCOVERY_PROBE,
-        SignalType.DISCOVERY_ANNOUNCE -> false
+        SignalType.DISCOVERY_ANNOUNCE,
+        SignalType.VIDEO_PUBLISH,
+        SignalType.VIDEO_PUBLISH_DENY,
+        SignalType.VIDEO_STOP,
+        SignalType.VIDEO_OFFER,
+        SignalType.VIDEO_ANSWER,
+        SignalType.VIDEO_ICE,
+        SignalType.TASK_ISSUE,
+        SignalType.TASK_ACK,
+        SignalType.TASK_CLOSE -> false
         SignalType.WEBRTC_OFFER,
         SignalType.WEBRTC_ANSWER,
         SignalType.WEBRTC_ICE,

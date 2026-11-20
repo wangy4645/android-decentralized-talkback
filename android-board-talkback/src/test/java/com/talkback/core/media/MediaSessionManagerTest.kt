@@ -104,6 +104,25 @@ class MediaSessionManagerTest {
     }
 
     @Test
+    fun requestEngine_video_doesNotReplaceConferencePc() {
+        val conference = manager.create("M02", MediaBearerScope.CONFERENCE)
+        manager.onIceStateChanged("M02", "CONNECTED")
+        var failed = false
+        var videoEngine: com.talkback.core.webrtc.WebRtcAudioEngine? = null
+        manager.requestEngine(
+            moduleId = "M02",
+            scope = MediaBearerScope.VIDEO,
+            sessionId = "sess-1",
+            onReady = { videoEngine = it },
+            onFailed = { failed = true },
+        )
+        assertTrue(failed)
+        assertNull(videoEngine)
+        assertEquals(conference, manager.getEngine("M02"))
+        assertEquals(MediaBearerScope.CONFERENCE, manager.getState("M02")!!.scope)
+    }
+
+    @Test
     fun create_conferenceDisconnected_reusesWithoutViolation() {
         manager.create("M02", MediaBearerScope.CONFERENCE)
         manager.onIceStateChanged("M02", "CONNECTED")

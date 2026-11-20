@@ -26,6 +26,8 @@ import com.talkback.core.contacts.ContactsProjection
 import com.talkback.core.channeltext.ChannelTextController
 import com.talkback.core.channeltext.ChannelTextEvent
 import com.talkback.core.channeltext.ChannelTextPrepareResult
+import com.talkback.core.channeltask.ChannelTaskController
+import com.talkback.core.channeltask.ChannelTaskSnapshot
 import com.talkback.core.endpointtext.EndpointTextController
 import com.talkback.core.endpointtext.EndpointTextEvent
 import com.talkback.core.endpointtext.EndpointTextPrepareResult
@@ -66,6 +68,14 @@ import com.talkback.core.model.RecoveryReattachRequest
 import com.talkback.core.model.RemoteEndpointInfo
 import com.talkback.core.model.SignalEnvelope
 import com.talkback.core.model.SignalType
+import com.talkback.core.model.TaskAckPayload
+import com.talkback.core.model.TaskClosePayload
+import com.talkback.core.model.TaskIssuePayload
+import com.talkback.core.model.ChannelTaskPhase
+import com.talkback.core.model.VideoNegotiationPayload
+import com.talkback.core.model.VideoPublishDenyPayload
+import com.talkback.core.model.VideoPublishPayload
+import com.talkback.core.model.VideoStopPayload
 import com.talkback.core.ptt.FloorArbitrator
 import com.talkback.core.ptt.FloorCommitResult
 import com.talkback.core.ptt.FloorGrantCompletion
@@ -387,6 +397,14 @@ import com.talkback.core.webrtc.conferenceaudio.ParticipantMediaModePolicy
 import com.talkback.core.webrtc.conferenceaudio.PcmInjectionFailure
 import com.talkback.core.webrtc.MediaBearerScope
 import com.talkback.core.webrtc.SessionMediaRegistry
+import com.talkback.core.video.MediaPriorityGate
+import com.talkback.core.video.VideoInboundResult
+import com.talkback.core.video.VideoMediaPolicy
+import com.talkback.core.video.VideoNegotiationKey
+import com.talkback.core.video.VideoPublishDecision
+import com.talkback.core.video.VideoSessionController
+import com.talkback.core.video.VideoSignalingDemux
+import com.talkback.core.webrtc.VideoPcRole
 import com.talkback.core.conference.lifecycle.ConferenceGroupReclaimDecision
 import com.talkback.core.conference.lifecycle.ConferenceInboundHangupDecision
 import com.talkback.core.conference.session.ConferenceSessionMediaCoordinatorDelegate
@@ -594,6 +612,12 @@ class TalkbackCoordinator(
     @Volatile
     var onEndpointBulkAttachmentReceived: ((com.talkback.core.endpointattachment.bulk.EndpointBulkAttachmentEvent) -> Unit)? =
         null
+
+    @Volatile
+    var onRemoteLiveVideoTrack: ((org.webrtc.VideoTrack) -> Unit)? = null
+
+    @Volatile
+    var onChannelTaskUpdated: ((ChannelTaskSnapshot) -> Unit)? = null
 
     private var meetingProfile01FactWireIngress: MeetingProfile01FactWireIngress? = null
     private var meetingProfile01SessionIndex: MeetingProfile01ConferenceSessionIndex? = null
@@ -2016,7 +2040,7 @@ class TalkbackCoordinator(
                     ?.address?.key
             },
             getGroupEngine = { moduleId -> mediaRegistry.getGroup(moduleId) },
-            isPttPaused = { sessions.values.any { isLocalFloorHolder(it) } },
+            isPttPaused = { !mediaPriorityGate.bulkAllowed() },
             sendSignal = { peer, envelope -> sendSignalHandoff(peer, envelope) },
             buildEnvelope = { type, from, to, payload ->
                 buildSignedEnvelope(
@@ -2031,6 +2055,300 @@ class TalkbackCoordinator(
             isDialable = { moduleId -> isModuleDialable(moduleId) },
             onBulkReceived = { event -> onEndpointBulkAttachmentReceived?.invoke(event) },
         )
+    }
+
+    private val videoSessionController = VideoSessionController()
+    private val mediaPriorityGate = MediaPriorityGate()
+    private val channelTaskController = ChannelTaskController()
+    @Volatile
+    private var localWatchKey: VideoNegotiationKey? = null
+    @Volatile
+    private var localVideoPublishing = false
+
+    fun liveVideoPublish(sessionId: String, streamId: String = "live"): Boolean {
+        val session = sessions[sessionId] ?: return false
+        val local = groupLocalIdentity(session)
+        if (isMembershipAuthority(session)) {
+            return when (val decision = videoSessionController.grantAsAuthority(local.moduleId.value, streamId)) {
+                is VideoPublishDecision.Grant,
+                is VideoPublishDecision.Refresh -> {
+                    val canonical = when (decision) {
+                        is VideoPublishDecision.Grant -> decision.canonical
+                        is VideoPublishDecision.Refresh -> decision.canonical
+                        else -> return false
+                    }
+                    broadcastVideoSignal(
+                        session,
+                        SignalType.VIDEO_PUBLISH,
+                        VideoPublishPayload(
+                            streamId = canonical.streamId,
+                            videoGeneration = canonical.videoGeneration,
+                            publisherModuleId = canonical.publisherModuleId,
+                            authoritative = true,
+                        ).encode(),
+                    )
+                    setLocalVideoPublishing(true)
+                    mediaRegistry.startLocalVideoKeepAlive()
+                    true
+                }
+                is VideoPublishDecision.Deny -> false
+            }
+        }
+        val payload = VideoPublishPayload(
+            streamId = streamId,
+            videoGeneration = 0L,
+            publisherModuleId = local.moduleId.value,
+            authoritative = false,
+        )
+        broadcastVideoSignal(session, SignalType.VIDEO_PUBLISH, payload.encode())
+        setLocalVideoPublishing(true)
+        mediaRegistry.startLocalVideoKeepAlive()
+        return true
+    }
+
+    fun liveVideoStop(sessionId: String): Boolean {
+        val session = sessions[sessionId] ?: return false
+        val slot = videoSessionController.canonical ?: return false
+        if (slot.publisherModuleId != localModuleId.value) return false
+        val payload = VideoStopPayload(slot.streamId, slot.videoGeneration, slot.publisherModuleId)
+        val envelope = SignalEnvelope(
+            type = SignalType.VIDEO_STOP,
+            from = groupLocalIdentity(session),
+            to = null,
+            sessionId = session.id,
+            timestampMs = System.currentTimeMillis(),
+            payload = payload.encode(),
+            nonce = "",
+            signature = "",
+        )
+        videoSessionController.onInbound(envelope, isMembershipAuthority(session))
+        broadcastVideoSignal(session, SignalType.VIDEO_STOP, payload.encode())
+        mediaRegistry.releaseVideoForSession(session.id)
+        mediaRegistry.stopLocalVideoKeepAlive()
+        setLocalVideoPublishing(false)
+        return true
+    }
+
+    fun liveVideoWatch(sessionId: String): Boolean {
+        val session = sessions[sessionId] ?: return false
+        val slot = videoSessionController.canonical ?: return false
+        if (slot.publisherModuleId == localModuleId.value) return false
+        val peer = resolvePeerForModule(slot.publisherModuleId) ?: return false
+        val negotiationId = java.util.UUID.randomUUID().toString()
+        val key = VideoNegotiationKey(session.id, slot.streamId, slot.videoGeneration, negotiationId)
+        if (!videoSessionController.noteNegotiation(key, localModuleId.value)) return false
+        val engine = mediaRegistry.obtainVideoEngine(key, VideoPcRole.VIEWER)
+        engine.setOnRemoteVideoTrack { track -> onRemoteLiveVideoTrack?.invoke(track) }
+        bindVideoIce(
+            session = session,
+            key = key,
+            engine = engine,
+            remoteModuleId = slot.publisherModuleId,
+            viewerModuleId = localModuleId.value,
+        )
+        val sdp = runCatching { engine.createOffer(false) }.getOrDefault("")
+        if (sdp.isBlank()) {
+            mediaRegistry.releaseVideoEngine(key)
+            return false
+        }
+        val local = groupLocalIdentity(session)
+        val payload = VideoNegotiationPayload(
+            streamId = slot.streamId,
+            videoGeneration = slot.videoGeneration,
+            negotiationId = negotiationId,
+            publisherModuleId = slot.publisherModuleId,
+            viewerModuleId = local.moduleId.value,
+            sdp = sdp,
+        )
+        val publisher = endpointForModule(session, ModuleId(slot.publisherModuleId))
+        sendSignal(
+            peer,
+            buildSignedEnvelope(SignalType.VIDEO_OFFER, local, publisher, session.id, payload.encode()),
+        )
+        localWatchKey = key
+        return true
+    }
+
+    fun liveVideoUnwatch(sessionId: String) {
+        val key = localWatchKey ?: return
+        if (key.sessionId != sessionId) return
+        mediaRegistry.releaseVideoEngine(key)
+        localWatchKey = null
+    }
+
+    fun liveVideoCanonicalPublisher(): String? = videoSessionController.canonical?.publisherModuleId
+
+    fun isLocalLiveVideoPublishing(): Boolean = localVideoPublishing
+
+    fun isLiveVideoWatching(): Boolean = localWatchKey != null
+
+    fun attachLocalLivePreview(sink: org.webrtc.VideoSink) {
+        mediaRegistry.attachLocalVideoPreview(sink)
+    }
+
+    fun detachLocalLivePreview(sink: org.webrtc.VideoSink) {
+        mediaRegistry.detachLocalVideoPreview(sink)
+    }
+
+    private fun handleVideoSignal(signal: SignalEnvelope) {
+        val session = sessions[signal.sessionId]
+        val localIsAuthority = session?.let { isMembershipAuthority(it) } ?: false
+        val result = videoSessionController.onInbound(signal, localIsAuthority)
+        if (session == null) return
+        when (result) {
+            is VideoInboundResult.AcceptPublish -> {
+                if (localIsAuthority) {
+                    val incoming = VideoPublishPayload.decode(signal.payload)
+                    if (incoming?.authoritative != true) {
+                        broadcastVideoSignal(
+                            session,
+                            SignalType.VIDEO_PUBLISH,
+                            VideoPublishPayload(
+                                streamId = result.canonical.streamId,
+                                videoGeneration = result.canonical.videoGeneration,
+                                publisherModuleId = result.canonical.publisherModuleId,
+                                authoritative = true,
+                            ).encode(),
+                        )
+                    }
+                }
+            }
+            is VideoInboundResult.DenyPublish -> {
+                if (localIsAuthority) {
+                    val requester = endpointForModule(session, ModuleId(result.deny.requesterModuleId))
+                    val peer = resolvePeerForModule(result.deny.requesterModuleId) ?: return
+                    sendSignal(
+                        peer,
+                        buildSignedEnvelope(
+                            SignalType.VIDEO_PUBLISH_DENY,
+                            groupLocalIdentity(session),
+                            requester,
+                            session.id,
+                            result.deny.encode(),
+                        ),
+                    )
+                }
+            }
+            is VideoInboundResult.DropStale -> {
+                if (result.reason == "DENIED") {
+                    val deny = VideoPublishDenyPayload.decode(signal.payload)
+                    if (deny?.requesterModuleId == localModuleId.value) {
+                        mediaRegistry.stopLocalVideoKeepAlive()
+                        setLocalVideoPublishing(false)
+                    }
+                }
+            }
+            is VideoInboundResult.Stopped -> {
+                mediaRegistry.releaseVideoForSession(session.id)
+                mediaRegistry.stopLocalVideoKeepAlive()
+                localWatchKey = null
+                if (result.canonical.publisherModuleId == localModuleId.value) {
+                    setLocalVideoPublishing(false)
+                }
+            }
+            is VideoInboundResult.AcceptNegotiation -> handleVideoNegotiation(session, signal, result.key)
+            else -> Unit
+        }
+    }
+
+    private fun handleVideoNegotiation(
+        session: TalkbackSession,
+        signal: SignalEnvelope,
+        key: VideoNegotiationKey,
+    ) {
+        val payload = VideoNegotiationPayload.decode(signal.payload) ?: return
+        when (signal.type) {
+            SignalType.VIDEO_OFFER -> {
+                if (payload.publisherModuleId != localModuleId.value) return
+                val engine = mediaRegistry.obtainVideoEngine(key, VideoPcRole.PUBLISHER)
+                engine.startCapture()
+                applyLiveVideoPriority()
+                bindVideoIce(
+                    session = session,
+                    key = key,
+                    engine = engine,
+                    remoteModuleId = payload.viewerModuleId,
+                    viewerModuleId = payload.viewerModuleId,
+                )
+                val answer = runCatching { engine.applyRemoteOffer(payload.sdp, polite = true) }.getOrDefault("")
+                if (answer.isBlank()) return
+                val local = groupLocalIdentity(session)
+                val viewer = endpointForModule(session, ModuleId(payload.viewerModuleId))
+                val peer = resolvePeerForModule(payload.viewerModuleId) ?: return
+                sendSignal(
+                    peer,
+                    buildSignedEnvelope(
+                        SignalType.VIDEO_ANSWER,
+                        local,
+                        viewer,
+                        session.id,
+                        payload.copy(sdp = answer, candidate = "").encode(),
+                    ),
+                )
+            }
+            SignalType.VIDEO_ANSWER -> {
+                val engine = mediaRegistry.getVideoEngine(key) ?: return
+                runCatching { engine.applyRemoteAnswer(payload.sdp, polite = true) }
+            }
+            SignalType.VIDEO_ICE -> {
+                val engine = mediaRegistry.getVideoEngine(key) ?: return
+                if (payload.candidate.isNotBlank()) {
+                    engine.addIceCandidate(payload.candidate)
+                }
+            }
+            else -> Unit
+        }
+    }
+
+    private fun bindVideoIce(
+        session: TalkbackSession,
+        key: VideoNegotiationKey,
+        engine: WebRtcAudioEngine,
+        remoteModuleId: String,
+        viewerModuleId: String,
+    ) {
+        val slot = videoSessionController.canonical ?: return
+        val local = groupLocalIdentity(session)
+        engine.setOnLocalIceCandidate { candidate ->
+            val remote = endpointForModule(session, ModuleId(remoteModuleId))
+            val peer = resolvePeerForModule(remoteModuleId) ?: return@setOnLocalIceCandidate
+            val icePayload = VideoNegotiationPayload(
+                streamId = key.streamId,
+                videoGeneration = key.videoGeneration,
+                negotiationId = key.negotiationId,
+                publisherModuleId = slot.publisherModuleId,
+                viewerModuleId = viewerModuleId,
+                candidate = candidate,
+            )
+            sendSignal(
+                peer,
+                buildSignedEnvelope(SignalType.VIDEO_ICE, local, remote, session.id, icePayload.encode()),
+            )
+        }
+    }
+
+    private fun setLocalVideoPublishing(active: Boolean) {
+        localVideoPublishing = active
+        mediaPriorityGate.onLocalVideoPublishing(active)
+        applyLiveVideoPriority()
+    }
+
+    private fun applyLiveVideoPriority() {
+        val send = mediaPriorityGate.videoSendEnabled()
+        val bitrate = mediaPriorityGate.videoMaxBitrateBps()
+        mediaRegistry.forEachVideoEngine { engine ->
+            engine.setVideoSendEnabled(send)
+            engine.setVideoMaxBitrateBps(bitrate)
+        }
+    }
+
+    private fun broadcastVideoSignal(session: TalkbackSession, type: SignalType, payload: String) {
+        targetsForSession(session).forEach { (peer, remote) ->
+            sendSignal(
+                peer,
+                buildSignedEnvelope(type, groupLocalIdentity(session), remote, session.id, payload),
+            )
+        }
     }
 
     fun installBulkEndpointAttachmentStorage(partialDir: java.io.File, finalDir: java.io.File) {
@@ -2852,6 +3170,166 @@ class TalkbackCoordinator(
                 }
             }
         }
+    }
+
+    fun issueChannelTask(
+        from: EndpointAddress,
+        channelId: String,
+        remotes: List<EndpointAddress>,
+        title: String,
+        body: String,
+        deadlineEpochMs: Long,
+    ): Result<ChannelTaskSnapshot> = runCatching {
+        runOnCoordinatorSync {
+            val trimmedTitle = title.trim()
+            if (trimmedTitle.isBlank()) error("TASK_TITLE_REQUIRED")
+            if (channelId.isBlank()) error("INVALID_CHANNEL")
+            val local = from.moduleId.value.uppercase()
+            val snapshotTargets = LinkedHashSet<String>()
+            snapshotTargets += local
+            remotes.map { it.moduleId.value.uppercase() }
+                .filter { it.isNotBlank() && it != local }
+                .forEach { snapshotTargets += it }
+            if (snapshotTargets.size < 2) error("NO_MEMBERS")
+            val payload = TaskIssuePayload(
+                taskId = java.util.UUID.randomUUID().toString(),
+                channelId = channelId,
+                title = trimmedTitle,
+                body = body.trim(),
+                deadlineEpochMs = deadlineEpochMs,
+                targets = snapshotTargets.toList(),
+            )
+            val created = channelTaskController.createLocalIssue(local, payload)
+            fanoutTaskIssue(from, payload)
+            onChannelTaskUpdated?.invoke(created)
+            created
+        }
+    }
+
+    fun ackChannelTask(from: EndpointAddress, taskId: String): Result<ChannelTaskSnapshot> = runCatching {
+        runOnCoordinatorSync {
+            val now = System.currentTimeMillis()
+            val snap = channelTaskController.ackLocal(taskId, from.moduleId.value, now)
+                ?: error("TASK_NOT_FOUND")
+            sendTaskAckToIssuer(from, snap)
+            onChannelTaskUpdated?.invoke(snap)
+            snap
+        }
+    }
+
+    fun closeChannelTask(from: EndpointAddress, taskId: String): Result<ChannelTaskSnapshot> = runCatching {
+        runOnCoordinatorSync {
+            val now = System.currentTimeMillis()
+            val snap = channelTaskController.closeLocal(taskId, from.moduleId.value, now)
+                ?: error("TASK_NOT_FOUND")
+            if (snap.issuerModuleId != from.moduleId.value.uppercase()) error("NOT_ISSUER")
+            fanoutTaskClose(from, TaskClosePayload(taskId, ChannelTaskPhase.CLOSED), snap)
+            onChannelTaskUpdated?.invoke(snap)
+            snap
+        }
+    }
+
+    fun listChannelTasks(channelId: String, localModuleId: String): List<ChannelTaskSnapshot> {
+        return channelTaskController.list(channelId, System.currentTimeMillis(), localModuleId)
+    }
+
+    fun retryOpenChannelTasks(from: EndpointAddress) {
+        runOnCoordinatorSync {
+            val now = System.currentTimeMillis()
+            channelTaskController.openIssuerTaskIds(from.moduleId.value, now).forEach { taskId ->
+                val snap = channelTaskController.snapshot(taskId, now, from.moduleId.value) ?: return@forEach
+                if (snap.phase == ChannelTaskPhase.EXPIRED) {
+                    fanoutTaskClose(from, TaskClosePayload(taskId, ChannelTaskPhase.EXPIRED), snap)
+                    onChannelTaskUpdated?.invoke(snap)
+                    return@forEach
+                }
+                val pending = channelTaskController.pendingRetryTargets(taskId, now)
+                if (pending.isEmpty()) return@forEach
+                val payload = TaskIssuePayload(
+                    taskId = snap.taskId,
+                    channelId = snap.channelId,
+                    title = snap.title,
+                    body = snap.body,
+                    deadlineEpochMs = snap.deadlineEpochMs,
+                    targets = snap.members.map { it.moduleId },
+                )
+                pending.forEach { moduleId ->
+                    sendTaskSignal(from, moduleId, SignalType.TASK_ISSUE, payload.encode())
+                }
+            }
+        }
+    }
+
+    private fun handleChannelTaskSignal(signal: SignalEnvelope) {
+        val now = System.currentTimeMillis()
+        val local = localModuleId.value
+        when (signal.type) {
+            SignalType.TASK_ISSUE -> {
+                val payload = TaskIssuePayload.decode(signal.payload) ?: return
+                when (val result = channelTaskController.onIssue(signal.from.moduleId.value, payload, local, now)) {
+                    ChannelTaskController.IssueResult.Ignored -> Unit
+                    is ChannelTaskController.IssueResult.New ->
+                        onChannelTaskUpdated?.invoke(result.snapshot)
+                    is ChannelTaskController.IssueResult.Duplicate ->
+                        onChannelTaskUpdated?.invoke(result.snapshot)
+                    is ChannelTaskController.IssueResult.DuplicateResendAck -> {
+                        onChannelTaskUpdated?.invoke(result.snapshot)
+                        val local = localEndpointAddress() ?: return
+                        sendTaskAckToIssuer(local, result.snapshot)
+                    }
+                }
+            }
+            SignalType.TASK_ACK -> {
+                val payload = TaskAckPayload.decode(signal.payload) ?: return
+                val snap = channelTaskController.onAck(signal.from.moduleId.value, payload, now) ?: return
+                onChannelTaskUpdated?.invoke(snap)
+            }
+            SignalType.TASK_CLOSE -> {
+                val payload = TaskClosePayload.decode(signal.payload) ?: return
+                val snap = channelTaskController.onClose(signal.from.moduleId.value, payload, now) ?: return
+                onChannelTaskUpdated?.invoke(snap)
+            }
+            else -> Unit
+        }
+    }
+
+    private fun fanoutTaskIssue(from: EndpointAddress, payload: TaskIssuePayload) {
+        payload.targets.filter { it != from.moduleId.value.uppercase() }.forEach { moduleId ->
+            sendTaskSignal(from, moduleId, SignalType.TASK_ISSUE, payload.encode())
+        }
+    }
+
+    private fun fanoutTaskClose(
+        from: EndpointAddress,
+        payload: TaskClosePayload,
+        snap: ChannelTaskSnapshot,
+    ) {
+        snap.members.map { it.moduleId }
+            .filter { it != from.moduleId.value.uppercase() }
+            .forEach { moduleId ->
+                sendTaskSignal(from, moduleId, SignalType.TASK_CLOSE, payload.encode())
+            }
+    }
+
+    private fun sendTaskAckToIssuer(from: EndpointAddress, snap: ChannelTaskSnapshot) {
+        if (snap.issuerModuleId == from.moduleId.value.uppercase()) return
+        sendTaskSignal(from, snap.issuerModuleId, SignalType.TASK_ACK, TaskAckPayload(snap.taskId).encode())
+    }
+
+    private fun sendTaskSignal(
+        from: EndpointAddress,
+        remoteModuleId: String,
+        type: SignalType,
+        payload: String,
+    ) {
+        val peer = resolvePeerForModule(remoteModuleId) ?: return
+        val state = mergeRemoteModuleViews().firstOrNull { it.presence.moduleId.value == remoteModuleId }
+        val endpointId = resolvePrimaryEndpointId(remoteModuleId, state) ?: "E01"
+        val remote = EndpointAddress(ModuleId(remoteModuleId), EndpointId(endpointId))
+        sendSignalHandoff(
+            peer,
+            buildSignedEnvelope(type, from, remote, sessionId = "", payload = payload),
+        )
     }
 
     /**
@@ -5463,6 +5941,8 @@ class TalkbackCoordinator(
     private fun onPttPressedInternal(sessionId: String, priority: EndpointPriority = EndpointPriority.NORMAL) {
         PttTimingLog.pttDown(sessionId)
         val session = sessions[sessionId] ?: return
+        mediaPriorityGate.onPtt(true)
+        applyLiveVideoPriority()
         if (!session.type.usesFloorControl()) return
         session.channelId?.let { channelId ->
             if (session.type == SessionType.GROUP) {
@@ -5552,6 +6032,11 @@ class TalkbackCoordinator(
             broadcastFloorRelease(session)
         }
         updateSessionReceivePlayback(session, "ptt_released")
+        mediaPriorityGate.onPtt(false)
+        applyLiveVideoPriority()
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+            runOnCoordinator { applyLiveVideoPriority() }
+        }, VideoMediaPolicy.PTT_RESTORE_HOLD_MS)
     }
 
     fun hangup(sessionId: String) {
@@ -9483,6 +9968,16 @@ class TalkbackCoordinator(
             onEndpointTextReceived?.invoke(event)
             return
         }
+        if (signal.type == SignalType.TASK_ISSUE ||
+            signal.type == SignalType.TASK_ACK ||
+            signal.type == SignalType.TASK_CLOSE
+        ) {
+            observePeerInboundAfterAuth(signal)
+            callableModuleGate.markVerified(signal.from.moduleId.value)
+            rememberSignalPeer(signal.from.moduleId.value, fromPeer)
+            handleChannelTaskSignal(signal)
+            return
+        }
         if (signal.type == SignalType.CHANNEL_TEXT) {
             observePeerInboundAfterAuth(signal)
             callableModuleGate.markVerified(signal.from.moduleId.value)
@@ -9552,6 +10047,13 @@ class TalkbackCoordinator(
             meetingProfile01FactWireIngress?.onConferenceSignedFact(signal)
             return
         }
+        if (VideoSignalingDemux.isVideoSignal(signal.type)) {
+            observePeerInboundAfterAuth(signal)
+            callableModuleGate.markVerified(signal.from.moduleId.value)
+            rememberSignalPeer(signal.from.moduleId.value, fromPeer)
+            handleVideoSignal(signal)
+            return
+        }
         observePeerInboundAfterAuth(signal)
         if (NegotiationIngressGate.isNegotiationCapableSignal(signal.type)) {
             val remote = signal.from.moduleId.value
@@ -9614,6 +10116,15 @@ class TalkbackCoordinator(
             SignalType.CHANNEL_ATTACHMENT_META -> Unit // handled above
             SignalType.CHANNEL_ATTACHMENT_CHUNK -> Unit // handled above
             SignalType.CONFERENCE_SIGNED_FACT -> Unit // handled above; keep exhaustive
+            SignalType.VIDEO_PUBLISH,
+            SignalType.VIDEO_PUBLISH_DENY,
+            SignalType.VIDEO_STOP,
+            SignalType.VIDEO_OFFER,
+            SignalType.VIDEO_ANSWER,
+            SignalType.VIDEO_ICE -> Unit
+            SignalType.TASK_ISSUE,
+            SignalType.TASK_ACK,
+            SignalType.TASK_CLOSE -> Unit
             else -> Unit
         }
     }
@@ -14855,7 +15366,7 @@ class TalkbackCoordinator(
         when (mediaBearerScopeFor(session)) {
             MediaBearerScope.CONFERENCE -> qosMonitor.resetConference(moduleId)
             MediaBearerScope.GROUP -> qosMonitor.resetRemote(moduleId)
-            MediaBearerScope.UNICAST -> Unit
+            MediaBearerScope.UNICAST, MediaBearerScope.VIDEO -> Unit
         }
     }
 
@@ -18642,6 +19153,7 @@ class TalkbackCoordinator(
             MediaBearerScope.UNICAST -> onUnicastIceStateChanged(bearerKey, state)
             MediaBearerScope.GROUP, MediaBearerScope.CONFERENCE ->
                 onMeshIceStateChanged(scope, bearerKey, state)
+            MediaBearerScope.VIDEO -> Unit
         }
     }
 
@@ -19000,6 +19512,7 @@ class TalkbackCoordinator(
             MediaBearerScope.CONFERENCE -> isConferencePeerMediaConnected(moduleId)
             MediaBearerScope.UNICAST ->
                 error("Use isUnicastMediaConnected for UNICAST scope")
+            MediaBearerScope.VIDEO -> false
         }
 
     private fun isUnicastMediaConnected(session: TalkbackSession): Boolean =

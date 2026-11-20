@@ -326,7 +326,10 @@ object TalkbackRuntimeFactory {
             },
             onUnicastIce = { sessionId, state ->
                 coordinator.onIceStateChanged(MediaBearerScope.UNICAST, sessionId, state)
-            }
+            },
+            onVideoIce = { negotiationId, state ->
+                coordinator.onIceStateChanged(MediaBearerScope.VIDEO, negotiationId, state)
+            },
         )
         coordinator = TalkbackCoordinator(
             discoveryService = resolvedDiscovery,

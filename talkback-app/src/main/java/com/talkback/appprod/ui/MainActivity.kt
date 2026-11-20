@@ -72,6 +72,7 @@ class MainActivity : AppCompatActivity() {
         bottomNav.setOnItemSelectedListener { item ->
             if (suppressNavListener) return@setOnItemSelectedListener true
             dismissConversation()
+            dismissChannelTasks()
             if (!talkViewModel.uiState.value.call.active) {
                 dismissCallOverlay()
             }
@@ -429,6 +430,65 @@ class MainActivity : AppCompatActivity() {
             )
         }
         updateConversationDismissBackCallback()
+    }
+
+    fun showChannelTasks() {
+        findViewById<View>(R.id.taskOverlayContainer).isVisible = true
+        val fm = supportFragmentManager
+        if (fm.findFragmentByTag(ChannelTaskDetailFragment.TAG) != null) {
+            fm.popBackStack()
+            return
+        }
+        if (fm.findFragmentByTag(ChannelTaskListFragment.TAG) == null) {
+            fm.commit {
+                setReorderingAllowed(true)
+                replace(
+                    R.id.taskOverlayContainer,
+                    ChannelTaskListFragment(),
+                    ChannelTaskListFragment.TAG
+                )
+            }
+        }
+    }
+
+    fun showChannelTaskDetail(taskId: String) {
+        findViewById<View>(R.id.taskOverlayContainer).isVisible = true
+        talkViewModel.selectChannelTask(taskId)
+        val fm = supportFragmentManager
+        if (fm.findFragmentByTag(ChannelTaskListFragment.TAG) == null) {
+            fm.commit {
+                setReorderingAllowed(true)
+                replace(
+                    R.id.taskOverlayContainer,
+                    ChannelTaskListFragment(),
+                    ChannelTaskListFragment.TAG
+                )
+            }
+        }
+        fm.commit {
+            setReorderingAllowed(true)
+            replace(
+                R.id.taskOverlayContainer,
+                ChannelTaskDetailFragment.newInstance(taskId),
+                ChannelTaskDetailFragment.TAG
+            )
+            addToBackStack(ChannelTaskListFragment.BACK_STACK_NAME)
+        }
+    }
+
+    fun dismissChannelTasks() {
+        val fm = supportFragmentManager
+        if (fm.findFragmentByTag(ChannelTaskDetailFragment.TAG) != null) {
+            fm.popBackStack(ChannelTaskListFragment.BACK_STACK_NAME, androidx.fragment.app.FragmentManager.POP_BACK_STACK_INCLUSIVE)
+        }
+        val list = fm.findFragmentByTag(ChannelTaskListFragment.TAG)
+        if (list != null) {
+            fm.commit {
+                setReorderingAllowed(true)
+                remove(list)
+            }
+        }
+        findViewById<View>(R.id.taskOverlayContainer).isVisible = false
     }
 
     fun dismissConversation() {

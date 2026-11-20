@@ -19,6 +19,8 @@ class PeerControlSignalingAdmissionTest {
         assertFalse(PeerControlSignalingAdmission.isHardGatedControl(SignalType.WEBRTC_OFFER))
         assertFalse(PeerControlSignalingAdmission.isHardGatedControl(SignalType.WEBRTC_ANSWER))
         assertFalse(PeerControlSignalingAdmission.isHardGatedControl(SignalType.WEBRTC_ICE))
+        assertFalse(PeerControlSignalingAdmission.isHardGatedControl(SignalType.VIDEO_OFFER))
+        assertFalse(PeerControlSignalingAdmission.isHardGatedControl(SignalType.VIDEO_ICE))
         assertFalse(PeerControlSignalingAdmission.isHardGatedControl(SignalType.HELLO))
         assertFalse(PeerControlSignalingAdmission.isHardGatedControl(SignalType.HEARTBEAT))
         assertFalse(PeerControlSignalingAdmission.isHardGatedControl(SignalType.FLOOR_REQUEST))

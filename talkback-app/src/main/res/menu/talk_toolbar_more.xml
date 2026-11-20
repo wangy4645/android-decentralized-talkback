@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:id="@+id/menu_live_start"
+        android:title="@string/live_menu_start"
+        android:visible="false" />
+    <item
+        android:id="@+id/menu_live_stop"
+        android:title="@string/live_menu_stop"
+        android:visible="false" />
+</menu>

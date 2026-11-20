@@ -1,6 +1,8 @@
 package com.talkback.appprod.ui
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
 import android.media.AudioManager
 import android.os.Bundle
 import android.view.LayoutInflater
@@ -11,7 +13,9 @@ import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.widget.PopupMenu
 import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.core.content.ContextCompat
 import androidx.core.view.isVisible
@@ -27,6 +31,10 @@ import com.talkback.core.session.ChannelReadiness
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.webrtc.EglBase
+import org.webrtc.RendererCommon
+import org.webrtc.SurfaceViewRenderer
+import org.webrtc.VideoTrack
 
 class TalkFragment : Fragment() {
     private val viewModel: TalkViewModel by activityViewModels { TalkViewModelFactory(requireContext()) }
@@ -45,6 +53,22 @@ class TalkFragment : Fragment() {
     private lateinit var txtPttHintRef: TextView
     private var pttRippleAnimator: PttTransmitRippleAnimator? = null
     private lateinit var layoutPttRadarRings: View
+    private var liveEglBase: EglBase? = null
+    private var pipRenderer: SurfaceViewRenderer? = null
+    private var fullRenderer: SurfaceViewRenderer? = null
+    private var liveFullscreen = false
+    private var hidePublisherPip = false
+    private var localPreviewAttached = false
+    private var remoteTrackAttached: VideoTrack? = null
+    private val requestCamera = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            viewModel.toggleLivePublish()
+        } else {
+            Toast.makeText(requireContext(), R.string.live_camera_denied, Toast.LENGTH_SHORT).show()
+        }
+    }
 
     override fun onCreateView(
         inflater: LayoutInflater,
@@ -106,6 +130,16 @@ class TalkFragment : Fragment() {
             }
         }
 
+        setupLiveViews(view)
+        view.findViewById<View>(R.id.layoutTaskDockHeader).setOnClickListener {
+            (activity as? MainActivity)?.showChannelTasks()
+        }
+        view.findViewById<View>(R.id.layoutTaskDockAlert).setOnClickListener {
+            val task = viewModel.uiState.value.task
+            if (!task.needsAck) return@setOnClickListener
+            task.taskId?.let { viewModel.ackChannelTask(it) }
+        }
+
         view.findViewById<View>(R.id.btnViewAllEndpoints).setOnClickListener {
             Toast.makeText(requireContext(), R.string.feature_coming_soon, Toast.LENGTH_SHORT).show()
         }
@@ -113,8 +147,8 @@ class TalkFragment : Fragment() {
         view.findViewById<View>(R.id.btnToolbarMenu).setOnClickListener {
             Toast.makeText(requireContext(), R.string.feature_coming_soon, Toast.LENGTH_SHORT).show()
         }
-        view.findViewById<View>(R.id.btnToolbarMore).setOnClickListener {
-            Toast.makeText(requireContext(), R.string.feature_coming_soon, Toast.LENGTH_SHORT).show()
+        view.findViewById<View>(R.id.btnToolbarMore).setOnClickListener { anchor ->
+            showToolbarMoreMenu(anchor)
         }
         view.findViewById<View>(R.id.btnToolbarVolume).setOnClickListener {
             val audio = requireContext().getSystemService(Context.AUDIO_SERVICE) as AudioManager
@@ -138,6 +172,13 @@ class TalkFragment : Fragment() {
                 }
             }
         }
+        viewLifecycleOwner.lifecycleScope.launch {
+            viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                viewModel.liveRemoteTrack.collect { track ->
+                    bindRemoteLiveTrack(track)
+                }
+            }
+        }
     }
 
     override fun onResume() {
@@ -149,6 +190,7 @@ class TalkFragment : Fragment() {
     override fun onDestroyView() {
         pttRippleAnimator?.stop()
         pttRippleAnimator = null
+        releaseLiveRenderers()
         super.onDestroyView()
     }
 
@@ -259,6 +301,7 @@ class TalkFragment : Fragment() {
         view.findViewById<TextView>(R.id.txtNetwork).setTextColor(
             ContextCompat.getColor(requireContext(), networkColor)
         )
+        bindLiveChrome(view, state)
 
         view.findViewById<TextView>(R.id.txtEndpointHeader).text =
             getString(R.string.online_endpoints_count, state.endpoints.size)
@@ -496,6 +539,96 @@ class TalkFragment : Fragment() {
             emergency.setOnClickListener { showEmergencyPlaceholder() }
             record.setOnClickListener { FeaturePlaceholderBottomSheet.showRecord(this) }
         }
+    }
+
+    private fun bindTaskChrome(view: View, state: TalkUiState) {
+        val task = state.task
+        val dock = view.findViewById<View>(R.id.layoutTaskDock)
+        val showDock = state.serviceRunning && !state.conferenceMode
+        dock.isVisible = showDock
+        if (!showDock) return
+        view.findViewById<TextView>(R.id.txtTaskDockTitle).text =
+            getString(R.string.task_dock_title, task.openTaskCount)
+        val showAlert = task.visible
+        view.findViewById<View>(R.id.layoutTaskDockDivider).isVisible = showAlert
+        val alertRow = view.findViewById<View>(R.id.layoutTaskDockAlert)
+        alertRow.isVisible = showAlert
+        if (!showAlert) return
+        view.findViewById<TextView>(R.id.txtTaskDockAlert).text = if (task.needsAck) {
+            getString(R.string.task_banner_new, task.title)
+        } else {
+            "${task.title}  ·  ${getString(R.string.task_collecting_short, task.ackedCount, task.targetCount)}"
+        }
+        val action = view.findViewById<TextView>(R.id.txtTaskDockAlertAction)
+        when {
+            task.needsAck -> {
+                alertRow.isClickable = true
+                action.isVisible = true
+                action.text = getString(R.string.task_tap_to_confirm)
+                action.setTextColor(ContextCompat.getColor(requireContext(), R.color.tb_warning))
+            }
+            task.collecting -> {
+                alertRow.isClickable = false
+                action.isVisible = false
+            }
+            task.visible -> {
+                alertRow.isClickable = false
+                action.isVisible = true
+                action.text = getString(R.string.task_quick_acked)
+                action.setTextColor(ContextCompat.getColor(requireContext(), R.color.tb_success))
+            }
+            else -> action.isVisible = false
+        }
+    }
+
+    private fun showToolbarMoreMenu(anchor: View) {
+        val state = viewModel.uiState.value
+        val live = state.live
+        val popup = PopupMenu(requireContext(), anchor)
+        popup.menuInflater.inflate(R.menu.talk_toolbar_more, popup.menu)
+        val sessionReady = state.serviceRunning && state.sessionActive && !state.conferenceMode
+        val remoteLive = live.active && !live.localPublishing
+        popup.menu.findItem(R.id.menu_live_start).isVisible =
+            sessionReady && !live.localPublishing && !remoteLive
+        popup.menu.findItem(R.id.menu_live_stop).isVisible =
+            sessionReady && live.localPublishing
+        popup.setOnMenuItemClickListener { item ->
+            when (item.itemId) {
+                R.id.menu_live_start -> {
+                    startLiveWithCameraPermission()
+                    true
+                }
+                R.id.menu_live_stop -> {
+                    hidePublisherPip = false
+                    viewModel.toggleLivePublish()
+                    true
+                }
+                else -> false
+            }
+        }
+        popup.show()
+    }
+
+    private fun startLiveWithCameraPermission() {
+        val granted = ContextCompat.checkSelfPermission(
+            requireContext(),
+            Manifest.permission.CAMERA
+        ) == PackageManager.PERMISSION_GRANTED
+        if (granted) {
+            viewModel.toggleLivePublish()
+        } else {
+            requestCamera.launch(Manifest.permission.CAMERA)
+        }
+    }
+
+    private fun openLiveWatch(view: View) {
+        val live = viewModel.uiState.value.live
+        if (live.localPublishing) return
+        if (!live.active) return
+        if (!live.watching) viewModel.watchLive()
+        liveFullscreen = true
+        bindLiveChrome(view, viewModel.uiState.value)
+        bindRemoteLiveTrack(viewModel.liveRemoteTrack.value)
     }
 
     private fun bindMeetingActionTileState(view: View, state: TalkUiState) {
@@ -829,5 +962,137 @@ class TalkFragment : Fragment() {
                 }
             }
             .show()
+    }
+
+    private fun setupLiveViews(view: View) {
+        val egl = EglBase.create()
+        liveEglBase = egl
+        val pip = view.findViewById<SurfaceViewRenderer>(R.id.livePipRenderer)
+        val full = view.findViewById<SurfaceViewRenderer>(R.id.liveFullRenderer)
+        pip.init(egl.eglBaseContext, null)
+        pip.setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FILL)
+        pip.setEnableHardwareScaler(true)
+        pip.setZOrderMediaOverlay(true)
+        full.init(egl.eglBaseContext, null)
+        full.setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FIT)
+        pipRenderer = pip
+        fullRenderer = full
+
+        view.findViewById<View>(R.id.txtLiveBannerAction).setOnClickListener {
+            val live = viewModel.uiState.value.live
+            if (live.localPublishing) {
+                hidePublisherPip = false
+                viewModel.toggleLivePublish()
+            } else {
+                openLiveWatch(view)
+            }
+        }
+        view.findViewById<View>(R.id.layoutLiveBanner).setOnClickListener {
+            openLiveWatch(view)
+        }
+        view.findViewById<View>(R.id.btnLivePipClose).setOnClickListener {
+            val live = viewModel.uiState.value.live
+            if (live.watching) {
+                liveFullscreen = false
+                viewModel.unwatchLive()
+            } else if (live.localPublishing) {
+                hidePublisherPip = true
+                bindLiveChrome(view, viewModel.uiState.value)
+            }
+        }
+        pip.setOnClickListener {
+            if (!viewModel.uiState.value.live.watching) return@setOnClickListener
+            liveFullscreen = true
+            bindLiveChrome(view, viewModel.uiState.value)
+            bindRemoteLiveTrack(viewModel.liveRemoteTrack.value)
+        }
+        view.findViewById<View>(R.id.btnLiveFullscreenClose).setOnClickListener {
+            liveFullscreen = false
+            bindLiveChrome(view, viewModel.uiState.value)
+            bindRemoteLiveTrack(viewModel.liveRemoteTrack.value)
+        }
+    }
+
+    private fun bindLiveChrome(view: View, state: TalkUiState) {
+        val live = state.live
+        if (!live.localPublishing) hidePublisherPip = false
+        val publisherLabel = live.publisherModuleId
+            ?: getString(R.string.live_action)
+        val showRemote = live.active && !live.localPublishing
+        val showLocal = live.localPublishing
+        val banner = view.findViewById<View>(R.id.layoutLiveBanner)
+        banner.isVisible = showRemote || showLocal
+        val title = view.findViewById<TextView>(R.id.txtLiveBanner)
+        val sub = view.findViewById<TextView>(R.id.txtLiveBannerSub)
+        val action = view.findViewById<TextView>(R.id.txtLiveBannerAction)
+        val success = ContextCompat.getColor(requireContext(), R.color.tb_success)
+        val warning = ContextCompat.getColor(requireContext(), R.color.tb_warning)
+        if (showLocal) {
+            title.text = getString(R.string.live_publishing)
+            sub.isVisible = false
+            action.isVisible = true
+            action.text = getString(R.string.live_stop)
+            action.setTextColor(warning)
+            banner.isClickable = false
+        } else if (showRemote) {
+            title.text = getString(R.string.live_banner_title, publisherLabel)
+            sub.isVisible = !live.watching
+            sub.text = getString(R.string.live_banner_subtitle)
+            action.isVisible = !live.watching
+            action.text = getString(R.string.live_watch_action)
+            action.setTextColor(success)
+            banner.isClickable = !live.watching
+        }
+
+        val showPip = (live.watching && !liveFullscreen) ||
+            (live.localPublishing && !hidePublisherPip && !liveFullscreen)
+        view.findViewById<View>(R.id.layoutLivePip).isVisible = showPip
+        view.findViewById<TextView>(R.id.txtLivePipCaption).text =
+            getString(R.string.live_pip_caption, publisherLabel)
+        view.findViewById<View>(R.id.layoutLiveFullscreen).isVisible = liveFullscreen && live.watching
+        if (!live.watching && liveFullscreen) liveFullscreen = false
+        bindTaskChrome(view, state)
+
+        if (live.localPublishing && showPip) {
+            val pip = pipRenderer
+            if (pip != null && !localPreviewAttached) {
+                viewModel.attachLocalLivePreview(pip)
+                localPreviewAttached = true
+            }
+        } else if (localPreviewAttached) {
+            pipRenderer?.let { viewModel.detachLocalLivePreview(it) }
+            localPreviewAttached = false
+        }
+    }
+
+    private fun bindRemoteLiveTrack(track: VideoTrack?) {
+        val target = if (liveFullscreen) fullRenderer else pipRenderer
+        remoteTrackAttached?.let { current ->
+            pipRenderer?.let { runCatching { current.removeSink(it) } }
+            fullRenderer?.let { runCatching { current.removeSink(it) } }
+        }
+        remoteTrackAttached = track
+        if (track != null && target != null && viewModel.uiState.value.live.watching) {
+            runCatching { track.addSink(target) }
+        }
+    }
+
+    private fun releaseLiveRenderers() {
+        remoteTrackAttached?.let { track ->
+            pipRenderer?.let { runCatching { track.removeSink(it) } }
+            fullRenderer?.let { runCatching { track.removeSink(it) } }
+        }
+        remoteTrackAttached = null
+        if (localPreviewAttached) {
+            pipRenderer?.let { viewModel.detachLocalLivePreview(it) }
+            localPreviewAttached = false
+        }
+        runCatching { pipRenderer?.release() }
+        runCatching { fullRenderer?.release() }
+        pipRenderer = null
+        fullRenderer = null
+        runCatching { liveEglBase?.release() }
+        liveEglBase = null
+        liveFullscreen = false
     }
 }

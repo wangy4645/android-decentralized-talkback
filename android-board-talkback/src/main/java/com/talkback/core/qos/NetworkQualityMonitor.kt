@@ -26,6 +26,7 @@ class NetworkQualityMonitor {
                 meshStore.updateIceState(scope, key, iceState)
             MediaBearerScope.UNICAST ->
                 error("Use updateUnicastIceState for UNICAST scope")
+            MediaBearerScope.VIDEO -> Unit
         }
     }
 
@@ -56,6 +57,7 @@ class NetworkQualityMonitor {
                 meshStore.reset(scope, remoteModuleId)
             MediaBearerScope.UNICAST ->
                 error("Use resetUnicast for UNICAST scope")
+            MediaBearerScope.VIDEO -> Unit
         }
     }
 
@@ -78,6 +80,7 @@ class NetworkQualityMonitor {
     fun snapshot(scope: MediaBearerScope, key: String): QosSnapshot? = when (scope) {
         MediaBearerScope.GROUP, MediaBearerScope.CONFERENCE -> meshStore.snapshot(scope, key)
         MediaBearerScope.UNICAST -> unicastSnapshots[key]
+        MediaBearerScope.VIDEO -> null
     }
 
     @Synchronized
