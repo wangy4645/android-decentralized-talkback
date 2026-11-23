@@ -642,14 +642,15 @@ class TalkFragment : Fragment() {
 
     private fun toggleMeetingSpeakerRoute(monitor: View) {
         val nextRoute = when (CallAudioRouteHelper.current()) {
-            CallAudioRoute.SPEAKER -> CallAudioRoute.EARPIECE
+            CallAudioRoute.SPEAKER -> CallAudioRouteHelper.preferredNonSpeaker(requireContext())
             else -> CallAudioRoute.SPEAKER
         }
         CallAudioRouteHelper.apply(requireContext(), nextRoute)
         bindSpeakerTileAppearance(monitor)
         val messageRes = when (nextRoute) {
             CallAudioRoute.SPEAKER -> R.string.meeting_audio_route_speaker_on
-            else -> R.string.meeting_audio_route_earpiece_on
+            CallAudioRoute.HEADSET -> R.string.meeting_audio_route_headset_on
+            CallAudioRoute.EARPIECE -> R.string.meeting_audio_route_earpiece_on
         }
         Toast.makeText(requireContext(), messageRes, Toast.LENGTH_SHORT).show()
     }
@@ -660,10 +661,10 @@ class TalkFragment : Fragment() {
         monitor.setBackgroundResource(
             if (speakerSelected) R.drawable.bg_action_tile_active else R.drawable.bg_action_tile
         )
-        monitor.findViewById<TextView>(R.id.txtActionMonitor).text = if (speakerSelected) {
-            getString(R.string.call_audio_route_speaker)
-        } else {
-            getString(R.string.call_audio_route_earpiece)
+        monitor.findViewById<TextView>(R.id.txtActionMonitor).text = when (route) {
+            CallAudioRoute.SPEAKER -> getString(R.string.call_audio_route_speaker)
+            CallAudioRoute.HEADSET -> getString(R.string.call_audio_route_headset)
+            CallAudioRoute.EARPIECE -> getString(R.string.call_audio_route_earpiece)
         }
     }
 
@@ -677,6 +678,7 @@ class TalkFragment : Fragment() {
     }
 
     private fun startMeeting(intent: JoinMeetingIntent, target: MeetingNavigation = MeetingNavigation.MAIN) {
+        CallAudioRouteHelper.apply(requireContext(), CallAudioRouteHelper.preferred(requireContext()))
         lifecycleScope.launch(Dispatchers.Default) {
             val result = viewModel.joinMeeting(intent)
             withContext(Dispatchers.Main) {

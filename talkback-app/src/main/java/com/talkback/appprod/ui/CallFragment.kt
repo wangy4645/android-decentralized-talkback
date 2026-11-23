@@ -105,7 +105,7 @@ class CallFragment : Fragment() {
             getString(R.string.call_control_speaker)
         ) {
             val next = if (CallAudioRouteHelper.current() == CallAudioRoute.SPEAKER) {
-                CallAudioRoute.EARPIECE
+                CallAudioRouteHelper.preferredNonSpeaker(requireContext())
             } else {
                 CallAudioRoute.SPEAKER
             }
@@ -135,7 +135,7 @@ class CallFragment : Fragment() {
         view.findViewById<View>(R.id.btnCallBack).setOnClickListener { finishCall() }
         bindReturnTargetButton(view)
 
-        applyAudioRoute(CallAudioRoute.SPEAKER)
+        applyAudioRoute(CallAudioRouteHelper.preferred(requireContext()))
 
         viewLifecycleOwner.lifecycleScope.launch {
             viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {

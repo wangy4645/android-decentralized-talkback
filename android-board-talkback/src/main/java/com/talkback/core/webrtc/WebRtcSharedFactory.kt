@@ -113,8 +113,6 @@ internal object WebRtcSharedFactory {
     private fun configureAndroidAudio(context: Context) {
         val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
         audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
-        @Suppress("DEPRECATION")
-        audioManager.isSpeakerphoneOn = true
         audioConfigured = true
     }
 

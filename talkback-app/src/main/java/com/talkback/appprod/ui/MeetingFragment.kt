@@ -68,8 +68,9 @@ class MeetingFragment : Fragment() {
             R.drawable.ic_volume,
             getString(R.string.call_control_headset)
         ) {
-            CallAudioRouteHelper.apply(requireContext(), CallAudioRoute.EARPIECE)
-            CallAudioRouteUi.highlight(speakerControl, headsetControl, CallAudioRoute.EARPIECE)
+            val route = CallAudioRouteHelper.preferredNonSpeaker(requireContext())
+            CallAudioRouteHelper.apply(requireContext(), route)
+            CallAudioRouteUi.highlight(speakerControl, headsetControl, route)
         }
         setupControl(
             view.findViewById(R.id.btnMeetingMore),
@@ -86,8 +87,14 @@ class MeetingFragment : Fragment() {
         view.findViewById<View>(R.id.btnMeetingLeave).setOnClickListener { leaveMeeting() }
         view.findViewById<View>(R.id.btnMeetingCancel).setOnClickListener { handleMeetingCancel() }
 
-        CallAudioRouteHelper.apply(requireContext(), CallAudioRoute.SPEAKER)
-        CallAudioRouteUi.highlight(speakerControl, headsetControl, CallAudioRoute.SPEAKER)
+        val initialRoute =
+            if (CallAudioRouteHelper.current() == CallAudioRoute.HEADSET) {
+                CallAudioRoute.HEADSET
+            } else {
+                CallAudioRouteHelper.preferred(requireContext())
+            }
+        CallAudioRouteHelper.apply(requireContext(), initialRoute)
+        CallAudioRouteUi.highlight(speakerControl, headsetControl, initialRoute)
 
         viewLifecycleOwner.lifecycleScope.launch {
             viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {

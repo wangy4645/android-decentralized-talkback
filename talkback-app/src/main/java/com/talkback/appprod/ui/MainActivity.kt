@@ -509,6 +509,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     fun showMeetingScreen(target: MeetingNavigation = MeetingNavigation.MAIN) {
+        CallAudioRouteHelper.apply(this, CallAudioRouteHelper.preferred(this))
         dismissMeetingInviteOverlay()
         val existing =
             supportFragmentManager.findFragmentByTag(MeetingFragment.TAG_MEETING) as? MeetingFragment
