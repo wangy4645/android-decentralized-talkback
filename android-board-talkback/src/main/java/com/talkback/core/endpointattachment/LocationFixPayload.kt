@@ -10,6 +10,8 @@ data class LocationFixPayload(
     val altitudeMeters: Double?,
     val timestampMs: Long,
     val provider: String,
+    val label: String? = null,
+    val coordinateSystem: LocationCoordinateSystem = LocationCoordinateSystem.WGS84,
 ) {
     fun encode(): ByteArray = JSONObject()
         .put("v", 1)
@@ -19,6 +21,8 @@ data class LocationFixPayload(
         .put("altM", altitudeMeters ?: JSONObject.NULL)
         .put("tsMs", timestampMs)
         .put("provider", provider)
+        .put("label", label?.takeIf { it.isNotBlank() } ?: JSONObject.NULL)
+        .put("crs", coordinateSystem.name)
         .toString()
         .toByteArray(Charsets.UTF_8)
 
@@ -44,6 +48,11 @@ data class LocationFixPayload(
                     altRaw == null || altRaw == JSONObject.NULL -> null
                     else -> altRaw.toString().toDoubleOrNull()?.takeIf { it.isFinite() }
                 }
+                val labelRaw = json.opt("label")
+                val label = when {
+                    labelRaw == null || labelRaw == JSONObject.NULL -> null
+                    else -> labelRaw.toString().trim().takeIf { it.isNotEmpty() }
+                }
                 LocationFixPayload(
                     latitude = lat,
                     longitude = lon,
@@ -51,6 +60,10 @@ data class LocationFixPayload(
                     altitudeMeters = alt,
                     timestampMs = json.optLong("tsMs", 0L),
                     provider = json.optString("provider", "gps").ifBlank { "gps" },
+                    label = label,
+                    coordinateSystem = LocationCoordinateSystem.fromWire(
+                        json.optString("crs").takeIf { json.has("crs") && it.isNotBlank() },
+                    ),
                 )
             }.getOrNull()
         }

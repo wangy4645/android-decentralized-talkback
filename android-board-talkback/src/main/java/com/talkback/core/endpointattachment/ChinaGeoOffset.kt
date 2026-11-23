@@ -1,0 +1,45 @@
+package com.talkback.core.endpointattachment
+
+import kotlin.math.abs
+import kotlin.math.cos
+import kotlin.math.sin
+import kotlin.math.sqrt
+
+/** WGS84 to GCJ-02 (China survey offset) for third-party map URIs. */
+object ChinaGeoOffset {
+    private const val A = 6378245.0
+    private const val EE = 0.00669342162296594323
+
+    fun isInChina(latitude: Double, longitude: Double): Boolean {
+        return longitude in 72.004..137.8347 && latitude in 0.8293..55.8271
+    }
+
+    fun wgs84ToGcj02(latitude: Double, longitude: Double): Pair<Double, Double> {
+        if (!isInChina(latitude, longitude)) return latitude to longitude
+        var dLat = transformLat(longitude - 105.0, latitude - 35.0)
+        var dLon = transformLon(longitude - 105.0, latitude - 35.0)
+        val radLat = latitude / 180.0 * Math.PI
+        var magic = sin(radLat)
+        magic = 1 - EE * magic * magic
+        val sqrtMagic = sqrt(magic)
+        dLat = (dLat * 180.0) / ((A * (1 - EE)) / (magic * sqrtMagic) * Math.PI)
+        dLon = (dLon * 180.0) / (A / sqrtMagic * cos(radLat) * Math.PI)
+        return latitude + dLat to longitude + dLon
+    }
+
+    private fun transformLat(x: Double, y: Double): Double {
+        var ret = -100.0 + 2.0 * x + 3.0 * y + 0.2 * y * y + 0.1 * x * y + 0.2 * sqrt(abs(x))
+        ret += (20.0 * sin(6.0 * x * Math.PI) + 20.0 * sin(2.0 * x * Math.PI)) * 2.0 / 3.0
+        ret += (20.0 * sin(y * Math.PI) + 40.0 * sin(y / 3.0 * Math.PI)) * 2.0 / 3.0
+        ret += (160.0 * sin(y / 12.0 * Math.PI) + 320 * sin(y * Math.PI / 30.0)) * 2.0 / 3.0
+        return ret
+    }
+
+    private fun transformLon(x: Double, y: Double): Double {
+        var ret = 300.0 + x + 2.0 * y + 0.1 * x * x + 0.1 * x * y + 0.1 * sqrt(abs(x))
+        ret += (20.0 * sin(6.0 * x * Math.PI) + 20.0 * sin(2.0 * x * Math.PI)) * 2.0 / 3.0
+        ret += (20.0 * sin(x * Math.PI) + 40.0 * sin(x / 3.0 * Math.PI)) * 2.0 / 3.0
+        ret += (150.0 * sin(x / 12.0 * Math.PI) + 300.0 * sin(x / 30.0 * Math.PI)) * 2.0 / 3.0
+        return ret
+    }
+}

@@ -166,6 +166,7 @@
     <string name="meeting_control_speaker">Speaker</string>
     <string name="meeting_audio_route_speaker_on">Speaker on</string>
     <string name="meeting_audio_route_earpiece_on">Earpiece on</string>
+    <string name="meeting_audio_route_headset_on">Headset on</string>
     <string name="meeting_control_more">More</string>
     <string name="meeting_control_section">MEETING CONTROL</string>
     <string name="meeting_mute_all">Mute All</string>
@@ -409,6 +410,12 @@
     <string name="message_location_timeout">No GPS fix. Move outdoors and retry.</string>
     <string name="message_location_unavailable">GPS is not available on this device</string>
     <string name="message_location_open_failed">No map app. Coordinates copied on screen.</string>
+    <string name="message_location_open_title">Open in maps</string>
+    <string name="message_location_map_amap">Amap</string>
+    <string name="message_location_map_baidu">Baidu Maps</string>
+    <string name="message_location_map_other">Other maps</string>
+    <string name="message_location_copy_coords">Copy coordinates</string>
+    <string name="message_location_copied">Coordinates copied</string>
     <string name="message_location_coords">%1$.5f, %2$.5f</string>
     <string name="message_location_coords_acc">%1$.5f, %2$.5f  ±%3$.0fm</string>
     <string name="message_attach_file_browse">Browse files</string>

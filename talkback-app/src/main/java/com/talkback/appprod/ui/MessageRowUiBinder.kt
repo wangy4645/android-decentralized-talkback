@@ -332,7 +332,9 @@ object MessageRowUiBinder {
                 payload.longitude,
             )
         }
-        return context.getString(R.string.message_attach_pick_location) + "\n" + coords
+        val headline = payload.label?.takeIf { it.isNotBlank() }
+            ?: context.getString(R.string.message_attach_pick_location)
+        return "$headline\n$coords"
     }
 
     private fun openLocation(context: Context, attachment: MessageAttachmentInfo) {
@@ -341,14 +343,7 @@ object MessageRowUiBinder {
             Toast.makeText(context, R.string.message_attachment_missing, Toast.LENGTH_SHORT).show()
             return
         }
-        val uri = android.net.Uri.parse(
-            "geo:${payload.latitude},${payload.longitude}?q=${payload.latitude},${payload.longitude}",
-        )
-        try {
-            context.startActivity(Intent(Intent.ACTION_VIEW, uri))
-        } catch (_: ActivityNotFoundException) {
-            Toast.makeText(context, R.string.message_location_open_failed, Toast.LENGTH_SHORT).show()
-        }
+        LocationMapOpener.showChooser(context, payload)
     }
 
     private fun decodeLocation(attachment: MessageAttachmentInfo): LocationFixPayload? {

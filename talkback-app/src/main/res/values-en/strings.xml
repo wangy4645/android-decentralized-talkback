@@ -165,6 +165,7 @@
     <string name="meeting_control_speaker">Speaker</string>
     <string name="meeting_audio_route_speaker_on">Speaker on</string>
     <string name="meeting_audio_route_earpiece_on">Earpiece on</string>
+    <string name="meeting_audio_route_headset_on">Headset on</string>
     <string name="meeting_control_more">More</string>
     <string name="meeting_control_section">MEETING CONTROL</string>
     <string name="meeting_mute_all">Mute All</string>

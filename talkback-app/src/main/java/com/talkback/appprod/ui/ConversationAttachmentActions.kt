@@ -24,6 +24,7 @@ import androidx.fragment.app.Fragment
 import com.talkback.appprod.R
 import com.talkback.appprod.endpointtext.StreamingFileHasher
 import com.talkback.core.endpointattachment.AttachmentKind
+import com.talkback.core.endpointattachment.LocationCoordinateSystem
 import com.talkback.core.endpointattachment.LocationFixPayload
 import com.talkback.core.endpointattachment.bulk.AttachmentSizePolicy
 import java.io.File
@@ -81,6 +82,7 @@ class ConversationAttachmentActions(
     private val mainHandler = Handler(Looper.getMainLooper())
     private var gpsListener: LocationListener? = null
     private var gpsTimeout: Runnable? = null
+    private var geocodeFallback: Runnable? = null
     private var bestGpsFix: Location? = null
 
     fun pickImage() {
@@ -265,20 +267,35 @@ class ConversationAttachmentActions(
 
     private fun completeGpsFix(location: Location) {
         stopGpsFix()
-        val payload = LocationFixPayload(
-            latitude = location.latitude,
-            longitude = location.longitude,
-            accuracyMeters = location.accuracy.takeIf { location.hasAccuracy() },
-            altitudeMeters = location.altitude.takeIf { location.hasAltitude() },
-            timestampMs = location.time.takeIf { it > 0L } ?: System.currentTimeMillis(),
-            provider = location.provider ?: LocationManager.GPS_PROVIDER,
-        )
-        onBytesReady(
-            payload.encode(),
-            AttachmentKind.LOCATION,
-            LocationFixPayload.MIME_TYPE,
-            LocationFixPayload.FILE_NAME,
-        )
+        var delivered = false
+        fun deliver(label: String?) {
+            if (delivered) return
+            delivered = true
+            geocodeFallback?.let { mainHandler.removeCallbacks(it) }
+            geocodeFallback = null
+            val payload = LocationFixPayload(
+                latitude = location.latitude,
+                longitude = location.longitude,
+                accuracyMeters = location.accuracy.takeIf { location.hasAccuracy() },
+                altitudeMeters = location.altitude.takeIf { location.hasAltitude() },
+                timestampMs = location.time.takeIf { it > 0L } ?: System.currentTimeMillis(),
+                provider = location.provider ?: LocationManager.GPS_PROVIDER,
+                label = label,
+                coordinateSystem = LocationCoordinateSystem.WGS84,
+            )
+            onBytesReady(
+                payload.encode(),
+                AttachmentKind.LOCATION,
+                LocationFixPayload.MIME_TYPE,
+                LocationFixPayload.FILE_NAME,
+            )
+        }
+        val fallback = Runnable { deliver(null) }
+        geocodeFallback = fallback
+        mainHandler.postDelayed(fallback, GEOCODE_TIMEOUT_MS)
+        LocationReverseGeocoder.resolve(context, location.latitude, location.longitude) { label ->
+            mainHandler.post { deliver(label) }
+        }
     }
 
     private fun stopGpsFix() {
@@ -343,6 +360,7 @@ class ConversationAttachmentActions(
 
     companion object {
         private const val MIN_VOICE_MS = 600L
+        private const val GEOCODE_TIMEOUT_MS = 2_500L
         private const val GPS_TIMEOUT_MS = 45_000L
         private const val ACCEPT_ACCURACY_M = 20f
         private const val TIMEOUT_ACCEPT_ACCURACY_M = 75f

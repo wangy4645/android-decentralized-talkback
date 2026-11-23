@@ -166,6 +166,7 @@
     <string name="meeting_control_speaker">扬声器</string>
     <string name="meeting_audio_route_speaker_on">扬声器已开</string>
     <string name="meeting_audio_route_earpiece_on">听筒已开</string>
+    <string name="meeting_audio_route_headset_on">耳机已开</string>
     <string name="meeting_control_more">更多</string>
     <string name="meeting_control_section">会议控制</string>
     <string name="meeting_mute_all">全员静音</string>
@@ -409,6 +410,12 @@
     <string name="message_location_timeout">未拿到 GPS 点，请到室外重试</string>
     <string name="message_location_unavailable">本机没有 GPS</string>
     <string name="message_location_open_failed">没有地图应用，请记录坐标</string>
+    <string name="message_location_open_title">选择地图打开</string>
+    <string name="message_location_map_amap">高德地图</string>
+    <string name="message_location_map_baidu">百度地图</string>
+    <string name="message_location_map_other">其他地图</string>
+    <string name="message_location_copy_coords">复制坐标</string>
+    <string name="message_location_copied">已复制坐标</string>
     <string name="message_location_coords">%1$.5f, %2$.5f</string>
     <string name="message_location_coords_acc">%1$.5f, %2$.5f  ±%3$.0fm</string>
     <string name="message_attach_file_browse">浏览文件</string>
