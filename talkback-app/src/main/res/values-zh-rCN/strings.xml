@@ -38,6 +38,7 @@
     <string name="device_list">设备</string>
     <string name="you_suffix">（您）</string>
     <string name="meeting_you_in_meeting">您正在会议中</string>
+    <string name="status_meeting_joined">已入会</string>
     <string name="status_online">在线</string>
     <string name="status_speaking">正在讲话</string>
     <string name="status_offline">离线</string>

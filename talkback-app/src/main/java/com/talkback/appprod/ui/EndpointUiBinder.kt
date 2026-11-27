@@ -21,6 +21,7 @@ object EndpointUiBinder {
         keyView.text = item.displayLabel
         statusView.text = when (item.status) {
             EndpointStatus.SPEAKING -> ctx.getString(R.string.status_speaking)
+            EndpointStatus.JOINED -> ctx.getString(R.string.status_meeting_joined)
             EndpointStatus.ONLINE -> ctx.getString(R.string.status_online)
             EndpointStatus.OFFLINE -> ctx.getString(R.string.status_offline)
             EndpointStatus.INVITING -> ctx.getString(R.string.status_inviting)
@@ -38,11 +39,11 @@ object EndpointUiBinder {
             item.status == EndpointStatus.SYNCING || item.status == EndpointStatus.DEGRADED
         val isMuted = item.status == EndpointStatus.EXPIRED || item.status == EndpointStatus.INVITING
         waveformView.isVisible = isSpeaking
-        signalBarsView.isVisible = !isSpeaking && !isOffline && !isMuted && !isReconnecting
+        signalBarsView.isVisible = !isSpeaking && !isOffline && !isMuted && !isReconnecting && item.status != EndpointStatus.JOINED
 
         val dotDrawable = when (item.status) {
             EndpointStatus.SPEAKING -> R.drawable.dot_speaking
-            EndpointStatus.ONLINE -> R.drawable.dot_online
+            EndpointStatus.JOINED, EndpointStatus.ONLINE -> R.drawable.dot_online
             EndpointStatus.OFFLINE -> R.drawable.dot_offline
             EndpointStatus.INVITING -> R.drawable.dot_offline
             EndpointStatus.CONNECTING -> R.drawable.dot_meeting_connecting
@@ -63,7 +64,7 @@ object EndpointUiBinder {
 
         val statusColor = when (item.status) {
             EndpointStatus.SPEAKING -> R.color.tb_primary
-            EndpointStatus.ONLINE -> if (item.isLocal) R.color.tb_primary else R.color.tb_success
+            EndpointStatus.JOINED, EndpointStatus.ONLINE -> if (item.isLocal) R.color.tb_primary else R.color.tb_success
             EndpointStatus.CONNECTING -> R.color.tb_meeting_connecting
             EndpointStatus.SYNCING -> R.color.tb_meeting_connecting
             EndpointStatus.DEGRADED -> R.color.tb_text_muted

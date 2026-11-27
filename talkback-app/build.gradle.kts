@@ -47,6 +47,7 @@ android {
         copy {
             from("src/test/java") {
                 include(
+                    "com/talkback/appprod/ui/ConferenceRosterMembershipTest.kt",
                     "com/talkback/appprod/ui/MeetingPresenceDisplayTest.kt",
                     "com/talkback/appprod/ui/ConferenceDisplayStateResolverTest.kt",
                 )

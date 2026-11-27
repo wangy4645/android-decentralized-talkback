@@ -16,6 +16,7 @@ enum class ConferenceEndReason {
 }
 
 enum class EndpointStatus {
+    JOINED,
     ONLINE,
     SPEAKING,
     OFFLINE,

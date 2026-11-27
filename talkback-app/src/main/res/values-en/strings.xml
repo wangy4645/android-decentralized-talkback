@@ -37,6 +37,7 @@
     <string name="device_list">Devices</string>
     <string name="you_suffix">(You)</string>
     <string name="meeting_you_in_meeting">You\'re in the meeting</string>
+    <string name="status_meeting_joined">Joined</string>
     <string name="status_online">Online</string>
     <string name="status_speaking">Speaking</string>
     <string name="status_offline">Offline</string>
