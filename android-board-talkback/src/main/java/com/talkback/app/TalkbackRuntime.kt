@@ -576,12 +576,44 @@ class TalkbackRuntime(
     internal fun testReconcileGroupMeshInternalInvocationCount(): Int =
         runCatching { coordinator.testReconcileGroupMeshInternalInvocationCount() }.getOrDefault(0)
 
+    internal fun testGroupRecoveryObserveEvents(): List<TestGroupRecoveryObserveEvent> =
+        runCatching { coordinator.testGroupRecoveryObserveEvents() }.getOrDefault(emptyList())
+
+    internal fun testGroupPttRecoveryPending(channelId: String): Boolean =
+        runCatching { coordinator.testGroupPttRecoveryPending(channelId) }.getOrDefault(false)
+
+    internal fun testGroupAuthorityState(channelId: String): String =
+        runCatching { coordinator.testGroupAuthorityState(channelId) }.getOrDefault("UNKNOWN")
+
+    internal fun testGroupSessionDeskSnapshot(channelId: String): String =
+        runCatching { coordinator.testGroupSessionDeskSnapshot(channelId) }.getOrDefault("UNKNOWN")
+
+    internal fun testConferenceActiveOnChannel(channelId: String): Boolean =
+        runCatching { coordinator.testConferenceActiveOnChannel(channelId) }.getOrDefault(false)
+
+    internal fun testHangupBootstrapBarrierActive(channelId: String): Boolean =
+        runCatching { coordinator.testHangupBootstrapBarrierActive(channelId) }.getOrDefault(false)
+
+    internal fun testLocalMemberOfChannel(channelId: String): Boolean =
+        runCatching { coordinator.testLocalMemberOfChannel(channelId) }.getOrDefault(false)
+
     internal fun testActivateHangupBootstrapBarrier(channelId: String) {
         runCatching { coordinator.testActivateHangupBootstrapBarrier(channelId) }
     }
 
     internal fun testClearHangupBootstrapBarrier(channelId: String) {
         runCatching { coordinator.testClearHangupBootstrapBarrier(channelId) }
+    }
+
+    internal fun testReleaseConferenceChannelForGroupPtt(channelId: String, reason: String = "test_post_meeting") {
+        runCatching { coordinator.testReleaseConferenceChannelForGroupPtt(channelId, reason) }
+    }
+
+    internal fun testSuspendAcceptedGroupOnChannel(channelId: String): Boolean =
+        runCatching { coordinator.testSuspendAcceptedGroupOnChannel(channelId) }.getOrDefault(false)
+
+    internal fun testLeaveChannelMembership(channelId: String) {
+        runCatching { coordinator.testLeaveChannelMembership(channelId) }
     }
 
     internal fun testSendGroupJoinToPeer(
@@ -603,6 +635,10 @@ class TalkbackRuntime(
 
     fun refreshStaleConferenceSession(channelId: String) {
         runCatching { coordinator.refreshStaleConferenceSession(channelId) }
+    }
+
+    fun rebroadcastHello() {
+        runCatching { coordinator.rebroadcastHello() }
     }
 
     fun upsertLocalEndpoint(

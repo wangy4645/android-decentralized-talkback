@@ -2454,6 +2454,9 @@ class TalkbackCoordinator(
     internal var testLatePeerAdmitInvokeCount: Int = 0
     @Volatile
     internal var testReconcileGroupMeshInternalInvocationCount: Int = 0
+    private val testGroupRecoveryObserveEvents =
+        java.util.Collections.synchronizedList(mutableListOf<TestGroupRecoveryObserveEvent>())
+    private val testGroupRecoveryObserveSeq = java.util.concurrent.atomic.AtomicInteger(0)
     private val lastPlaybackEnabledBySession = ConcurrentHashMap<String, Boolean>()
     private val lastEnsureCanonicalInviteMsByModule = ConcurrentHashMap<String, Long>()
     private val lastE4RejoinInviteMsByModule = ConcurrentHashMap<String, Long>()
@@ -2538,6 +2541,7 @@ class TalkbackCoordinator(
         cancelHostRejoinRetry(channelId)
         channelModeFsm(channelId).reset()
         log("Conference channel released for GROUP PTT ch=$channelId reason=$reason")
+        observeGroupRecovery("CHANNEL", "CONFERENCE_RELEASED", "ch=$channelId reason=$reason")
         MeetingRecoveryLog.onConferenceReleased(channelId, reason)
         lastSeenAuthorityDigestByChannel.clear(channelId, MembershipAuthorityPlane.CONFERENCE)
         log(
@@ -2624,9 +2628,34 @@ class TalkbackCoordinator(
             ChannelLifecycleEvent.PeersDiscovered -> maybeBootstrapGroupOnPeerDiscovery(channelId)
             else -> {
                 if (!ChannelLifecyclePolicy.shouldScheduleGroupRecovery(event)) return
+                observeGroupRecovery(
+                    "RECOVERY",
+                    "SCHEDULE_REQUESTED",
+                    "ch=$channelId lifecycle=$event"
+                )
                 scheduleGroupPttRecovery(channelId)
             }
         }
+    }
+
+    private fun observeGroupRecovery(kind: String, label: String, detail: String = "") {
+        val seq = testGroupRecoveryObserveSeq.incrementAndGet()
+        testGroupRecoveryObserveEvents.add(TestGroupRecoveryObserveEvent(seq, kind, label, detail))
+    }
+
+    private fun observeReconcileExit(channelId: String, exit: String) {
+        val auth = groupChannelAuthority.snapshot(channelId).state.name
+        val confActive = sessions.values.any {
+            it.channelId == channelId && it.type == SessionType.CONFERENCE
+        }
+        val group = groupSessionOnChannel(channelId)?.let { session ->
+            "id=${session.id} accepted=${session.accepted} susp=${session.isForegroundSuspended()}"
+        } ?: "none"
+        observeGroupRecovery(
+            "RECONCILE_EXIT",
+            exit,
+            "ch=$channelId auth=$auth conf=$confActive group=$group",
+        )
     }
 
     private var lastDialablePeerCount = 0
@@ -2681,20 +2710,87 @@ class TalkbackCoordinator(
     }
 
     private fun scheduleGroupPttRecovery(channelId: String) {
-        if (pendingGroupPttRecoveryByChannel.putIfAbsent(channelId, true) != null) return
+        if (pendingGroupPttRecoveryByChannel.putIfAbsent(channelId, true) != null) {
+            observeGroupRecovery(
+                "RECOVERY",
+                "REQUEST_DEDUPED",
+                "ch=$channelId pendingFlagAlreadySet=true",
+            )
+            return
+        }
+        observeGroupRecovery(
+            "RECOVERY",
+            "REQUEST_SCHEDULED",
+            "ch=$channelId delayMs=$GROUP_PTT_RECOVERY_DELAY_MS",
+        )
         scheduler.schedule({
+            observeGroupRecovery("RECOVERY", "EXEC_STARTED", "ch=$channelId")
             runOnCoordinator {
                 pendingGroupPttRecoveryByChannel.remove(channelId)
-                if (sessions.values.any { it.channelId == channelId && it.type == SessionType.CONFERENCE }) {
-                    return@runOnCoordinator
-                }
-                if (deferHangupBootstrapOnChannel(channelId, "group_ptt_recovery")) {
-                    return@runOnCoordinator
-                }
-                endStaleConferenceBlockingGroup(channelId)
-                reconcileGroupMeshInternal(channelId)
+                executeGroupPttRecoveryTick(channelId)
             }
         }, GROUP_PTT_RECOVERY_DELAY_MS, TimeUnit.MILLISECONDS)
+    }
+
+    private fun executeGroupPttRecoveryTick(channelId: String) {
+        if (!localMemberOfChannel(channelId)) {
+            observeGroupRecovery(
+                "RECOVERY",
+                "EXEC_EXIT",
+                "ch=$channelId reason=LEFT_CHANNEL",
+            )
+            return
+        }
+        if (sessions.values.any { it.channelId == channelId && it.type == SessionType.CONFERENCE }) {
+            observeGroupRecovery(
+                "RECOVERY",
+                "EXEC_EXIT",
+                "ch=$channelId reason=CONFERENCE_STILL_ACTIVE",
+            )
+            return
+        }
+        if (deferHangupBootstrapOnChannel(channelId, "group_ptt_recovery")) {
+            observeGroupRecovery(
+                "RECOVERY",
+                "EXEC_EXIT",
+                "ch=$channelId reason=HANGUP_BOOTSTRAP_DEFER",
+            )
+            return
+        }
+        if (hasUsableAcceptedGroupOnChannel(channelId)) {
+            observeGroupRecovery(
+                "RECOVERY",
+                "EXEC_EXIT",
+                "ch=$channelId reason=GROUP_ALREADY_USABLE",
+            )
+            return
+        }
+        endStaleConferenceBlockingGroup(channelId)
+        observeGroupRecovery(
+            "RECOVERY",
+            "EXEC_INVOKING_RECONCILE",
+            "ch=$channelId",
+        )
+        when (val advance = reconcileGroupMeshInternal(channelId)) {
+            ReconcileAuthorityAdvance.STALE_PRIMARY_TO_INVALIDATED,
+            ReconcileAuthorityAdvance.INVALIDATED_TO_BOOTSTRAP_REQUIRED -> {
+                observeGroupRecovery(
+                    "RECOVERY",
+                    "CONTINUATION_SCHEDULED",
+                    "ch=$channelId advance=$advance",
+                )
+                scheduleGroupPttRecovery(channelId)
+            }
+            ReconcileAuthorityAdvance.NONE -> Unit
+        }
+    }
+
+    private fun localMemberOfChannel(channelId: String): Boolean =
+        localModuleId in channelManager.members(channelId)
+
+    private fun hasUsableAcceptedGroupOnChannel(channelId: String): Boolean {
+        val session = groupSessionOnChannel(channelId) ?: return false
+        return session.accepted && !session.isForegroundSuspended()
     }
 
     private fun enterChannelMode(channelId: String, mode: ChannelMode, ownerModuleId: String) {
@@ -3688,6 +3784,31 @@ class TalkbackCoordinator(
     internal fun testReconcileGroupMeshInternalInvocationCount(): Int =
         runOnCoordinatorSync { testReconcileGroupMeshInternalInvocationCount }
 
+    internal fun testGroupRecoveryObserveEvents(): List<TestGroupRecoveryObserveEvent> =
+        runOnCoordinatorSync { testGroupRecoveryObserveEvents.toList() }
+
+    internal fun testGroupPttRecoveryPending(channelId: String): Boolean =
+        runOnCoordinatorSync { pendingGroupPttRecoveryByChannel.containsKey(channelId) }
+
+    internal fun testGroupAuthorityState(channelId: String): String =
+        runOnCoordinatorSync { groupChannelAuthority.snapshot(channelId).state.name }
+
+    internal fun testGroupSessionDeskSnapshot(channelId: String): String = runOnCoordinatorSync {
+        val session = groupSessionOnChannel(channelId) ?: return@runOnCoordinatorSync "none"
+        val disposition = sessionPresenceSnapshot(session.id)?.disposition?.name ?: "unknown"
+        "id=${session.id} accepted=${session.accepted} suspended=${session.isForegroundSuspended()} disp=$disposition"
+    }
+
+    internal fun testConferenceActiveOnChannel(channelId: String): Boolean = runOnCoordinatorSync {
+        sessions.values.any { it.channelId == channelId && it.type == SessionType.CONFERENCE }
+    }
+
+    internal fun testHangupBootstrapBarrierActive(channelId: String): Boolean =
+        runOnCoordinatorSync { pendingHangupMediaBarrierChannels.contains(channelId) }
+
+    internal fun testLocalMemberOfChannel(channelId: String): Boolean =
+        runOnCoordinatorSync { localMemberOfChannel(channelId) }
+
     fun groupCall(
         local: EndpointAddress,
         remoteEndpoints: List<EndpointAddress>,
@@ -3709,10 +3830,12 @@ class TalkbackCoordinator(
      */
     fun reconcileGroupMesh(channelId: String) = runOnCoordinator {
         reconcileGroupMeshInternal(channelId)
+        Unit
     }
 
     internal fun reconcileGroupMeshSync(channelId: String) = runOnCoordinatorSync {
         reconcileGroupMeshInternal(channelId)
+        Unit
     }
 
     internal fun testSendGroupJoinToPeer(
@@ -6426,6 +6549,7 @@ class TalkbackCoordinator(
         }
         groupSessions.forEach { hangupInternal(it.id) }
         reconcileGroupMeshInternal(channelId)
+        Unit
     }
 
     fun refreshStaleConferenceSession(channelId: String) = runOnCoordinator {
@@ -15473,6 +15597,26 @@ class TalkbackCoordinator(
         pendingHangupMediaBarrierChannels.remove(channelId)
     }
 
+    /** Desk: post-meeting channel release without a live conference session. */
+    internal fun testReleaseConferenceChannelForGroupPtt(
+        channelId: String,
+        reason: String = "test_post_meeting",
+    ) = runOnCoordinator {
+        releaseConferenceChannelForGroupPtt(channelId, reason)
+    }
+
+    internal fun testSuspendAcceptedGroupOnChannel(channelId: String): Boolean = runOnCoordinatorSync {
+        val session = groupSessionOnChannel(channelId) ?: return@runOnCoordinatorSync false
+        if (!session.accepted) return@runOnCoordinatorSync false
+        suspendSessionForUnicast(session)
+        true
+    }
+
+    internal fun testLeaveChannelMembership(channelId: String) = runOnCoordinator {
+        channelManager.leave(channelId, localModuleId)
+        leaveChannelMode(channelId)
+    }
+
     private fun scheduleConferenceChannelReleaseAfterMediaBarrier(
         channelId: String,
         reason: String,
@@ -21311,40 +21455,74 @@ class TalkbackCoordinator(
         }
     }
 
-    private fun reconcileGroupMeshInternal(channelId: String) {
+    /** Post-meeting recovery may schedule another tick when authority advances across these steps. */
+    private enum class ReconcileAuthorityAdvance {
+        NONE,
+        STALE_PRIMARY_TO_INVALIDATED,
+        INVALIDATED_TO_BOOTSTRAP_REQUIRED,
+    }
+
+    private fun reconcileGroupMeshInternal(channelId: String): ReconcileAuthorityAdvance {
         testReconcileGroupMeshInternalInvocationCount++
-        if (deferHangupBootstrapOnChannel(channelId, "reconcile_group_mesh")) return
+        if (deferHangupBootstrapOnChannel(channelId, "reconcile_group_mesh")) {
+            observeReconcileExit(channelId, "EARLY_DEFER_HANGUP_BARRIER")
+            return ReconcileAuthorityAdvance.NONE
+        }
         endStaleConferenceBlockingGroup(channelId)
-        if (blocksGroupOnChannel(channelId)) return
-        if (isMeshRepairSuppressed(channelId)) return
-        val local = localEndpointAddress() ?: return
+        if (blocksGroupOnChannel(channelId)) {
+            observeReconcileExit(channelId, "EARLY_BLOCKS_GROUP_ON_CHANNEL")
+            return ReconcileAuthorityAdvance.NONE
+        }
+        if (isMeshRepairSuppressed(channelId)) {
+            observeReconcileExit(channelId, "EARLY_MESH_REPAIR_SUPPRESSED")
+            return ReconcileAuthorityAdvance.NONE
+        }
+        val local = localEndpointAddress()
+        if (local == null) {
+            observeReconcileExit(channelId, "EARLY_NO_LOCAL_ENDPOINT")
+            return ReconcileAuthorityAdvance.NONE
+        }
         val dialable = dialableRemoteModuleIds()
-        if (dialable.isEmpty()) return
+        if (dialable.isEmpty()) {
+            observeReconcileExit(channelId, "EARLY_NO_DIALABLE_PEERS")
+            return ReconcileAuthorityAdvance.NONE
+        }
         val allModules = dialable + localModuleId
 
         var session = groupSessionOnChannel(channelId)
-        var authoritySnapshot = resolveGroupAuthoritySnapshot(channelId, session, dialable, allModules)
+        val authoritySnapshot = resolveGroupAuthoritySnapshot(channelId, session, dialable, allModules)
 
-        when (authoritySnapshot.state) {
+        return when (authoritySnapshot.state) {
             GroupAuthorityState.STALE_PRIMARY -> {
                 commitGroupChannelAuthorityInvalidation(channelId, session)
-                return
+                observeReconcileExit(channelId, "AUTH_STALE_PRIMARY_COMMITTED_INVALIDATION")
+                ReconcileAuthorityAdvance.STALE_PRIMARY_TO_INVALIDATED
             }
             GroupAuthorityState.AUTHORITY_INVALIDATED -> {
                 groupChannelAuthority.advanceToBootstrapRequired(
                     channelId,
                     buildGroupAuthorityObservation(channelId, null, dialable, allModules)
                 )
-                return
+                observeReconcileExit(channelId, "AUTH_INVALIDATED_ADVANCED_TO_BOOTSTRAP_REQUIRED")
+                ReconcileAuthorityAdvance.INVALIDATED_TO_BOOTSTRAP_REQUIRED
             }
             GroupAuthorityState.BOOTSTRAP_REQUIRED -> {
                 reconcileGroupBootstrap(channelId, local, dialable, allModules, authoritySnapshot)
-                return
+                ReconcileAuthorityAdvance.NONE
             }
             GroupAuthorityState.VALID_PRIMARY -> {
-                session = groupSessionOnChannel(channelId) ?: return
-                if (!session.accepted || session.isForegroundSuspended()) return
-                reconcileGroupMeshMaintenance(channelId, session, dialable, allModules)
+                session = groupSessionOnChannel(channelId)
+                if (session == null) {
+                    observeReconcileExit(channelId, "VALID_PRIMARY_NO_SESSION")
+                    ReconcileAuthorityAdvance.NONE
+                } else if (!session.accepted || session.isForegroundSuspended()) {
+                    observeReconcileExit(channelId, "VALID_PRIMARY_SKIP_NOT_ACTIVE")
+                    ReconcileAuthorityAdvance.NONE
+                } else {
+                    reconcileGroupMeshMaintenance(channelId, session, dialable, allModules)
+                    observeReconcileExit(channelId, "VALID_PRIMARY_MAINTENANCE_DONE")
+                    ReconcileAuthorityAdvance.NONE
+                }
             }
         }
     }
@@ -21582,21 +21760,33 @@ class TalkbackCoordinator(
                 waitingForPrimary = true,
                 meshRecoveryState = "waiting_primary"
             )
+            observeReconcileExit(
+                channelId,
+                "BOOTSTRAP_WAITING_FOR_PRIMARY primary=${primary.value}",
+            )
             return
         }
         if (!groupChannelAuthority.mayEmitBootstrap(authoritySnapshot, localModuleId)) {
+            observeReconcileExit(channelId, "BOOTSTRAP_MAY_EMIT_FALSE")
             return
         }
         val inviteModuleIds = GroupMeshPlanner.inviteTargets(localModuleId, allModules)
-        if (inviteModuleIds.isEmpty()) return
+        if (inviteModuleIds.isEmpty()) {
+            observeReconcileExit(channelId, "BOOTSTRAP_NO_INVITE_TARGETS")
+            return
+        }
         val inviteEndpoints = inviteModuleIds.mapNotNull { endpointForDialableModule(it) }
-        if (inviteEndpoints.isEmpty()) return
+        if (inviteEndpoints.isEmpty()) {
+            observeReconcileExit(channelId, "BOOTSTRAP_NO_INVITE_ENDPOINTS")
+            return
+        }
         observeGroupTransitionBootstrapAttempt(
             channelId = channelId,
             resolvedPrimary = primary?.value,
             waitingForPrimary = false,
             meshRecoveryState = "mesh_create"
         )
+        observeReconcileExit(channelId, "BOOTSTRAP_MESH_CREATE_OBSERVED")
         markActiveGroupBootstrapEmission(channelId)
         runCatching {
             meshCallInternal(
@@ -21608,12 +21798,24 @@ class TalkbackCoordinator(
                 config.maxGroupModules
             )
         }.onSuccess { sessionId ->
+            observeReconcileExit(
+                channelId,
+                if (sessionId == null) {
+                    "BOOTSTRAP_MESH_CALL_RETURNED_NULL"
+                } else {
+                    "BOOTSTRAP_MESH_CALL_OK id=$sessionId"
+                },
+            )
             if (sessionId != null) {
                 groupChannelAuthority.markRecovered(channelId, sessionId, localModuleId)
                 clearActiveGroupBootstrapEmission(channelId)
             }
         }.onFailure {
             clearActiveGroupBootstrapEmission(channelId)
+            observeReconcileExit(
+                channelId,
+                "BOOTSTRAP_MESH_CALL_FAILED err=${it.message ?: "unknown"}",
+            )
             log("reconcileGroupMesh bootstrap failed on $channelId: ${it.message}")
         }
     }
@@ -25136,3 +25338,11 @@ class TalkbackCoordinator(
     }
 
 }
+
+/** Read-only desk observe events for post-meeting GROUP recovery (tests). */
+internal data class TestGroupRecoveryObserveEvent(
+    val sequence: Int,
+    val kind: String,
+    val label: String,
+    val detail: String,
+)

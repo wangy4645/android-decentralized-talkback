@@ -141,6 +141,12 @@ android {
                 listOf(
                     "com/talkback/core/signaling/link/LinkQualificationTrackerTest.kt",
                 ),
+            "postMeetingGroupRecoveryDeskOnly" to listOf(
+                "com/talkback/app/PostMeetingChannelGroupRecoveryDeskTest.kt",
+                "com/talkback/app/TestTalkbackNode.kt",
+                "com/talkback/core/discovery/FixedDiscoveryService.kt",
+                "com/talkback/core/signaling/InMemorySignalingHub.kt",
+            ),
             "groupL0IceRestartDeskOnly" to
                 listOf(
                     "com/talkback/core/session/GroupL0IceRestartAdmissionTest.kt",
